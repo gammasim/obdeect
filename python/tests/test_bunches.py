@@ -557,12 +557,47 @@ def test_plane_height_is_taken_along_the_telescope_axis():
         [0.0, math.cos(angle), -math.sin(angle)],
         [0.0, math.sin(angle), math.cos(angle)],
     ])
-    # 1.02 top input units give 1.02 * cos(20 deg) top along the telescope axis: below the top.
+    # At the telescope axis the height is input height / cos(angle).
     with pytest.raises(ValueError, match="below incoming obscurer"):
-        trace_bunches(model, bunches, 1.02 * top, frame_rotation=tilted)
-    # 1.02 top / cos(20 deg) input units give 1.02 top along the telescope axis: accepted.
+        trace_bunches(model, bunches, 0.5 * top * math.cos(angle), frame_rotation=tilted)
+    assert "weight" in trace_bunches(model, bunches, 2.0 * top, frame_rotation=tilted)
+
+
+def test_tilted_plane_cuts_incoming_obscurer():
+    model = compiled(telescope_transmission=None)
+    top = model.max_incoming_obscurer_z_m()
+    bunches, _ = star_bunches(model, 10)
+    angle = math.radians(20.0)
+    tilted = np.array([
+        [1.0, 0.0, 0.0],
+        [0.0, math.cos(angle), -math.sin(angle)],
+        [0.0, math.sin(angle), math.cos(angle)],
+    ])
+    # The input origin is above the plate, but the plane crosses its edge.
+    plane_z = (top + 0.01) / math.cos(angle)
+    with pytest.raises(ValueError, match="below incoming obscurer 'camera-front'"):
+        trace_bunches(
+            model,
+            bunches,
+            plane_z,
+            frame_rotation=tilted,
+            frame_offset_m=(0.0, math.sin(angle) * plane_z, 0.0),
+        )
+
+
+def test_simtools_plane_at_60_degrees_is_accepted():
+    model = compiled(telescope_transmission=None)
+    top = model.max_incoming_obscurer_z_m()
+    bunches, _ = star_bunches(model, 10)
+    angle = math.radians(60.0)
+    tilted = np.array([
+        [1.0, 0.0, 0.0],
+        [0.0, math.cos(angle), -math.sin(angle)],
+        [0.0, math.sin(angle), math.cos(angle)],
+    ])
+    # simtools uses a one metre margin and a ground-horizontal plane.
     assert "weight" in trace_bunches(
-        model, bunches, 1.02 * top / math.cos(angle), frame_rotation=tilted
+        model, bunches, (top + 1.0) / math.cos(angle), frame_rotation=tilted
     )
 
 

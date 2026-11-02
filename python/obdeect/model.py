@@ -433,9 +433,12 @@ class OpticalModel:
         `seed`). `frame_rotation` (3 x 3, input to telescope frame),
         `frame_offset_m`, `length_unit_m` (metres per input length unit) and
         `plane_z` (input units) place the input plane in the telescope frame. The
-        model's `axes_offset_m` is subtracted from `frame_offset_m`, so a ground-frame
-        point P is traced at R (P - O); this assumes `frame_rotation` is the ground-to-
-        telescope rotation at the zenith angle the model was compiled for.
+        model's `axes_offset_m` is subtracted from `frame_offset_m`; with zero
+        `frame_offset_m`, a ground-frame point P is traced at R P - O_t = R (P - O_g),
+        where O_t is `axes_offset_m` in the telescope frame and O_g = R.T O_t is in
+        the ground frame. This assumes
+        `frame_rotation` is the ground-to-telescope rotation at the zenith angle the model
+        was compiled for.
         `acceptance` is ``(wavelength_nm, zem_m, values)`` with values
         (n_wavelength, n_zem) in [0, 1]; `wavelength_density` is ``(nm,
         values)``. `wavelength_law` is ``(lo_nm, hi_nm)``: it samples
@@ -445,8 +448,8 @@ class OpticalModel:
 
         Each photon of a bunch is thinned by the acceptance and the model's
         response bound, traced, and, with `roulette`, kept with the probability
-        weight / bound (survivors have weight 1; without it they carry that
-        ratio as weight). Returns the surviving photons as columns position_m,
+        min(1, weight / bound) (survivors have weight 1; without roulette they carry
+        that capped ratio as weight). Returns the surviving photons as columns position_m,
         direction, time_ns, weight, wavelength_nm, bunch_index (input row) and
         sub_photon, in input order. Invalid input raises ``ValueError`` before
         any tracing. With `normalise_transmission` the roulette weight and
@@ -475,22 +478,41 @@ class OpticalModel:
         offset = np.ascontiguousarray(frame_offset_m, dtype=np.float64) - np.asarray(
             self.axes_offset_m, dtype=np.float64
         )
-        # The input plane is z = plane_z in input units. Its height along the telescope
-        # axis, at the input origin (x = y = 0), is the telescope-frame z of that point.
-        # Photons starting below an incoming obscurer never meet it, so the plane must
-        # lie above every one of them. A length unit that is not positive is left to the
-        # tracer, which rejects it.
+        # The plane has normal n = R[:, 2] and passes through p = offset + R[:, 2] * z.
+        # At lateral position (x, y), its height is (n.p - n_x*x - n_y*y) / n_z.
+        # Minimise this over each obscurer's footprint, then compare with its top.
+        # For an untilted plane retain the original input-origin height check.
         top = self._incoming_top()
         if top is not None and float(length_unit_m) > 0.0:
-            plane_height_m = float(offset[2]) + float(rotation[2, 2]) * float(plane_z) * float(
+            normal = rotation[:, 2]
+            origin_height = float(offset[2]) + float(normal[2]) * float(plane_z) * float(
                 length_unit_m
             )
-            if plane_height_m < top[0]:
-                raise ValueError(
-                    f"input plane below incoming obscurer {top[1]!r}: the plane is at "
-                    f"{plane_height_m:.3f} m along the telescope axis, but the obscurer reaches "
-                    f"{top[0]:.3f} m; raise the input plane above it"
-                )
+            if normal[0] == 0.0 and normal[1] == 0.0:
+                checks = [(origin_height, top[0], top[1])]
+            elif normal[2] > 0.0:
+                point = offset + normal * float(plane_z) * float(length_unit_m)
+                axis_height = float(np.dot(normal, point) / normal[2])
+                lateral = np.array([normal[0], normal[1], 0.0])
+                checks = [
+                    (
+                        axis_height - _obscurer_support(o, lateral) / float(normal[2]),
+                        _obscurer_top_z_m(o),
+                        o["name"],
+                    )
+                    for o in self._document["optics"]["obscurers"]
+                    if "incoming" in o.get("legs", [])
+                ]
+            else:
+                checks = [(-math.inf, top[0], top[1])]
+            for plane_height_m, obscurer_top, name in checks:
+                if plane_height_m < obscurer_top:
+                    raise ValueError(
+                        f"input plane below incoming obscurer {name!r}: the plane is at "
+                        f"{plane_height_m:.3f} m along the telescope axis, "
+                        "but the obscurer reaches "
+                        f"{obscurer_top:.3f} m; raise the input plane above it"
+                    )
         if acceptance is not None:
             wavelengths, heights, values = (np.asarray(a, dtype=np.float64) for a in acceptance)
             if wavelengths.ndim != 1 or heights.ndim != 1:
@@ -535,11 +557,7 @@ class OpticalModel:
 
 
 def _obscurer_top_z_m(obscurer: Mapping[str, Any]) -> float:
-    """Highest z [m] of one obscurer record (see the accessor).
-
-    A flat disk of radius r with unit normal n reaches r * sqrt(1 - n_z^2) above its centre; plates
-    and the flat ends of cylinders and frustums are disks, polyhedra are bounded by their vertices.
-    """
+    """Highest z [m] of one obscurer record (see the accessor)."""
     if "vertices_m" in obscurer:
         return max(float(v[2]) for v in obscurer["vertices_m"])
     if "centre_m" in obscurer:
@@ -557,6 +575,32 @@ def _obscurer_top_z_m(obscurer: Mapping[str, Any]) -> float:
     sine = math.sqrt(max(0.0, 1.0 - axis[2] ** 2))
     return max(
         float(point[2]) + float(radius) * sine
+        for point, radius in zip((start, end), radii, strict=True)
+    )
+
+
+def _obscurer_support(obscurer: Mapping[str, Any], direction: np.ndarray) -> float:
+    """Maximum dot product with a direction over an obscurer's geometry."""
+    if "vertices_m" in obscurer:
+        return max(float(np.dot(v, direction)) for v in obscurer["vertices_m"])
+    if "centre_m" in obscurer:
+        normal = np.asarray(obscurer["normal"], dtype=float)
+        normal /= np.linalg.norm(normal)
+        radius = 0.5 * float(obscurer["diameter_m"])
+        radial = math.sqrt(
+            max(0.0, float(np.dot(direction, direction) - np.dot(direction, normal) ** 2))
+        )
+        return float(np.dot(obscurer["centre_m"], direction)) + radius * radial
+    start, end = (np.asarray(obscurer[key], dtype=float) for key in ("start_m", "end_m"))
+    axis = (end - start) / np.linalg.norm(end - start)
+    radii = (
+        (obscurer["start_radius_m"], obscurer["end_radius_m"])
+        if "start_radius_m" in obscurer
+        else (0.5 * obscurer["diameter_m"],) * 2
+    )
+    radial = math.sqrt(max(0.0, float(np.dot(direction, direction) - np.dot(direction, axis) ** 2)))
+    return max(
+        float(np.dot(point, direction)) + float(radius) * radial
         for point, radius in zip((start, end), radii, strict=True)
     )
 

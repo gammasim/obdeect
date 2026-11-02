@@ -591,6 +591,52 @@ template <class F> bool throws_invalid_argument(F &&f) {
   return false;
 }
 
+// Output allocation equals the number of thinning survivors, including fractional bunches.
+void bunch_survivor_allocation() {
+  constexpr std::size_t n = 2050;
+  const auto model = single_facet(10.0, 0.5);
+  std::vector<float> zero(n, 0.0F), size(n, 2.5F), wavelength(n, 400.0F);
+  std::vector<std::uint64_t> ids(n);
+  for (std::size_t i = 0; i < n; ++i)
+    ids[i] = i;
+  BunchBlock in{zero.data(), zero.data(), zero.data(),       zero.data(), zero.data(),
+                zero.data(), size.data(), wavelength.data(), ids.data(),  n};
+  const Map2D acceptance{{100.0, 1000.0}, {0.0, 1.0}, std::vector<double>(4, 0.2), false};
+  BunchOptions options;
+  options.acceptance = &acceptance;
+  BunchFrame frame;
+  frame.plane_z = 20.0;
+  constexpr std::uint64_t seed = 42;
+  std::size_t expected = 0;
+  const double bound = response_bound(model, 400.0);
+  for (std::size_t i = 0; i < n; ++i)
+    for (std::uint32_t k = 0; k < 3; ++k)
+      expected +=
+          uniform4(seed, ids[i], Stream::thinning, k)[0] < (k == 2 ? 0.5 : 1.0) * 0.2 * bound;
+  for (const std::size_t threads : {1, 6}) {
+    ThreadPool pool(threads);
+    std::vector<double> position, direction, time, weight, lambda;
+    std::vector<std::uint64_t> bunch;
+    std::vector<std::uint32_t> sub;
+    std::size_t allocated = 0;
+    const auto allocate = [&](std::size_t rows) {
+      allocated = rows;
+      position.resize(3 * rows);
+      direction.resize(3 * rows);
+      time.resize(rows);
+      weight.resize(rows);
+      lambda.resize(rows);
+      bunch.resize(rows);
+      sub.resize(rows);
+      return BunchResult{position.data(), direction.data(), time.data(), weight.data(),
+                         lambda.data(),   bunch.data(),     sub.data()};
+    };
+    const auto written = trace_bunches(model, in, frame, options, seed, pool, allocate);
+    CHECK(allocated == expected);
+    CHECK(written <= allocated);
+  }
+}
+
 // trace_bunches rejects a wavelength density reaching 0 nm and bad acceptance axes.
 void bunch_option_validation() {
   const auto model = single_facet(10.0, 0.5);
@@ -656,6 +702,7 @@ void all_tests() {
   thread_pool();
   thread_pool_exceptions();
   bunch_option_validation();
+  bunch_survivor_allocation();
 }
 
 int main() { return run_checks(all_tests); }

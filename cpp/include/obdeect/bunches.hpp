@@ -47,7 +47,7 @@ struct BunchOptions {
   const LinearDensity *wavelength_density{}; // Over nm, for bunches of wavelength 0.
   // Alternative to wavelength_density for bunches of wavelength 0 (not both).
   const InverseSquareLaw *wavelength_law{};
-  bool roulette{true};                       // Survivors get weight 1 (else the weight ratio).
+  bool roulette{true}; // Survivors get weight 1 (else the weight ratio).
   bool classify_losses{true};
   // Roulette weights and bound relative to the telescope transmission's on-axis value.
   bool normalise_transmission{false};
@@ -114,8 +114,8 @@ public:
       const double lambda = in_.wavelength_nm[i];
       if (!(size > 0.0 && size <= kMaxBunchSize) || !std::isfinite(lambda) || lambda < 0.0 ||
           (lambda == 0.0 && !options_.wavelength_density && !options_.wavelength_law) ||
-          !std::isfinite(in_.x[i]) ||
-          !std::isfinite(in_.y[i]) || !std::isfinite(in_.cx[i]) || !std::isfinite(in_.cy[i]) ||
+          !std::isfinite(in_.x[i]) || !std::isfinite(in_.y[i]) || !std::isfinite(in_.cx[i]) ||
+          !std::isfinite(in_.cy[i]) ||
           !(static_cast<double>(in_.cx[i]) * in_.cx[i] +
                 static_cast<double>(in_.cy[i]) * in_.cy[i] <=
             1.0 + 1e-6) ||
@@ -129,8 +129,9 @@ public:
 
   // Trace the bunches [begin, end), writing rows from `row` on; returns the
   // number of rows written.
-  std::size_t run(std::size_t begin, std::size_t end, const BunchResult &out,
-                  std::size_t row) const {
+  std::size_t run(std::size_t begin, std::size_t end, const BunchResult &out, std::size_t row,
+                  std::uint8_t *keep_flags, std::vector<double> &roulette_draws,
+                  bool thinning) const {
     const std::size_t first = row;
     const double u = frame_.length_unit_m;
     const double *r = frame_.rotation;
@@ -167,6 +168,7 @@ public:
         cached_acceptance = options_.acceptance ? options_.acceptance->at(lambda, zem_m) : 1.0;
       }
     };
+    std::size_t candidate = 0, survivor = 0;
     for (std::size_t i = begin; i < end; ++i) {
       const double zem_m = u * in_.zem[i];
       const double size = in_.size[i], time = in_.time_ns[i];
@@ -180,14 +182,16 @@ public:
       Ray ray;
       for (std::size_t k = 0; k < n_sub; ++k) {
         const auto sub = static_cast<std::uint32_t>(k);
+        const std::size_t flag = candidate++;
+        if (!thinning && !keep_flags[flag])
+          continue;
         const double frac = static_cast<double>(k + 1) <= size ? 1.0 : size - std::floor(size);
         if (!fixed) {
           if (options_.wavelength_law) {
             // Inverse transform of 1/lambda^2; u in (0, 1), so the value lies in (lo, hi).
             const auto &law = *options_.wavelength_law;
             const double u = uniform4(seed_, id, Stream::wavelength, sub)[0];
-            const double exact =
-                1.0 / (1.0 / law.lo_nm - u * (1.0 / law.lo_nm - 1.0 / law.hi_nm));
+            const double exact = 1.0 / (1.0 / law.lo_nm - u * (1.0 / law.lo_nm - 1.0 / law.hi_nm));
             // Truncation to integer nm as sim_telarray does: lambda in [floor(lo), hi).
             lambda = std::floor(exact);
           } else {
@@ -198,9 +202,16 @@ public:
         }
         const double bound = cached_bound;
         const double keep = frac * cached_acceptance * bound;
-        const auto draw = uniform4(seed_, id, Stream::thinning, sub);
-        if (!(draw[0] < keep))
+        if (thinning) {
+          const auto draw = uniform4(seed_, id, Stream::thinning, sub);
+          keep_flags[flag] = draw[0] < keep;
+          if (keep_flags[flag]) {
+            roulette_draws.push_back(draw[1]);
+            ++row;
+          }
           continue;
+        }
+        const double roulette_draw = roulette_draws[survivor++];
         if (!placed) {
           ray = transform(i);
           placed = true;
@@ -210,7 +221,7 @@ public:
         if (t.status != Status::detected)
           continue;
         const double ratio = std::min(1.0, (t.weight / norm) / cached_bound);
-        if (options_.roulette && !(draw[1] < ratio))
+        if (options_.roulette && !(roulette_draw < ratio))
           continue;
         out.position_m[3 * row] = t.position.x;
         out.position_m[3 * row + 1] = t.position.y;
@@ -252,8 +263,8 @@ private:
 // before any tracing; so does a transmission without a known maximum
 // (ModelError).
 //
-// `allocate(rows)` is called once, after validation, with the largest number
-// of rows the call can write, and returns the output columns for that many
+// `allocate(rows)` is called once, after validation, with the number
+// of thinning survivors, and returns the output columns for that many
 // rows. Returns the rows written; they come first, in input order, bunch by
 // bunch and sub-photon by sub-photon.
 template <class Allocate>
@@ -291,11 +302,22 @@ std::size_t trace_bunches(const OpticalModel &model, const BunchBlock &in, const
   for (std::size_t c = 0; c < chunks; ++c)
     start[c + 1] += start[c];
 
-  const BunchResult out = allocate(start.back());
-
-  // Second pass: chunk c writes from start[c] on.
+  // Record thinning once, including the roulette draw needed after tracing.
+  std::vector<std::uint8_t> keep_flags(start.back());
+  std::vector<std::vector<double>> roulette_draws(chunks);
   pool.run(chunks, [&](std::size_t c) {
-    found[c] = task.run(c * kChunkSize, std::min(in.n, (c + 1) * kChunkSize), out, start[c]);
+    found[c] = task.run(c * kChunkSize, std::min(in.n, (c + 1) * kChunkSize), BunchResult{}, 0,
+                        keep_flags.data() + start[c], roulette_draws[c], true);
+  });
+  std::vector<std::size_t> output_start(chunks + 1, 0);
+  for (std::size_t c = 0; c < chunks; ++c)
+    output_start[c + 1] = output_start[c] + found[c];
+  const BunchResult out = allocate(output_start.back());
+
+  // Trace survivors into their chunk's allocated range.
+  pool.run(chunks, [&](std::size_t c) {
+    found[c] = task.run(c * kChunkSize, std::min(in.n, (c + 1) * kChunkSize), out, output_start[c],
+                        keep_flags.data() + start[c], roulette_draws[c], false);
   });
 
   std::vector<detail::Column> columns;
@@ -306,8 +328,8 @@ std::size_t trace_bunches(const OpticalModel &model, const BunchBlock &in, const
   detail::add_column(columns, out.wavelength_nm, 1);
   detail::add_column(columns, out.bunch_index, 1);
   detail::add_column(columns, out.sub_photon, 1);
-  start.pop_back();
-  return detail::compact_chunks(columns, start, found);
+  output_start.pop_back();
+  return detail::compact_chunks(columns, output_start, found);
 }
 
 } // namespace obdeect
