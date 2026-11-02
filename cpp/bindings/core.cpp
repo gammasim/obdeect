@@ -189,16 +189,14 @@ public:
 
   // Photon bunches (see obdeect::trace_bunches). Acceptance and density are
   // given as arrays; the output arrays are views of the rows written.
-  nb::dict
-  trace_bunches(In1<float> x, In1<float> y, In1<float> cx, In1<float> cy, In1<float> time_ns,
-                In1<float> zem, In1<float> size, In1<float> wavelength_nm,
-                In1<std::uint64_t> bunch_id, In1<double> rotation, In1<double> offset_m,
-                double length_unit_m, double plane_z, std::uint64_t seed,
-                const std::optional<std::tuple<In1<double>, In1<double>, In1<double>>> &acceptance,
-                const std::optional<std::tuple<In1<double>, In1<double>>> &density,
-                const std::optional<std::tuple<double, double>> &wavelength_law, bool roulette,
-                bool classify_losses, bool normalise_transmission,
-                obdeect::ThreadPool &pool) const {
+  nb::dict trace_bunches(
+      In1<float> x, In1<float> y, In1<float> cx, In1<float> cy, In1<float> time_ns, In1<float> zem,
+      In1<float> size, In1<float> wavelength_nm, In1<std::uint64_t> bunch_id, In1<double> rotation,
+      In1<double> offset_m, double length_unit_m, double plane_z, std::uint64_t seed,
+      const std::optional<std::tuple<In1<double>, In1<double>, In1<double>>> &acceptance,
+      const std::optional<std::tuple<In1<double>, In1<double>>> &density,
+      const std::optional<std::tuple<double, double>> &wavelength_law, bool roulette,
+      bool classify_losses, bool normalise_transmission, obdeect::ThreadPool &pool) const {
     const std::size_t n = x.shape(0);
     for (const std::size_t length :
          {y.shape(0), cx.shape(0), cy.shape(0), time_ns.shape(0), zem.shape(0), size.shape(0),
@@ -511,8 +509,8 @@ NB_MODULE(_core, module) {
            "zem"_a, "size"_a, "wavelength_nm"_a, "bunch_id"_a, "rotation"_a, "offset_m"_a,
            "length_unit_m"_a, "plane_z"_a, nb::kw_only(), "seed"_a, "acceptance"_a = nb::none(),
            "wavelength_density"_a = nb::none(), "wavelength_law"_a = nb::none(),
-           "roulette"_a = true, "classify_losses"_a = true,
-           "normalise_transmission"_a = false, "pool"_a)
+           "roulette"_a = true, "classify_losses"_a = true, "normalise_transmission"_a = false,
+           "pool"_a)
       .def("obscurer_crossings", &Model::obscurer_crossings, "start"_a, "end"_a, "leg"_a);
   module.def("trace_many", &trace_many, "items"_a, nb::kw_only(), "seed"_a, "pool"_a);
   nb::class_<Emitter>(module, "Emitter")
