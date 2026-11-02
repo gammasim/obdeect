@@ -123,11 +123,12 @@ invalid law) raises `ValueError` before any tracing.
 
 The input plane `z = plane_z` (input units) must lie above every obscurer on the
 incoming leg, such as the camera housing. Photons that start below such an
-obscurer never meet it. Before tracing, `trace_bunches` computes the height of
-the plane along the telescope axis at the input origin (x = y = 0) and raises
-`ValueError` if it is below the highest incoming obscurer. The message names that
-obscurer. Raise `plane_z` to fix this. The check uses the origin only, so with a
-strongly tilted frame it does not bound the whole plane; keep a margin.
+obscurer never meet it. Before tracing, `trace_bunches` computes, for each incoming
+obscurer, the lowest height of the plane along the telescope axis over that
+obscurer's footprint, and raises `ValueError` if it is below the obscurer's top.
+For an untilted plane this is the plane height at the input origin. The tilt of
+the plane is taken from `frame_rotation`, so the whole plane is bounded, not only
+its origin. The message names the obscurer. Raise `plane_z` to fix this.
 
 The random numbers of a photon depend on `(seed, bunch_id, sub_photon)`.
 **Bunch ids must be unique per seed.** The recommended id is
