@@ -155,11 +155,14 @@ def test_model_offset_equals_explicit_frame_offset(reference, offset_model):
 
 
 def test_input_plane_height_is_taken_at_the_offset_origin(offset_model):
-    # The input origin of the plane is at height R_zz H - O_z in the telescope frame.
+    # The input plane is tilted by the zenith angle: its normal is n = R e_z and its height
+    # over lateral (x, y) is (H - n_x x - n_y y) / n_z. The camera-front plate (0.6 m square,
+    # on the axis) lies lowest at the corner, so the plane must reach
+    # top + 0.3 (|n_x| + |n_y|) / n_z, i.e. H >= top n_z + 0.3 (|n_x| + |n_y|).
     top = offset_model.max_incoming_obscurer_z_m()
     bunches = ground_bunches(100)
-    # Plane height in the telescope frame: R_zz H - O_z; it must reach the obscurer top.
-    limit = (top + EXPECTED_OFFSET_M[2]) / ROTATION[2, 2]
+    normal = ROTATION[:, 2]
+    limit = top * normal[2] + 0.3 * (abs(normal[0]) + abs(normal[1]))
     with pytest.raises(ValueError, match="input plane below incoming obscurer"):
         trace_ground(offset_model, bunches, limit - 0.05)
     assert "weight" in trace_ground(offset_model, bunches, limit + 0.05)
