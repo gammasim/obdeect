@@ -263,12 +263,13 @@ runs with three seeds; their mean is the reference.
   transmission to the one sim_telarray applies, using sim_telarray's own
   transmission formula. A sim_telarray option to switch off its absorption with
   bypassed optics would remove this workaround.
-- Photoelectron arrival times agree per event within 0.06 ns at 20 deg.
-- Per-pixel images agree as well as two native seeds agree with each other
-  (pixel correlation 0.95-0.97 for both).
+- Images agree as well as two native seeds agree with each other: pixel
+  correlation within 0.004 of the seed-to-seed value, image centre and width
+  within 0.9 mm (seed-to-seed spread 3-12 mm).
+- Photoelectron arrival times agree per event within 0.03 ns.
 
 The scripts and full results are in the validation workspace (`phase3`:
-`results/RESULTS.md`, `results/RESULTS-R19.md`).
+`results/RESULTS.md`, `results/RESULTS-R19.md`, `results/RESULTS-R19-pixels.md`).
 
 ## Single-core speed
 
