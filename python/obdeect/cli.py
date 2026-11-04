@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
+from obdeect import __version__
 from obdeect.formats import ModelError
 from obdeect.model import STATUS_NAMES, OpticalModel
 from obdeect.psf import summary
@@ -129,6 +130,7 @@ def _source_arguments(command: argparse.ArgumentParser) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="obdeect", description=__doc__)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", required=True)
 
     c = commands.add_parser("compile", help="compile an optical model from simulation-models")
