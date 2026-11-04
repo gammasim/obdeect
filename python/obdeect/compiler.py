@@ -173,8 +173,8 @@ def _axes_offset_m(p: _Parameters, zenith_deg: float | None) -> list[float]:
     The ``axes_offsets`` record (sim_telarray ``axes_offset``) holds the horizontal offset
     between the azimuth and altitude axes followed by the altitude-to-optical-axis offset.
     The first component transforms to (along*cos(theta), 0, along*sin(theta)); the second is
-    along telescope-frame x. Zero when the record is absent or zero; a non-zero offset needs
-    the zenith angle.
+    subtracted along telescope-frame x. Zero when the record is absent or zero; a non-zero
+    offset needs the zenith angle.
     """
     if "axes_offsets" not in p:
         return [0.0, 0.0, 0.0]
@@ -192,7 +192,7 @@ def _axes_offset_m(p: _Parameters, zenith_deg: float | None) -> list[float]:
     if zenith_deg is None:
         raise ModelError("axes_offsets needs the telescope zenith angle")
     theta = math.radians(zenith_deg)
-    return [along * math.cos(theta) + transverse, 0.0, along * math.sin(theta)]
+    return [along * math.cos(theta) - transverse, 0.0, along * math.sin(theta)]
 
 
 def _sampling(p: _Parameters, optics: dict[str, Any]) -> dict[str, float]:

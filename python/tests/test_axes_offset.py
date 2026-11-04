@@ -119,10 +119,27 @@ def test_axes_offset_follows_the_zenith_angle():
 def test_second_axes_offset_component_is_transverse_to_the_optical_axis():
     model = compiled([OFFSET_CM, 10.0])
     assert model.axes_offset_m == pytest.approx((
-        OFFSET_CM / 100 * COS + 0.1,
+        OFFSET_CM / 100 * COS - 0.1,
         0.0,
         OFFSET_CM / 100 * SIN,
     ))
+
+
+def test_equal_offsets_align_optical_and_azimuth_axes_at_zenith():
+    model = compiled([OFFSET_CM, OFFSET_CM], zenith_deg=0.0)
+    assert model.axes_offset_m == pytest.approx(ORIGIN)
+
+
+def test_transverse_offset_matches_explicit_frame_transform(reference):
+    model = compiled([OFFSET_CM, 10.0])
+    bunches = ground_bunches(3000)
+    # sim_telarray translates by -O before rotation and +T in telescope x.
+    frame_offset = -ROTATION @ GROUND_OFFSET_M + np.array([0.1, 0.0, 0.0])
+    expected = trace_ground(reference, bunches, 30.0, offset_m=frame_offset)
+    actual = trace_ground(model, bunches, 30.0)
+    assert len(actual["weight"]) > 0
+    for name in ("bunch_index", "position_m", "direction", "time_ns", "weight"):
+        np.testing.assert_allclose(actual[name], expected[name], atol=1e-9)
 
 
 def test_second_axes_offset_component_needs_the_zenith_angle():

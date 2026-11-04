@@ -38,7 +38,7 @@ The compiler stores the offset in the telescope frame, in metres, as
 `optics.axes_offset_m` = [x, y, z]. The key is written only when the offset is
 non-zero, and it needs the zenith angle of the compilation. For components
 `(O, T)` and zenith `theta`, the offset is
-`(O cos(theta) + T, 0, O sin(theta))`. The loader requires three numbers.
+`(O cos(theta) - T, 0, O sin(theta))`. The loader requires three numbers.
 
 The offset is applied only by `trace_bunches`, which subtracts it from its frame
 offset (see [Batch tracing](batch-tracing.md)). `trace`, `star_photons` and the

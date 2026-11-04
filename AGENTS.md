@@ -51,9 +51,8 @@ scope. Read the relevant code and tests first; use `docs/VALIDATION.md` and
 ## Changes and validation
 
 - Make the narrowest complete change and preserve unrelated work.
-- Do not add anything under `docs/changes/` for current work. Leave that
-  directory untouched unless the user explicitly asks for a changelog or
-  release-note change.
+- Add an appropriate Towncrier fragment under `docs/changes/` for changes
+  that should appear in the release notes.
 - Add or update a focused test for every behavioural change. Establish analytic
   kernel and primitive tests before optical-model, cross-tool, or performance tests.
 - Preserve results across photon ordering, blocks, and thread counts. Record
