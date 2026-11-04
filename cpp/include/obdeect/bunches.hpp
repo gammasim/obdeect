@@ -45,12 +45,12 @@ struct BunchOptions {
   // emission height [m] (y), values in [0, 1]; null means 1.
   const Map2D *acceptance{};
   const LinearDensity *wavelength_density{}; // Over nm, for bunches of wavelength 0.
-  // Alternative to wavelength_density for bunches of wavelength 0 (not both).
-  const InverseSquareLaw *wavelength_law{};
-  bool roulette{true}; // Survivors get weight 1 (else the weight ratio).
+  bool roulette{true};                       // Survivors get weight 1 (else the weight ratio).
   bool classify_losses{true};
   // Roulette weights and bound relative to the telescope transmission's on-axis value.
   bool normalise_transmission{false};
+  // Alternative to wavelength_density for bunches of wavelength 0 (not both).
+  const InverseSquareLaw *wavelength_law{};
 };
 
 // Output columns, with room for the rows the allocator was asked for. Vectors
@@ -261,7 +261,7 @@ private:
 // unique per seed.
 //
 // Invalid input (a non-orthonormal frame, acceptance outside [0, 1], a bunch of
-// wavelength 0 without a density, bad sizes) throws std::invalid_argument
+// wavelength 0 without a density or law, bad sizes) throws std::invalid_argument
 // before any tracing; so does a transmission without a known maximum
 // (ModelError).
 //
@@ -280,9 +280,10 @@ std::size_t trace_bunches(const OpticalModel &model, const BunchBlock &in, const
     throw std::invalid_argument("bunch wavelength density: nodes must start above 0 nm");
   if (options.wavelength_law) {
     const auto &law = *options.wavelength_law;
-    if (!std::isfinite(law.lo_nm) || !std::isfinite(law.hi_nm) || !(law.lo_nm > 0.0) ||
+    // lo_nm >= 1 keeps floor(lambda) >= 1 for every sample, so no photon is at wavelength 0.
+    if (!std::isfinite(law.lo_nm) || !std::isfinite(law.hi_nm) || !(law.lo_nm >= 1.0) ||
         !(law.hi_nm > law.lo_nm))
-      throw std::invalid_argument("bunch wavelength law: need finite 0 < lo_nm < hi_nm");
+      throw std::invalid_argument("bunch wavelength law: need finite 1 <= lo_nm < hi_nm");
     if (options.wavelength_density)
       throw std::invalid_argument("bunch wavelength: set one wavelength law");
   }
@@ -300,7 +301,7 @@ std::size_t trace_bunches(const OpticalModel &model, const BunchBlock &in, const
   });
   if (std::find(bad.begin(), bad.end(), char{1}) != bad.end())
     throw std::invalid_argument("bunches: invalid size, position, direction, time or wavelength "
-                                "(wavelength 0 needs a wavelength density)");
+                                "(wavelength 0 needs a wavelength density or law)");
   for (std::size_t c = 0; c < chunks; ++c)
     start[c + 1] += start[c];
 

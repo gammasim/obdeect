@@ -32,7 +32,7 @@ and `d = R (cx, cy, cz)`, with `u` the metres per input length unit and `R` orth
   - `wavelength_law = (lo_nm, hi_nm)`: a density proportional to 1/lambda^2, sampled
     exactly, `lambda = 1 / (1/lo - u (1/lo - 1/hi))`, and truncated to an integer
     number of nm, `floor(lambda)`, as sim_telarray does. Values lie in
-    `[floor(lo), hi)`.
+    `[floor(lo), hi)`, with `1 <= lo < hi` so that no value is 0 nm.
 
 Giving both raises `ValueError`.
 

@@ -137,10 +137,10 @@ class OpticalModel:
     def max_incoming_obscurer_z_m(self) -> float | None:
         """Highest z [m, telescope frame] of any obscurer on the incoming leg, or None.
 
-        Each obscurer is bounded from above: a plate by its centre plus its radius,
-        a cylinder or frustum by its end points plus the end radii, a polyhedron by
-        its highest vertex. Photons starting below this height never meet those
-        obscurers.
+        Each obscurer is bounded from above: a plate by its centre plus its aperture's
+        circumradius, a cylinder or frustum by its end points plus the outer end radii
+        (wall thickness included), a polyhedron by its highest vertex. Photons
+        starting below this height never meet those obscurers.
         """
         top = self._incoming_top()
         return None if top is None else top[0]
@@ -442,8 +442,9 @@ class OpticalModel:
         (n_wavelength, n_zem) in [0, 1]; `wavelength_density` is ``(nm,
         values)``. `wavelength_law` is ``(lo_nm, hi_nm)``: it samples
         wavelength-0 bunches as sim_telarray does, with density proportional to
-        1/lambda^2 on [lo_nm, hi_nm] and wavelengths truncated to integer nm.
-        Give at most one of `wavelength_density` and `wavelength_law`.
+        1/lambda^2 on [lo_nm, hi_nm] (1 <= lo_nm < hi_nm) and wavelengths
+        truncated to integer nm. Give at most one of `wavelength_density` and
+        `wavelength_law`.
 
         Each photon of a bunch is thinned by the acceptance and the model's
         response bound, traced, and, with `roulette`, kept with the probability
@@ -547,6 +548,27 @@ class OpticalModel:
         )
 
 
+def _circumradius(aperture: str, diameter_m: float) -> float:
+    """Radius [m] of the circle that encloses a plate aperture, as in the native tracer."""
+    half_width = 0.5 * float(diameter_m)
+    if aperture == "square":
+        return half_width * math.sqrt(2.0)
+    if aperture.startswith("hexagon"):
+        return half_width * 2.0 / math.sqrt(3.0)
+    return half_width
+
+
+def _end_radii(obscurer: Mapping[str, Any]) -> tuple[float, float]:
+    """Outer radii [m] at the start and end of a cylinder or frustum (wall included)."""
+    if "start_radius_m" in obscurer:
+        thickness = float(obscurer["thickness_m"])
+        return (
+            float(obscurer["start_radius_m"]) + thickness,
+            float(obscurer["end_radius_m"]) + thickness,
+        )
+    return (0.5 * float(obscurer["diameter_m"]),) * 2
+
+
 def _obscurer_top_z_m(obscurer: Mapping[str, Any]) -> float:
     """Highest z [m] of one obscurer record (see the accessor)."""
     if "vertices_m" in obscurer:
@@ -554,19 +576,14 @@ def _obscurer_top_z_m(obscurer: Mapping[str, Any]) -> float:
     if "centre_m" in obscurer:
         normal = np.asarray(obscurer["normal"], dtype=float)
         normal /= np.linalg.norm(normal)
-        radius = 0.5 * float(obscurer["diameter_m"])
+        radius = _circumradius(obscurer["aperture"], obscurer["diameter_m"])
         return float(obscurer["centre_m"][2]) + radius * math.sqrt(max(0.0, 1.0 - normal[2] ** 2))
     start, end = (np.asarray(obscurer[key], dtype=float) for key in ("start_m", "end_m"))
     axis = (end - start) / np.linalg.norm(end - start)
-    radii = (
-        (obscurer["start_radius_m"], obscurer["end_radius_m"])
-        if "start_radius_m" in obscurer
-        else (0.5 * obscurer["diameter_m"],) * 2
-    )
     sine = math.sqrt(max(0.0, 1.0 - axis[2] ** 2))
     return max(
-        float(point[2]) + float(radius) * sine
-        for point, radius in zip((start, end), radii, strict=True)
+        float(point[2]) + radius * sine
+        for point, radius in zip((start, end), _end_radii(obscurer), strict=True)
     )
 
 
@@ -577,22 +594,17 @@ def _obscurer_support(obscurer: Mapping[str, Any], direction: np.ndarray) -> flo
     if "centre_m" in obscurer:
         normal = np.asarray(obscurer["normal"], dtype=float)
         normal /= np.linalg.norm(normal)
-        radius = 0.5 * float(obscurer["diameter_m"])
+        radius = _circumradius(obscurer["aperture"], obscurer["diameter_m"])
         radial = math.sqrt(
             max(0.0, float(np.dot(direction, direction) - np.dot(direction, normal) ** 2))
         )
         return float(np.dot(obscurer["centre_m"], direction)) + radius * radial
     start, end = (np.asarray(obscurer[key], dtype=float) for key in ("start_m", "end_m"))
     axis = (end - start) / np.linalg.norm(end - start)
-    radii = (
-        (obscurer["start_radius_m"], obscurer["end_radius_m"])
-        if "start_radius_m" in obscurer
-        else (0.5 * obscurer["diameter_m"],) * 2
-    )
     radial = math.sqrt(max(0.0, float(np.dot(direction, direction) - np.dot(direction, axis) ** 2)))
     return max(
-        float(np.dot(point, direction)) + float(radius) * radial
-        for point, radius in zip((start, end), radii, strict=True)
+        float(np.dot(point, direction)) + radius * radial
+        for point, radius in zip((start, end), _end_radii(obscurer), strict=True)
     )
 
 

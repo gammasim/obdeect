@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from obdeect import OpticalModel, ThreadPool
 from obdeect.compiler import model_hash
+from obdeect.model import _obscurer_top_z_m
 from telescopes import record, segmented
 
 IDENTITY = np.eye(3)
@@ -392,7 +393,15 @@ def test_inverse_square_law_follows_the_law():
 def test_wavelength_law_rejects_invalid_limits():
     model = compiled(telescope_transmission=None)
     bunches, plane_z = star_bunches(model, 100, wavelength_nm=0.0)
-    for law in ((0.0, 600.0), (-300.0, 600.0), (600.0, 600.0), (600.0, 300.0), (300.0, np.inf)):
+    # lo below 1 nm would let floor(lambda) reach 0, which the tracer rejects photon by photon.
+    for law in (
+        (0.0, 600.0),
+        (0.5, 0.75),
+        (-300.0, 600.0),
+        (600.0, 600.0),
+        (600.0, 300.0),
+        (300.0, np.inf),
+    ):
         with pytest.raises(ValueError, match="wavelength law"):
             trace_bunches(model, bunches, plane_z, wavelength_law=law)
     with pytest.raises(ValueError, match="one wavelength law"):
@@ -522,6 +531,28 @@ def test_normalised_transmission_keeps_errors():
     broken = {**bunches, "size": np.zeros(100, dtype=np.float32)}
     with pytest.raises(ValueError, match="invalid"):
         trace_bunches(model, broken, plane_z, normalise_transmission=True)
+
+
+def test_obscurer_top_bounds_square_plate_and_frustum_wall():
+    # Tilted square plate: circumradius sqrt(2) x half width = sqrt(2), and the sine of the tilt
+    # is 1/sqrt(2), so the top is 1 above the centre.
+    square = {
+        "centre_m": [0.0, 0.0, 2.0],
+        "normal": [1.0, 0.0, 1.0],
+        "aperture": "square",
+        "diameter_m": 2.0,
+    }
+    assert _obscurer_top_z_m(square) == pytest.approx(3.0)
+    # Tilted frustum: its outer radius is the end radius plus the wall thickness.
+    frustum = {
+        "start_m": [0.0, 0.0, 0.0],
+        "end_m": [1.0, 0.0, 1.0],
+        "start_radius_m": 1.0,
+        "end_radius_m": 1.0,
+        "thickness_m": 0.5,
+        "solid": False,
+    }
+    assert _obscurer_top_z_m(frustum) == pytest.approx(1.0 + 1.5 / math.sqrt(2.0))
 
 
 def test_input_plane_below_an_incoming_obscurer_is_rejected():

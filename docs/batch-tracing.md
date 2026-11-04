@@ -73,7 +73,7 @@ inverse transform. This is the sampling sim_telarray uses over the CORSIKA
 header range. The wavelength is then truncated to an integer number of nm,
 `floor(lambda)`, as in sim_telarray. The values lie in [floor(lo_nm), hi_nm),
 so for a non-integer `lo_nm` the lowest value can be below `lo_nm`. The law
-needs finite 0 < lo_nm < hi_nm. Give at most one of `wavelength_density` and
+needs finite 1 <= lo_nm < hi_nm, so that no sample truncates to 0 nm. Give at most one of `wavelength_density` and
 `wavelength_law`; giving both raises `ValueError`. Bunches with a fixed
 wavelength are not affected.
 

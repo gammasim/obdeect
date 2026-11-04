@@ -637,7 +637,7 @@ void bunch_survivor_allocation() {
   }
 }
 
-// trace_bunches rejects a wavelength density reaching 0 nm and bad acceptance axes.
+// trace_bunches rejects a wavelength density or law reaching 0 nm and bad acceptance axes.
 void bunch_option_validation() {
   const auto model = single_facet(10.0, 0.5);
   const float zero = 0.0F, one = 1.0F;
@@ -661,6 +661,11 @@ void bunch_option_validation() {
   options.wavelength_density = &from_zero;
   CHECK(throws_invalid_argument([&] { run(options); }));
   options.wavelength_density = &from_below;
+  CHECK(throws_invalid_argument([&] { run(options); }));
+
+  const InverseSquareLaw from_sub_nm{0.5, 0.75};
+  options.wavelength_density = nullptr;
+  options.wavelength_law = &from_sub_nm;
   CHECK(throws_invalid_argument([&] { run(options); }));
 
   const double nan = std::numeric_limits<double>::quiet_NaN();
