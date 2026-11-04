@@ -116,9 +116,18 @@ def test_axes_offset_follows_the_zenith_angle():
     assert model.axes_offset_m == pytest.approx((1.6, 0.0, 0.0))
 
 
-def test_non_zero_perpendicular_component_is_not_supported():
-    with pytest.raises(NotImplementedError, match="perpendicular"):
-        compiled([OFFSET_CM, 10.0])
+def test_second_axes_offset_component_is_transverse_to_the_optical_axis():
+    model = compiled([OFFSET_CM, 10.0])
+    assert model.axes_offset_m == pytest.approx((
+        OFFSET_CM / 100 * COS + 0.1,
+        0.0,
+        OFFSET_CM / 100 * SIN,
+    ))
+
+
+def test_second_axes_offset_component_needs_the_zenith_angle():
+    with pytest.raises(ModelError, match="zenith"):
+        compiled([0.0, 10.0], zenith_deg=None)
 
 
 def test_axes_offset_needs_the_zenith_angle():
