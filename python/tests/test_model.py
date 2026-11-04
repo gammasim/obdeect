@@ -7,13 +7,20 @@ import sys
 
 import numpy as np
 import pytest
-from obdeect import ModelError, OpticalModel, ThreadPool, trace_many
+from obdeect import ModelError, OpticalModel, ThreadPool, __version__, trace_many
 from obdeect.cli import main
 from obdeect.compiler import model_hash
 from obdeect.model import DETECTED, STATUS_NAMES
 from obdeect.psf import containment, summary
 from obdeect.repository import read_telescope
 from telescopes import STRUCTURE, dual, record, segmented, write_simulation_models
+
+
+def test_cli_version(capsys):
+    with pytest.raises(SystemExit) as error:
+        main(["--version"])
+    assert error.value.code == 0
+    assert capsys.readouterr().out.strip() == f"obdeect {__version__}"
 
 
 def model_of(records_files, **options):
