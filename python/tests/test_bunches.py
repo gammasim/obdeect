@@ -585,6 +585,39 @@ def test_tilted_plane_cuts_incoming_obscurer():
         )
 
 
+def test_tilted_plane_above_a_slanted_cylinder_is_accepted():
+    # Rotation about x by 20 deg: the plane normal is n = (0, -sin, cos). The cylinder runs from
+    # (0, -1, 0) to (0, 1, 1), so its lateral extreme (y = -1, z = 0) is not its highest point
+    # (y = 1, z = 1). Its support max n.q is about 0.65, but the old bound (max lateral support
+    # + max z) gives about 1.28: the plane at n.p = 0.9 lies above the cylinder everywhere.
+    angle = math.radians(20.0)
+    tilted = np.array([
+        [1.0, 0.0, 0.0],
+        [0.0, math.cos(angle), -math.sin(angle)],
+        [0.0, math.sin(angle), math.cos(angle)],
+    ])
+    cylinder = {
+        "id": 900,
+        "name": "slanted-cylinder",
+        "group": "test",
+        "legs": ["incoming"],
+        "shape": "cylinder",
+        "start_m": [0.0, -1.0, 0.0],
+        "end_m": [0.0, 1.0, 1.0],
+        "diameter_m": 0.1,
+    }
+
+    def only_cylinder(document):
+        document["optics"]["obscurers"] = [cylinder]
+
+    model = edited(compiled(telescope_transmission=None), only_cylinder)
+    bunches, _ = star_bunches(model, 10)
+    assert "weight" in trace_bunches(model, bunches, 0.9, frame_rotation=tilted)
+    # A plane at n.p = 0.3 passes through the cylinder's low end (height 0 at y = -1): rejected.
+    with pytest.raises(ValueError, match="input plane below incoming obscurer 'slanted-cylinder'"):
+        trace_bunches(model, bunches, 0.3, frame_rotation=tilted)
+
+
 def test_simtools_plane_at_60_degrees_is_accepted():
     model = compiled(telescope_transmission=None)
     top = model.max_incoming_obscurer_z_m()

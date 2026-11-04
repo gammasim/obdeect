@@ -433,10 +433,9 @@ class OpticalModel:
         `seed`). `frame_rotation` (3 x 3, input to telescope frame),
         `frame_offset_m`, `length_unit_m` (metres per input length unit) and
         `plane_z` (input units) place the input plane in the telescope frame. The
-        model's `axes_offset_m` is subtracted from `frame_offset_m`; with zero
+        native tracer applies the model's `axes_offset_m` O_t (telescope frame): with zero
         `frame_offset_m`, a ground-frame point P is traced at R P - O_t = R (P - O_g),
-        where O_t is `axes_offset_m` in the telescope frame and O_g = R.T O_t is in
-        the ground frame. This assumes
+        where O_g = R.T O_t is in the ground frame. This assumes
         `frame_rotation` is the ground-to-telescope rotation at the zenith angle the model
         was compiled for.
         `acceptance` is ``(wavelength_nm, zem_m, values)`` with values
@@ -474,30 +473,22 @@ class OpticalModel:
         rotation = np.ascontiguousarray(frame_rotation, dtype=np.float64)
         if rotation.shape != (3, 3):
             raise ValueError("frame_rotation must be a 3 x 3 matrix")
-        # The model's axes offset displaces the input origin as well (see `axes_offset_m`).
-        offset = np.ascontiguousarray(frame_offset_m, dtype=np.float64) - np.asarray(
-            self.axes_offset_m, dtype=np.float64
-        )
-        # The plane has normal n = R[:, 2] and passes through p = offset + R[:, 2] * z.
-        # At lateral position (x, y), its height is (n.p - n_x*x - n_y*y) / n_z.
-        # Minimise this over each obscurer's footprint, then compare with its top.
-        # For an untilted plane retain the original input-origin height check.
+        offset = np.ascontiguousarray(frame_offset_m, dtype=np.float64)
+        # The traced input origin is offset - axes_offset_m (applied natively).
+        traced_offset = offset - np.asarray(self.axes_offset_m, dtype=np.float64)
+        # The input plane is {p : n.p = value} with n = R[:, 2]. Its height on the telescope
+        # axis is value / n_z, and an obscurer with support s = max over its points q of n.q
+        # lies entirely below the plane iff s <= value (for n_z > 0).
         top = self._incoming_top()
         if top is not None and float(length_unit_m) > 0.0:
             normal = rotation[:, 2]
-            origin_height = float(offset[2]) + float(normal[2]) * float(plane_z) * float(
-                length_unit_m
-            )
-            if normal[0] == 0.0 and normal[1] == 0.0:
-                checks = [(origin_height, top[0], top[1])]
-            elif normal[2] > 0.0:
-                point = offset + normal * float(plane_z) * float(length_unit_m)
-                axis_height = float(np.dot(normal, point) / normal[2])
-                lateral = np.array([normal[0], normal[1], 0.0])
+            point = traced_offset + normal * float(plane_z) * float(length_unit_m)
+            value = float(np.dot(normal, point))
+            if normal[2] > 0.0:
                 checks = [
                     (
-                        axis_height - _obscurer_support(o, lateral) / float(normal[2]),
-                        _obscurer_top_z_m(o),
+                        value / float(normal[2]),
+                        _obscurer_support(o, normal) / float(normal[2]),
                         o["name"],
                     )
                     for o in self._document["optics"]["obscurers"]

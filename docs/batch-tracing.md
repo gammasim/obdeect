@@ -50,7 +50,7 @@ out = model.trace_bunches(
     },
     seed=run_seed_of_this_telescope,
     frame_rotation=rotation,  # 3 x 3, input frame to telescope frame
-    frame_offset_m=offset_m,  # telescope frame; the model's axes offset is subtracted
+    frame_offset_m=offset_m,  # telescope frame; the model's axes offset is applied natively
     length_unit_m=0.01,  # metres per input length unit (cm here)
     plane_z=0.0,  # height of the input plane, input units; above all incoming obscurers
     acceptance=(wavelength_nm_axis, zem_m_axis, values),  # optional, in [0, 1]
@@ -79,9 +79,9 @@ wavelength are not affected.
 
 `frame_offset_m` is the input origin in the telescope frame, in metres. A
 model with an axes offset (see [Optical models](optical-models.md)) stores it as
-`axes_offset_m`, and `trace_bunches` subtracts that vector from `frame_offset_m`.
-A ground-frame point P is therefore traced at `R P + frame_offset_m - O`, which
-is `R (P - O_ground)` for the ground-frame offset `O_ground` of the
+`axes_offset_m`, and the native tracer subtracts that vector from the traced
+origin. A ground-frame point P is therefore traced at `R P + frame_offset_m - O`,
+which is `R (P - O_ground)` for the ground-frame offset `O_ground` of the
 sim_telarray `axes_offsets` record. This assumes that `frame_rotation` is the
 ground-to-telescope rotation at the zenith angle the model was compiled for.
 A model without an axes offset is traced as before.
@@ -121,14 +121,15 @@ acceptance outside [0, 1], a bunch of wavelength 0 without a density or law, a
 bad size or direction, both `wavelength_density` and `wavelength_law`, an
 invalid law) raises `ValueError` before any tracing.
 
-The input plane `z = plane_z` (input units) must lie above every obscurer on the
+The input plane (input units `plane_z`, tilted by `frame_rotation`, shifted by
+`frame_offset_m` and the axes offset) must lie above every obscurer on the
 incoming leg, such as the camera housing. Photons that start below such an
-obscurer never meet it. Before tracing, `trace_bunches` computes, for each incoming
-obscurer, the lowest height of the plane along the telescope axis over that
-obscurer's footprint, and raises `ValueError` if it is below the obscurer's top.
-For an untilted plane this is the plane height at the input origin. The tilt of
-the plane is taken from `frame_rotation`, so the whole plane is bounded, not only
-its origin. The message names the obscurer. Raise `plane_z` to fix this.
+obscurer never meet it. Before tracing, `trace_bunches` takes the plane as
+`n . p = value`, with normal `n = R e_z`, and compares it with each incoming
+obscurer's highest point along `n` (its support). It raises `ValueError` if the
+plane passes below that point. The message names the obscurer and gives the
+height along the telescope axis, `value / n_z`. For an untilted plane without
+offset this is the plane height at the input origin. Raise `plane_z` to fix this.
 
 The random numbers of a photon depend on `(seed, bunch_id, sub_photon)`.
 **Bunch ids must be unique per seed.** The recommended id is

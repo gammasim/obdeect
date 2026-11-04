@@ -259,14 +259,16 @@ runs with three seeds; their mean is the reference.
   optics, sim_telarray takes the airmass from the camera-frame direction of each
   bunch (near the telescope axis), not from its direction in the sky. Without a
   correction this gave 7% too many photoelectrons at 40 deg and 33-39% at
-  60 deg. The route therefore scales each bunch by the ratio of the native
+  60 deg. The route therefore scales each photon weight by the ratio of the native
   transmission to the one sim_telarray applies, using sim_telarray's own
-  transmission formula. A sim_telarray option to switch off its absorption with
+  transmission formula. obdeect returns the telescope transmission in its
+  weights (`normalise_transmission=False`), so the total equals the native chain. A sim_telarray option to switch off its absorption with
   bypassed optics would remove this workaround.
 - Images agree as well as two native seeds agree with each other: pixel
   correlation within 0.004 of the seed-to-seed value, image centre and width
   within 0.9 mm (seed-to-seed spread 3-12 mm).
-- Photoelectron arrival times agree per event within 0.03 ns.
+- Photoelectron arrival times: the per-event mean time difference is within
+  0.06 ns, and the Kolmogorov-Smirnov p value is at least 0.002 everywhere.
 
 The scripts and full results are in the validation workspace (`phase3`:
 `results/RESULTS.md`, `results/RESULTS-R19.md`, `results/RESULTS-R19-pixels.md`).

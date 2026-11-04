@@ -11,5 +11,6 @@ usage
 python-guide
 light-sources
 batch-tracing
+air-shower-photons
 optical-models
 ```

@@ -1,9 +1,16 @@
 // Optical-model loading: valid documents load; every error names its path.
 #include "check.hpp"
 
+#include "obdeect/bunches.hpp"
 #include "obdeect/model_json.hpp"
 
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <string>
+#include <vector>
 
 using namespace obdeect;
 
@@ -63,6 +70,79 @@ bool contains(const std::string &text, const std::string &part) {
   return text.find(part) != std::string::npos;
 }
 
+// Columns of one trace_bunches call without roulette: positions and their row count.
+struct Traced {
+  std::vector<double> position;
+  std::size_t rows{};
+};
+
+Traced trace_bunches_of(const OpticalModel &model, const BunchBlock &in, const BunchFrame &frame) {
+  Traced out;
+  ThreadPool pool(2);
+  std::vector<double> direction, time, weight, wavelength;
+  std::vector<std::uint64_t> bunch;
+  std::vector<std::uint32_t> sub;
+  const auto allocate = [&](std::size_t rows) {
+    out.position.resize(3 * rows);
+    direction.resize(3 * rows);
+    time.resize(rows);
+    weight.resize(rows);
+    wavelength.resize(rows);
+    bunch.resize(rows);
+    sub.resize(rows);
+    return BunchResult{out.position.data(), direction.data(), time.data(), weight.data(),
+                       wavelength.data(),   bunch.data(),     sub.data()};
+  };
+  out.rows = trace_bunches(model, in, frame, BunchOptions{}, 7, pool, allocate);
+  return out;
+}
+
+// The loaded axes offset is applied by the tracer: a ground point P is traced at R P - O, the
+// same as the model without offset and frame offset -O.
+void axes_offset_is_applied_by_the_tracer() {
+  const std::string key = "\"optics\": {";
+  std::string text = kValid;
+  text.insert(text.find(key) + key.size(), "\n    \"axes_offset_m\": [0.5, -0.2, 0.1],");
+  auto shifted = load_model(text);
+  auto plain = load_model(kValid);
+  CHECK((shifted.axes_offset_m == std::array<double, 3>{0.5, -0.2, 0.1}));
+  CHECK((plain.axes_offset_m == std::array<double, 3>{}));
+  // Without the obscurers, which would shadow the photons, the photons reach the primary.
+  shifted.obscurers = Obscurers(std::vector<Obscurer>{}, std::vector<Plane>{});
+  plain.obscurers = Obscurers(std::vector<Obscurer>{}, std::vector<Plane>{});
+
+  constexpr std::size_t n = 200;
+  std::vector<float> x(n), y(n), zero(n, 0.0F), size(n, 1.0F), wavelength(n, 400.0F), time(n, 0.0F);
+  std::vector<std::uint64_t> ids(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    x[i] = static_cast<float>(0.2 + 0.6 * static_cast<double>(i) / n);
+    y[i] = static_cast<float>(-0.4 + 0.8 * static_cast<double>((37 * i) % n) / n);
+    ids[i] = i;
+  }
+  const BunchBlock in{x.data(),    y.data(),    zero.data(),       zero.data(), time.data(),
+                      zero.data(), size.data(), wavelength.data(), ids.data(),  n};
+  BunchFrame origin;
+  origin.plane_z = 30.0;
+  BunchFrame explicit_offset = origin;
+  explicit_offset.offset_m[0] = -0.5;
+  explicit_offset.offset_m[1] = 0.2;
+  explicit_offset.offset_m[2] = -0.1;
+
+  const Traced offset_model = trace_bunches_of(shifted, in, origin);
+  const Traced reference = trace_bunches_of(plain, in, explicit_offset);
+  CHECK(offset_model.rows > 0);
+  CHECK(offset_model.rows == reference.rows);
+  CHECK(offset_model.position.size() == reference.position.size());
+  double largest = 0.0;
+  for (std::size_t i = 0; i < std::min(offset_model.position.size(), reference.position.size());
+       ++i)
+    largest = std::max(largest, std::abs(offset_model.position[i] - reference.position[i]));
+  CHECK(largest <= 1e-12);
+  // The offset is not a no-op: the same model without it traces the photons elsewhere.
+  const Traced unshifted = trace_bunches_of(plain, in, origin);
+  CHECK(unshifted.position != offset_model.position);
+}
+
 } // namespace
 
 void all_tests() {
@@ -92,6 +172,9 @@ void all_tests() {
   CHECK(contains(error_after(R"("plane_z_m": 16.0)", R"("asphere_x": 1)"),
                  "focal_surface: unknown key"));
   CHECK(contains(error_after("\"optics\": {", "\"optics\": {,"), "JSON syntax error"));
+  CHECK(contains(error_after("\"optics\": {", "\"optics\": {\"axes_offset_m\": [1, 2],"),
+                 "expected three components"));
+  axes_offset_is_applied_by_the_tracer();
 }
 
 int main() { return run_checks(all_tests); }

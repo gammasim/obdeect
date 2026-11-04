@@ -168,6 +168,25 @@ def test_input_plane_height_is_taken_at_the_offset_origin(offset_model):
     assert "weight" in trace_ground(offset_model, bunches, limit + 0.05)
 
 
+def test_offset_plane_at_60_degrees_is_accepted():
+    # R20: at 60 deg the offset has a telescope-frame z component of 1.6 m sin(60 deg), and the
+    # input plane is ground-horizontal with a 1 m margin above the obscurer top (as simtools).
+    # The offset lies in the ground plane, so it does not move the plane itself and the plane
+    # height at the telescope axis is (top + 1 m) / cos(60 deg). Ignoring the offset lowers the
+    # plane by that z component and rejects it.
+    angle = math.radians(60.0)
+    cos60, sin60 = math.cos(angle), math.sin(angle)
+    rotation = np.array([[cos60, 0.0, -sin60], [0.0, 1.0, 0.0], [sin60, 0.0, cos60]])
+    model = compiled([OFFSET_CM, 0.0], zenith_deg=60.0)
+    top = model.max_incoming_obscurer_z_m()
+    bunches = ground_bunches(10)
+    assert "weight" in trace_ground(model, bunches, (top + 1.0) / cos60, rotation=rotation)
+    # The plate centre (on the axis, height top) has n.q = top cos(60 deg): a plane through
+    # n.p = top cos(60 deg) - 0.1 m is below it.
+    with pytest.raises(ValueError, match="input plane below incoming obscurer"):
+        trace_ground(model, bunches, top * cos60 - 0.1, rotation=rotation)
+
+
 def test_star_tracing_is_unaffected_by_the_offset(reference, offset_model):
     # Star photons are sampled and traced in the telescope frame, where the offset does not act.
     stars = reference.star_photons(4000, seed=SEED, towards_source=(0.02, 0.01, 0.99))
