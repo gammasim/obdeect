@@ -105,8 +105,10 @@ public:
             const BunchOptions &options, std::uint64_t seed)
       : model_(model), in_(in), frame_(frame), options_(options), seed_(seed) {}
 
-  // True if a bunch in [begin, end) is invalid.
-  bool invalid(std::size_t begin, std::size_t end) const {
+  // Rows that chunk c can write at most (ceil of the sizes); sets `bad` for an
+  // invalid bunch.
+  std::size_t rows_max(std::size_t begin, std::size_t end, bool &bad) const {
+    std::size_t rows = 0;
     for (std::size_t i = begin; i < end; ++i) {
       const double size = in_.size[i];
       const double lambda = in_.wavelength_nm[i];
@@ -118,18 +120,18 @@ public:
                 static_cast<double>(in_.cy[i]) * in_.cy[i] <=
             1.0 + 1e-6) ||
           !std::isfinite(in_.time_ns[i]) || !std::isfinite(in_.zem[i]))
-        return true;
+        bad = true;
+      else
+        rows += sub_photons(in_.size[i]);
     }
-    return false;
+    return rows;
   }
 
   // Trace the bunches [begin, end), writing rows from `row` on; returns the
   // number of rows written.
-  // In the thinning pass, `survivor_candidates` receives the candidate index (within
-  // [begin, end)) of each survivor; the tracing pass reads it back in the same order.
   std::size_t run(std::size_t begin, std::size_t end, const BunchResult &out, std::size_t row,
-                  std::vector<std::size_t> &survivor_candidates,
-                  std::vector<double> &roulette_draws, bool thinning) const {
+                  std::uint8_t *keep_flags, std::vector<double> &roulette_draws,
+                  bool thinning) const {
     const std::size_t first = row;
     const double u = frame_.length_unit_m;
     const double *r = frame_.rotation;
@@ -168,7 +170,7 @@ public:
         cached_acceptance = options_.acceptance ? options_.acceptance->at(lambda, zem_m) : 1.0;
       }
     };
-    std::size_t candidate = 0, next = 0; // next: cursor into survivor_candidates.
+    std::size_t candidate = 0, survivor = 0;
     for (std::size_t i = begin; i < end; ++i) {
       const double zem_m = u * in_.zem[i];
       const double size = in_.size[i], time = in_.time_ns[i];
@@ -183,10 +185,8 @@ public:
       for (std::size_t k = 0; k < n_sub; ++k) {
         const auto sub = static_cast<std::uint32_t>(k);
         const std::size_t flag = candidate++;
-        if (!thinning) {
-          if (next == survivor_candidates.size() || survivor_candidates[next] != flag)
-            continue;
-        }
+        if (!thinning && !keep_flags[flag])
+          continue;
         const double frac = static_cast<double>(k + 1) <= size ? 1.0 : size - std::floor(size);
         if (!fixed) {
           if (options_.wavelength_law) {
@@ -206,14 +206,14 @@ public:
         const double keep = frac * cached_acceptance * bound;
         if (thinning) {
           const auto draw = uniform4(seed_, id, Stream::thinning, sub);
-          if (draw[0] < keep) {
-            survivor_candidates.push_back(flag);
+          keep_flags[flag] = draw[0] < keep;
+          if (keep_flags[flag]) {
             roulette_draws.push_back(draw[1]);
             ++row;
           }
           continue;
         }
-        const double roulette_draw = roulette_draws[next++];
+        const double roulette_draw = roulette_draws[survivor++];
         if (!placed) {
           ray = transform(i);
           placed = true;
@@ -289,24 +289,27 @@ std::size_t trace_bunches(const OpticalModel &model, const BunchBlock &in, const
   validate_bound_support(model); // Throws ModelError for an unsupported transmission.
   const detail::BunchTask task(model, in, frame, options, seed);
 
-  // First pass: the input check.
+  // First pass: the most rows each chunk can write (and the input check).
   const std::size_t chunks = (in.n + kChunkSize - 1) / kChunkSize;
-  std::vector<std::size_t> found(chunks, 0);
+  std::vector<std::size_t> start(chunks + 1, 0), found(chunks, 0);
   std::vector<char> bad(chunks, 0);
   pool.run(chunks, [&](std::size_t c) {
-    bad[c] = task.invalid(c * kChunkSize, std::min(in.n, (c + 1) * kChunkSize));
+    bool b = false;
+    start[c + 1] = task.rows_max(c * kChunkSize, std::min(in.n, (c + 1) * kChunkSize), b);
+    bad[c] = b;
   });
   if (std::find(bad.begin(), bad.end(), char{1}) != bad.end())
     throw std::invalid_argument("bunches: invalid size, position, direction, time or wavelength "
                                 "(wavelength 0 needs a wavelength density)");
+  for (std::size_t c = 0; c < chunks; ++c)
+    start[c + 1] += start[c];
 
-  // Record thinning once: per chunk, the candidate index of each survivor and its roulette
-  // draw, so that memory grows with the survivors rather than with the candidates.
-  std::vector<std::vector<std::size_t>> survivors(chunks);
+  // Record thinning once, including the roulette draw needed after tracing.
+  std::vector<std::uint8_t> keep_flags(start.back());
   std::vector<std::vector<double>> roulette_draws(chunks);
   pool.run(chunks, [&](std::size_t c) {
     found[c] = task.run(c * kChunkSize, std::min(in.n, (c + 1) * kChunkSize), BunchResult{}, 0,
-                        survivors[c], roulette_draws[c], true);
+                        keep_flags.data() + start[c], roulette_draws[c], true);
   });
   std::vector<std::size_t> output_start(chunks + 1, 0);
   for (std::size_t c = 0; c < chunks; ++c)
@@ -316,7 +319,7 @@ std::size_t trace_bunches(const OpticalModel &model, const BunchBlock &in, const
   // Trace survivors into their chunk's allocated range.
   pool.run(chunks, [&](std::size_t c) {
     found[c] = task.run(c * kChunkSize, std::min(in.n, (c + 1) * kChunkSize), out, output_start[c],
-                        survivors[c], roulette_draws[c], false);
+                        keep_flags.data() + start[c], roulette_draws[c], false);
   });
 
   std::vector<detail::Column> columns;
