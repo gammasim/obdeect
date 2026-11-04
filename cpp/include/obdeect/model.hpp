@@ -4,6 +4,7 @@
 #include "obdeect/surfaces.hpp"
 #include "obdeect/table.hpp"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -72,6 +73,8 @@ struct OpticalModel {
   Obscurers obscurers;
   std::optional<TelescopeTransmission> telescope_transmission;
   double propagation_group_index{1.0};
+  // Optical origin offset O [m, telescope frame]: a ground point P is traced at R P - O.
+  std::array<double, 3> axes_offset_m{};
 };
 
 } // namespace obdeect

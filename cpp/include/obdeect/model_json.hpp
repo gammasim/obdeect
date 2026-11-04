@@ -439,8 +439,15 @@ inline Obscurer obscurer(const Node &node, std::vector<Plane> &planes) {
     root["format"].fail("expected '" + std::string(kModelFormat) + "'");
   const Node optics = root["optics"];
   (void)optics.object({"propagation_group_index", "telescope_transmission", "primary", "secondary",
-                       "secondary_blocks_incoming", "focal_surface", "obscurers"});
+                       "secondary_blocks_incoming", "focal_surface", "obscurers", "axes_offset_m"});
   OpticalModel model;
+  if (optics.has("axes_offset_m")) {
+    const auto offset = optics["axes_offset_m"].array();
+    if (offset.size() != 3)
+      optics["axes_offset_m"].fail("expected three components");
+    for (std::size_t i = 0; i < 3; ++i)
+      model.axes_offset_m[i] = offset[i].number();
+  }
   std::vector<std::uint32_t> ids;
   model.propagation_group_index = optics["propagation_group_index"].number();
   if (!(model.propagation_group_index >= 1.0))

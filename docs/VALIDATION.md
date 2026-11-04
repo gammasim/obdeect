@@ -232,6 +232,47 @@ illuminators: 10 pulses of 10^9 photons.
 The scripts are in the validation workspace (`val/phase2`: `cases.sh`,
 `run_case.sh`, `compare.py`, `summarize.py`, `xyzls_times.py`).
 
+## Air-shower photons (Phase 3)
+
+CORSIKA + sim_telarray against CORSIKA + obdeect + sim_telarray, simulation
+models 7.0.0, 1 TeV gammas, 50 showers with 10 core reuses per point. Both
+chains read the same CORSIKA IACT file. In the obdeect chain the simtools
+shower route traces the photon bunches to the camera and sim_telarray simulates
+the camera with its optics bypassed (`Bypass_Optics=1`). Native sim_telarray
+runs with three seeds; their mean is the reference.
+
+| Telescope | Zenith [deg] | p.e. sim_telarray | p.e. obdeect | obdeect / sim_telarray |
+| --- | --- | --- | --- | --- |
+| LSTS-01 | 20 | 1678606 | 1677207 | 0.9992 |
+| LSTS-01 | 40 | 1196284 | 1197360 | 1.0009 |
+| MSTS-04 | 40 | 406894 | 406417 | 0.9988 |
+| LSTN-01 | 40 | 1061542 | 1062029 | 1.0005 |
+| MSTN-07 | 40 | 264967 | 265766 | 1.0030 |
+| LSTS-01 | 60 | 390242 | 390761 | 1.0013 |
+| MSTS-04 | 60 | 134511 | 135149 | 1.0047 |
+| LSTN-01 | 60 | 325837 | 325495 | 0.9990 |
+| MSTN-07 | 60 | 95095 | 95157 | 1.0007 |
+
+- All points agree within 0.5% and within 1.5 sigma (native seed spread plus
+  Poisson).
+- Atmospheric transmission is split between the two codes. With bypassed
+  optics, sim_telarray takes the airmass from the camera-frame direction of each
+  bunch (near the telescope axis), not from its direction in the sky. Without a
+  correction this gave 7% too many photoelectrons at 40 deg and 33-39% at
+  60 deg. The route therefore scales each photon weight by the ratio of the native
+  transmission to the one sim_telarray applies, using sim_telarray's own
+  transmission formula. obdeect returns the telescope transmission in its
+  weights (`normalise_transmission=False`), so the total equals the native chain. A sim_telarray option to switch off its absorption with
+  bypassed optics would remove this workaround.
+- Images agree as well as two native seeds agree with each other: pixel
+  correlation within 0.004 of the seed-to-seed value, image centre and width
+  within 0.9 mm (seed-to-seed spread 3-12 mm).
+- Photoelectron arrival times: the per-event mean time difference is within
+  0.06 ns, and the Kolmogorov-Smirnov p value is at least 0.002 everywhere.
+
+The scripts and full results are in the validation workspace (`phase3`:
+`results/RESULTS.md`, `results/RESULTS-R19.md`, `results/RESULTS-R19-pixels.md`).
+
 ## Single-core speed
 
 Both codes pinned to one core of the validation container (aarch64 Linux VM,
