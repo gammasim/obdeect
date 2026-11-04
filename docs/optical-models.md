@@ -31,15 +31,14 @@ path of the first error. Surface and obscurer ids are unique.
 
 Some telescopes have the optical origin displaced from the rotation axes. The
 sim_telarray `axes_offsets` record gives the horizontal offset between the
-azimuth and altitude axes, in the record's units (cm in sim_telarray). The
-first component is that offset; a non-zero second component (displacement
-perpendicular to the optical axis) is rejected at compile time.
+azimuth and altitude axes, followed by the altitude-to-optical-axis offset,
+in the record's units (cm in sim_telarray).
 
 The compiler stores the offset in the telescope frame, in metres, as
 `optics.axes_offset_m` = [x, y, z]. The key is written only when the offset is
-non-zero, and it needs the zenith angle of the compilation. The offset is
-`(O cos(theta), 0, O sin(theta))` for an along-axis offset `O` at zenith
-`theta`. The loader requires three numbers.
+non-zero, and it needs the zenith angle of the compilation. For components
+`(O, T)` and zenith `theta`, the offset is
+`(O cos(theta) - T, 0, O sin(theta))`. The loader requires three numbers.
 
 The offset is applied only by `trace_bunches`, which subtracts it from its frame
 offset (see [Batch tracing](batch-tracing.md)). `trace`, `star_photons` and the
