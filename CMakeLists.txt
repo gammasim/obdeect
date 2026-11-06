@@ -34,21 +34,11 @@ if(OBDEECT_USE_FMA)
   endif()
 endif()
 
-# Warnings are always enabled; treating them as errors is for development and CI only, so
-# source builds with newer compilers or Python headers do not fail on new diagnostics.
-option(OBDEECT_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
-
 function(obdeect_enable_warnings target)
   if(MSVC)
-    target_compile_options(${target} PRIVATE /W4)
-    if(OBDEECT_WARNINGS_AS_ERRORS)
-      target_compile_options(${target} PRIVATE /WX)
-    endif()
+    target_compile_options(${target} PRIVATE /W4 /WX)
   else()
-    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
-    if(OBDEECT_WARNINGS_AS_ERRORS)
-      target_compile_options(${target} PRIVATE -Werror)
-    endif()
+    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror)
   endif()
 endfunction()
 

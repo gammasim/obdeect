@@ -1,14 +1,16 @@
-#include "obdeect/bunches.hpp"
-#include "obdeect/model_json.hpp"
-#include "obdeect/source.hpp"
-#include "obdeect/trace.hpp"
-
+// Python.h must precede all standard headers (it sets feature-test macros such as
+// _POSIX_C_SOURCE), so the nanobind headers come first.
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
+
+#include "obdeect/bunches.hpp"
+#include "obdeect/model_json.hpp"
+#include "obdeect/source.hpp"
+#include "obdeect/trace.hpp"
 
 #include <algorithm>
 #include <iterator>
