@@ -1,6 +1,7 @@
 """Version selection and publishing layout for the documentation site."""
 
 import importlib.util
+import json
 import runpy
 import sys
 from pathlib import Path
@@ -71,6 +72,20 @@ def test_publish_preserves_root_pages_and_provides_version_aliases(tmp_path):
 def test_refuse_to_publish_into_an_existing_directory(tmp_path):
     with pytest.raises(FileExistsError):
         versions.publish_dev(tmp_path / "build", tmp_path)
+
+
+def test_dev_only_build_skips_release_tags(tmp_path, monkeypatch):
+    built = []
+    monkeypatch.setattr(
+        versions.subprocess, "check_output", lambda *a, **k: pytest.fail("tags were listed")
+    )
+    monkeypatch.setattr(versions, "build_docs", lambda *a, **k: built.append(a[3]))
+    monkeypatch.setattr(versions, "publish_dev", lambda build, site: site.mkdir())
+    versions.build_site(tmp_path / "site", "https://example.org/project", dev_only=True)
+    assert built == ["dev"]
+    entries = json.loads((tmp_path / "site" / "switcher.json").read_text())
+    assert [entry["version"] for entry in entries] == ["dev"]
+    assert not (tmp_path / "site" / "stable").exists()
 
 
 def test_docs_authors_come_from_citation(monkeypatch):

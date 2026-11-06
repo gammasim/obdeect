@@ -3,14 +3,68 @@
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and uses semantic versioning after the first stable release.
 
-## [0.6.0]
+<!-- towncrier release notes start -->
+
+## [v0.7.2] - 2026-11-06
+
+### Added
+
+- Expanded the agent guide (`AGENTS.md`) with the repository layout, CI-equivalent sanitizer and FMA build commands, pre-commit coverage, and corrected paths and references. (#27)
+- Add a --version to the obdeect executable. (#32)
+
+### Fixed
+
+- Accept two components for axes offsets (as expected by the simulation models). (#31)
+- Include the Python headers before the standard library in the bindings, fixing source builds with Python 3.15 that failed on `_POSIX_C_SOURCE` redefinition warnings. Wheels are now also built for Python 3.15. (#33)
+
+### Maintenance
+
+- Reduce external python dependencies. (#28)
+- Pull-request documentation builds only build the dev pages; releases are rebuilt on `main` and tags. Changelog fragments of type `maintenance` are now accepted. (#33)
+
+
+## [v0.7.1] - 2026-11-04
+
+Bug fix release.
+
+### Fixed
+
+- Support both components of the `axes_offsets` telescope parameter. The compiled optical model
+  now includes the transverse offset, allowing models such as SSTS design v2.0.0 to run with
+  obdeect. (#31)
+
+## [v0.7.0] - 2026-11-04
+
+Trace air-shower Cherenkov photons and pass them on to `sim_telarray` using the
+`bypass_optics` mode.
+
+### Added
+
+- Air-shower photon bunches: `trace_bunches` takes `wavelength_law=(lo_nm, hi_nm)`, an exact
+  1/λ² wavelength law with sim_telarray-style truncation to integer nm. It also takes
+  `normalise_transmission`. Thinning sizes the output from the photons that survive.
+- Telescope axes offsets are compiled into the optical model and applied when tracing. Input
+  planes below an incoming obscurer are rejected, and `max_incoming_obscurer_z_m()` reports the
+  obscurer height.
+- New documentation: an air-shower photons guide, batch-tracing updates, and validation results
+  in `docs/VALIDATION.md`.
+
+### Changed
+
+- Matplotlib is no longer a core dependency. Install `obdeect[plot]` for plotting; `obdeect plot`
+  without it fails with a message saying so.
+- Reduced external Python dependencies. `scipy` is no longer a dev dependency, and `astropy` is
+  only needed for regenerating figures (`obdeect[figures]`).
+- CI runs the Python lint through pre-commit, and the test job installs `.[plot]`.
+
+## [v0.6.0]
 
 ### Changed
 
 - The PyPI distribution is named `obdeect`. Install with `pip install obdeect`.
   The repository is hosted in the `gammasim` organisation.
 
-## [0.5.0]
+## [v0.5.0]
 
 Maintenance release: CI workflows and changelog. No change to the code or the Python API.
 
@@ -21,7 +75,7 @@ Maintenance release: CI workflows and changelog. No change to the code or the Py
   match the expected hash now fails the workflow.
 - The changelog is rebuilt from the git history for all releases from 0.1.0 on.
 
-## [0.4.0]
+## [v0.4.0]
 
 Performance release for the optical ray tracer, with additions to the Python API and the
 command line. The optical-model format is unchanged (`obdeect.optical-model.v2`).
@@ -65,7 +119,7 @@ command line. The optical-model format is unchanged (`obdeect.optical-model.v2`)
 - A failure while starting the thread pool no longer leaves joinable threads behind; an
   exception in a task is rethrown to the caller and the remaining chunks are skipped.
 
-## [0.3.0]
+## [v0.3.0]
 
 Phase 2: calibration light.
 
@@ -83,13 +137,13 @@ Phase 2: calibration light.
 - Segment footprint frames are computed once per optical model. Results are bit-identical; SST
   tracing is about 1.7 times faster.
 
-## [0.2.1]
+## [v0.2.1]
 
 ### Added
 
 - Linux arm64 wheels.
 
-## [0.2.0]
+## [v0.2.0]
 
 Phase 1: optical models for in-process use by simtools, with sim_telarray equivalence.
 
@@ -111,7 +165,7 @@ Phase 1: optical models for in-process use by simtools, with sim_telarray equiva
 - Optical input validation and deterministic boundary selection.
 - GCC header portability and the macOS wheel deployment target.
 
-## [0.1.0]
+## [v0.1.0]
 
 First version: a C++20 ray tracer with a Python package.
 
