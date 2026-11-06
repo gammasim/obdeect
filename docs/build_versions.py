@@ -96,13 +96,18 @@ def build_docs(source, destination, base_url, version, package_path=None):
     )
 
 
-def build_site(site, base_url, dev_ref=None):
-    """Rebuild releases from git, never from copies of the development pages."""
+def build_site(site, base_url, dev_ref=None, dev_only=False):
+    """Rebuild releases from git, never from copies of the development pages.
+
+    With dev_only, release tags are skipped (a quick check of the development pages).
+    """
     if site.exists():
         raise FileExistsError(f"Use a fresh output directory: {site}")
-    tags = release_tags(
-        subprocess.check_output(["git", "tag", "--list"], cwd=ROOT, text=True).splitlines()
-    )
+    tags = []
+    if not dev_only:
+        tags = release_tags(
+            subprocess.check_output(["git", "tag", "--list"], cwd=ROOT, text=True).splitlines()
+        )
     published = []
     with tempfile.TemporaryDirectory(prefix="obdeect-docs-") as directory:
         work = Path(directory)
@@ -161,5 +166,8 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--dev-ref", help="Git ref for dev pages (default: working tree)")
+    parser.add_argument(
+        "--dev-only", action="store_true", help="Build only the dev pages, skipping release tags"
+    )
     args = parser.parse_args()
-    build_site(args.output.resolve(), args.base_url, args.dev_ref)
+    build_site(args.output.resolve(), args.base_url, args.dev_ref, args.dev_only)
