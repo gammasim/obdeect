@@ -68,6 +68,7 @@ $ ps-cat run.ps | ps-tee copy.ps > out.ps  # copy.ps and out.ps get the same rec
 $ corsika2ps run.iact > run.ps           # CORSIKA IACT EventIO to a photon stream
 $ ps2simtel --camera-map cam.txt run.ps > sim.simtel   # stream to sim_telarray input
 $ corsika2ps < run.iact | ps2simtel > sim.simtel       # pipe; "-" reads stdin
+$ ps-cat --version                       # ps-cat 0.0.1 (photon-stream format 1.0)
 ```
 
 The camera map lists the camera-frame telescopes, one per line:
@@ -80,3 +81,27 @@ The camera map lists the camera-frame telescopes, one per line:
 Telescopes not listed are ground-frame (sim_telarray `Bypass_Optics=0`). Listed telescopes are
 converted to the bypass convention and need `Bypass_Optics=1` (class 1) or `2` (class 2) in
 sim_telarray; `ps2simtel` prints the value for each.
+
+## CMake package
+
+`cmake --install` puts the headers and a CMake package in the install prefix; a wheel
+carries the same files under `gstrickd/include` and `gstrickd/cmake`:
+
+```console
+$ python -m gstrickd --cmake-dir      # directory of gstrickd-config.cmake
+$ python -m gstrickd --include-dir    # directory of the gstrickd/ headers
+```
+
+A consumer (e.g. dlufd or dlamb) links the header-only core:
+
+```cmake
+find_package(gstrickd 0.0 CONFIG REQUIRED)   # SameMinorVersion
+target_link_libraries(<target> PRIVATE gstrickd::gstrickd_core)
+```
+
+Configure with `-Dgstrickd_DIR=$(python -m gstrickd --cmake-dir)`, or with
+`-Dgstrickd_DIR=<prefix>/lib/cmake/gstrickd` for a `cmake --install` prefix.
+
+The version is defined once. Wheels and sdists take it from the git tag (setuptools-scm,
+passed by scikit-build-core as `SKBUILD_PROJECT_VERSION`). Other builds take the newest
+`v*` tag, or 0.0.0 without one. CMake derives `project()` and the C++ `version.hpp` from it.
