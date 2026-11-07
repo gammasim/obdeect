@@ -16,7 +16,9 @@ The alignment errors (`mirror_align_random_distance`, `_horizontal`,
 dishes (`mirror_class` 0). Dual-mirror surfaces are traced at their design
 position; `primary_segmentation` and `secondary_segmentation` define gaps
 between segments. The surface-scattering parameter
-`mirror_reflection_random_angle` tilts the surface normal at each reflection.
+`mirror_reflection_random_angle` tilts the surface normal at each reflection
+(a convention, not a ray angle: see
+[mirror scatter conventions](optics.md#mirror-scatter-conventions)).
 See [validation](VALIDATION.md) for the resulting dual-mirror PSF comparisons.
 
 

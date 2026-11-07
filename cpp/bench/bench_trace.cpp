@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <fstream>
 #include <sstream>
 #include <vector>
@@ -38,7 +39,7 @@ template <class Body> double best_ns(std::size_t items, const Body &body) {
 
 } // namespace
 
-int main(int argc, char **argv) {
+static int run(int argc, char **argv) {
   if (argc < 5) {
     std::fprintf(stderr,
                  "usage: %s model.json disk_radius_m disk_z_m start_z_m [photons] "
@@ -328,4 +329,13 @@ int main(int argc, char **argv) {
 #endif
   std::printf("checksum %.17g\n", checksum);
   return 0;
+}
+
+int main(int argc, char **argv) {
+  try {
+    return run(argc, argv);
+  } catch (const std::exception &error) {
+    std::fprintf(stderr, "error: %s\n", error.what());
+    return 1;
+  }
 }

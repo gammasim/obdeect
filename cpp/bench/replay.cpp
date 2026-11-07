@@ -30,6 +30,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <fstream>
 #include <limits>
 #include <sstream>
@@ -276,7 +277,7 @@ int compare_command(bool class_b, const char *path_a, const char *path_b) {
 
 } // namespace
 
-int main(int argc, char **argv) {
+static int run(int argc, char **argv) {
   if (argc == 4 && std::strcmp(argv[1], "write") == 0)
     return write_command(argv[2], argv[3]);
   if (argc == 4 && std::strcmp(argv[1], "compare") == 0)
@@ -299,4 +300,13 @@ int main(int argc, char **argv) {
                "<a> <b>\n",
                argv[0]);
   return 2;
+}
+
+int main(int argc, char **argv) {
+  try {
+    return run(argc, argv);
+  } catch (const std::exception &error) {
+    std::fprintf(stderr, "error: %s\n", error.what());
+    return 1;
+  }
 }

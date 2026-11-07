@@ -23,8 +23,8 @@ jobs:
         python-version: ['3.14', '3.15']
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7
         with:
           python-version: ${{ matrix.python-version }}
           allow-prereleases: true
@@ -39,7 +39,7 @@ jobs:
   fma:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       - name: Configure, build, and test with OBDEECT_USE_FMA
         run: >-
           cmake -S . -B build-fma -DCMAKE_BUILD_TYPE=Release -DOBDEECT_USE_FMA=ON
@@ -48,11 +48,38 @@ jobs:
   sanitizers:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - name: Install a decimal-comma locale
+        run: sudo locale-gen de_DE.UTF-8
       - name: Configure, build, and test with sanitizers
+        env:
+          OBDEECT_REQUIRE_COMMA_LOCALE: "1"
         run: >-
           cmake -S . -B build-sanitize -DCMAKE_BUILD_TYPE=Debug
           -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
           && cmake --build build-sanitize --parallel
           && ctest --test-dir build-sanitize --output-on-failure
+  thread-sanitizer:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - name: Configure, build, and test with ThreadSanitizer
+        run: >-
+          cmake -S . -B build-tsan -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
+          && cmake --build build-tsan --parallel
+          && ctest --test-dir build-tsan --output-on-failure
+  clang-tidy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - name: Configure with the compilation database
+        run: >-
+          cmake -S . -B build-tidy -DCMAKE_BUILD_TYPE=Debug -DOBDEECT_BUILD_BENCH=ON
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+      - name: Run clang-tidy on tests and benchmarks (headers via HeaderFilterRegex)
+        run: >-
+          find cpp/tests cpp/bench -name '*.cpp' -print0
+          | xargs -0 clang-tidy -p build-tidy
