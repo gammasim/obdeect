@@ -88,8 +88,10 @@ def main(original, dlamb):
     dc, dd = read_dlamb(dlamb)
     print(f"events: original {len(oc)}, dlamb {len(dc)}")
     if oc and dc:
-        print(f"photons per event: original mean {np.mean(oc):.2f} (sum {np.sum(oc):.0f}), "
-              f"dlamb mean {np.mean(dc):.2f} (sum {np.sum(dc):.0f})")
+        print(
+            f"photons per event: original mean {np.mean(oc):.2f} (sum {np.sum(oc):.0f}), "
+            f"dlamb mean {np.mean(dc):.2f} (sum {np.sum(dc):.0f})"
+        )
     print(f"{'quantity':12s} {'original':>24s} {'dlamb':>24s} {'diff/sigma':>11s}")
     for name in ["cx", "cy", "cz", "t", "wavelength"]:
         mo, so = moments(oo[name])
