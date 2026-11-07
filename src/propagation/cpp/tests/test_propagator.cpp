@@ -1125,6 +1125,58 @@ void test_pathlen_per_telescope() {
   CHECK(largest_change > 1e-5);
 }
 
+// Scattered photons of telescope 1 get the in-telescope factor exp(-od_focus(lambda)) of their
+// telescope (path 28 m), in weighted mode per photon. Telescope 1 has no block: its output is
+// scattered photons only, from the primaries of telescope 2 (same draws for both runs).
+void test_scattered_pathlen() {
+  const auto table = real_table();
+  const std::size_t n = 400;
+  const auto input = make_stream([&](gstrickd::Writer &writer) {
+    writer.write_metadata(RecordType::run, scatter_run_keys());
+    writer.write_metadata(RecordType::event, event_keys());
+    writer.write_metadata(RecordType::telescope, telescope_keys(2, Frame::sky));
+    writer.write_chunk(beam_chunk(2, 0, n, 200.0));
+    writer.write_metadata(RecordType::telescope_end, telescope_end_keys(2));
+    writer.write_metadata(RecordType::event_end, {});
+    writer.write_metadata(RecordType::run_end, {});
+  });
+  auto zero = scattering_config(table, true);
+  auto path = scattering_config(table, true);
+  path.telescope_pathlen_m = {{1, 28.0}};
+  const auto records_0 = records_of(propagate(input, zero).bytes);
+  const auto records_28 = records_of(propagate(input, path).bytes);
+  const auto w_0 = photon_column(records_0, 1, Column::w);
+  const auto w_28 = photon_column(records_28, 1, Column::w);
+  const auto lambda = photon_column(records_0, 1, Column::wavelength);
+  CHECK(!w_0.empty());
+  CHECK(w_0.size() == w_28.size() && w_0.size() == lambda.size());
+  if (w_0.size() != w_28.size() || w_0.size() != lambda.size() || w_0.empty()) {
+    return;
+  }
+  const auto depths = table.telescope_depths(site_m, 28.0); // telescope 1 at the site altitude
+  double sum_0 = 0.0;
+  double sum_28 = 0.0;
+  double mean_factor = 0.0;
+  double max_deviation = 0.0;
+  for (std::size_t i = 0; i < w_0.size(); ++i) {
+    const auto iwl = static_cast<std::size_t>(lambda[i]);
+    const double factor = std::exp(-depths.od_focus[iwl]);
+    max_deviation = std::max(max_deviation, std::abs(static_cast<double>(w_28[i]) -
+                                                     static_cast<double>(w_0[i]) * factor) /
+                                                static_cast<double>(w_0[i]));
+    sum_0 += static_cast<double>(w_0[i]);
+    sum_28 += static_cast<double>(w_28[i]);
+    mean_factor += factor / static_cast<double>(w_0.size());
+  }
+  CHECK(max_deviation <= 1e-5);
+  // The 28 m factor is not 1 here, so the check above is not vacuous.
+  CHECK(std::abs(1.0 - mean_factor) > 1e-4);
+  CHECK_NEAR(sum_28 / sum_0, mean_factor, 1e-5);
+  std::fprintf(stderr,
+               "scattered pathlen: weight ratio %.8g, mean factor %.8g, max rel. dev %.3g\n",
+               sum_28 / sum_0, mean_factor, max_deviation);
+}
+
 // Invalid path lengths and ids are rejected: negative, NaN, infinite, id 0, and an id the run does
 // not have (checked when the run record is read).
 void test_pathlen_rejects() {
@@ -1156,6 +1208,7 @@ void test_pathlen_rejects() {
 int main() {
   return run_checks([] {
     test_pathlen_per_telescope();
+    test_scattered_pathlen();
     test_pathlen_rejects();
     test_ledger_layout();
     test_expected_count();

@@ -10,10 +10,10 @@
 //   4. envelope E(lambda), the product of the envelope factors, then thinning or weighting
 //      (thinning.hpp)
 // Optional single scattering (scattering.hpp) runs on the primaries of an event before step 3.
-// Its scattered photons go through step 1 (sky to G), then the envelope of step 4 only
-// (Propagator::emit_scattered). An event is held until its end, see Propagator::flush_event.
-// Each effect of the ledger is listed in make_ledger(); a new effect adds a step in
-// Propagator::photons and an entry in make_ledger().
+// Its scattered photons go through step 1 (sky to G), then step 4 with the envelope and the
+// in-telescope factor exp(-od_focus) only (Propagator::emit_scattered). An event is held until its
+// end, see Propagator::flush_event. Each effect of the ledger is listed in make_ledger(); a new
+// effect adds a step in Propagator::photons and an entry in make_ledger().
 
 #include "dlufd/extinction.hpp"
 #include "dlufd/pipeline.hpp"
@@ -748,9 +748,9 @@ private:
         }
       }
       sky_to_ground(plane_input, sky_plane());
-      for (auto &out :
-           apply_envelope_chunk(std::move(plane_input), run_->envelope, weighted, config_.seed,
-                                event_number_, telescope_.id, telescope_.out_index)) {
+      for (auto &out : apply_envelope_chunk(std::move(plane_input), run_->envelope,
+                                            *telescope_.depths, weighted, config_.seed,
+                                            event_number_, telescope_.id, telescope_.out_index)) {
         emit(out, sink);
       }
     }

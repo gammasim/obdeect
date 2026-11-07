@@ -125,13 +125,15 @@ apply_extinction_chunk(gstrickd::PhotonChunk chunk, const ExtinctionSettings &se
                     true);
 }
 
-// Envelope step for scattered photons (docs/scattering.md, frame G). Their transmission to the
-// telescope is in w, so the acceptance is the envelope E(lambda) only (no atmospheric
-// extinction). Thinned or weighted as apply_extinction_chunk; wavelengths must be assigned.
+// Envelope step for scattered photons (docs/scattering.md, frame G). Their transmission from the
+// scattering point to the telescope sphere is in w, so the acceptance is E(lambda) times
+// exp(-od_focus(lambda)), the in-telescope part of the extinction (the same od_focus as
+// apply_extinction_chunk). Thinned or weighted as apply_extinction_chunk; wavelengths must be
+// assigned.
 [[nodiscard]] inline std::vector<gstrickd::PhotonChunk>
-apply_envelope_chunk(gstrickd::PhotonChunk chunk, const Envelope &envelope, bool weighted,
-                     std::uint64_t seed, std::uint32_t event, std::uint32_t telescope,
-                     std::uint64_t out_first_index) {
+apply_envelope_chunk(gstrickd::PhotonChunk chunk, const Envelope &envelope,
+                     const TelescopeDepths &depths, bool weighted, std::uint64_t seed,
+                     std::uint32_t event, std::uint32_t telescope, std::uint64_t out_first_index) {
   using gstrickd::Column;
   if (chunk.frame != gstrickd::Frame::ground) {
     throw std::invalid_argument("envelope step needs photons in frame ground (G)");
@@ -157,7 +159,9 @@ apply_envelope_chunk(gstrickd::PhotonChunk chunk, const Envelope &envelope, bool
     if (iwl < envelope.min_wavelength_nm() || iwl > envelope.max_wavelength_nm()) {
       throw std::invalid_argument("wavelength outside the envelope table");
     }
-    p[row] = envelope(static_cast<double>(iwl));
+    // od_focus is 0 for a path of 0 m, so the factor is exactly 1 then.
+    p[row] = envelope(static_cast<double>(iwl)) *
+             std::exp(-depths.od_focus[static_cast<std::size_t>(iwl)]);
   }
   if (weighted) {
     weight_chunk(chunk, p, true);

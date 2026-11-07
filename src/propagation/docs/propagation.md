@@ -25,11 +25,14 @@ With `--scattering` the stage runs one more step per event, before the steps abo
 | 2, 3 | Primaries: wavelength, extinction p_atm | G | |
 | 4 | Primaries: p = p_atm E, thinning or weighting | G | |
 | 1s | Scattered photons: sky → G, same run geometry (refraction, air delay) | sky → G | |
-| 4s | Scattered photons: p = E only, thinning or weighting (their own random stream) | G | |
+| 4s | Scattered photons: p = E exp(-od_focus), thinning or weighting (their own random stream) | G | |
 
-Scattered photons skip steps 2 and 3: their transmission to the telescope is already in w
-(`T(P -> C)` of [](scattering.md)), so the atmosphere is not applied twice. The primaries are
-scattered before their own extinction and are otherwise unchanged.
+Scattered photons skip steps 2 and 3: their transmission from the scattering point to the telescope
+sphere is already in w (`T(P -> C)` of [](scattering.md)), so the atmosphere is not applied twice.
+Step 4s adds only the in-telescope part of the extinction, exp(-od_focus(lambda)) of their telescope
+(the same `od_focus` as step 4, so the path length applies to scattered photons too). With a path of
+0 m the factor is 1. The primaries are scattered before their own extinction and are otherwise
+unchanged.
 
 An event is held until its `event_end` record, because the scattered photons of a telescope come
 from the primaries of all telescopes of the event. Memory: one event of the input.
