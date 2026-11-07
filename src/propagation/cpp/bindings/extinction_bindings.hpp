@@ -129,28 +129,39 @@ inline gstrickd::Column column_from_name(const std::string &name) {
   throw std::invalid_argument("unknown photon column: " + name);
 }
 
-// Columns given as equal-length float32 arrays, keyed by column name. mask receives the
-// columns given (also when there are no rows, where the chunk itself has no columns).
-inline gstrickd::PhotonChunk chunk_from_columns(const nb::dict &columns, std::uint64_t first_index,
-                                                std::uint32_t &mask) {
+// Input columns given as equal-length float32 arrays, keyed by column name. The arrays
+// are not copied; mask is the set of columns given (also when there are no rows).
+struct InputColumns {
   std::vector<std::pair<gstrickd::Column, FloatArray>> arrays;
-  std::size_t rows = 0;
-  mask = 0;
+  std::size_t rows{};
+  std::uint32_t mask{};
+};
+
+inline InputColumns input_columns(const nb::dict &columns) {
+  InputColumns input;
   for (auto item : columns) {
     const auto column = column_from_name(nb::cast<std::string>(item.first));
     const auto array = nb::cast<FloatArray>(item.second);
-    if (!arrays.empty() && array.size() != rows) {
+    if (!input.arrays.empty() && array.size() != input.rows) {
       throw std::invalid_argument("photon columns differ in length");
     }
-    rows = array.size();
-    mask |= gstrickd::column_bit(column);
-    arrays.emplace_back(column, array);
+    input.rows = array.size();
+    input.mask |= gstrickd::column_bit(column);
+    input.arrays.emplace_back(column, array);
   }
+  return input;
+}
+
+// Chunk of rows [offset, offset + count) of the input; first_index is the index of row
+// offset among all photons. count must be at most gstrickd::max_chunk_rows.
+inline gstrickd::PhotonChunk slice_chunk(const InputColumns &input, std::size_t offset,
+                                         std::size_t count, std::uint64_t first_index) {
   gstrickd::PhotonChunk chunk;
   chunk.first_index = first_index;
-  chunk.resize(rows, mask);
-  for (const auto &[column, array] : arrays) {
-    std::copy(array.data(), array.data() + array.size(), chunk[column].begin());
+  chunk.resize(count, input.mask);
+  for (const auto &[column, array] : input.arrays) {
+    const float *begin = array.data() + offset;
+    std::copy(begin, begin + count, chunk[column].begin());
   }
   return chunk;
 }
@@ -175,31 +186,21 @@ inline void bind_apply(nb::module_ &module) {
         settings.telescope = telescope;
         settings.weighted = weighted;
 
-        // The input is processed in slices of at most 2^16 rows. The photon index and the
-        // output index continue across slices, so the result does not depend on slicing.
-        std::uint32_t input_mask = 0;
-        const gstrickd::PhotonChunk input = chunk_from_columns(columns, first_index, input_mask);
+        // The input is processed in slices of at most 2^16 rows (the PhotonChunk limit). Each
+        // slice keeps its photon index (first_index + offset), so the random draws do not
+        // depend on slicing; the output index continues across slices.
+        const InputColumns input = input_columns(columns);
         // Output columns: the input columns plus the wavelength and p columns, which the
         // pipeline always produces, also when no photon survives.
-        const std::uint32_t output_mask = input_mask |
+        const std::uint32_t output_mask = input.mask |
                                           gstrickd::column_bit(gstrickd::Column::wavelength) |
                                           gstrickd::column_bit(gstrickd::Column::p);
         std::vector<std::vector<float>> out(gstrickd::n_columns);
         std::uint64_t out_index = 0;
-        for (std::size_t offset = 0; offset < input.rows(); offset += gstrickd::max_chunk_rows) {
+        for (std::size_t offset = 0; offset < input.rows; offset += gstrickd::max_chunk_rows) {
           const std::size_t rows =
-              std::min<std::size_t>(gstrickd::max_chunk_rows, input.rows() - offset);
-          gstrickd::PhotonChunk slice;
-          slice.telescope_id = input.telescope_id;
-          slice.frame = input.frame;
-          slice.first_index = first_index + offset;
-          slice.resize(rows, input.mask());
-          for (std::uint32_t c = 0; c < gstrickd::n_columns; ++c) {
-            if (input.has(static_cast<gstrickd::Column>(c))) {
-              const auto begin = input.columns[c].begin() + static_cast<std::ptrdiff_t>(offset);
-              std::copy(begin, begin + static_cast<std::ptrdiff_t>(rows), slice.columns[c].begin());
-            }
-          }
+              std::min<std::size_t>(gstrickd::max_chunk_rows, input.rows - offset);
+          gstrickd::PhotonChunk slice = slice_chunk(input, offset, rows, first_index + offset);
           for (auto &chunk : dlufd::apply_extinction_chunk(std::move(slice), settings, out_index)) {
             for (std::uint32_t c = 0; c < gstrickd::n_columns; ++c) {
               if (chunk.has(static_cast<gstrickd::Column>(c))) {

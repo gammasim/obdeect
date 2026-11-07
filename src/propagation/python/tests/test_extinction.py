@@ -307,3 +307,23 @@ def test_invalid_input_rejected(table):
     columns["unknown"] = columns["w"]
     with pytest.raises(ValueError):
         _apply(table, columns, weighted=False)
+
+
+@pytest.mark.parametrize("weighted", [True, False])
+def test_split_input_matches_whole_input_bit_for_bit(table, weighted):
+    # 200000 rows exceed one photon chunk (2^16); the binding slices internally. Splitting the
+    # input by hand with matching first_index must give identical output.
+    n = 200000
+    columns = _photons(n, np.random.default_rng(10))
+    first_index = 1000
+    whole = _apply(table, columns, weighted=weighted, first_index=first_index)
+    bounds = [0, 12345, 99999, n]
+    parts = []
+    for start, stop in zip(bounds[:-1], bounds[1:]):
+        piece = {name: values[start:stop] for name, values in columns.items()}
+        parts.append(_apply(table, piece, weighted=weighted, first_index=first_index + start))
+    assert set(whole) == set(parts[0])
+    for name, values in whole.items():
+        joined = np.concatenate([part[name] for part in parts])
+        assert values.dtype == joined.dtype, name
+        assert values.tobytes() == joined.tobytes(), name
