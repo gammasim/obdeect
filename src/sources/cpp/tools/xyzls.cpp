@@ -4,6 +4,7 @@
 #include "dlamb/programs/xyzls.hpp"
 
 #include "sky_args.hpp"
+#include "telpos_file.hpp"
 
 #include <cstdio>
 #include <fstream>
@@ -37,31 +38,6 @@ const char *usage_text =
     "  --seed n        random seed (1, new option)\n"
     "  -o fname        output file (stdout)\n"
     "  --help          this text\n";
-
-std::vector<dlamb::programs::TelposCm> read_telpos(const std::string &path, bool corsika) {
-  std::ifstream in(path);
-  if (!in)
-    throw std::invalid_argument("cannot open telescope file " + path);
-  std::vector<dlamb::programs::TelposCm> list;
-  std::string line;
-  while (std::getline(in, line)) {
-    if (corsika) {
-      std::istringstream fields(line);
-      std::string word;
-      if (!(fields >> word) || word != "TELESCOPE")
-        continue;
-      dlamb::programs::TelposCm t;
-      if (fields >> t.x >> t.y >> t.z >> t.r)
-        list.push_back(t);
-    } else {
-      dlamb::programs::TelposCm t;
-      std::istringstream fields(line);
-      if (fields >> t.x >> t.y >> t.z >> t.r)
-        list.push_back(t);
-    }
-  }
-  return list;
-}
 
 int run(int argc, char **argv) {
   dlamb::programs::XyzlsOptions o;
@@ -108,9 +84,9 @@ int run(int argc, char **argv) {
     } else if (arg == "-d") {
       o.direction = dlamb::cli::to_vec3(next(), arg);
     } else if (arg == "--telpos-file") {
-      o.telescopes = read_telpos(next(), false);
+      o.telescopes = dlamb::cli::read_telpos(next(), arg, false);
     } else if (arg == "--corsika-telpos-file") {
-      o.telescopes = read_telpos(next(), true);
+      o.telescopes = dlamb::cli::read_telpos(next(), arg, true);
     } else if (arg == "--seed") {
       o.seed = static_cast<std::uint64_t>(dlamb::cli::to_int(next(), arg));
     } else if (arg == "-o") {

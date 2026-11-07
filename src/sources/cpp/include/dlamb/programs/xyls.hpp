@@ -7,6 +7,7 @@
 #include "dlamb/sky_sources.hpp"
 #include "dlamb/source.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <stdexcept>
 #include <vector>
@@ -28,6 +29,9 @@ struct XylsOptions {
 };
 
 [[nodiscard]] inline SkyPlan<SourceEmission> plan_xyls(const XylsOptions &o) {
+  // A radius of 0 or less gives an empty scan (and a zero-length table): reject it.
+  if (!(o.radius_cm > 0.0) || !std::isfinite(o.radius_cm))
+    throw std::invalid_argument("xyls: radius must be finite and positive");
   SkyPlan<SourceEmission> plan;
   plan.run.run_number = 1;
   plan.run.observation_level_m = o.altitude_m;

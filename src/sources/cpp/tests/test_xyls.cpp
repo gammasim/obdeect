@@ -3,7 +3,9 @@
 
 #include "dlamb/programs/xyls.hpp"
 
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <variant>
 
@@ -87,6 +89,25 @@ void rejects_negative_photons() {
   CHECK(threw);
 }
 
+// A zero, negative, NaN or infinite radius is rejected (it used to give an empty stream).
+void rejects_bad_radius() {
+  const double radii[] = {0.0, -1.0, -123.0, std::nan(""), std::numeric_limits<double>::infinity()};
+  for (const double r : radii) {
+    XylsOptions o;
+    o.radius_cm = r;
+    bool threw = false;
+    try {
+      (void)plan_xyls(o);
+    } catch (const std::invalid_argument &) {
+      threw = true;
+    }
+    CHECK(threw);
+  }
+  XylsOptions ok;
+  ok.radius_cm = 1e-3; // tiny but positive: accepted, with a non-empty scan
+  CHECK(!plan_xyls(ok).cases[0].empty());
+}
+
 } // namespace
 
 int main() {
@@ -94,5 +115,6 @@ int main() {
     default_scan();
     non_default_scan();
     rejects_negative_photons();
+    rejects_bad_radius();
   });
 }

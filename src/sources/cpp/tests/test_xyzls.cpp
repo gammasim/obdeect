@@ -3,10 +3,16 @@
 
 #include "dlamb/programs/xyzls.hpp"
 
+#include "../tools/telpos_file.hpp"
+
 #include <cmath>
 #include <cstdint>
+#include <limits>
+#include <sstream>
 #include <stdexcept>
+#include <string>
 #include <variant>
+#include <vector>
 
 using namespace dlamb;
 using namespace dlamb::programs;
@@ -137,6 +143,54 @@ void rejects_negative_photons() {
   CHECK(threw);
 }
 
+// Telescope lists of --telpos-file / --corsika-telpos-file (see cpp/tools/telpos_file.hpp).
+std::vector<TelposCm> telpos(const std::string &text, bool corsika) {
+  std::istringstream in(text);
+  return cli::read_telpos(in, "--telpos-file", corsika);
+}
+
+bool telpos_rejects(const std::string &text, bool corsika) {
+  try {
+    (void)telpos(text, corsika);
+  } catch (const std::invalid_argument &) {
+    return true;
+  }
+  return false;
+}
+
+// Valid files: blank lines and comments are skipped; each line gives one telescope.
+void telpos_valid() {
+  const auto list = telpos("# two telescopes\n\n0 0 0 1500\n 100 -50 0 1200 # comment\n", false);
+  CHECK(list.size() == 2);
+  CHECK(list[1].x == 100.0 && list[1].y == -50.0 && list[1].z == 0.0 && list[1].r == 1200.0);
+  const auto corsika =
+      telpos("SHOWER 1\nTELESCOPE 0 0 0 1500\nOBSLEV 2150\nTELESCOPE 10 20 0 500\n", true);
+  CHECK(corsika.size() == 2);
+  CHECK(corsika[1].x == 10.0 && corsika[1].y == 20.0 && corsika[1].r == 500.0);
+}
+
+// Empty files, or files without telescope records, are errors (no silent default telescope).
+void telpos_rejects_empty() {
+  CHECK(telpos_rejects("", false));
+  CHECK(telpos_rejects("# nothing here\n\n", false));
+  CHECK(telpos_rejects("OBSLEV 2150\n", true));
+  CHECK(telpos_rejects("", true));
+}
+
+// Malformed lines are errors, even when other lines are valid.
+void telpos_rejects_malformed() {
+  CHECK(telpos_rejects("0 0 0 1500\n1 2\n", false));
+  CHECK(telpos_rejects("0 0 0\n", false));
+  CHECK(telpos_rejects("0 0 0 1500 9\n", false));
+  CHECK(telpos_rejects("0 0 x 1500\n", false));
+  CHECK(telpos_rejects("0 0 0 0\n", false));
+  CHECK(telpos_rejects("0 0 0 -5\n", false));
+  CHECK(telpos_rejects("0 0 0 nan\n", false));
+  CHECK(telpos_rejects("0 0 0 inf\n", false));
+  CHECK(telpos_rejects("TELESCOPE 0 0 0\n", true));
+  CHECK(telpos_rejects("TELESCOPE 0 0 0 1500 9\n", true));
+}
+
 } // namespace
 
 int main() {
@@ -147,5 +201,8 @@ int main() {
     rejects_unported_profile();
     emission_altitude();
     rejects_negative_photons();
+    telpos_valid();
+    telpos_rejects_empty();
+    telpos_rejects_malformed();
   });
 }

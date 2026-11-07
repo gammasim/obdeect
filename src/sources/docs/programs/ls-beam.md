@@ -46,7 +46,7 @@ albedo and phase-function asymmetry g. These come from simulation-models (step 6
 | `--laser-theta`, `--laser-phi` | 60, 180 | `laser_theta_deg`, `laser_phi_deg` (CLI phi astronomical, converted as the original) |
 | `--telescope-theta`, `--telescope-phi` | 30, 0 | same, telescope axis |
 | `--telescope-radius` [m] | 12.5 | `telescope_radius_m` |
-| `--fov` [deg] | 15 | `fov_deg` (full cone opening angle) |
+| `--fov` [deg] | 15 | `fov_deg` (full cone opening angle, must lie in (0, 90)) |
 | `--altitude`, `--run`, `--atmosphere` | 2150, 1, 1 | `altitude_m`, `run_number`, `atmosphere` (recorded) |
 | (new) `--primary-per-m` | 1e4 | `primary_photons_per_m` (sampling choice, not physics) |
 

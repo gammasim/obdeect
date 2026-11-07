@@ -17,6 +17,17 @@ namespace {
 
 constexpr double deg = pi / 180.0;
 
+// Message of the std::invalid_argument thrown by fn ("" if none).
+template <class Fn> std::string message_of(Fn fn) {
+  try {
+    fn();
+  } catch (const std::invalid_argument &error) {
+    return error.what();
+  } catch (...) {
+  }
+  return "";
+}
+
 // True when fn throws std::invalid_argument (any other exception fails the check).
 template <class Fn> bool rejects(Fn fn) {
   try {
@@ -103,6 +114,31 @@ void angular_names() {
   CHECK(rejects([] { (void)parse_angular("Cone:30abc", "-a"); }));
 }
 
+// Exponent and sign forms are numbers: a bad value fails as a number (range or finiteness),
+// never as a missing table file.
+void exponent_numbers() {
+  CHECK(is_number("4e2"));
+  CHECK(is_number("1.5E-3"));
+  CHECK(is_number("-5"));
+  CHECK(!is_number("4e2x"));
+  CHECK(!is_number("1e"));
+  CHECK(!is_number("abc"));
+  CHECK(!is_number(""));
+  CHECK(std::get<Fixed>(parse_spectrum("4e2", "-s")).value == 400.0);
+  CHECK(std::get<Fixed>(parse_spectrum("2.0E2", "-s")).value == 200.0);
+  CHECK(message_of([] { (void)parse_spectrum("1e2", "-s"); }).find("200..2000") !=
+        std::string::npos);
+  CHECK(message_of([] { (void)parse_spectrum("-5", "-s"); }).find("200..2000") !=
+        std::string::npos);
+  CHECK(message_of([] { (void)parse_spectrum("4e2x", "-s"); }).find("cannot open table") !=
+        std::string::npos);
+  CHECK(rejects([] { (void)parse_spectrum("nan", "-s"); }));
+  CHECK(rejects([] { (void)parse_spectrum("inf", "-s"); }));
+  CHECK(rejects([] { (void)parse_spectrum("1e400", "-s"); }));
+  CHECK_NEAR(std::get<GaussianShape>(parse_pulse("2.5e0", "-p", true)).sigma, 2.5, 1e-12);
+  CHECK(rejects([] { (void)parse_pulse("1e400", "-p", true); }));
+}
+
 } // namespace
 
 int main() {
@@ -112,5 +148,6 @@ int main() {
     cherenkov_spectrum();
     pulse_names_and_arity();
     angular_names();
+    exponent_numbers();
   });
 }

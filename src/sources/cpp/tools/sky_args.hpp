@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <limits>
 #include <sstream>
@@ -107,13 +108,15 @@ inline std::vector<std::string> split_fields(const std::string &text, char sep) 
   }
 }
 
+// True when strtod consumes the whole text (so "4e2", "-5" and "1.5E-3" are numbers, not
+// file names). Range and finiteness are checked by to_double.
 inline bool is_number(const std::string &text) {
   if (text.empty())
     return false;
-  for (const char c : text)
-    if (!(std::isdigit(static_cast<unsigned char>(c)) || c == '.'))
-      return false;
-  return true;
+  const char *begin = text.c_str();
+  char *end = nullptr;
+  std::strtod(begin, &end);
+  return end == begin + text.size();
 }
 
 // Two-column table (x, y); '#' starts a comment. Throws if no rows.
