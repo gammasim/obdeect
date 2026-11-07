@@ -57,10 +57,10 @@ if(DLAMB_BUILD_TESTING)
   endforeach()
 endif()
 
-# sky-level programs
-option(DLAMB_BUILD_TOOLS "Build the sky-level light-source command-line tools" ON)
+# LightEmission programs
+option(DLAMB_BUILD_TOOLS "Build the light-source command-line tools" ON)
 if(DLAMB_BUILD_TESTING)
-  foreach(test_name xyzls xyls ls-beam nsbls)
+  foreach(test_name ff-1m ff-gct fpls pixled xyzls xyls ls-beam nsbls)
     add_executable(test_${test_name} cpp/tests/test_${test_name}.cpp)
     target_link_libraries(test_${test_name} PRIVATE dlamb_core)
     dlamb_enable_warnings(test_${test_name})
@@ -68,13 +68,14 @@ if(DLAMB_BUILD_TESTING)
   endforeach()
 endif()
 if(DLAMB_BUILD_TOOLS)
-  foreach(tool xyzls xyls ls-beam nsbls)
+  foreach(tool ff-1m ff-gct fpls pixled xyzls xyls ls-beam nsbls)
     add_executable(dlamb-${tool} cpp/tools/${tool}.cpp)
     target_link_libraries(dlamb-${tool} PRIVATE dlamb_core)
     dlamb_enable_warnings(dlamb-${tool})
   endforeach()
   if(DEFINED SKBUILD_SCRIPTS_DIR)
-    install(TARGETS dlamb-xyzls dlamb-xyls dlamb-ls-beam dlamb-nsbls
+    install(TARGETS dlamb-ff-1m dlamb-ff-gct dlamb-fpls dlamb-pixled dlamb-xyzls dlamb-xyls
+                    dlamb-ls-beam dlamb-nsbls
             RUNTIME DESTINATION ${SKBUILD_SCRIPTS_DIR})
   endif()
 endif()

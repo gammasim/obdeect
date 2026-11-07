@@ -83,28 +83,50 @@ inline constexpr std::uint32_t source_columns =
     gstrickd::column_bit(gstrickd::Column::t) | gstrickd::column_bit(gstrickd::Column::w) |
     gstrickd::column_bit(gstrickd::Column::wavelength);
 
+// Largest magnitude of a length, time or wavelength. Squares of lengths and the float32
+// photon columns then stay finite, and positive values are at least its inverse, so
+// their inverses stay finite too.
+inline constexpr double max_magnitude = 1e30;
+
+// Largest photon count that is exact in a double (2^53). Larger means cannot be rounded
+// to an integer count without loss.
+inline constexpr double max_photon_count = 9007199254740992.0;
+
+[[nodiscard]] inline bool magnitude_ok(double x) {
+  return std::isfinite(x) && std::abs(x) <= max_magnitude;
+}
+[[nodiscard]] inline bool magnitude_ok(Vec3 a) {
+  return magnitude_ok(a.x) && magnitude_ok(a.y) && magnitude_ok(a.z);
+}
+[[nodiscard]] inline bool positive_magnitude_ok(double x) {
+  return magnitude_ok(x) && x >= 1.0 / max_magnitude;
+}
+
 // Throws std::invalid_argument for an inconsistent source.
 inline void validate(const Source &source) {
   const auto fail = [](const char *message) { throw std::invalid_argument(message); };
-  if (!std::isfinite(source.photons) || source.photons < 0.0)
-    fail("photons must be finite and >= 0");
-  if (source.frame == gstrickd::Frame::ground)
-    fail("frame G is not a source frame (use sky, T or C)");
+  if (!(source.photons >= 0.0) || source.photons > max_photon_count)
+    fail("photons must be finite, >= 0 and at most 2^53");
+  if (source.frame != gstrickd::Frame::sky && source.frame != gstrickd::Frame::telescope &&
+      source.frame != gstrickd::Frame::camera)
+    fail("frame must be sky, T or C");
   std::visit(
       [&](const auto &s) {
         using S = std::decay_t<decltype(s)>;
         if constexpr (std::is_same_v<S, Fixed>) {
-          if (!(s.value > 0.0) || !std::isfinite(s.value))
-            fail("a fixed wavelength must be positive");
+          if (!positive_magnitude_ok(s.value))
+            fail("a fixed wavelength must be in [1e-30, 1e30] nm");
         } else if constexpr (std::is_same_v<S, UniformRange>) {
-          if (!(s.low > 0.0) || !(s.high >= s.low) || !std::isfinite(s.high))
-            fail("a uniform wavelength range needs 0 < low <= high");
+          if (!positive_magnitude_ok(s.low) || !positive_magnitude_ok(s.high) || !(s.high >= s.low))
+            fail("a uniform wavelength range needs 0 < low <= high, within [1e-30, 1e30] nm");
         } else if constexpr (std::is_same_v<S, InverseSquare>) {
-          if (!(s.low > 0.0) || !(s.high > s.low) || !std::isfinite(s.high))
-            fail("an inverse-square wavelength range needs 0 < low < high");
+          if (!positive_magnitude_ok(s.low) || !positive_magnitude_ok(s.high) || !(s.high > s.low))
+            fail(
+                "an inverse-square wavelength range needs 0 < low < high, within [1e-30, 1e30] nm");
         } else if constexpr (std::is_same_v<S, Tabulated>) {
-          if (s.density.empty() || !(s.density.lower() > 0.0))
-            fail("a tabulated wavelength density needs nodes > 0");
+          if (s.density.empty() || !positive_magnitude_ok(s.density.lower()) ||
+              !magnitude_ok(s.density.upper()))
+            fail("a tabulated wavelength density needs nodes in [1e-30, 1e30] nm");
         }
       },
       source.spectrum);
@@ -112,24 +134,26 @@ inline void validate(const Source &source) {
       [&](const auto &s) {
         using S = std::decay_t<decltype(s)>;
         if constexpr (std::is_same_v<S, Fixed>) {
-          if (!std::isfinite(s.value))
-            fail("a fixed time must be finite");
+          if (!magnitude_ok(s.value))
+            fail("a fixed time must be finite and within 1e30 ns");
         } else if constexpr (std::is_same_v<S, UniformRange>) {
-          if (!std::isfinite(s.low) || !std::isfinite(s.high) || s.high < s.low)
-            fail("a uniform pulse needs finite low <= high");
+          if (!magnitude_ok(s.low) || !magnitude_ok(s.high) || s.high < s.low)
+            fail("a uniform pulse needs low <= high, within 1e30 ns");
         } else if constexpr (std::is_same_v<S, GaussianShape>) {
-          if (!std::isfinite(s.mean_value) || !(s.sigma >= 0.0) || !std::isfinite(s.sigma))
-            fail("a Gaussian pulse needs a finite mean and sigma >= 0");
+          if (!magnitude_ok(s.mean_value) || !(s.sigma >= 0.0) || !magnitude_ok(s.sigma))
+            fail("a Gaussian pulse needs a mean and sigma >= 0, finite and within 1e30 ns");
         } else if constexpr (std::is_same_v<S, Exponential>) {
-          if (!std::isfinite(s.mean_value) || !(s.tau >= 0.0) || !std::isfinite(s.tau))
-            fail("an exponential pulse needs a finite mean and tau >= 0");
+          if (!magnitude_ok(s.mean_value) || !(s.tau >= 0.0) || !magnitude_ok(s.tau))
+            fail("an exponential pulse needs a mean and tau >= 0, finite and within 1e30 ns");
         } else if constexpr (std::is_same_v<S, ComplexPulse>) {
           if (!(s.flat_width >= 0.0) || !(s.gauss_rms >= 0.0) || !(s.decay >= 0.0) ||
-              !std::isfinite(s.delay))
-            fail("a complex pulse needs widths >= 0 and a finite delay");
+              !magnitude_ok(s.flat_width) || !magnitude_ok(s.gauss_rms) || !magnitude_ok(s.decay) ||
+              !magnitude_ok(s.delay))
+            fail("a complex pulse needs widths >= 0 and a delay, all finite and within 1e30 ns");
         } else if constexpr (std::is_same_v<S, Tabulated>) {
-          if (s.density.empty())
-            fail("a tabulated pulse needs nodes");
+          if (s.density.empty() || !magnitude_ok(s.density.lower()) ||
+              !magnitude_ok(s.density.upper()))
+            fail("a tabulated pulse needs nodes within 1e30 ns");
         }
       },
       source.pulse);
@@ -141,17 +165,20 @@ inline void validate(const Source &source) {
     if (!is_finite(star->towards_source) || std::abs(unit - 1.0) > 1e-9 ||
         star->towards_source.z <= 0.0)
       fail("towards_source must be a finite unit vector pointing upwards");
-    if (!(star->distance_m > 0.0) || !(star->disk_radius_m > 0.0) ||
-        !std::isfinite(star->disk_radius_m) || !std::isfinite(star->disk_z_m) ||
-        !std::isfinite(star->start_z_m))
-      fail("star distance and disc radius must be positive; heights finite");
+    // Infinite distance is a plane wave; a finite distance must be a valid length.
+    const bool plane_wave = std::isinf(star->distance_m) && star->distance_m > 0.0;
+    if (!plane_wave && !positive_magnitude_ok(star->distance_m))
+      fail("star distance must be positive and finite (or +inf for a plane wave)");
+    if (!positive_magnitude_ok(star->disk_radius_m) || !magnitude_ok(star->disk_z_m) ||
+        !magnitude_ok(star->start_z_m))
+      fail("star disc radius must be positive; heights finite and within 1e30 m");
     return;
   }
 
   const auto &emitter = std::get<Emitter>(source.geometry);
-  if (!is_finite(emitter.position) || !is_finite(emitter.pointing) ||
+  if (!magnitude_ok(emitter.position) || !is_finite(emitter.pointing) ||
       std::abs(norm(emitter.pointing) - 1.0) > 1e-9)
-    fail("an emitter needs a finite position and a unit pointing vector");
+    fail("an emitter needs a position within 1e30 m and a unit pointing vector");
   std::visit(
       [&](const auto &a) {
         using A = std::decay_t<decltype(a)>;
@@ -168,18 +195,17 @@ inline void validate(const Source &source) {
       },
       emitter.angular);
   if (const auto *disc = std::get_if<DiscTarget>(&source.target)) {
-    if (!is_finite(disc->centre) || !is_finite(disc->normal) ||
-        std::abs(norm(disc->normal) - 1.0) > 1e-9 || !(disc->radius_m > 0.0) ||
-        !std::isfinite(disc->radius_m))
-      fail("a disc target needs a finite centre, a unit normal and a positive radius");
+    if (!magnitude_ok(disc->centre) || !is_finite(disc->normal) ||
+        std::abs(norm(disc->normal) - 1.0) > 1e-9 || !positive_magnitude_ok(disc->radius_m))
+      fail("a disc target needs a centre within 1e30 m, a unit normal and a positive radius");
     if (std::holds_alternative<FixedAngle>(emitter.angular))
       fail("a fixed-angle emitter cannot target a disc (it has no density)");
     if (std::abs(dot(disc->centre - emitter.position, disc->normal)) <= 0.0)
       fail("the emitter must not lie in the plane of the disc");
   }
   if (const auto *sphere = std::get_if<SphereTarget>(&source.target)) {
-    if (!is_finite(sphere->centre) || !(sphere->radius_m > 0.0) || !std::isfinite(sphere->radius_m))
-      fail("a sphere target needs a finite centre and a positive radius");
+    if (!magnitude_ok(sphere->centre) || !positive_magnitude_ok(sphere->radius_m))
+      fail("a sphere target needs a centre within 1e30 m and a positive radius");
     if (!std::holds_alternative<Isotropic>(emitter.angular))
       fail("a sphere target needs an isotropic emitter");
     if (!(norm(sphere->centre - emitter.position) > sphere->radius_m))
@@ -204,9 +230,9 @@ inline void validate(const Source &source) {
   return std::sqrt(1.0 - ratio * ratio);
 }
 
-// Mean number of generated photons (candidates for a disc target).
-[[nodiscard]] inline double expected_count(const Source &source) {
-  validate(source);
+namespace detail {
+
+inline double unchecked_expected_count(const Source &source) {
   if (std::holds_alternative<Star>(source.geometry))
     return source.photons;
   const auto &emitter = std::get<Emitter>(source.geometry);
@@ -215,6 +241,18 @@ inline void validate(const Source &source) {
   if (const auto *sphere = std::get_if<SphereTarget>(&source.target))
     return source.photons * 0.5 * (1.0 - sphere_cos_max(emitter, *sphere));
   return source.photons;
+}
+
+} // namespace detail
+
+// Mean number of generated photons (candidates for a disc target). Throws when it is not
+// finite or exceeds 2^53 (a near-degenerate disc target can overflow it).
+[[nodiscard]] inline double expected_count(const Source &source) {
+  validate(source);
+  const double mean = detail::unchecked_expected_count(source);
+  if (!(mean >= 0.0) || mean > max_photon_count)
+    throw std::invalid_argument("the expected photon count must be finite and at most 2^53");
+  return mean;
 }
 
 // Number of photons of one source in one (event, telescope): the expected count rounded
