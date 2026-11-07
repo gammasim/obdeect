@@ -7,5 +7,6 @@ Status: pre-alpha, no functionality yet.
 ```{toctree}
 :maxdepth: 1
 
+format
 changelog
 ```

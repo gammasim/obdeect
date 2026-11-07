@@ -1,0 +1,84 @@
+#include "check.hpp"
+
+#include "gstrickd/photons.hpp"
+#include "gstrickd/random.hpp"
+
+#include <stdexcept>
+
+using namespace gstrickd;
+
+namespace {
+
+void chunk_columns() {
+  PhotonChunk chunk;
+  chunk.resize(3, required_columns | column_bit(Column::wavelength));
+  CHECK(chunk.rows() == 3);
+  CHECK(chunk.has(Column::wavelength));
+  CHECK(!chunk.has(Column::zem));
+  CHECK(chunk.mask() == (required_columns | column_bit(Column::wavelength)));
+  chunk.validate();
+  chunk[Column::zem].assign(2, 1.0F);
+  bool threw = false;
+  try {
+    chunk.validate();
+  } catch (const std::invalid_argument &) {
+    threw = true;
+  }
+  CHECK(threw);
+}
+
+void missing_required_column() {
+  PhotonChunk chunk;
+  chunk.resize(2, column_bit(Column::x));
+  bool threw = false;
+  try {
+    chunk.validate();
+  } catch (const std::invalid_argument &) {
+    threw = true;
+  }
+  CHECK(threw);
+}
+
+void random_is_keyed() {
+  const DrawKey a{.seed = 1, .stage = 2, .event = 3, .telescope = 4, .photon = 5, .stream = 0};
+  DrawKey b = a;
+  CHECK(uniform4(a) == uniform4(b));
+  b.stage = 3;
+  CHECK(uniform4(a) != uniform4(b));
+  b = a;
+  b.stream = 1;
+  CHECK(uniform4(a) != uniform4(b));
+  b = a;
+  b.photon = 6;
+  CHECK(uniform4(a) != uniform4(b));
+  CHECK(uniform4(a, 0) != uniform4(a, 1));
+  for (const double u : uniform4(a)) {
+    CHECK(u > 0.0 && u < 1.0);
+  }
+}
+
+void random_mean() {
+  double sum = 0.0;
+  constexpr int n = 100000;
+  for (int i = 0; i < n; ++i) {
+    const DrawKey key{.seed = 7,
+                      .stage = 1,
+                      .event = 0,
+                      .telescope = 0,
+                      .photon = static_cast<std::uint64_t>(i),
+                      .stream = 0};
+    sum += uniform4(key)[0];
+  }
+  CHECK_NEAR(sum / n, 0.5, 0.005);
+}
+
+} // namespace
+
+int main() {
+  return run_checks([] {
+    chunk_columns();
+    missing_required_column();
+    random_is_keyed();
+    random_mean();
+  });
+}
