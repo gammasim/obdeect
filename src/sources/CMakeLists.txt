@@ -9,10 +9,18 @@ else()
 endif()
 option(DLAMB_BUILD_PYTHON_API "Build the Python extension" ${DLAMB_BUILD_PYTHON_API_DEFAULT})
 
-# Header-only, standard-library-only core.
+include(FetchContent)
+FetchContent_Declare(gstrickd GIT_REPOSITORY https://github.com/GernotMaier/gstrickd.git
+                     GIT_TAG 1e488f48a59230214a3f7fa75b1d1e7f584f5b2d)
+set(GSTRICKD_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(GSTRICKD_BUILD_PYTHON_API OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(gstrickd)
+
+# Header-only, standard-library-only core. Photon chunks use the gstrickd headers.
 add_library(dlamb_core INTERFACE)
 target_include_directories(dlamb_core INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/cpp/include)
 target_compile_features(dlamb_core INTERFACE cxx_std_20)
+target_link_libraries(dlamb_core INTERFACE gstrickd_core)
 # Identical floating-point results for any thread count and chunk size on one
 # platform: no implicit fused multiply-add contraction.
 if(NOT MSVC)
@@ -41,7 +49,7 @@ endif()
 
 if(DLAMB_BUILD_TESTING)
   enable_testing()
-  foreach(test_name version)
+  foreach(test_name version density source)
     add_executable(test_${test_name} cpp/tests/test_${test_name}.cpp)
     target_link_libraries(test_${test_name} PRIVATE dlamb_core)
     dlamb_enable_warnings(test_${test_name})

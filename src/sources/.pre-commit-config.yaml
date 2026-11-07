@@ -1,4 +1,6 @@
 ---
+# Reference data are byte copies of their sources.
+exclude: ^cpp/tests/data/
 default_language_version:
   python: python3.14
 
