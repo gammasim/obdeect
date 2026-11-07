@@ -49,7 +49,7 @@ endif()
 
 if(DLUFD_BUILD_TESTING)
   enable_testing()
-  foreach(test_name version transmission thinning pipeline)
+  foreach(test_name version transmission thinning pipeline profile refraction timing)
     add_executable(test_${test_name} cpp/tests/test_${test_name}.cpp)
     target_link_libraries(test_${test_name} PRIVATE dlufd_core)
     # Reference data: cpp/tests/data (copied from sim_telarray, see test_transmission.cpp).
@@ -58,4 +58,21 @@ if(DLUFD_BUILD_TESTING)
     dlufd_enable_warnings(test_${test_name})
     add_test(NAME ${test_name} COMMAND test_${test_name})
   endforeach()
+
+  # Agreement with CORSIKA's atmo.c: DLUFD_CORSIKA_REFERENCE=<corsika7/bernlohr directory>.
+  option(DLUFD_CORSIKA_REFERENCE "Path to CORSIKA's corsika7/bernlohr directory (atmo.c)" OFF)
+  if(DLUFD_CORSIKA_REFERENCE)
+    enable_language(C)
+    add_library(corsika_atmo STATIC
+      ${DLUFD_CORSIKA_REFERENCE}/atmo.c
+      ${DLUFD_CORSIKA_REFERENCE}/fileopen.c
+      ${DLUFD_CORSIKA_REFERENCE}/straux.c)
+    target_include_directories(corsika_atmo PUBLIC ${DLUFD_CORSIKA_REFERENCE})
+    target_compile_options(corsika_atmo PRIVATE -w -ffp-contract=off)
+    add_executable(test_corsika_reference cpp/tests/test_corsika_reference.cpp)
+    target_link_libraries(test_corsika_reference PRIVATE dlufd_core corsika_atmo m)
+    target_compile_definitions(test_corsika_reference PRIVATE
+      DLUFD_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/cpp/tests/data")
+    add_test(NAME corsika_reference COMMAND test_corsika_reference)
+  endif()
 endif()

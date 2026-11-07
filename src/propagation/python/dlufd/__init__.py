@@ -12,6 +12,11 @@ except PackageNotFoundError:
 _EXPORTS = {
     "TransmissionTable": "dlufd.extinction",
     "apply_extinction": "dlufd.extinction",
+    "AtmosphereProfile": "dlufd.profile",
+    "RefractionTables": "dlufd.profile",
+    "air_delay_ns": "dlufd.profile",
+    "propagation_time_ns": "dlufd.profile",
+    "refract": "dlufd.profile",
 }
 __all__ = [*_EXPORTS, "__version__"]
 
