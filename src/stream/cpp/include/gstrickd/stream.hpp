@@ -538,4 +538,22 @@ private:
   bool ended_{false};
 };
 
+// Writes one record as returned by Reader (stream and stream_end are not written).
+inline void write_record(Writer &writer, const Record &record) {
+  switch (record.type) {
+  case RecordType::stream:
+  case RecordType::stream_end:
+    return;
+  case RecordType::photons:
+    writer.write_chunk(record.chunk);
+    return;
+  case RecordType::blob:
+    writer.write_blob(record.blob_eventio_type, record.blob_eventio_id, record.blob);
+    return;
+  default:
+    writer.write_metadata(record.type, record.metadata);
+    return;
+  }
+}
+
 } // namespace gstrickd
