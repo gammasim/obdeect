@@ -1,0 +1,32 @@
+---
+name: Changelog
+# Require a changelog entry for each pull request
+# from: https://github.com/cta-observatory/ctapipe/blob/main/.github/workflows/changelog.yml
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled, ready_for_review]
+    branches:
+      - 'main'
+
+env:
+  FRAGMENT_NAME_PREFIX: "docs/changes/${{ github.event.number }}"
+
+permissions:
+  contents: read
+
+jobs:
+  changelog:
+    runs-on: ubuntu-slim
+    if: >-
+      github.event.pull_request.draft == false &&
+      !contains(github.event.pull_request.labels.*.name, 'no-changelog-needed') &&
+      !contains(github.event.pull_request.labels.*.name, 'dependencies')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+
+      - name: Check for at least one changelog fragment
+        run: |
+          find docs/changes -type f | \
+          grep -E "^${FRAGMENT_NAME_PREFIX}\.(feature|bugfix|maintenance)\.md$"

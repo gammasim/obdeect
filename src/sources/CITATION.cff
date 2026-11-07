@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: "If you use dlamb, please cite it using the metadata below."
+title: "dlamb: Artificial light sources for Cherenkov-telescope simulations"
+version: 0.1.0
+license: BSD-3-Clause
+type: software
+repository-code: "https://github.com/gammasim/dlamb"
+authors:
+  - given-names: Gernot
+    family-names: Maier
+    affiliation: DESY
+    orcid: 'https://orcid.org/0000-0001-9868-4700'
+abstract: "Artificial light sources for Cherenkov-telescope simulations: flashers, illuminators, lasers, LEDs and stars, emitting photons at sky, telescope-sphere, telescope or camera level, as a standard-library-only C++20 core with a Python API writing gstrickd photon streams."

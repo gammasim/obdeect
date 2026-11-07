@@ -1,0 +1,32 @@
+# CMake and native build products
+/build/
+/out/
+/compile_commands.json
+/tmp_planning/
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+
+# Generated trace and visualisation products
+*.npz
+*.html
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.egg-info/
+/dist/
+
+# IDE and operating-system files
+.DS_Store
+.vscode/
+.idea/
+
+# Documentation build
+/docs/_build/
