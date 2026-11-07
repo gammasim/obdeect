@@ -40,6 +40,16 @@ double sum_weight_sq(const std::vector<Photon> &p) {
   return s;
 }
 
+// True when f throws std::invalid_argument.
+template <class F> bool throws_invalid(F f) {
+  try {
+    f();
+  } catch (const std::invalid_argument &) {
+    return true;
+  }
+  return false;
+}
+
 // Track of the fake-muon default geometry but with a given sphere radius and index.
 Track vertical_track(double length, double cos_ct, double radius) {
   Track t;
@@ -277,6 +287,52 @@ void stream_round_trip() {
   CHECK_NEAR(telescope_weight, summary.weight, 1e-3 * summary.weight + 1e-6);
 }
 
+// Track photon counts above 2^53 are rejected (track_count would convert them to uint64_t
+// without loss); 2^53 itself is accepted, as in Source::validate.
+void rejects_large_photon_counts() {
+  Track t = vertical_track(1000.0, std::cos(1.0 * pi / 180.0), 15.0);
+  t.photons = max_photon_count;
+  CHECK(!throws_invalid([&] { validate(t); }));
+  t.photons = 1e16;
+  CHECK(throws_invalid([&] { validate(t); }));
+  std::vector<Photon> out;
+  CHECK(throws_invalid([&] { emit_track(t, 1, 1, 1, out); }));
+  t.photons = std::nan("");
+  CHECK(throws_invalid([&] { validate(t); }));
+}
+
+// CLI value checks of fake-muon: event count range, primary names and index profile file.
+void cli_values() {
+  CHECK(throws_invalid([] { (void)fake_muon::event_count(-1); }));
+  CHECK(throws_invalid([] { (void)fake_muon::event_count(0); }));
+  CHECK(throws_invalid([] { (void)fake_muon::event_count(4294967296LL); }));
+  CHECK(fake_muon::event_count(1) == 1);
+  CHECK(fake_muon::event_count(4294967295LL) == 4294967295U);
+
+  // mu+ is CORSIKA 5 (charge +1), mu- is 6 (charge -1); "muon" is mu-.
+  double mass = 0.0, charge = 0.0;
+  CHECK(fake_muon::primary_id_from_name("mu+") == 5);
+  fake_muon::mass_charge(fake_muon::primary_id_from_name("mu+"), mass, charge);
+  CHECK(charge == 1.0);
+  CHECK(fake_muon::primary_id_from_name("mu-") == 6);
+  CHECK(fake_muon::primary_id_from_name("muon") == 6);
+  fake_muon::mass_charge(fake_muon::primary_id_from_name("muon"), mass, charge);
+  CHECK(charge == -1.0);
+  CHECK(throws_invalid([] { (void)fake_muon::primary_id_from_name("tau"); }));
+
+  // An empty index profile is an error, not the constant index.
+  std::istringstream empty("");
+  CHECK(throws_invalid([&] { (void)fake_muon::read_index_profile(empty, "empty.txt"); }));
+  std::istringstream garbage("0 0.000292\nabc\n");
+  CHECK(throws_invalid([&] { (void)fake_muon::read_index_profile(garbage, "garbage.txt"); }));
+  std::istringstream dangling("0 0.000292\n3000\n");
+  CHECK(throws_invalid([&] { (void)fake_muon::read_index_profile(dangling, "dangling.txt"); }));
+  std::istringstream two("0 0.000292\n3000 0.000220\n");
+  const fake_muon::IndexProfile profile = fake_muon::read_index_profile(two, "two.txt");
+  CHECK(profile.altitude_m.size() == 2);
+  CHECK_NEAR(profile.index_minus_one[1], 0.000220, 1e-15);
+}
+
 } // namespace
 
 int main() {
@@ -288,5 +344,7 @@ int main() {
     profile_steps();
     rejects_unported();
     stream_round_trip();
+    rejects_large_photon_counts();
+    cli_values();
   });
 }

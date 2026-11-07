@@ -2,7 +2,8 @@
 
 Isotropic point light moved along a figure-eight 1000 m above the observation level,
 emitting at each position. Port of `sim_telarray/LightEmission/octo.cc`. The original is a
-demonstration with no options; the CLI exposes its parameters.
+demonstration with no options. The CLI exposes only `--photons`, `--seed` and `-o`; the
+other parameters are library-only.
 
 ```bash
 dlamb-octo --seed 1 -o octo.ps

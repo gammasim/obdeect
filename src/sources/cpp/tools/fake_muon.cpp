@@ -88,7 +88,7 @@ Parsed parse(int argc, char **argv) {
     else if (arg == "-h" || arg == "--h-start")
       o.h_start_m = parse_number(arg, value);
     else if (arg == "-N" || arg == "--events")
-      o.events = static_cast<std::uint32_t>(parse_integer(arg, value));
+      o.events = dlamb::fake_muon::event_count(parse_integer(arg, value));
     else if (arg == "-n" || arg == "--n1" || arg == "--refraction") {
       const double v = parse_number(arg, value);
       if (v > 1.0 && v < 1.0003)
@@ -105,13 +105,7 @@ Parsed parse(int argc, char **argv) {
       std::ifstream in(value);
       if (!in)
         throw std::invalid_argument("cannot open index profile " + value);
-      double altitude = 0.0, index = 0.0;
-      while (in >> altitude >> index) {
-        o.index_profile.altitude_m.push_back(altitude);
-        o.index_profile.index_minus_one.push_back(index);
-      }
-      if (!in.eof())
-        throw std::invalid_argument("index profile " + value + ": expected 'altitude n-1' lines");
+      o.index_profile = dlamb::fake_muon::read_index_profile(in, value);
     } else if (arg == "-a" || arg == "--altitude" || arg == "--obslev" ||
                arg == "--observation-level")
       o.observation_level_m = parse_number(arg, value);
@@ -125,21 +119,7 @@ Parsed parse(int argc, char **argv) {
       if (!value.empty() && value[0] >= '0' && value[0] <= '9') {
         o.primary_id = static_cast<int>(parse_integer(arg, value));
       } else {
-        const std::string name = value;
-        if (name == "gamma")
-          o.primary_id = 1;
-        else if (name == "positron")
-          o.primary_id = 2;
-        else if (name == "electron")
-          o.primary_id = 3;
-        else if (name == "muon" || name == "mu-")
-          o.primary_id = 5;
-        else if (name == "mu+")
-          o.primary_id = 6;
-        else if (name == "proton")
-          o.primary_id = 14;
-        else
-          throw std::invalid_argument("unknown primary name: " + name);
+        o.primary_id = dlamb::fake_muon::primary_id_from_name(value);
       }
       dlamb::fake_muon::mass_charge(o.primary_id, o.mass_gev, o.charge);
     } else if (arg == "-l" || arg == "--wlmin")

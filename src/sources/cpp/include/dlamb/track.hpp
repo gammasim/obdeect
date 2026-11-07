@@ -37,8 +37,8 @@ struct Track {
 // Throws std::invalid_argument for an inconsistent track.
 inline void validate(const Track &track) {
   const auto fail = [](const char *message) { throw std::invalid_argument(message); };
-  if (!std::isfinite(track.photons) || track.photons < 0.0)
-    fail("track photons must be finite and >= 0");
+  if (!(track.photons >= 0.0) || track.photons > max_photon_count)
+    fail("track photons must be finite, >= 0 and at most 2^53");
   if (!is_finite(track.start) || !is_finite(track.direction) ||
       std::abs(norm(track.direction) - 1.0) > 1e-9)
     fail("a track needs a finite start and a unit direction");

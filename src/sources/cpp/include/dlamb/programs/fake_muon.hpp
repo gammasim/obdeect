@@ -11,6 +11,8 @@
 
 #include <cmath>
 #include <cstdint>
+#include <istream>
+#include <limits>
 #include <ostream>
 #include <stdexcept>
 #include <string>
@@ -163,6 +165,52 @@ inline void mass_charge(int type, double &mass, double &charge) {
     if (type == 402)
       mass = 0.931845 * 4.0; // 4He
   }
+}
+
+// CORSIKA particle id of a --primary name. mu+ is 5 and mu- is 6 (CORSIKA numbering, as in
+// mass_charge); "muon" means mu-, the charge default.
+[[nodiscard]] inline int primary_id_from_name(const std::string &name) {
+  if (name == "gamma")
+    return 1;
+  if (name == "positron")
+    return 2;
+  if (name == "electron")
+    return 3;
+  if (name == "muon" || name == "mu-")
+    return 6;
+  if (name == "mu+")
+    return 5;
+  if (name == "proton")
+    return 14;
+  throw std::invalid_argument("unknown primary name: " + name);
+}
+
+// Event count of -N: 1 to 2^32 - 1 (the event number in the stream is 32-bit).
+[[nodiscard]] inline std::uint32_t event_count(long long value) {
+  if (value < 1 || value > std::numeric_limits<std::uint32_t>::max())
+    throw std::invalid_argument("events must be between 1 and 4294967295");
+  return static_cast<std::uint32_t>(value);
+}
+
+// Reads the "altitude_m n_minus_1" pairs of an index profile file. An empty file is an error:
+// it would otherwise act as the constant index.
+[[nodiscard]] inline IndexProfile read_index_profile(std::istream &in, const std::string &name) {
+  std::vector<double> values;
+  double value = 0.0;
+  while (in >> value)
+    values.push_back(value);
+  if (!in.eof())
+    throw std::invalid_argument("index profile " + name + ": expected 'altitude n-1' lines");
+  if (values.empty())
+    throw std::invalid_argument("index profile " + name + " has no data");
+  if (values.size() % 2 != 0)
+    throw std::invalid_argument("index profile " + name + ": a value is missing its pair");
+  IndexProfile profile;
+  for (std::size_t i = 0; i < values.size(); i += 2) {
+    profile.altitude_m.push_back(values[i]);
+    profile.index_minus_one.push_back(values[i + 1]);
+  }
+  return profile;
 }
 
 // Lorentz factor, momentum and energy of the track (fake-muon.cc:404-410). Energy [GeV] is
@@ -319,13 +367,15 @@ inline StreamSummary write(std::ostream &out, const Options &o,
   double expected_per_event = 0.0;
   for (const auto &t : segments)
     expected_per_event += expected_track_weight(t);
-  for (std::uint32_t event = 1; event <= o.events; ++event) {
-    writer.begin_event({event, o.primary_id, energy_gev(o), o.impact_x_m, o.impact_y_m});
+  // 64-bit counter: with events = 2^32 - 1 a 32-bit one would wrap and never end.
+  for (std::uint64_t event = 1; event <= o.events; ++event) {
+    const auto id = static_cast<std::uint32_t>(event);
+    writer.begin_event({id, o.primary_id, energy_gev(o), o.impact_x_m, o.impact_y_m});
     writer.begin_telescope(telescope, gstrickd::Frame::sky);
     std::vector<Photon> photons;
     for (std::size_t k = 0; k < segments.size(); ++k) {
       photons.clear();
-      emit_track(segments[k], source_seed(o.seed, k), event, telescope.id, photons);
+      emit_track(segments[k], source_seed(o.seed, k), id, telescope.id, photons);
       for (const auto &p : photons)
         writer.push(p);
     }

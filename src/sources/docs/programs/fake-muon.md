@@ -43,7 +43,8 @@ dlamb-fake-muon --help
 | `-l`, `-L` (`:248`) | `-l`, `-L` | 240, 1000 nm | 200 to 2000 nm |
 | `-q`, `-m`, `-p`, `--beta` | same | -1, 0.105658 GeV, -, 1 | `-p` sets beta from the mass |
 | `--primary` (`:327`) | `--primary` | 5 | sets mass and charge (`mass_charge`) |
-| `-N`, `--run` | same | 1, 1 | |
+| `-N`, `--events` | same | 1 | number of events, 1 to 4294967295 |
+| `--run` | same | 1 | run number (run record) |
 | `--enable-scatter` (`:275`) | rejected | off | not ported (needs the density profile) |
 | `--rscat`, `-I` | rejected | 0 | disabled in the original / not applicable |
 | `--seed` | new | 1 | explicit random seed |
