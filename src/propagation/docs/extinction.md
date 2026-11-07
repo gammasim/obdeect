@@ -1,0 +1,94 @@
+# Atmospheric extinction
+
+Direct atmospheric transmission of Cherenkov and artificial-source photons, as in
+sim_telarray (`atmospheric_transmission2`, `sim_absorb.c`). Wavelength assignment and
+early thinning with the efficiency envelope follow sim_telarray's photon loop
+(`sim_telarray.c`).
+
+## Inputs
+
+| Quantity | Unit | Source |
+|---|---|---|
+| Transmission table | nm, km a.s.l., optical depth | sim_telarray `atm_trans_*.dat` (`# H2=`, `H1=` header) |
+| Site altitude | m a.s.l. | must match H2 within 25 m |
+| Telescope altitude | m a.s.l. | telescope position |
+| Path inside telescope | m | optics (sim_telarray `pathlen_tel`) |
+| Envelope E(lambda) | nm, [0, 1] | product of later efficiencies, upper bound |
+
+## Formulas
+
+Airmass of a downward photon with direction cosines (cx, cy), plane-parallel:
+
+$$
+X = \frac{1}{|c_z|}, \qquad c_z = -\sqrt{1 - c_x^2 - c_y^2}, \qquad X = 10^{10} \text{ if } c_z = 0.
+$$
+
+Optical depth at height h (metres a.s.l.) and integer wavelength lambda (nm), linear in
+log10 of the height in cm and clamped to the table edges:
+
+$$
+\tau(\lambda, h) = \operatorname{rpol}\left(\log_{10} h_{\text{cm}},\; \tau_i(\lambda)\right).
+$$
+
+Telescope optical depths, with h_T the telescope altitude and l the path inside the
+telescope:
+
+$$
+\tau_{\text{tel}} = -\ln T(\lambda, h_T), \qquad
+\tau_{\text{focus}} = -\ln\frac{T(\lambda, h_T + l)}{T(\lambda, h_T)},
+$$
+
+where T is the vertical transmission $T = e^{-\tau}$. If T(400 nm, h_T) gives
+$\tau_{\text{tel}} > 1000$, both are set to 0 (sim_telarray behaviour).
+
+Acceptance of a photon at emission altitude z with wavelength lambda:
+
+$$
+T_{\text{atm}} = \exp\!\left[-\left(\left|\tau(\lambda, z) - \tau_{\text{tel}}\right| X + \tau_{\text{focus}}\right)\right],
+$$
+
+with $T_{\text{atm}} = 0$ below the observation level, for $\tau_{\text{tel}} > 1000$, or for an
+optical depth above 100. Photons with lambda >= 1000 nm get 0 (as sim_telarray skips them).
+
+Wavelength: for photons without a wavelength, density proportional to $1/\lambda^2$ on
+[lo, hi], by inverse CDF, $\lambda = 1 / (1/\lambda_{lo} - u\,(1/\lambda_{lo} - 1/\lambda_{hi}))$
+with u uniform in (0, 1). As in sim_telarray the value is truncated to an integer nm.
+
+Thinning: the acceptance is $p = T_{\text{atm}}(\lambda)\,E(\lambda)$, where E is linear
+between the envelope nodes. Each bunch of weight w gives
+
+$$
+n = \mathrm{Binomial}(\lfloor w \rfloor, p) + \mathrm{Bernoulli}\big((w - \lfloor w \rfloor)\,p\big),
+$$
+
+as sim_telarray's loop over the photons of a bunch. Thinned output has one row per surviving
+photon with w = 1. Weighted output keeps every row with $w \leftarrow w\,p$. Both write the
+column p.
+
+## Random numbers
+
+Philox (gstrickd `uniform4`), key (seed, stage `DLUF`, event, telescope, photon index,
+stream). Wavelength draws use stream 1, thinning stream 2. The binomial is a sum of
+Bernoulli trials, so bunches are limited to 2048 photons (split larger bunches upstream).
+sim_telarray's own random sequence is not reproduced; the agreement is in the probabilities.
+
+## Example
+
+```python
+import dlufd
+
+table = dlufd.TransmissionTable("atm_trans_2000_1_10_0_0_2000.dat", site_altitude_m=2000.0)
+out = dlufd.apply_extinction(
+    columns, table, telescope_altitude_m=2030.0,
+    envelope_wavelength=[200.0, 800.0], envelope_value=[0.9, 0.3],
+    seed=1, event=1, telescope=1, first_index=0,
+    weighted=False, wavelength_range=(250.0, 700.0), pathlen_m=28.0,
+)
+```
+
+## References
+
+- sim_telarray: `common/sim_absorb.c` (`read_trans`, `atmospheric_transmission2`),
+  `common/rpolator.c` (`rpol`), `common/sim_telarray.c` (telescope depths, photon loop).
+- Python port used for the test reference values: `simtools/simtel/shower_transmission.py`.
+- Photon stream and random numbers: gstrickd, `docs/format.md`.

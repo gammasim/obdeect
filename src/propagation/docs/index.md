@@ -8,4 +8,5 @@ Status: pre-alpha, no functionality yet.
 :maxdepth: 1
 
 changelog
+extinction
 ```
