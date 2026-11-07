@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -30,19 +31,87 @@ std::uint32_t mask_of(std::initializer_list<Column> columns) {
   return mask;
 }
 
+template <class Function> bool throws_invalid(Function function) {
+  try {
+    function();
+  } catch (const std::invalid_argument &) {
+    return true;
+  }
+  return false;
+}
+
 void test_envelope() {
   const dlufd::Envelope envelope({300.0, 400.0, 500.0}, {0.0, 0.5, 1.0});
   CHECK_NEAR(envelope(300.0), 0.0, 0.0);
   CHECK_NEAR(envelope(350.0), 0.25, 1e-15);
   CHECK_NEAR(envelope(450.0), 0.75, 1e-15);
   CHECK_NEAR(envelope(500.0), 1.0, 0.0);
-  bool rejected = false;
-  try {
-    dlufd::Envelope bad({300.0, 300.0}, {0.1, 0.2});
-  } catch (const std::invalid_argument &) {
-    rejected = true;
+  CHECK(throws_invalid([] { dlufd::Envelope bad({300.0, 300.0}, {0.1, 0.2}); }));
+  CHECK(throws_invalid([] { dlufd::Envelope bad({300.0, 400.0}, {0.1, std::nan("")}); }));
+  CHECK(throws_invalid([] { dlufd::Envelope bad({300.0, std::nan("")}, {0.1, 0.2}); }));
+  CHECK(throws_invalid([] { dlufd::Envelope bad({300.0, 400.0}, {0.1, 1.5}); }));
+}
+
+// The wavelength range must be finite, with 1 <= lo < hi <= 2^24 (exact integers in float32).
+void test_wavelength_range_validation() {
+  dlufd::WavelengthRange{250.0, 700.0}.validate();
+  dlufd::WavelengthRange{1.0, dlufd::max_exact_wavelength_nm}.validate();
+  constexpr double inf = std::numeric_limits<double>::infinity();
+  CHECK(throws_invalid([] { (void)dlufd::WavelengthRange{250.0, inf}.validate(); }));
+  CHECK(throws_invalid([] { (void)dlufd::WavelengthRange{std::nan(""), 700.0}.validate(); }));
+  CHECK(throws_invalid([] { (void)dlufd::WavelengthRange{-inf, 700.0}.validate(); }));
+  CHECK(throws_invalid([] { (void)dlufd::WavelengthRange{0.5, 700.0}.validate(); }));
+  CHECK(throws_invalid([] { (void)dlufd::WavelengthRange{700.0, 700.0}.validate(); }));
+  CHECK(throws_invalid([] { (void)dlufd::WavelengthRange{250.0, 1e10}.validate(); }));
+  // The largest allowed range draws exact, non-negative integers below 2^24.
+  gstrickd::PhotonChunk chunk;
+  chunk.resize(4096, mask_of({Column::x, Column::y, Column::cx, Column::cy, Column::t, Column::w,
+                              Column::wavelength}));
+  dlufd::assign_wavelengths(chunk, {1.0, dlufd::max_exact_wavelength_nm}, seed, 0, 0);
+  bool exact = true;
+  for (const float lambda : chunk[Column::wavelength]) {
+    exact = exact && lambda == std::floor(lambda) && lambda >= 1.0F &&
+            lambda < static_cast<float>(dlufd::max_exact_wavelength_nm);
   }
-  CHECK(rejected);
+  CHECK(exact);
+}
+
+// Non-finite or out-of-range probabilities and weights are rejected, never thinned to zero.
+void test_non_finite_acceptance_rejected() {
+  const double nan = std::nan("");
+  gstrickd::PhotonChunk chunk;
+  chunk.resize(3, mask_of({Column::x, Column::y, Column::cx, Column::cy, Column::t, Column::w,
+                           Column::wavelength}));
+  for (std::size_t r = 0; r < 3; ++r) {
+    chunk[Column::w][r] = 2.0F;
+  }
+  CHECK(throws_invalid([&] {
+    (void)dlufd::thin_chunk(chunk, std::vector<double>{0.5, nan, 0.5}, seed, 0, 0, 0, true);
+  }));
+  CHECK(throws_invalid(
+      [&] { (void)dlufd::thin_chunk(chunk, std::vector<double>{0.5, 0.5}, seed, 0, 0, 0, true); }));
+  CHECK(throws_invalid([&] {
+    (void)dlufd::thin_chunk(chunk, std::vector<double>{0.5, 1.5, 0.5}, seed, 0, 0, 0, true);
+  }));
+  gstrickd::PhotonChunk weighted = chunk;
+  CHECK(throws_invalid(
+      [&] { (void)dlufd::weight_chunk(weighted, std::vector<double>{0.5, nan, 0.5}, true); }));
+  CHECK(throws_invalid(
+      [&] { (void)dlufd::weight_chunk(weighted, std::vector<double>{0.5, 0.5}, true); }));
+  // Nothing changed by the rejected calls.
+  CHECK(weighted[Column::w][0] == 2.0F && weighted[Column::w][1] == 2.0F);
+  CHECK(!weighted.has(Column::p));
+
+  gstrickd::PhotonChunk bad_weight = chunk;
+  bad_weight[Column::w][1] = std::numeric_limits<float>::quiet_NaN();
+  CHECK(throws_invalid(
+      [&] { (void)dlufd::weight_chunk(bad_weight, std::vector<double>{0.5, 0.5, 0.5}, false); }));
+  bad_weight[Column::w][1] = std::numeric_limits<float>::infinity();
+  CHECK(throws_invalid(
+      [&] { (void)dlufd::weight_chunk(bad_weight, std::vector<double>{0.5, 0.5, 0.5}, false); }));
+  CHECK(throws_invalid([&] {
+    (void)dlufd::thin_chunk(bad_weight, std::vector<double>{0.5, 0.5, 0.5}, seed, 0, 0, 0, true);
+  }));
 }
 
 // Wavelengths follow density ~ 1/lambda^2 on [lo, hi]: P(lambda < x) analytic.
@@ -215,6 +284,8 @@ void test_chunk_size_determinism() {
 int main() {
   return run_checks([] {
     test_envelope();
+    test_wavelength_range_validation();
+    test_non_finite_acceptance_rejected();
     test_wavelength_distribution();
     test_surviving_photons_moments();
     test_thinning_statistics();

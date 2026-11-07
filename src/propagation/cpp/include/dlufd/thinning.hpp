@@ -109,10 +109,13 @@ thin_chunk(const gstrickd::PhotonChunk &in, std::span<const double> p, std::uint
   if (in.has(Column::p)) {
     throw std::invalid_argument("input already has an acceptance column p");
   }
+  if (p.size() != in.rows()) {
+    throw std::invalid_argument("acceptance needs one value per row");
+  }
   // Source row of every output photon.
   std::vector<std::size_t> source;
   for (std::size_t row = 0; row < in.rows(); ++row) {
-    if (p[row] < 0.0 || p[row] > 1.0) {
+    if (!(p[row] >= 0.0 && p[row] <= 1.0)) {
       throw std::invalid_argument("acceptance must be within [0, 1]");
     }
     const double w = in[Column::w][row];
@@ -157,17 +160,25 @@ thin_chunk(const gstrickd::PhotonChunk &in, std::span<const double> p, std::uint
 }
 
 // Weighted mode. Each row is kept with w multiplied by p; p is written as column p if
-// write_p. Returns the chunk in place.
+// write_p. Returns the chunk in place; all input is checked before the chunk changes.
 inline void weight_chunk(gstrickd::PhotonChunk &chunk, std::span<const double> p, bool write_p) {
   using gstrickd::Column;
   if (chunk.has(Column::p)) {
     throw std::invalid_argument("input already has an acceptance column p");
   }
+  if (p.size() != chunk.rows()) {
+    throw std::invalid_argument("acceptance needs one value per row");
+  }
   auto &w = chunk[Column::w];
   for (std::size_t row = 0; row < chunk.rows(); ++row) {
-    if (p[row] < 0.0 || p[row] > 1.0) {
+    if (!(p[row] >= 0.0 && p[row] <= 1.0)) {
       throw std::invalid_argument("acceptance must be within [0, 1]");
     }
+    if (!(w[row] >= 0.0F && std::isfinite(w[row]))) {
+      throw std::invalid_argument("bunch weight must be finite and non-negative");
+    }
+  }
+  for (std::size_t row = 0; row < chunk.rows(); ++row) {
     w[row] = static_cast<float>(static_cast<double>(w[row]) * p[row]);
   }
   if (write_p) {
