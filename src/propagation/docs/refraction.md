@@ -65,8 +65,9 @@ travel time   T = T0(h) - (T_a^2) s^2 / c^3 + (dz + de) / (c_vac cos(theta_em))
 - `dz = |h - obs|`, `de = etadsn (thick(obs) - thick(h))`, `etadsn` is `(n-1)/rho` at the first level more than 1.5 km above the observation level.
 - The new direction is `(cx, cy) sin(theta_obs)/sin(theta_em)`; the position moves by `d (cx, cy)/sin(theta_em)`.
 
-Photons with a direction outside the unit circle (upward or horizontal) are returned
-unchanged with `bent = False`.
+Photons with a direction outside the unit circle (upward or horizontal) or with any non-finite
+input (height, direction, position, time) are returned unchanged with `bent = False`. Public
+height lookups, the timing helpers and the observation level throw for non-finite values.
 
 Example (ECMWF table, observation level 2180 m, photon direction purely in x):
 

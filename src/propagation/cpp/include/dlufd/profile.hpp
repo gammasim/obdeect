@@ -16,6 +16,13 @@
 
 namespace dlufd {
 
+// Public numeric inputs must be finite. NaN fails every boundary comparison and converting it
+// to an integer is undefined behaviour; infinities would be silently clamped.
+inline void require_finite(double value, const char *name) {
+  if (!std::isfinite(value))
+    throw std::invalid_argument(std::string(name) + " must be finite");
+}
+
 // Natural cubic spline with the coefficients of CORSIKA rpolator.c, set_1d_cubic_params()
 // with clamped = 0. On interval i, y = a + b r + c r^2 + d r^3 with r = x - x[i].
 class CubicSpline {
@@ -129,6 +136,7 @@ public:
   std::span<const double> table_index_minus_one() const { return n_1_; }
 
   // Public height-in-metre lookups (same interpolation as the _cm methods).
+  // Throw std::invalid_argument for non-finite heights (also after the conversion to cm).
   double density(double height_m) const { return density_cm(100. * height_m); }
   double thickness(double height_m) const { return thickness_cm(100. * height_m); }
   double refractive_index_minus_one(double height_m) const {
@@ -137,6 +145,7 @@ public:
 
   // atmo.c rhofx_: density [g/cm^3] at height [cm].
   double density_cm(double h) const {
+    require_finite(h, "height");
     if (h <= bottom_cm_)
       return rho_.front();
     if (h > top_cm_ + 0.001)
@@ -150,6 +159,7 @@ public:
 
   // atmo.c thickx_: thickness [g/cm^2] at height [cm], with the exponential top layer.
   double thickness_cm(double h) const {
+    require_finite(h, "height");
     if (h <= bottom_cm_)
       return thick_.front();
     if (h >= top_cm_)
@@ -165,6 +175,7 @@ public:
 
   // atmo.c refim1x_: n-1 at height [cm].
   double index_minus_one_cm(double h) const {
+    require_finite(h, "height");
     if (h <= bottom_cm_)
       return n_1_.front();
     if (h >= top_cm_)
@@ -179,6 +190,7 @@ public:
   // Integral of n-1 over height [cm] from the bottom of the table to h (exact for the
   // piecewise-linear table). Heights above the top count to the top; below the bottom throw.
   double index_integral_cm(double h) const {
+    require_finite(h, "height");
     if (h < bottom_cm_)
       throw std::invalid_argument("height below the atmospheric table");
     if (h >= top_cm_)
@@ -359,6 +371,7 @@ private:
                                                                   (fast_alt_[i] - fast_alt_[i - 1]);
   }
 
+  // Callers have checked that h is finite; the conversion is then well defined.
   std::size_t index_of(double h) const {
     const auto i = static_cast<long long>(fast_h_fac_ * (h - bottom_cm_));
     return static_cast<std::size_t>(

@@ -4,9 +4,11 @@
 
 #include <cmath>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #ifndef DLUFD_TEST_DATA_DIR
 #error "DLUFD_TEST_DATA_DIR must be defined by CMake"
@@ -20,21 +22,58 @@ const std::string kProfilePath =
 // Exponential atmosphere, 1 km levels to 10 km: rho = 1.2e-3 exp(-h/7 km) g/cm^3,
 // thickness = integral from h to 10 km = 7e5 cm * (rho - rho(10 km)), n-1 = etadsn * rho
 // (the relation atmo.c uses in the top layer).
-std::string exponential_profile() {
+std::string exponential_row(int km) {
+  const double rho = 1.2e-3 * std::exp(-km / 7.);
+  const double rho_top = 1.2e-3 * std::exp(-10. / 7.);
+  std::ostringstream row;
+  row << km << ' ' << rho << ' ' << 7e5 * (rho - rho_top) << ' '
+      << dlufd::AtmosphereProfile::default_etadsn * rho;
+  return row.str();
+}
+
+// Exponential profile. `trailing` is appended to every row; row `replaced_km` (if >= 0) is
+// written as `replacement` instead.
+std::string exponential_profile(const std::string &trailing = "", int replaced_km = -1,
+                                const std::string &replacement = "") {
   std::ostringstream text;
   text << "# exponential test profile\n";
   for (int km = 0; km <= 10; ++km) {
-    const double rho = 1.2e-3 * std::exp(-km / 7.);
-    const double rho_top = 1.2e-3 * std::exp(-10. / 7.);
-    text << km << ' ' << rho << ' ' << 7e5 * (rho - rho_top) << ' '
-         << dlufd::AtmosphereProfile::default_etadsn * rho << '\n';
+    if (km == replaced_km)
+      text << replacement << '\n';
+    else
+      text << exponential_row(km) << trailing << '\n';
   }
   return text.str();
 }
 
-bool rejects(const std::string &text) {
+// exponential_row(km) with its column `column` (0 = altitude .. 3 = n-1) replaced by `token`.
+std::string with_column(int km, std::size_t column, const std::string &token) {
+  std::istringstream row(exponential_row(km));
+  std::vector<std::string> columns;
+  for (std::string column_text; row >> column_text;)
+    columns.push_back(column_text);
+  columns.at(column) = token;
+  std::string joined;
+  for (const auto &column_text : columns)
+    joined += (joined.empty() ? "" : " ") + column_text;
+  return joined;
+}
+
+// The error message of a rejected profile, or an empty string if it is accepted.
+std::string parse_error(const std::string &text) {
   try {
     dlufd::AtmosphereProfile profile(text);
+  } catch (const std::invalid_argument &error) {
+    return error.what();
+  }
+  return "";
+}
+
+bool rejects(const std::string &text) { return !parse_error(text).empty(); }
+
+bool throws_invalid(auto &&action) {
+  try {
+    action();
   } catch (const std::invalid_argument &) {
     return true;
   }
@@ -108,10 +147,49 @@ int main() {
     // Below the table the bottom values are returned.
     CHECK(profile.density(-5.) == profile.density(0.));
 
+    // Non-finite heights are rejected by every public height lookup: NaN fails all boundary
+    // comparisons and would reach an integer conversion, infinities would be clamped.
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double inf = std::numeric_limits<double>::infinity();
+    for (double bad : {nan, inf, -inf}) {
+      CHECK(throws_invalid([&] { profile.density(bad); }));
+      CHECK(throws_invalid([&] { profile.thickness(bad); }));
+      CHECK(throws_invalid([&] { profile.refractive_index_minus_one(bad); }));
+      CHECK(throws_invalid([&] { profile.density_cm(bad); }));
+      CHECK(throws_invalid([&] { profile.thickness_cm(bad); }));
+      CHECK(throws_invalid([&] { profile.index_minus_one_cm(bad); }));
+      CHECK(throws_invalid([&] { profile.index_integral_cm(bad); }));
+    }
+    // A finite height whose conversion to cm overflows is non-finite too.
+    CHECK(throws_invalid([&] { profile.density(std::numeric_limits<double>::max()); }));
+    CHECK(throws_invalid([&] { profile.thickness(-std::numeric_limits<double>::max()); }));
+    // Finite heights outside the table keep their defined values (not an error).
+    CHECK(profile.density(1e9) == 0.);
+
     // Input rejection.
     CHECK(rejects("0 1e-3 100\n1 1e-3 90\n2 1e-3 80\n3 1e-3 70\n4 1e-3 60\n")); // 3 columns
-    CHECK(rejects(
-        "0 1e-3 100 2e-4 x\n1 1e-3 90 2e-4\n2 1e-3 80 2e-4\n3 1e-3 70 2e-4\n4 1e-3 60 2e-4\n"));
+    // A malformed token in any of the four parsed columns is rejected, and the error names the
+    // line (row km = 5 is line 7: one comment line, then rows from km = 0).
+    for (std::size_t column = 0; column < 4; ++column) {
+      for (const std::string token : {"x", "2e-4x"}) {
+        const std::string error =
+            parse_error(exponential_profile("", 5, with_column(5, column, token)));
+        CHECK(error.find("not a number") != std::string::npos);
+        CHECK(error.find("line 7") != std::string::npos);
+      }
+    }
+    // Trailing columns beyond the four are ignored (CORSIKA short format): they are accepted
+    // and give the same table as the four-column text, whatever they contain.
+    const dlufd::AtmosphereProfile four_columns(exponential_profile());
+    for (const std::string trailing : {" x", " 1e-3 2 abc", " 0.5"}) {
+      const dlufd::AtmosphereProfile extra(exponential_profile(trailing));
+      CHECK(extra.levels() == four_columns.levels());
+      for (double h = 0.; h <= 10000.; h += 333.) {
+        CHECK(extra.density(h) == four_columns.density(h));
+        CHECK(extra.thickness(h) == four_columns.thickness(h));
+        CHECK(extra.refractive_index_minus_one(h) == four_columns.refractive_index_minus_one(h));
+      }
+    }
     CHECK(rejects(exponential_profile().substr(0, 60))); // too few levels
     CHECK(rejects(
         "0 1e-3 100 2e-4\n1 1e-3 90 2e-4\n1 1e-3 80 2e-4\n3 1e-3 70 2e-4\n4 1e-3 60 2e-4\n"));
