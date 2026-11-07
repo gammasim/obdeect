@@ -93,7 +93,8 @@ Event keys (from CORSIKA EVTH and TELOFF): `event_number`,
 | 9 | `wavelength` | wavelength [nm]; 0 = not yet assigned |
 | 10 | `p` | acceptance probability already applied (for reweighting) |
 
-Columns `x y cx cy t w` are required; the others are optional.
+Columns `x y cx cy t w` are required; the others are optional. A chunk
+with 0 rows has column mask 0.
 
 Frames:
 
