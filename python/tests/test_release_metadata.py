@@ -17,4 +17,4 @@ def test_citation_version_matches_release():
         pytest.skip(f"{version} is not a release version")
     cited = re.search(r"^version:\s*(\S+)", CITATION.read_text(encoding="utf-8"), re.M)
     assert cited is not None
-    assert cited.group(1) == version, "update version and date-released in CITATION.cff"
+    assert cited.group(1) == version, "CITATION.cff version must equal the release version"

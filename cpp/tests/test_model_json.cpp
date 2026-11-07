@@ -10,6 +10,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -144,12 +146,22 @@ void axes_offset_is_applied_by_the_tracer() {
   CHECK(unshifted.position != offset_model.position);
 }
 
-// Numbers parse the same under a locale with a decimal comma (where one is installed).
+// Numbers parse the same under a locale with a decimal comma. Without one installed the
+// test cannot exercise the path: it is skipped, unless OBDEECT_REQUIRE_COMMA_LOCALE is set
+// (CI does), in which case a missing locale fails.
 void decimal_comma_locale() {
   const std::string previous = std::setlocale(LC_NUMERIC, nullptr);
+  bool comma = false;
   for (const char *name : {"de_DE.UTF-8", "de_DE.utf8", "de_DE", "fr_FR.UTF-8", "fr_FR.utf8"})
-    if (std::setlocale(LC_NUMERIC, name))
+    if (std::setlocale(LC_NUMERIC, name)) {
+      comma = true;
       break;
+    }
+  if (!comma) {
+    CHECK(std::getenv("OBDEECT_REQUIRE_COMMA_LOCALE") == nullptr);
+    std::puts("decimal_comma_locale: no decimal-comma locale installed, skipped");
+    return;
+  }
   const auto value = json::Parser::parse(R"([1.5, -2.25e-3, 12345.678901234567, 0.1])");
   std::setlocale(LC_NUMERIC, previous.c_str());
   const auto &numbers = std::get<json::Value::Array>(value.data);

@@ -347,7 +347,8 @@ void scatter_on_curved_facet() {
   mirror.scatter = Scatter{sigma, 0.0, 0.0, false};
   const Vec3 point{x, 0.0, radius - std::sqrt(radius * radius - x * x)};
   detail::MirrorHit hit;
-  hit.hit = {1.0, point, (Vec3{0.0, 0.0, radius} - point) * (1.0 / radius), 1};
+  hit.hit = {1.0, point, (Vec3{0.0, 0.0, radius} - point) * (1.0 / radius), 0};
+  hit.facet_index = 0; // The mirror has a single facet.
   const Vec3 direction{0.0, 0.0, -1.0};
   const Vec3 specular = reflect(direction, hit.hit.normal);
   const int n = 100000;

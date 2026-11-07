@@ -49,7 +49,11 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - name: Install a decimal-comma locale
+        run: sudo locale-gen de_DE.UTF-8
       - name: Configure, build, and test with sanitizers
+        env:
+          OBDEECT_REQUIRE_COMMA_LOCALE: "1"
         run: >-
           cmake -S . -B build-sanitize -DCMAKE_BUILD_TYPE=Debug
           -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"

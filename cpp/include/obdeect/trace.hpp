@@ -136,13 +136,15 @@ inline Vec3 reflect_at(const Mirror &mirror, const MirrorHit &mh, const Vec3 &di
   // The facet tangent is perpendicular to the normal at the vertex only; on a
   // curved facet remove its component along the hit normal, so that e1, e2 and n
   // are orthonormal (the rotations need unit axes).
-  Vec3 e1;
-  if (mirror.facets.empty()) {
-    e1 = normalized(std::abs(n.z) < 0.9 ? cross(Vec3{0, 0, 1}, n) : cross(Vec3{1, 0, 0}, n));
-  } else {
+  Vec3 e1 = cross(std::abs(n.z) < 0.9 ? Vec3{0, 0, 1} : Vec3{1, 0, 0}, n);
+  if (!mirror.facets.empty()) {
     const Vec3 &u = mirror.facets[mh.facet_index].u;
-    e1 = normalized(u - n * dot(u, n));
+    const Vec3 projected = u - n * dot(u, n);
+    // Near a steep cap edge the normal can align with u; keep the generic axis then.
+    if (dot(projected, projected) > 1e-12)
+      e1 = projected;
   }
+  e1 = normalized(e1);
   const Vec3 e2 = cross(n, e1);
   return normalized(rotate(rotate(reflect(direction, n), e2, a1), e1, a2));
 }
