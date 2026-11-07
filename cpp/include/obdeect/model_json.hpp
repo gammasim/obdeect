@@ -33,7 +33,7 @@ public:
     if (value_->kind() != json::Value::Kind::object)
       fail("expected an object");
     const auto &members = std::get<json::Value::Object>(value_->data);
-    for (const auto &[name, value] : members)
+    for (const std::string &name : members.names)
       if (std::find(keys.begin(), keys.end(), name) == keys.end())
         fail("unknown key '" + name + "'");
     return members;

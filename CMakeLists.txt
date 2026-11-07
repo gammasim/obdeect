@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
-project(obdeect VERSION 0.2.0 LANGUAGES CXX)
+# The version comes from the git tag (setuptools-scm), not from here.
+project(obdeect LANGUAGES CXX)
 
 option(OBDEECT_BUILD_TESTING "Build the C++ tests" ON)
 if(DEFINED SKBUILD_PLATLIB_DIR)
@@ -18,8 +19,10 @@ target_compile_features(obdeect_core INTERFACE cxx_std_20)
 # platform: no implicit fused multiply-add contraction. Transcendental functions
 # come from the platform's math library, so results may differ between
 # platforms.
+# -fno-math-errno lets GCC inline sqrt without the errno branch and libm call; it
+# changes no result (the tracer never reads errno).
 if(NOT MSVC)
-  target_compile_options(obdeect_core INTERFACE -ffp-contract=off)
+  target_compile_options(obdeect_core INTERFACE -ffp-contract=off -fno-math-errno)
 endif()
 
 # Changes results at the rounding level. Use only on hardware with fused

@@ -1,15 +1,18 @@
 #pragma once
 
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <cstddef>
-#include <cstdlib>
+#include <locale>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
+#include <version>
 
 namespace obdeect::json {
 
@@ -17,7 +20,11 @@ namespace obdeect::json {
 struct Value {
   enum class Kind { null, boolean, number, string, array, object };
   using Array = std::vector<Value>;
-  using Object = std::vector<std::pair<std::string, Value>>;
+  // Parallel vectors: std::vector accepts the incomplete Value, std::pair does not.
+  struct Object {
+    std::vector<std::string> names;
+    std::vector<Value> values;
+  };
 
   std::variant<std::monostate, bool, double, std::string, Array, Object> data;
 
@@ -25,9 +32,10 @@ struct Value {
   [[nodiscard]] const Value *find(std::string_view key) const {
     if (kind() != Kind::object)
       return nullptr;
-    for (const auto &[name, value] : std::get<Object>(data))
-      if (name == key)
-        return &value;
+    const auto &object = std::get<Object>(data);
+    for (std::size_t i = 0; i < object.names.size(); ++i)
+      if (object.names[i] == key)
+        return &object.values[i];
     return nullptr;
   }
 };
@@ -140,8 +148,20 @@ private:
       if (!digits())
         fail("invalid exponent");
     }
-    const std::string literal{text_.substr(start, at_ - start)};
-    const double result = std::strtod(literal.c_str(), nullptr);
+    // The text was checked against the JSON grammar above. Parse it independent of
+    // the process locale (strtod would read "1.5" as 1 under a decimal-comma locale).
+    const std::string_view literal = text_.substr(start, at_ - start);
+    double result = 0.0;
+#if defined(__cpp_lib_to_chars) && __cpp_lib_to_chars >= 201611L
+    const auto parsed = std::from_chars(literal.data(), literal.data() + literal.size(), result);
+    if (parsed.ec != std::errc{} || parsed.ptr != literal.data() + literal.size())
+      fail("number out of range");
+#else
+    std::istringstream stream{std::string(literal)};
+    stream.imbue(std::locale::classic());
+    if (!(stream >> result))
+      fail("number out of range");
+#endif
     if (!std::isfinite(result))
       fail("number out of range");
     return result;
@@ -179,7 +199,8 @@ private:
         space();
         expect(':');
         space();
-        members.emplace_back(std::move(key), value(depth + 1));
+        members.names.push_back(std::move(key));
+        members.values.push_back(value(depth + 1));
         space();
       } while (take(','));
       expect('}');

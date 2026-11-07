@@ -33,7 +33,7 @@ extensions = [
 ]
 source_suffix = {".md": "markdown"}
 root_doc = "index"
-exclude_patterns = ["_build", "changes", "figures"]
+exclude_patterns = ["_build", "changes", "figures", "USER_GUIDE.md", "PHYSICS.md"]
 myst_heading_anchors = 3
 myst_enable_extensions = ["colon_fence", "dollarmath"]
 nitpicky = False

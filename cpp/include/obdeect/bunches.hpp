@@ -332,7 +332,9 @@ std::size_t trace_bunches(const OpticalModel &model, const BunchBlock &in, const
   detail::add_column(columns, out.bunch_index, 1);
   detail::add_column(columns, out.sub_photon, 1);
   output_start.pop_back();
-  return detail::compact_chunks(columns, output_start, found);
+  return detail::compact_chunks(
+      columns, output_start, found,
+      [&](std::size_t count, const auto &each) { pool.run(count, each); });
 }
 
 } // namespace obdeect
