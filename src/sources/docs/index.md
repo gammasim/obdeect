@@ -10,3 +10,14 @@ Status: pre-alpha. Light sources (profiles, stars, emitters, targets) are implem
 sources
 changelog
 ```
+
+## Programs
+
+```{toctree}
+:maxdepth: 1
+
+programs/fake-muon
+programs/octo
+programs/ls-test
+programs/ls-geo-test
+```

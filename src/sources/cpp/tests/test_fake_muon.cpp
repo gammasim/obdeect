@@ -1,0 +1,292 @@
+#include "check.hpp"
+
+#include "dlamb/emission_stream.hpp"
+#include "dlamb/programs/fake_muon.hpp"
+#include "dlamb/track.hpp"
+
+#include "gstrickd/stream.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <sstream>
+#include <stdexcept>
+#include <vector>
+
+using namespace dlamb;
+
+namespace {
+
+// Stored photons of all tracks of one event.
+std::vector<Photon> stored_photons(const std::vector<Track> &tracks, std::uint64_t seed,
+                                   std::uint32_t event = 1) {
+  std::vector<Photon> out;
+  for (std::size_t k = 0; k < tracks.size(); ++k)
+    emit_track(tracks[k], source_seed(seed, k), event, 1, out);
+  return out;
+}
+
+double sum_weight(const std::vector<Photon> &p) {
+  double s = 0.0;
+  for (const auto &x : p)
+    s += x.weight;
+  return s;
+}
+
+double sum_weight_sq(const std::vector<Photon> &p) {
+  double s = 0.0;
+  for (const auto &x : p)
+    s += x.weight * x.weight;
+  return s;
+}
+
+// Track of the fake-muon default geometry but with a given sphere radius and index.
+Track vertical_track(double length, double cos_ct, double radius) {
+  Track t;
+  t.start = {0.0, 0.0, length};
+  t.direction = {0.0, 0.0, -1.0};
+  t.length_m = length;
+  t.cos_theta = cos_ct;
+  t.spectrum = InverseSquare{300.0, 600.0};
+  t.photons = 1e5;
+  t.target = SphereTarget{{0.0, 0.0, 0.0}, radius};
+  return t;
+}
+
+// Arc kernel against brute force over the azimuth: the fraction of azimuths that hit.
+void arc_matches_brute_force() {
+  Track t = vertical_track(1000.0, std::cos(1.0 * pi / 180.0), 15.0);
+  t.start = {20.0, -5.0, 1000.0};
+  t.direction = normalised(Vec3{-0.2, 0.1, -1.0});
+  t.cos_theta = std::cos(19.0 * pi / 180.0); // the sphere lies at 19 deg: partial arc
+  const double s = 400.0;
+  const TrackArc arc = track_arc(t, s);
+  const Vec3 point = t.start + t.direction * s;
+  const Basis b = orthonormal_basis(t.direction);
+  const double sin_t = std::sin(std::acos(t.cos_theta));
+  const std::size_t n = 200000;
+  std::size_t hits = 0;
+  for (std::size_t k = 0; k < n; ++k) {
+    const double phi = two_pi * (static_cast<double>(k) + 0.5) / n;
+    const Vec3 e =
+        t.direction * t.cos_theta + (b.e1 * std::cos(phi) + b.e2 * std::sin(phi)) * sin_t;
+    const Vec3 to = normalised(t.target.centre - point);
+    if (dot(e, to) > std::sqrt(1.0 - std::pow(15.0 / norm(t.target.centre - point), 2)))
+      ++hits;
+  }
+  const double fraction = static_cast<double>(hits) / n;
+  CHECK(arc.hit);
+  CHECK_NEAR(arc.half / pi, fraction, 2e-5);
+}
+
+// Axis point: all azimuths hit if the emission angle is inside the sphere's cone.
+void arc_on_axis() {
+  Track t = vertical_track(3000.0, std::cos(0.2 * pi / 180.0), 15.0); // inside asin(15/3000)
+  CHECK(track_arc(t, 0.0).hit);
+  CHECK_NEAR(track_arc(t, 0.0).half, pi, 1e-12);
+  t.cos_theta = std::cos(1.0 * pi / 180.0); // wider than asin(15/3000) = 0.286 deg
+  CHECK(!track_arc(t, 0.0).hit);
+  // A point inside the sphere is hit in every direction.
+  Track inside = vertical_track(3000.0, std::cos(60.0 * pi / 180.0), 15.0);
+  CHECK(track_arc(inside, 2995.0).hit);
+  CHECK_NEAR(track_arc(inside, 2995.0).half, pi, 1e-12);
+}
+
+// Default options: Frank-Tamm yield, counts and weight sums against the analytic values.
+void default_options() {
+  fake_muon::Options o;
+  const auto segments = fake_muon::tracks(o);
+  CHECK(segments.size() == 1);
+  const double sin2 = 1.0 - std::pow(1.0 / (1.0 + o.index_minus_one), 2);
+  const double per_m = 2.0 * pi * fake_muon::alpha_fine * sin2 * (1.0 / 240.0 - 1.0 / 1000.0) * 1e9;
+  CHECK_NEAR(segments[0].photons, per_m * 3000.0, 1e-9 * per_m * 3000.0);
+  CHECK_NEAR(segments[0].time_ns, -3000.0 / speed_of_light_m_per_ns, 1e-9);
+  // Emitted count (4 pi) is Poisson-like around the mean.
+  const std::uint64_t emitted = track_count(segments[0], 1, 1, 1);
+  CHECK(std::abs(static_cast<double>(emitted) - segments[0].photons) <= 1.0);
+  // Expected weight of a central track (impact at the telescope) is positive and matches
+  // the stored sum within 4 sigma.
+  const double expected = expected_track_weight(segments[0]);
+  CHECK(expected > 0.0);
+  const auto photons = stored_photons(segments, 7);
+  const double sigma = std::sqrt(sum_weight_sq(photons));
+  CHECK(std::abs(sum_weight(photons) - expected) <= 4.0 * sigma);
+  for (const auto &p : photons) {
+    CHECK(p.weight >= 0.0 && p.weight <= 1.0);
+    CHECK(p.time_ns <= 0.0);
+  }
+}
+
+// Non-default options: angles, impact, index, band, altitude and radius. The emission angle
+// is exact, the wavelength follows 1/lambda^2, and the weight sum matches the quadrature.
+void non_default_options() {
+  fake_muon::Options o;
+  o.theta_deg = 20.0;
+  o.phi_deg = 30.0;
+  o.impact_x_m = 40.0;
+  o.impact_y_m = -30.0;
+  o.h_start_m = 2000.0;
+  o.wavelength_min_nm = 300.0;
+  o.wavelength_max_nm = 600.0;
+  o.telescope_radius_m = 15.0;
+  o.index_minus_one = 0.00028;
+  const auto segments = fake_muon::tracks(o);
+  CHECK(segments.size() == 1);
+  const double dist = 2000.0 / std::cos(20.0 * pi / 180.0);
+  CHECK_NEAR(segments[0].length_m, dist, 1e-9);
+  // The track ends at the impact point on the observation level.
+  CHECK_NEAR(segments[0].start.x + segments[0].direction.x * dist, 40.0, 1e-7);
+  CHECK_NEAR(segments[0].start.y + segments[0].direction.y * dist, -30.0, 1e-7);
+
+  const double cos_ct = 1.0 / (1.0 + o.index_minus_one);
+  const double expected = expected_track_weight(segments[0]);
+  const auto photons = stored_photons(segments, 11);
+  CHECK(photons.size() > 200);
+  const double sigma = std::sqrt(sum_weight_sq(photons));
+  CHECK(std::abs(sum_weight(photons) - expected) <= 4.0 * sigma);
+
+  // Emission angle to the track axis is exactly theta_c.
+  double worst = 0.0;
+  for (const auto &p : photons)
+    worst = std::max(worst, std::abs(dot(p.direction, segments[0].direction) - cos_ct));
+  CHECK(worst < 1e-12);
+
+  // Wavelength: 1/lambda^2 moments within 4 sigma.
+  const InverseSquare law{300.0, 600.0};
+  double s1 = 0.0, s2 = 0.0;
+  for (const auto &p : photons) {
+    s1 += p.wavelength_nm;
+    s2 += p.wavelength_nm * p.wavelength_nm;
+  }
+  const double n = static_cast<double>(photons.size());
+  const double mean = s1 / n;
+  const double var = s2 / n - mean * mean;
+  CHECK(std::abs(mean - law.mean()) <= 4.0 * std::sqrt(law.variance() / n));
+  CHECK(std::abs(var - law.variance()) <= 4.0 * law.variance() * std::sqrt(2.0 / n));
+  for (const auto &p : photons)
+    CHECK(p.wavelength_nm >= 300.0 && p.wavelength_nm <= 600.0);
+
+  // Emission times lie between the start (-dist/c) and the arrival at the observation level.
+  for (const auto &p : photons)
+    CHECK(p.time_ns >= -dist / speed_of_light_m_per_ns - 1e-9 && p.time_ns <= 1e-9);
+}
+
+// Profile option: the track is cut into 10 m steps with the index at each mid-point, and the
+// steps cover the whole track.
+void profile_steps() {
+  fake_muon::Options o;
+  o.h_start_m = 3000.0;
+  o.index_profile.altitude_m = {0.0, 3000.0};
+  o.index_profile.index_minus_one = {0.000292, 0.000220};
+  const auto segments = fake_muon::tracks(o);
+  CHECK(segments.size() == 300);
+  double length = 0.0;
+  for (const auto &t : segments)
+    length += t.length_m;
+  CHECK_NEAR(length, 3000.0, 1e-7);
+  // The first step (lowest, at the observation level) uses the index at 5 m altitude.
+  const double n0 = 1.0 + 0.000292 + (0.000220 - 0.000292) * 5.0 / 3000.0;
+  CHECK_NEAR(segments.front().cos_theta, 1.0 / n0, 1e-12);
+  CHECK_NEAR(segments.front().time_ns, -10.0 / speed_of_light_m_per_ns, 1e-9);
+  // Rejected: a profile with unsorted altitudes.
+  fake_muon::Options bad = o;
+  bad.index_profile.altitude_m = {3000.0, 0.0};
+  bool rejected = false;
+  try {
+    fake_muon::validate(bad);
+  } catch (const std::invalid_argument &) {
+    rejected = true;
+  }
+  CHECK(rejected);
+}
+
+// Options that are not ported are rejected.
+void rejects_unported() {
+  fake_muon::Options o;
+  o.multiple_scattering = true;
+  bool rejected = false;
+  try {
+    fake_muon::validate(o);
+  } catch (const std::invalid_argument &) {
+    rejected = true;
+  }
+  CHECK(rejected);
+  o = fake_muon::Options{};
+  o.rscat_m = 1.0;
+  rejected = false;
+  try {
+    fake_muon::validate(o);
+  } catch (const std::invalid_argument &) {
+    rejected = true;
+  }
+  CHECK(rejected);
+}
+
+// Stream: readable by gstrickd::Reader; run, events, sky frame and totals agree.
+void stream_round_trip() {
+  fake_muon::Options o;
+  o.theta_deg = 20.0;
+  o.impact_x_m = 40.0;
+  o.impact_y_m = -30.0;
+  o.h_start_m = 2000.0;
+  o.index_minus_one = 0.00028;
+  o.events = 2;
+  std::stringstream stream(std::ios::in | std::ios::out | std::ios::binary);
+  const StreamSummary summary = fake_muon::write(stream, o);
+  CHECK(summary.photons > 0);
+  CHECK_NEAR(summary.weight, summary.expected, 4.0 * std::sqrt(summary.expected + 1.0));
+
+  gstrickd::Reader reader(stream);
+  gstrickd::Record record;
+  int runs = 0, events = 0, telescopes = 0;
+  std::uint64_t rows = 0;
+  double telescope_weight = 0.0;
+  while (reader.next(record)) {
+    switch (record.type) {
+    case gstrickd::RecordType::run:
+      ++runs;
+      CHECK(std::get<std::int64_t>(record.metadata.at("run_number")) == 1);
+      CHECK(std::get<std::int64_t>(record.metadata.at("refraction_applied")) == 0);
+      break;
+    case gstrickd::RecordType::event:
+      ++events;
+      break;
+    case gstrickd::RecordType::telescope:
+      ++telescopes;
+      CHECK(std::get<std::int64_t>(record.metadata.at("frame")) ==
+            static_cast<std::int64_t>(gstrickd::Frame::sky));
+      CHECK_NEAR(std::get<double>(record.metadata.at("r_m")), 15.0, 1e-12);
+      break;
+    case gstrickd::RecordType::photons:
+      CHECK(record.chunk.frame == gstrickd::Frame::sky);
+      CHECK(record.chunk.rows() <= gstrickd::max_chunk_rows);
+      rows += record.chunk.rows();
+      break;
+    case gstrickd::RecordType::telescope_end:
+      telescope_weight += std::get<double>(record.metadata.at("photons"));
+      break;
+    default:
+      break;
+    }
+  }
+  CHECK(reader.ended());
+  CHECK(runs == 1);
+  CHECK(events == 2);
+  CHECK(telescopes == 2);
+  CHECK(rows == summary.photons);
+  CHECK_NEAR(telescope_weight, summary.weight, 1e-3 * summary.weight + 1e-6);
+}
+
+} // namespace
+
+int main() {
+  return run_checks([] {
+    arc_matches_brute_force();
+    arc_on_axis();
+    default_options();
+    non_default_options();
+    profile_steps();
+    rejects_unported();
+    stream_round_trip();
+  });
+}
