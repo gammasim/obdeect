@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -625,6 +626,111 @@ void test_rejects_invalid_input() {
   CHECK(throws_invalid([&] { propagate(unknown, config_for(zero_table())); }));
 }
 
+// Stream of n sky photons of telescope 1 with the given run keys.
+std::string sky_stream(const gstrickd::Metadata &run, std::size_t n,
+                       const std::function<Row(std::size_t)> &rows) {
+  return make_stream([&](gstrickd::Writer &writer) {
+    writer.write_metadata(RecordType::run, run);
+    writer.write_metadata(RecordType::event, event_keys());
+    writer.write_metadata(RecordType::telescope, telescope_keys(1, Frame::sky));
+    writer.write_chunk(make_chunk(Frame::sky, 1, 0, n, rows));
+    writer.write_metadata(RecordType::telescope_end, telescope_end_keys(1));
+    writer.write_metadata(RecordType::event_end, {});
+    writer.write_metadata(RecordType::run_end, {});
+  });
+}
+
+// Same file, different spellings: the output must not truncate the input.
+void test_same_file() {
+  const std::string data = DLUFD_TEST_DATA_DIR;
+  const std::string table = data + "/atm_trans_2000_1_10_0_0_2000.dat";
+  CHECK(dlufd::same_file(table, table));
+  CHECK(dlufd::same_file(table, data + "/../data/atm_trans_2000_1_10_0_0_2000.dat"));
+  CHECK(!dlufd::same_file(table, data + "/atmprof_ecmwf_north_winter_fixed.dat"));
+  // An output that does not exist yet, named through "..".
+  CHECK(dlufd::same_file(data + "/new_output.dat", data + "/../data/new_output.dat"));
+  CHECK(!dlufd::same_file(table, data + "/new_output.dat"));
+}
+
+// The transmission table's H2 must match the configured site altitude (25 m tolerance).
+void test_rejects_site_mismatch() {
+  auto config = config_for(zero_table()); // H2 = 2000 m
+  config.site_altitude_m = 2100.0;
+  CHECK(throws_invalid([&] { propagate(ground_stream(4, 4), config); }));
+}
+
+// telescope_end needs an open telescope with the same id.
+void test_rejects_telescope_end_mismatch() {
+  const auto no_open = make_stream([&](gstrickd::Writer &writer) {
+    writer.write_metadata(RecordType::run, run_keys(0));
+    writer.write_metadata(RecordType::event, event_keys());
+    writer.write_metadata(RecordType::telescope_end, telescope_end_keys(1));
+  });
+  CHECK(throws_invalid([&] { propagate(no_open, config_for(zero_table())); }));
+
+  const auto other = make_stream([&](gstrickd::Writer &writer) {
+    writer.write_metadata(RecordType::run, run_keys(0));
+    writer.write_metadata(RecordType::event, event_keys());
+    writer.write_metadata(RecordType::telescope, telescope_keys(1, Frame::ground));
+    writer.write_metadata(RecordType::telescope_end, telescope_end_keys(2));
+  });
+  CHECK(throws_invalid([&] { propagate(other, config_for(zero_table())); }));
+}
+
+// A run level 24 m above the site (inside the tolerance) is used for everything: the output
+// equals the output of a configuration whose site is that level.
+void test_run_observation_level() {
+  const auto profile = ecmwf_profile();
+  gstrickd::Metadata run = run_keys(0);
+  run["observation_level_m"] = 2024.0;
+  const auto input = sky_stream(run, 1, [](std::size_t) {
+    return Row{150.0, -40.0, 10000.0, std::sqrt(3.0) / 2.0, 0.0, -0.5, 5.0, 0.0, 1.0};
+  });
+  auto run_level_only = config_for(zero_table()); // site 2000 m, run level 2024 m
+  run_level_only.profile.emplace(profile);
+  run_level_only.profile_source = "ecmwf";
+  auto run_level_site = config_for(zero_table()); // site 2024 m, run level 2024 m
+  run_level_site.site_altitude_m = 2024.0;
+  run_level_site.profile.emplace(profile);
+  run_level_site.profile_source = "ecmwf";
+  const auto a = records_of(propagate(input, run_level_only).bytes);
+  const auto b = records_of(propagate(input, run_level_site).bytes);
+  CHECK(photon_rows(a, 1) == 1);
+  CHECK(photon_column(a, 1, Column::x) == photon_column(b, 1, Column::x));
+  CHECK(photon_column(a, 1, Column::y) == photon_column(b, 1, Column::y));
+  CHECK(photon_column(a, 1, Column::t) == photon_column(b, 1, Column::t));
+  CHECK(photon_column(a, 1, Column::zem) == photon_column(b, 1, Column::zem));
+}
+
+// Non-finite sky input (x, y, cz) and a non-finite run observation level are rejected.
+void test_rejects_non_finite_input() {
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double inf = std::numeric_limits<double>::infinity();
+  const auto with = [](std::function<void(Row &)> set) {
+    return [set](std::size_t) {
+      Row row{150.0, -40.0, 10000.0, 0.0, 0.0, -1.0, 5.0, 0.0, 1.0};
+      set(row);
+      return row;
+    };
+  };
+  const gstrickd::Metadata run = run_keys(0);
+  CHECK(throws_invalid([&] {
+    propagate(sky_stream(run, 1, with([&](Row &r) { r.x = nan; })), config_for(zero_table()));
+  }));
+  CHECK(throws_invalid([&] {
+    propagate(sky_stream(run, 1, with([&](Row &r) { r.y = inf; })), config_for(zero_table()));
+  }));
+  CHECK(throws_invalid([&] {
+    propagate(sky_stream(run, 1, with([&](Row &r) { r.cz = nan; })), config_for(zero_table()));
+  }));
+
+  gstrickd::Metadata nan_level = run_keys(0);
+  nan_level["observation_level_m"] = nan;
+  const auto only_run = make_stream(
+      [&](gstrickd::Writer &writer) { writer.write_metadata(RecordType::run, nan_level); });
+  CHECK(throws_invalid([&] { propagate(only_run, config_for(zero_table())); }));
+}
+
 } // namespace
 
 int main() {
@@ -637,5 +743,10 @@ int main() {
     test_sky_analytic();
     test_sky_refraction();
     test_rejects_invalid_input();
+    test_same_file();
+    test_rejects_site_mismatch();
+    test_rejects_telescope_end_mismatch();
+    test_run_observation_level();
+    test_rejects_non_finite_input();
   });
 }

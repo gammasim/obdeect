@@ -32,6 +32,9 @@ inline void bind_propagator(nb::module_ &module) {
          const std::vector<std::pair<std::string, std::string>> &envelope_paths,
          const std::optional<std::tuple<double, double>> &wavelength_range, std::uint64_t seed,
          bool weighted, bool store_p) {
+        if (dlufd::same_file(input_path, output_path)) {
+          throw std::invalid_argument("input and output are the same file: " + input_path);
+        }
         dlufd::PropagatorConfig config;
         config.transmission.emplace(
             dlufd::TransmissionTable::from_file(transmission_path, site_altitude_m));
