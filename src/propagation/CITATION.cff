@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: "If you use dlufd, please cite it using the metadata below."
+title: "dlufd: Atmospheric propagation of Cherenkov and artificial-source photons"
+version: 0.1.0
+license: BSD-3-Clause
+type: software
+repository-code: "https://github.com/gammasim/dlufd"
+authors:
+  - given-names: Gernot
+    family-names: Maier
+    affiliation: DESY
+    orcid: 'https://orcid.org/0000-0001-9868-4700'
+abstract: "Atmospheric propagation for Cherenkov-telescope simulations: extinction, refraction and timing from the refractive-index profile, optional single scattering, and early photon thinning, as a standard-library-only C++20 core with a Python API, working on gstrickd photon streams."
