@@ -61,10 +61,13 @@ if(DLAMB_BUILD_TESTING)
   endforeach()
 endif()
 
-# camera-level programs
+# Light-source programs: tool and test sources share the program name.
 option(DLAMB_BUILD_TOOLS "Build the light-source command-line tools" ON)
+set(DLAMB_LIGHT_SOURCE_PROGRAMS
+    camera-flasher secondary-flasher rotating-led pixel-led point-source beam-scan laser-beam
+    night-sky muon-track figure-eight geometry-report)
 if(DLAMB_BUILD_TESTING)
-  foreach(test_name ff-1m ff-gct fpls pixled)
+  foreach(test_name ${DLAMB_LIGHT_SOURCE_PROGRAMS} sky_args)
     add_executable(test_${test_name} cpp/tests/test_${test_name}.cpp)
     target_link_libraries(test_${test_name} PRIVATE dlamb_core)
     dlamb_enable_warnings(test_${test_name})
@@ -72,13 +75,14 @@ if(DLAMB_BUILD_TESTING)
   endforeach()
 endif()
 if(DLAMB_BUILD_TOOLS)
-  foreach(tool ff-1m ff-gct fpls pixled)
+  foreach(tool ${DLAMB_LIGHT_SOURCE_PROGRAMS})
     add_executable(dlamb-${tool} cpp/tools/${tool}.cpp)
     target_link_libraries(dlamb-${tool} PRIVATE dlamb_core)
     dlamb_enable_warnings(dlamb-${tool})
   endforeach()
   if(DEFINED SKBUILD_SCRIPTS_DIR)
-    install(TARGETS dlamb-ff-1m dlamb-ff-gct dlamb-fpls dlamb-pixled
-            RUNTIME DESTINATION ${SKBUILD_SCRIPTS_DIR})
+    foreach(tool ${DLAMB_LIGHT_SOURCE_PROGRAMS})
+      install(TARGETS dlamb-${tool} RUNTIME DESTINATION ${SKBUILD_SCRIPTS_DIR})
+    endforeach()
   endif()
 endif()

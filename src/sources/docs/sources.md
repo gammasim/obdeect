@@ -92,8 +92,8 @@ each independent source its own seed.
   `Gauss-rms:` is `gauss`, `Rayleigh` is `rayleigh`, `Cherenkov:a:b` is
   `inverse_square`, and `Simple:`, `Gauss:`, `Exp:`, `Complex:` are the pulse kinds.
 - Tables are passed as arrays, not read from files.
-- Not ported yet: `BackgroundLightSource` (night-sky background), moving or line
-  sources (`length`, `beta`), the `Run` geometry (fiducial sphere, observation
-  level), refraction and airlight. The Gaussian spectrum is missing.
+- The night-sky background (`dlamb-night-sky`) and moving track sources
+  (`dlamb-muon-track`) are ported; refraction and airlight belong to dlufd. The
+  Gaussian spectrum is missing.
 - The IACT bunch writes (`telout_`, block 1205) are the adapter's job. LightEmission
   stores `w = -cz`; the mapping to gstrickd is not checked here.
