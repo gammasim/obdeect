@@ -39,26 +39,26 @@ inline void validate(const Track &track) {
   const auto fail = [](const char *message) { throw std::invalid_argument(message); };
   if (!(track.photons >= 0.0) || track.photons > max_photon_count)
     fail("track photons must be finite, >= 0 and at most 2^53");
-  if (!is_finite(track.start) || !is_finite(track.direction) ||
+  if (!magnitude_ok(track.start) || !is_finite(track.direction) ||
       std::abs(norm(track.direction) - 1.0) > 1e-9)
-    fail("a track needs a finite start and a unit direction");
-  if (!std::isfinite(track.length_m) || track.length_m < 0.0)
-    fail("track length must be finite and >= 0");
+    fail("a track needs a finite start within 1e30 and a unit direction");
+  if (!magnitude_ok(track.length_m) || track.length_m < 0.0)
+    fail("track length must be finite, >= 0 and at most 1e30");
   if (!(track.cos_theta > 0.0 && track.cos_theta <= 1.0))
     fail("track cos(theta) must lie in (0, 1]");
   if (!(track.beta >= 0.0 && track.beta <= 1.0))
     fail("track beta must lie in [0, 1]");
-  if (!std::isfinite(track.time_ns))
-    fail("track time must be finite");
-  if (!is_finite(track.target.centre) || !(track.target.radius_m > 0.0) ||
-      !std::isfinite(track.target.radius_m))
-    fail("a track needs a sphere target with a finite centre and a positive radius");
+  if (!magnitude_ok(track.time_ns))
+    fail("track time must be finite and at most 1e30 in magnitude");
+  if (!magnitude_ok(track.target.centre) || !positive_magnitude_ok(track.target.radius_m))
+    fail("a track needs a sphere target with a centre and a positive radius, within 1e30");
   if (const auto *fixed = std::get_if<Fixed>(&track.spectrum)) {
-    if (!(fixed->value > 0.0) || !std::isfinite(fixed->value))
-      fail("a fixed wavelength must be positive");
+    if (!positive_magnitude_ok(fixed->value))
+      fail("a fixed wavelength must be positive and within 1e30");
   } else if (const auto *inv = std::get_if<InverseSquare>(&track.spectrum)) {
-    if (!(inv->low > 0.0) || !(inv->high > inv->low) || !std::isfinite(inv->high))
-      fail("an inverse-square wavelength range needs 0 < low < high");
+    if (!positive_magnitude_ok(inv->low) || !positive_magnitude_ok(inv->high) ||
+        !(inv->high > inv->low))
+      fail("an inverse-square wavelength range needs 0 < low < high, within 1e30");
   } else {
     fail("a track takes a fixed or inverse-square spectrum");
   }

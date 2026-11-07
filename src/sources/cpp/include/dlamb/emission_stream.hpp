@@ -61,7 +61,7 @@ struct StreamSummary {
 class RunWriter {
 public:
   RunWriter(std::ostream &out, const std::string &producer, const RunInfo &run)
-      : writer_(out, producer) {
+      : writer_(out, producer), observation_level_m_(run.observation_level_m) {
     gstrickd::Metadata meta;
     meta["run_number"] = static_cast<std::int64_t>(run.run_number);
     meta["observation_level_m"] = run.observation_level_m;
@@ -154,17 +154,19 @@ private:
     chunk.telescope_id = telescope_id_;
     chunk.frame = frame_;
     chunk.first_index = next_index_;
-    chunk.resize(pending_.size(), source_columns);
+    chunk.resize(pending_.size(), source_columns | gstrickd::column_bit(gstrickd::Column::zem));
     auto &x = chunk[gstrickd::Column::x], &y = chunk[gstrickd::Column::y],
          &z = chunk[gstrickd::Column::z], &cx = chunk[gstrickd::Column::cx],
          &cy = chunk[gstrickd::Column::cy], &cz = chunk[gstrickd::Column::cz],
          &t = chunk[gstrickd::Column::t], &w = chunk[gstrickd::Column::w],
-         &wl = chunk[gstrickd::Column::wavelength];
+         &wl = chunk[gstrickd::Column::wavelength], &zem = chunk[gstrickd::Column::zem];
     for (std::size_t i = 0; i < pending_.size(); ++i) {
       const Photon &p = pending_[i];
       x[i] = static_cast<float>(p.position.x);
       y[i] = static_cast<float>(p.position.y);
       z[i] = static_cast<float>(p.position.z);
+      // Emission altitude a.s.l. (format.md, zem), as sky_sources.hpp.
+      zem[i] = static_cast<float>(observation_level_m_ + p.position.z);
       cx[i] = static_cast<float>(p.direction.x);
       cy[i] = static_cast<float>(p.direction.y);
       cz[i] = static_cast<float>(p.direction.z);
@@ -178,6 +180,7 @@ private:
   }
 
   gstrickd::Writer writer_;
+  double observation_level_m_{};
   std::vector<Photon> pending_;
   std::uint32_t telescope_id_{};
   gstrickd::Frame frame_{gstrickd::Frame::sky};

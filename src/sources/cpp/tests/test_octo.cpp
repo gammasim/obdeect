@@ -1,6 +1,7 @@
 #include "check.hpp"
 
 #include "dlamb/programs/octo.hpp"
+#include "program_stream.hpp"
 
 #include "gstrickd/stream.hpp"
 
@@ -110,6 +111,20 @@ void stream_round_trip() {
   CHECK(rows == summary.photons);
 }
 
+// Emission altitude: every photon of the stream has zem = observation level + z (format.md).
+void emission_altitude() {
+  const octo::Options o;
+  std::stringstream stream(std::ios::in | std::ios::out | std::ios::binary);
+  const StreamSummary summary = octo::write(stream, o);
+  CHECK(summary.photons > 0);
+  const StreamContents s = read_stream(stream.str());
+  CHECK(!s.rows.empty());
+  for (const auto &r : s.rows) {
+    CHECK(r.has_zem);
+    CHECK_NEAR(r.zem - r.z, o.observation_level_m, 1e-2);
+  }
+}
+
 void validation() {
   octo::Options bad;
   bad.distance_m = 10.0; // inside the sphere
@@ -129,6 +144,7 @@ int main() {
     figure_eight_geometry();
     photons_hit_sphere_and_fill_cone();
     stream_round_trip();
+    emission_altitude();
     validation();
   });
 }

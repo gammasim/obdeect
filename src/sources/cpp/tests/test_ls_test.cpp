@@ -2,6 +2,7 @@
 
 #include "dlamb/programs/ls_test.hpp"
 #include "dlamb/programs/octo.hpp"
+#include "program_stream.hpp"
 
 #include "gstrickd/stream.hpp"
 
@@ -35,8 +36,27 @@ void half_of_octo() {
   CHECK(rows == ls.photons);
 }
 
+// Emission altitude: every photon of the stream has zem = observation level + z (format.md).
+void emission_altitude() {
+  const ls_test::Options o;
+  std::stringstream stream(std::ios::in | std::ios::out | std::ios::binary);
+  const StreamSummary summary = ls_test::write(stream, o);
+  CHECK(summary.photons > 0);
+  const StreamContents s = read_stream(stream.str());
+  CHECK(!s.rows.empty());
+  // ls-test uses the octo observation level (octo.hpp, alt_m).
+  const double observation_level_m = octo::Options{}.observation_level_m;
+  for (const auto &r : s.rows) {
+    CHECK(r.has_zem);
+    CHECK_NEAR(r.zem - r.z, observation_level_m, 1e-2);
+  }
+}
+
 } // namespace
 
 int main() {
-  return run_checks([] { half_of_octo(); });
+  return run_checks([] {
+    half_of_octo();
+    emission_altitude();
+  });
 }

@@ -11,7 +11,7 @@ dlamb-fake-muon --help
 ## Geometry and yield
 
 - The track runs from `-h` above the observation level to the impact point
-  `(-x, -y, 0)`, direction `(-sin theta cos phi, -sin theta sin phi, -cos theta)`.
+  `(x, y, 0)`, direction `(-sin theta cos phi, -sin theta sin phi, -cos theta)`.
 - Photons per metre into 4 pi (Frank-Tamm, `fake-muon.cc:504`, `:594`):
   `2 pi alpha q^2 sin^2(theta_c) (1/wlmin - 1/wlmax)`, with `cos(theta_c) = 1/(n beta)`.
 - Emission is at a fixed angle `theta_c` to the track, uniform azimuth, uniform along

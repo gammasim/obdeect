@@ -3,6 +3,7 @@
 #include "dlamb/emission_stream.hpp"
 #include "dlamb/programs/fake_muon.hpp"
 #include "dlamb/track.hpp"
+#include "program_stream.hpp"
 
 #include "gstrickd/stream.hpp"
 
@@ -287,6 +288,51 @@ void stream_round_trip() {
   CHECK_NEAR(telescope_weight, summary.weight, 1e-3 * summary.weight + 1e-6);
 }
 
+// Emission altitude: every photon of the stream has zem = observation level + z (format.md).
+void emission_altitude() {
+  fake_muon::Options o;
+  o.theta_deg = 20.0;
+  o.impact_x_m = 40.0;
+  o.impact_y_m = -30.0;
+  o.h_start_m = 2000.0;
+  o.index_minus_one = 0.00028;
+  o.events = 1;
+  std::stringstream stream(std::ios::in | std::ios::out | std::ios::binary);
+  const StreamSummary summary = fake_muon::write(stream, o);
+  CHECK(summary.photons > 0);
+  const StreamContents s = read_stream(stream.str());
+  CHECK(!s.rows.empty());
+  for (const auto &r : s.rows) {
+    CHECK(r.has_zem);
+    CHECK_NEAR(r.zem - r.z, o.observation_level_m, 1e-2);
+  }
+}
+
+// Track magnitudes beyond 1e30 are rejected, as in Source::validate (finite float32 columns).
+void rejects_large_magnitudes() {
+  const double cos_ct = std::cos(1.0 * pi / 180.0);
+  CHECK(!throws_invalid([&] { validate(vertical_track(1000.0, cos_ct, 15.0)); }));
+  Track t = vertical_track(1000.0, cos_ct, 15.0);
+  t.start.x = 1e100;
+  CHECK(throws_invalid([&] { validate(t); }));
+  t = vertical_track(1000.0, cos_ct, 15.0);
+  t.length_m = 1e100;
+  CHECK(throws_invalid([&] { validate(t); }));
+  t = vertical_track(1000.0, cos_ct, 15.0);
+  t.target.centre.y = 1e100;
+  CHECK(throws_invalid([&] { validate(t); }));
+  t = vertical_track(1000.0, cos_ct, 1e100);
+  CHECK(throws_invalid([&] { validate(t); }));
+  t = vertical_track(1000.0, cos_ct, 15.0);
+  t.time_ns = -1e100;
+  CHECK(throws_invalid([&] { validate(t); }));
+  t = vertical_track(1000.0, cos_ct, 15.0);
+  t.spectrum = Fixed{1e100};
+  CHECK(throws_invalid([&] { validate(t); }));
+  t.spectrum = InverseSquare{300.0, 1e100};
+  CHECK(throws_invalid([&] { validate(t); }));
+}
+
 // Track photon counts above 2^53 are rejected (track_count would convert them to uint64_t
 // without loss); 2^53 itself is accepted, as in Source::validate.
 void rejects_large_photon_counts() {
@@ -344,6 +390,8 @@ int main() {
     profile_steps();
     rejects_unported();
     stream_round_trip();
+    emission_altitude();
+    rejects_large_magnitudes();
     rejects_large_photon_counts();
     cli_values();
   });
