@@ -104,7 +104,7 @@ private:
 [[nodiscard]] inline std::vector<gstrickd::PhotonChunk>
 thin_chunk(const gstrickd::PhotonChunk &in, std::span<const double> p, std::uint64_t seed,
            std::uint32_t event, std::uint32_t telescope, std::uint64_t out_first_index,
-           bool write_p) {
+           bool write_p, std::uint32_t stream = stream_thinning) {
   using gstrickd::Column;
   if (in.has(Column::p)) {
     throw std::invalid_argument("input already has an acceptance column p");
@@ -123,7 +123,7 @@ thin_chunk(const gstrickd::PhotonChunk &in, std::span<const double> p, std::uint
       throw std::invalid_argument("bunch weight must be within [0, max_bunch_photons]");
     }
     const gstrickd::DrawKey key{seed,      stage_atmosphere,     event,
-                                telescope, in.first_index + row, stream_thinning};
+                                telescope, in.first_index + row, stream};
     const std::uint64_t count = surviving_photons(w, p[row], key);
     source.insert(source.end(), count, row);
   }

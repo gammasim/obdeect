@@ -24,6 +24,8 @@ def propagate(
     wavelength_range: tuple[float, float] | None = None,
     mode: str = "thinned",
     store_p: bool = False,
+    scattering: str | os.PathLike | None = None,
+    scattering_points: int = 8,
 ) -> dict[str, float]:
     """Run the atmosphere stage on a photon stream file.
 
@@ -42,6 +44,10 @@ def propagate(
         mode: ``"thinned"`` (one row per surviving photon, w = 1) or ``"weighted"``
             (w multiplied by the acceptance).
         store_p: keep the acceptance column p in the output.
+        scattering: optional scattering table (docs/scattering.md). Enables single scattering of
+            the sky photons before extinction; scattered photons go to their telescope's block.
+            The run needs telescope_r_m. Off when None.
+        scattering_points: scattering points per photon (1 to 1024); used only with scattering.
 
     Returns:
         Dict with photons_in, photons_out, dropped (sky photons not reaching the telescope
@@ -69,5 +75,7 @@ def propagate(
             int(seed),
             mode == "weighted",
             bool(store_p),
+            None if scattering is None else os.fspath(scattering),
+            int(scattering_points),
         )
     )

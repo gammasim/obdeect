@@ -4,6 +4,7 @@
 // wavelength assignment, atmospheric acceptance, envelope, then weighted or thinned output.
 
 #include "dlufd/extinction.hpp"
+#include "dlufd/streams.hpp"
 #include "dlufd/thinning.hpp"
 #include "dlufd/transmission.hpp"
 #include "dlufd/wavelength.hpp"
@@ -122,6 +123,50 @@ apply_extinction_chunk(gstrickd::PhotonChunk chunk, const ExtinctionSettings &se
   }
   return thin_chunk(chunk, p, settings.seed, settings.event, settings.telescope, out_first_index,
                     true);
+}
+
+// Envelope step for scattered photons (docs/scattering.md, frame G). Their transmission to the
+// telescope is in w, so the acceptance is the envelope E(lambda) only (no atmospheric
+// extinction). Thinned or weighted as apply_extinction_chunk; wavelengths must be assigned.
+[[nodiscard]] inline std::vector<gstrickd::PhotonChunk>
+apply_envelope_chunk(gstrickd::PhotonChunk chunk, const Envelope &envelope, bool weighted,
+                     std::uint64_t seed, std::uint32_t event, std::uint32_t telescope,
+                     std::uint64_t out_first_index) {
+  using gstrickd::Column;
+  if (chunk.frame != gstrickd::Frame::ground) {
+    throw std::invalid_argument("envelope step needs photons in frame ground (G)");
+  }
+  chunk.validate();
+  const std::size_t rows = chunk.rows();
+  if (rows == 0) {
+    return {};
+  }
+  if (!chunk.has(Column::wavelength) || chunk.has(Column::p)) {
+    throw std::invalid_argument("envelope step needs wavelengths and no acceptance column p");
+  }
+  const auto &wavelength = chunk[Column::wavelength];
+  std::vector<double> p(rows, 0.0);
+  for (std::size_t row = 0; row < rows; ++row) {
+    if (wavelength[row] == 0.0F) {
+      throw std::invalid_argument("envelope step needs assigned wavelengths");
+    }
+    const int iwl = table_wavelength(static_cast<double>(wavelength[row]));
+    if (iwl < 0) {
+      continue; // at or above MAX_LAMBDA: p = 0
+    }
+    if (iwl < envelope.min_wavelength_nm() || iwl > envelope.max_wavelength_nm()) {
+      throw std::invalid_argument("wavelength outside the envelope table");
+    }
+    p[row] = envelope(static_cast<double>(iwl));
+  }
+  if (weighted) {
+    weight_chunk(chunk, p, true);
+    std::vector<gstrickd::PhotonChunk> out;
+    out.push_back(std::move(chunk));
+    return out;
+  }
+  return thin_chunk(chunk, p, seed, event, telescope, out_first_index, true,
+                    stream_scattered_thinning);
 }
 
 } // namespace dlufd
