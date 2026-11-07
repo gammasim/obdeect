@@ -11,11 +11,18 @@ sources
 changelog
 ```
 
-## Programs
-
 ```{toctree}
 :maxdepth: 1
+:caption: Programs
 
+programs/ff-1m
+programs/ff-gct
+programs/fpls
+programs/pixled
+programs/xyzls
+programs/xyls
+programs/ls-beam
+programs/nsbls
 programs/fake-muon
 programs/octo
 programs/ls-test

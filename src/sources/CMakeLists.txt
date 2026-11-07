@@ -57,26 +57,33 @@ if(DLAMB_BUILD_TESTING)
   endforeach()
 endif()
 
-# other programs
+# LightEmission programs (tool and test sources named as the programs, or with
+# underscores for fake-muon, octo, ls-test and ls-geo-test)
 option(DLAMB_BUILD_TOOLS "Build the light-source command-line tools" ON)
-if(DLAMB_BUILD_TOOLS)
-  foreach(tool fake-muon octo ls-test ls-geo-test)
-    string(REPLACE "-" "_" source ${tool})
-    add_executable(dlamb-${tool} cpp/tools/${source}.cpp)
-    target_link_libraries(dlamb-${tool} PRIVATE dlamb_core)
-    dlamb_enable_warnings(dlamb-${tool})
-  endforeach()
-  if(DEFINED SKBUILD_SCRIPTS_DIR)
-    install(TARGETS dlamb-fake-muon dlamb-octo dlamb-ls-test dlamb-ls-geo-test
-            RUNTIME DESTINATION ${SKBUILD_SCRIPTS_DIR})
-  endif()
-endif()
-
 if(DLAMB_BUILD_TESTING)
-  foreach(test_name fake_muon octo ls_test ls_geo_test)
+  foreach(test_name ff-1m ff-gct fpls pixled xyzls xyls ls-beam nsbls fake_muon octo ls_test
+                    ls_geo_test)
     add_executable(test_${test_name} cpp/tests/test_${test_name}.cpp)
     target_link_libraries(test_${test_name} PRIVATE dlamb_core)
     dlamb_enable_warnings(test_${test_name})
     add_test(NAME ${test_name} COMMAND test_${test_name})
   endforeach()
+endif()
+if(DLAMB_BUILD_TOOLS)
+  foreach(tool ff-1m ff-gct fpls pixled xyzls xyls ls-beam nsbls fake-muon octo ls-test
+               ls-geo-test)
+    string(REPLACE "-" "_" source ${tool})
+    if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/cpp/tools/${source}.cpp)
+      set(source ${tool})
+    endif()
+    add_executable(dlamb-${tool} cpp/tools/${source}.cpp)
+    target_link_libraries(dlamb-${tool} PRIVATE dlamb_core)
+    dlamb_enable_warnings(dlamb-${tool})
+  endforeach()
+  if(DEFINED SKBUILD_SCRIPTS_DIR)
+    install(TARGETS dlamb-ff-1m dlamb-ff-gct dlamb-fpls dlamb-pixled dlamb-xyzls dlamb-xyls
+                    dlamb-ls-beam dlamb-nsbls dlamb-fake-muon dlamb-octo dlamb-ls-test
+                    dlamb-ls-geo-test
+            RUNTIME DESTINATION ${SKBUILD_SCRIPTS_DIR})
+  endif()
 endif()
