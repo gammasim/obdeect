@@ -8,6 +8,8 @@
 
 #include "gstrickd/format.hpp"
 #include "gstrickd/photons.hpp"
+#include "gstrickd/simtel.hpp"
+#include "gstrickd/stdin_buffer.hpp"
 #include "gstrickd/stream.hpp"
 #include "gstrickd/version.hpp"
 
@@ -18,6 +20,7 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <tuple>
 #include <variant>
@@ -232,6 +235,36 @@ private:
   std::unique_ptr<gstrickd::Writer> writer_;
 };
 
+// Input path or "-" (stdin) as a stream; the file is opened in binary mode.
+class InputStream {
+public:
+  explicit InputStream(const std::string &path) {
+    if (path == "-") {
+      stream_ = &stdin_;
+      return;
+    }
+    file_.open(path, std::ios::binary);
+    if (!file_) {
+      throw nb::value_error(("cannot open " + path).c_str());
+    }
+    stream_ = &file_;
+  }
+  std::istream &get() { return *stream_; }
+
+private:
+  gstrickd::StdinBuffer stdin_buffer_;
+  std::istream stdin_{&stdin_buffer_};
+  std::ifstream file_;
+  std::istream *stream_{nullptr};
+};
+
+std::string producer_name() {
+  return "corsika2ps " + std::to_string(gstrickd::version_major) + "." +
+         std::to_string(gstrickd::version_minor) + "." + std::to_string(gstrickd::version_patch);
+}
+
+using CameraEntries = std::vector<std::tuple<std::uint32_t, int, double>>;
+
 } // namespace
 
 NB_MODULE(_core, module) {
@@ -247,6 +280,55 @@ NB_MODULE(_core, module) {
     }
     return names;
   });
+
+  module.def(
+      "corsika_to_stream",
+      [](const std::string &input, const std::string &output) {
+        InputStream in{input};
+        std::ofstream out(output, std::ios::binary);
+        if (!out) {
+          throw nb::value_error(("cannot open " + output + " for writing").c_str());
+        }
+        gstrickd::corsika_to_stream(in.get(), out, producer_name());
+        out.close();
+        if (out.fail()) {
+          throw std::runtime_error("failed to write " + output);
+        }
+      },
+      nb::arg("input_path"), nb::arg("output_path"));
+  module.def(
+      "stream_to_simtel",
+      [](const std::string &input, const std::string &output, const CameraEntries &camera) {
+        gstrickd::CameraMap map;
+        for (const auto &[id, mirror_class, rotation] : camera) {
+          static_cast<void>(gstrickd::bypass_optics_level(mirror_class)); // validates
+          if (!map.emplace(id, gstrickd::CameraTelescope{mirror_class, rotation}).second) {
+            throw nb::value_error(("telescope " + std::to_string(id) + " listed twice").c_str());
+          }
+        }
+        InputStream in{input};
+        std::ofstream out(output, std::ios::binary);
+        if (!out) {
+          throw nb::value_error(("cannot open " + output + " for writing").c_str());
+        }
+        gstrickd::stream_to_simtel(in.get(), out, std::move(map));
+        out.close();
+        if (out.fail()) {
+          throw std::runtime_error("failed to write " + output);
+        }
+      },
+      nb::arg("input_path"), nb::arg("output_path"), nb::arg("camera"));
+  module.def(
+      "parse_camera_map",
+      [](const std::string &text) {
+        std::istringstream in(text);
+        CameraEntries entries;
+        for (const auto &[id, telescope] : gstrickd::read_camera_map(in)) {
+          entries.emplace_back(id, telescope.mirror_class, telescope.rotation_deg);
+        }
+        return entries;
+      },
+      nb::arg("text"));
 
   nb::class_<PyReader>(module, "Reader")
       .def(nb::init<const std::string &>(), nb::arg("path"))

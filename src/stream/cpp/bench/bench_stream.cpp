@@ -99,12 +99,11 @@ int main(int argc, char **argv) {
 
   const double mb = bytes / 1e6;
   std::printf("photons written: %llu (%llu chunks of %llu rows, 8 columns)\n",
-              static_cast<unsigned long long>(n_chunks * chunk_rows),
-              static_cast<unsigned long long>(n_chunks),
+              static_cast<unsigned long long>(photons), static_cast<unsigned long long>(n_chunks),
               static_cast<unsigned long long>(chunk_rows));
   std::printf("file size: %.1f MB\n", mb);
   std::printf("write: %.2f s, %.0f MB/s\n", write_seconds, mb / write_seconds);
   std::printf("read:  %.2f s, %.0f MB/s (read %llu photons, weight sum %.6g)\n", read_seconds,
               mb / read_seconds, static_cast<unsigned long long>(read_photons), weight_sum);
-  return read_photons == n_chunks * chunk_rows ? EXIT_SUCCESS : EXIT_FAILURE;
+  return read_photons == photons ? EXIT_SUCCESS : EXIT_FAILURE;
 }
