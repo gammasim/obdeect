@@ -494,3 +494,46 @@ def test_executable_matches_api_with_scattering(tmp_path):
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
     assert cli_out.read_bytes() == api_out.read_bytes()
+
+
+def test_rejects_identical_paths(tmp_path):
+    source = tmp_path / "same.ps"
+    original = ground_stream(100, seed=3, chunk_rows=64)
+    source.write_bytes(original)
+    alias = tmp_path / ".." / tmp_path.name / "same.ps"
+    for output in (source, alias):
+        with pytest.raises(ValueError, match="same file"):
+            dlufd.propagate(
+                source,
+                output,
+                transmission=TABLE_PATH,
+                site_altitude_m=SITE_M,
+                seed=1,
+            )
+    assert source.read_bytes() == original
+
+
+def test_executable_rejects_identical_paths(tmp_path):
+    exe = shutil.which("dlufd-propagate") or str(Path(sys.executable).with_name("dlufd-propagate"))
+    if not Path(exe).exists():
+        pytest.skip("dlufd-propagate not installed")
+    source = tmp_path / "same.ps"
+    original = ground_stream(100, seed=3, chunk_rows=64)
+    source.write_bytes(original)
+    command = [
+        exe,
+        "--transmission",
+        str(TABLE_PATH),
+        "--site-altitude",
+        str(SITE_M),
+        "--seed",
+        "1",
+        "-i",
+        str(source),
+        "-o",
+        str(source),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert result.returncode == 2, result.stderr
+    assert "same file" in result.stderr
+    assert source.read_bytes() == original

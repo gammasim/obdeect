@@ -59,6 +59,9 @@ inline void bind_propagator(nb::module_ &module) {
           config.scattering_source = *scattering_path;
         }
 
+        if (dlufd::same_file(input_path, output_path)) {
+          throw std::invalid_argument("input and output are the same file: " + input_path);
+        }
         std::ifstream in(input_path, std::ios::binary);
         if (!in) {
           throw std::runtime_error("cannot open input stream: " + input_path);

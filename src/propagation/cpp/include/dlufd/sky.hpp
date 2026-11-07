@@ -83,12 +83,16 @@ inline std::uint64_t sky_to_ground(gstrickd::PhotonChunk &chunk, const SkyPlane 
     }
     const double cz_magnitude = std::sqrt(1.0 - r2);
     const double emission_z = z[row];
-    if (!std::isfinite(emission_z) || !std::isfinite(t[row])) {
+    if (!std::isfinite(x[row]) || !std::isfinite(y[row]) || !std::isfinite(emission_z) ||
+        !std::isfinite(t[row])) {
       throw std::invalid_argument("sky photon position and time must be finite");
     }
     bool reaches = cz_magnitude > 0.0 && emission_z >= plane_z;
     if (has_cz) {
       const double cz = cz_column[row];
+      if (!std::isfinite(cz)) {
+        throw std::invalid_argument("sky photon cz must be finite");
+      }
       if (cz >= 0.0) {
         reaches = false; // moving upwards or horizontally
       } else if (std::abs(cz + cz_magnitude) > 1e-5) {

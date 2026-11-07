@@ -35,6 +35,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <istream>
 #include <map>
@@ -129,6 +130,25 @@ inline EnvelopeFactor read_envelope_file(const std::string &name, const std::str
   return parse_envelope_text(buffer.str(), name, path);
 }
 
+// True if both names are the same file (same spelling, symlink, hard link, or the same
+// canonical path when the output does not exist yet). Used to refuse an output that would
+// truncate the input.
+inline bool same_file(const std::string &a, const std::string &b) {
+  namespace fs = std::filesystem;
+  if (a == b) {
+    return true;
+  }
+  std::error_code ec_a;
+  std::error_code ec_b;
+  const fs::path canonical_a = fs::weakly_canonical(a, ec_a);
+  const fs::path canonical_b = fs::weakly_canonical(b, ec_b);
+  if (!ec_a && !ec_b && canonical_a == canonical_b) {
+    return true;
+  }
+  std::error_code ec;
+  return fs::equivalent(a, b, ec); // true only if both exist and are the same file
+}
+
 class Propagator {
 public:
   explicit Propagator(PropagatorConfig config) : config_(std::move(config)) {
@@ -137,6 +157,10 @@ public:
     }
     if (!std::isfinite(config_.site_altitude_m)) {
       throw std::invalid_argument("site altitude must be finite");
+    }
+    if (std::abs(config_.transmission->observation_level_m() - config_.site_altitude_m) >
+        altitude_tolerance_m) {
+      throw std::invalid_argument("transmission table H2 does not match the site altitude");
     }
     if (config_.wavelength_range) {
       config_.wavelength_range->validate();
@@ -252,6 +276,10 @@ private:
       photons(record.chunk, sink);
       break;
     case RecordType::telescope_end: {
+      const auto id = checked_integer(record.metadata, "telescope_id", gstrickd::max_telescope);
+      if (!telescope_.open || static_cast<std::int64_t>(telescope_.id) != id) {
+        throw std::invalid_argument("telescope_end of a telescope that is not open");
+      }
       gstrickd::Record out = record;
       out.metadata["photons"] = telescope_.weight_out;
       telescope_.open = false;
@@ -299,6 +327,9 @@ private:
       throw std::invalid_argument(std::string("stream record lacks key '") + key + "'");
     }
     if (const auto *value = std::get_if<double>(&it->second)) {
+      if (!std::isfinite(*value)) {
+        throw std::invalid_argument(std::string("key '") + key + "' is not finite");
+      }
       return *value;
     }
     if (const auto *value = std::get_if<std::int64_t>(&it->second)) {
@@ -498,7 +529,7 @@ private:
     telescope_.x_m = run_->x_m[index];
     telescope_.y_m = run_->y_m[index];
     telescope_.z_m = run_->z_m[index];
-    telescope_.altitude_m = config_.site_altitude_m + telescope_.z_m;
+    telescope_.altitude_m = run_->observation_m + telescope_.z_m; // the run's observation level
     auto cached = depths_cache_.find(telescope_.altitude_m);
     if (cached == depths_cache_.end()) {
       cached = depths_cache_

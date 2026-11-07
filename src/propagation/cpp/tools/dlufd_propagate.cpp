@@ -177,6 +177,9 @@ int main(int argc, char **argv) {
       config.scattering_source = *scattering;
     }
 
+    if (input != "-" && output != "-" && dlufd::same_file(input, output)) {
+      throw UsageError("input and output are the same file: " + input);
+    }
     std::ifstream in_file;
     if (input != "-") {
       in_file.open(input, std::ios::binary);
