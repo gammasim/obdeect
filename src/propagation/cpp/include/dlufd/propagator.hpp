@@ -642,6 +642,13 @@ private:
   // get w = 0 (they are not scattered, as sky_to_ground drops them).
   static gstrickd::PhotonChunk scattering_primaries(const gstrickd::PhotonChunk &input) {
     using gstrickd::Column;
+    // Checked before the loop below writes out.w; scatter_chunk checks the rest later.
+    for (const Column required :
+         {Column::x, Column::y, Column::z, Column::cx, Column::cy, Column::t, Column::w}) {
+      if (!input.has(required)) {
+        throw std::invalid_argument("scattering needs the columns x y z cx cy t w");
+      }
+    }
     gstrickd::PhotonChunk out = without_column(input, Column::cz);
     if (!out.has(Column::wavelength)) {
       out[Column::wavelength].assign(out.rows(), 0.0F);

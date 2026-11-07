@@ -522,6 +522,71 @@ void test_rejects_missing_and_non_finite_columns() {
   CHECK(run(all, Column::t, nan));
 }
 
+// Table wavelengths beyond int range are rejected before the integer conversion (1e300 is UB).
+void test_rejects_huge_table_wavelength() {
+  const auto throws_table = [](const std::string &text) {
+    try {
+      dlufd::ScatteringTable table(text);
+    } catch (const std::invalid_argument &) {
+      return true;
+    }
+    return false;
+  };
+  // Two altitudes, tau decreasing with altitude; only the wavelength differs.
+  const auto table_at = [](const std::string &wavelength) {
+    return wavelength + " 1.0 0.1 0.0 1 0\n" + wavelength + " 2.0 0.05 0.0 1 0\n";
+  };
+  CHECK(throws_table(table_at("1e300")));
+  CHECK(throws_table(table_at("2147483648")));
+  CHECK(!throws_table(table_at("2147483647")));
+}
+
+// A telescope with an infinite radius is rejected; so is a NaN cz or zem column.
+void test_rejects_infinite_radius_and_nan_columns() {
+  const dlufd::ScatteringTable table(exponential_table_text(0.05, 7500.0));
+  const dlufd::TransmissionTable tr = site_transmission();
+  dlufd::ScatteringConfig config;
+  config.enabled = true;
+  const double inf = std::numeric_limits<double>::infinity();
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const std::initializer_list<Column> base = {Column::x,  Column::y, Column::z, Column::cx,
+                                              Column::cy, Column::t, Column::w, Column::wavelength};
+  // One photon at z = 5 km with the given extra column set to value (if it is not zero-size).
+  const auto make_chunk = [&](Column extra, double value) {
+    gstrickd::PhotonChunk chunk;
+    chunk.frame = gstrickd::Frame::sky;
+    chunk.resize(1, mask_of(base) | gstrickd::column_bit(extra));
+    chunk[Column::z][0] = 5000.0F;
+    chunk[Column::w][0] = 1.0F;
+    chunk[Column::wavelength][0] = static_cast<float>(lambda_nm);
+    chunk[extra][0] = static_cast<float>(value);
+    return chunk;
+  };
+  const auto throws_invalid = [](auto &&f) {
+    try {
+      f();
+    } catch (const std::invalid_argument &) {
+      return true;
+    }
+    return false;
+  };
+  std::vector<std::vector<gstrickd::PhotonChunk>> lists;
+
+  const std::vector<dlufd::ScatterTelescope> infinite = {{1, distance_m, 0.0, 0.0, inf}};
+  const gstrickd::PhotonChunk plain = make_chunk(Column::cz, -1.0);
+  CHECK(throws_invalid(
+      [&] { dlufd::scatter_chunk(config, table, tr, infinite, plain, seed, 1, 0, lists); }));
+
+  const std::vector<dlufd::ScatterTelescope> sphere = {{1, distance_m, 0.0, 0.0, radius_m}};
+  CHECK(throws_invalid([&] {
+    dlufd::scatter_chunk(config, table, tr, sphere, make_chunk(Column::cz, nan), seed, 1, 0, lists);
+  }));
+  CHECK(throws_invalid([&] {
+    dlufd::scatter_chunk(config, table, tr, sphere, make_chunk(Column::zem, nan), seed, 1, 0,
+                         lists);
+  }));
+}
+
 } // namespace
 
 int main() {
@@ -535,5 +600,7 @@ int main() {
     test_scattered_time_is_at_scattering_point();
     test_state_rejects_bad_arguments();
     test_rejects_missing_and_non_finite_columns();
+    test_rejects_huge_table_wavelength();
+    test_rejects_infinite_radius_and_nan_columns();
   });
 }

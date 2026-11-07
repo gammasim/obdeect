@@ -907,6 +907,41 @@ void test_scattering_rejects() {
   CHECK(throws_invalid([&] { propagate(ground, scattering_config(table, false)); }));
 }
 
+// A sky chunk with cz (an upward row) but without w: rejected before the pre-pass writes w.
+// The writer rejects such a chunk, so the records go to Propagator::process directly. The
+// scattering pre-pass runs when the event ends.
+void test_scattering_needs_w_column() {
+  const auto table = real_table();
+  dlufd::Propagator propagator(scattering_config(table, false));
+  const auto sink = [](const gstrickd::Record &) {};
+  const auto metadata_record = [](RecordType type, gstrickd::Metadata metadata) {
+    gstrickd::Record record;
+    record.type = type;
+    record.metadata = std::move(metadata);
+    return record;
+  };
+  propagator.process(metadata_record(RecordType::run, scatter_run_keys()), sink);
+  propagator.process(metadata_record(RecordType::event, event_keys()), sink);
+  propagator.process(metadata_record(RecordType::telescope, telescope_keys(1, Frame::sky)), sink);
+
+  gstrickd::Record photons;
+  photons.type = RecordType::photons;
+  photons.chunk.telescope_id = 1;
+  photons.chunk.frame = Frame::sky;
+  photons.chunk.first_index = 0;
+  photons.chunk.resize(2, gstrickd::column_bit(Column::x) | gstrickd::column_bit(Column::y) |
+                              gstrickd::column_bit(Column::z) | gstrickd::column_bit(Column::cx) |
+                              gstrickd::column_bit(Column::cy) | gstrickd::column_bit(Column::cz) |
+                              gstrickd::column_bit(Column::t));
+  photons.chunk[Column::z][0] = 10000.0F;
+  photons.chunk[Column::z][1] = 10000.0F;
+  photons.chunk[Column::cz][0] = 0.5F; // upward: the pre-pass sets its w
+  photons.chunk[Column::cz][1] = -1.0F;
+  propagator.process(photons, sink);
+  CHECK(throws_invalid(
+      [&] { propagator.process(metadata_record(RecordType::event_end, {}), sink); }));
+}
+
 // Stream of n sky photons of telescope 1 with the given run keys.
 std::string sky_stream(const gstrickd::Metadata &run, std::size_t n,
                        const std::function<Row(std::size_t)> &rows) {
@@ -1030,6 +1065,7 @@ int main() {
     test_scattering_ledger();
     test_scattering_chunk_determinism();
     test_scattering_rejects();
+    test_scattering_needs_w_column();
     test_same_file();
     test_rejects_site_mismatch();
     test_rejects_telescope_end_mismatch();

@@ -163,8 +163,10 @@ private:
                                     "(wavelength altitude tau_mol tau_aer ssa g)");
       }
       const double wavelength = parse_number(tokens[0], "wavelength");
-      if (wavelength != std::floor(wavelength) || wavelength < 1.0) {
-        throw std::invalid_argument("scattering table: wavelengths must be integer nm >= 1");
+      if (wavelength != std::floor(wavelength) || wavelength < 1.0 ||
+          wavelength > static_cast<double>(std::numeric_limits<int>::max())) {
+        throw std::invalid_argument("scattering table: wavelengths must be integer nm in "
+                                    "[1, INT_MAX]");
       }
       entries.push_back({static_cast<long>(wavelength), parse_number(tokens[1], "altitude"),
                          parse_number(tokens[2], "tau_mol"), parse_number(tokens[3], "tau_aer"),
@@ -501,9 +503,9 @@ inline void scatter_chunk(const ScatteringConfig &config, const ScatteringTable 
   for (std::size_t i = 0; i < telescopes.size(); ++i) {
     const ScatterTelescope &tel = telescopes[i];
     if (!std::isfinite(tel.x_m) || !std::isfinite(tel.y_m) || !std::isfinite(tel.z_m) ||
-        !(tel.radius_m > 0.0) || tel.z_m < 0.0) {
+        !std::isfinite(tel.radius_m) || !(tel.radius_m > 0.0) || tel.z_m < 0.0) {
       throw std::invalid_argument("telescope needs finite x, y, z >= 0 (above the observation "
-                                  "level) and radius > 0");
+                                  "level) and finite radius > 0");
     }
     for (std::size_t k = 0; k < i; ++k) {
       if (telescopes[k].id == tel.id) {
@@ -551,13 +553,20 @@ inline void scatter_chunk(const ScatteringConfig &config, const ScatteringTable 
       throw std::invalid_argument("direction cosines must satisfy cx^2 + cy^2 <= 1");
     }
     const double cz = -std::sqrt(1.0 - r2);
-    if (chunk.has(Column::cz) &&
-        std::abs(static_cast<double>(chunk[Column::cz][row]) - cz) > 1e-5) {
-      throw std::invalid_argument("cz column does not match cx, cy (cz = -sqrt(1-cx^2-cy^2))");
+    // Finite first: a NaN makes the comparison false and would pass the check.
+    if (chunk.has(Column::cz)) {
+      const double cz_column = chunk[Column::cz][row];
+      if (!std::isfinite(cz_column) || std::abs(cz_column - cz) > 1e-5) {
+        throw std::invalid_argument("cz column must be finite and match cx, cy "
+                                    "(cz = -sqrt(1-cx^2-cy^2))");
+      }
     }
-    if (chunk.has(Column::zem) && std::abs(static_cast<double>(chunk[Column::zem][row]) -
-                                           (observation_level + z[row])) > 1.0) {
-      throw std::invalid_argument("zem column does not match z plus the observation level");
+    if (chunk.has(Column::zem)) {
+      const double zem_column = chunk[Column::zem][row];
+      if (!std::isfinite(zem_column) || std::abs(zem_column - (observation_level + z[row])) > 1.0) {
+        throw std::invalid_argument("zem column must be finite and match z plus the observation "
+                                    "level");
+      }
     }
     if (!(w[row] >= 0.0F) || !std::isfinite(w[row]) || !std::isfinite(z[row]) ||
         !std::isfinite(x[row]) || !std::isfinite(y[row]) || !std::isfinite(t[row])) {
