@@ -32,6 +32,10 @@ function(dlamb_enable_warnings target)
     target_compile_options(${target} PRIVATE /W4 /WX)
   else()
     target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    # GCC 13 reports false maybe-uninitialized warnings inside std::variant at -O3.
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+      target_compile_options(${target} PRIVATE -Wno-error=maybe-uninitialized)
+    endif()
   endif()
 endfunction()
 
