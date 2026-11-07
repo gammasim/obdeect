@@ -379,6 +379,51 @@ void cli_values() {
   CHECK_NEAR(profile.index_minus_one[1], 0.000220, 1e-15);
 }
 
+// The default primary id, charge and mass describe the same particle (mu-, CORSIKA 6).
+void default_primary_matches_charge() {
+  const fake_muon::Options o;
+  double mass = 0.0, charge = 0.0;
+  fake_muon::mass_charge(o.primary_id, mass, charge);
+  CHECK(o.primary_id == 6);
+  CHECK(charge == o.charge);
+  CHECK(mass == o.mass_gev);
+  CHECK(fake_muon::primary_id_from_name("muon") == o.primary_id);
+}
+
+// A profile with index values but no altitudes is rejected, not run as constant index.
+void rejects_profile_size_mismatch() {
+  fake_muon::Options o;
+  o.index_profile.index_minus_one = {0.000292};
+  CHECK(throws_invalid([&] { fake_muon::validate(o); }));
+  CHECK(throws_invalid([&] { (void)fake_muon::tracks(o); }));
+  o = fake_muon::Options{};
+  o.index_profile.altitude_m = {0.0, 3000.0};
+  CHECK(throws_invalid([&] { fake_muon::validate(o); }));
+  o = fake_muon::Options{};
+  CHECK(!throws_invalid([&] { fake_muon::validate(o); }));
+}
+
+// --momentum gives the same beta whether it comes before or after --primary and -m.
+void momentum_option_order() {
+  const auto before =
+      fake_muon::parse_command_line({"--momentum", "1", "--primary", "electron"}).options;
+  const auto after =
+      fake_muon::parse_command_line({"--primary", "electron", "--momentum", "1"}).options;
+  const auto mass_last =
+      fake_muon::parse_command_line({"-p", "1", "--primary", "electron", "-m", "0.000511"}).options;
+  const double expected = 1.0 / std::sqrt(1.0 + 0.000511 * 0.000511);
+  CHECK(before.mass_gev == 0.000511);
+  CHECK_NEAR(before.beta, expected, 1e-15);
+  CHECK_NEAR(after.beta, before.beta, 0.0);
+  CHECK_NEAR(mass_last.beta, before.beta, 0.0);
+  // --beta and --momentum both set the speed: rejected in either order.
+  CHECK(throws_invalid(
+      [] { (void)fake_muon::parse_command_line({"--beta", "0.5", "--momentum", "1"}); }));
+  CHECK(throws_invalid(
+      [] { (void)fake_muon::parse_command_line({"--momentum", "1", "--beta", "0.5"}); }));
+  CHECK(throws_invalid([] { (void)fake_muon::parse_command_line({"-p", "0"}); }));
+}
+
 } // namespace
 
 int main() {
@@ -394,5 +439,8 @@ int main() {
     rejects_large_magnitudes();
     rejects_large_photon_counts();
     cli_values();
+    default_primary_matches_charge();
+    rejects_profile_size_mismatch();
+    momentum_option_order();
   });
 }

@@ -41,8 +41,8 @@ dlamb-fake-muon --help
 | `-a` (`:239`) | `-a` | 2150 m | written to the run record only |
 | `-b` (`:247`) | `-b` | 5 | accepted, no effect |
 | `-l`, `-L` (`:248`) | `-l`, `-L` | 240, 1000 nm | 200 to 2000 nm |
-| `-q`, `-m`, `-p`, `--beta` | same | -1, 0.105658 GeV, -, 1 | `-p` sets beta from the mass |
-| `--primary` (`:327`) | `--primary` | 5 | sets mass and charge (`mass_charge`) |
+| `-q`, `-m`, `-p`, `--beta` | same | -1, 0.105658 GeV, -, 1 | `-p` sets beta from the final mass (order-independent; not with `--beta`) |
+| `--primary` (`:327`) | `--primary` | 6 (mu-) | sets mass and charge (`mass_charge`) |
 | `-N`, `--events` | same | 1 | number of events, 1 to 4294967295 |
 | `--run` | same | 1 | run number (run record) |
 | `--enable-scatter` (`:275`) | rejected | off | not ported (needs the density profile) |

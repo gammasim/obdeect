@@ -11,8 +11,10 @@
 
 #include <cmath>
 #include <cstdint>
+#include <fstream>
 #include <istream>
 #include <limits>
+#include <optional>
 #include <ostream>
 #include <stdexcept>
 #include <string>
@@ -30,28 +32,29 @@ struct IndexProfile {
 // Options of fake-muon.cc (line numbers in the original). Lengths in metres, angles in
 // degrees, wavelengths in nanometres.
 struct Options {
-  int run_number{1};                  // --run (fake-muon.cc:260)
-  std::uint64_t seed{1};              // --seed (new: explicit random seed)
-  std::uint32_t events{1};            // -N, --events (fake-muon.cc:257)
-  double observation_level_m{2150.0}; // -a (fake-muon.cc:239)
-  double telescope_radius_m{15.0};    // -r (fake-muon.cc:240)
-  double impact_x_m{0.0};             // -x (fake-muon.cc:241)
-  double impact_y_m{0.0};             // -y (fake-muon.cc:242)
-  double rscat_m{0.0};                // --rscat (fake-muon.cc:243); must be 0
-  int nscat{1};                       // --nscat (fake-muon.cc:244); must be 1
-  double h_start_m{3000.0};           // -h (fake-muon.cc:245)
-  double theta_deg{0.0};              // --theta (fake-muon.cc:249)
-  double phi_deg{0.0};                // --phi (fake-muon.cc:249)
-  double index_minus_one{0.000292};   // -n (fake-muon.cc:250)
-  IndexProfile index_profile{};       // -A (fake-muon.cc:258); empty = constant
-  double bunch_size{5.0};             // -b (fake-muon.cc:247); no effect here
-  double wavelength_min_nm{240.0};    // -l (fake-muon.cc:248)
-  double wavelength_max_nm{1000.0};   // -L (fake-muon.cc:248)
-  double charge{-1.0};                // -q (fake-muon.cc:251)
-  double beta{1.0};                   // --beta (fake-muon.cc:252)
-  double mass_gev{0.105658};          // -m (fake-muon.cc:253)
-  int primary_id{5};                  // --primary (fake-muon.cc:262)
-  bool multiple_scattering{false};    // --enable-scatter (fake-muon.cc:259)
+  int run_number{1};                    // --run (fake-muon.cc:260)
+  std::uint64_t seed{1};                // --seed (new: explicit random seed)
+  std::uint32_t events{1};              // -N, --events (fake-muon.cc:257)
+  double observation_level_m{2150.0};   // -a (fake-muon.cc:239)
+  double telescope_radius_m{15.0};      // -r (fake-muon.cc:240)
+  double impact_x_m{0.0};               // -x (fake-muon.cc:241)
+  double impact_y_m{0.0};               // -y (fake-muon.cc:242)
+  double rscat_m{0.0};                  // --rscat (fake-muon.cc:243); must be 0
+  int nscat{1};                         // --nscat (fake-muon.cc:244); must be 1
+  double h_start_m{3000.0};             // -h (fake-muon.cc:245)
+  double theta_deg{0.0};                // --theta (fake-muon.cc:249)
+  double phi_deg{0.0};                  // --phi (fake-muon.cc:249)
+  double index_minus_one{0.000292};     // -n (fake-muon.cc:250)
+  IndexProfile index_profile{};         // -A (fake-muon.cc:258); empty = constant
+  double bunch_size{5.0};               // -b (fake-muon.cc:247); no effect here
+  double wavelength_min_nm{240.0};      // -l (fake-muon.cc:248)
+  double wavelength_max_nm{1000.0};     // -L (fake-muon.cc:248)
+  double charge{-1.0};                  // -q (fake-muon.cc:251)
+  double beta{1.0};                     // --beta (fake-muon.cc:252)
+  std::optional<double> momentum_gev{}; // -p (fake-muon.cc:252); sets beta, see apply_momentum
+  double mass_gev{0.105658};            // -m (fake-muon.cc:253)
+  int primary_id{6};                    // --primary (fake-muon.cc:262); mu-, as charge -1
+  bool multiple_scattering{false};      // --enable-scatter (fake-muon.cc:259)
 };
 
 // Fine-structure constant (fake-muon.cc:256).
@@ -258,9 +261,11 @@ inline void validate(const Options &o) {
   if (!(o.bunch_size > 0.0))
     fail("bunch size must be positive");
   const auto &p = o.index_profile;
+  if (p.altitude_m.size() != p.index_minus_one.size())
+    fail("an index profile needs one altitude per index value");
   if (!p.altitude_m.empty()) {
-    if (p.altitude_m.size() < 2 || p.altitude_m.size() != p.index_minus_one.size())
-      fail("an index profile needs at least two nodes and one value per node");
+    if (p.altitude_m.size() < 2)
+      fail("an index profile needs at least two nodes");
     for (std::size_t i = 0; i < p.altitude_m.size(); ++i) {
       if (!std::isfinite(p.altitude_m[i]) || !std::isfinite(p.index_minus_one[i]) ||
           p.index_minus_one[i] <= 0.0 || (i > 0 && !(p.altitude_m[i] > p.altitude_m[i - 1])))
@@ -349,6 +354,124 @@ inline void validate(const Options &o) {
     lower = upper;
   }
   return result;
+}
+
+// Sets beta from the requested momentum and the final mass: beta = p / sqrt(p^2 + m^2).
+// Called after all options are parsed, so the result does not depend on option order.
+inline void apply_momentum(Options &o) {
+  if (!o.momentum_gev)
+    return;
+  const double p = *o.momentum_gev;
+  o.beta = p / std::sqrt(p * p + o.mass_gev * o.mass_gev);
+}
+
+struct CommandLine {
+  Options options;
+  std::string output; // -o FILE; empty = stdout
+  bool help{false};
+};
+
+// Parses the arguments of dlamb-fake-muon (without argv[0]). Throws std::invalid_argument.
+[[nodiscard]] inline CommandLine parse_command_line(const std::vector<std::string> &args) {
+  using cli::parse_integer;
+  using cli::parse_number;
+  CommandLine parsed;
+  auto &o = parsed.options;
+  bool beta_given = false;
+  for (std::size_t i = 0; i < args.size(); ++i) {
+    const std::string &arg = args[i];
+    if (arg == "--help") {
+      parsed.help = true;
+      return parsed;
+    }
+    if (arg == "--enable-scatter" || arg == "--scatter") {
+      o.multiple_scattering = true;
+      continue;
+    }
+    if (arg == "--disable-scatter" || arg == "--no-scatter") {
+      o.multiple_scattering = false;
+      continue;
+    }
+    if (arg.size() > 1 && arg[0] == '-' && arg[1] == 'I')
+      throw std::invalid_argument("-I (atmosphere table search path) is not supported");
+    if (i + 1 >= args.size())
+      throw std::invalid_argument("option " + arg + " needs a value");
+    const std::string &value = args[++i];
+    if (arg == "-r" || arg == "--radius" || arg == "--telescope-radius")
+      o.telescope_radius_m = parse_number(arg, value);
+    else if (arg == "-x")
+      o.impact_x_m = parse_number(arg, value);
+    else if (arg == "-y")
+      o.impact_y_m = parse_number(arg, value);
+    else if (arg == "--nscat")
+      o.nscat = static_cast<int>(parse_integer(arg, value));
+    else if (arg == "--rscat")
+      o.rscat_m = parse_number(arg, value);
+    else if (arg == "-h" || arg == "--h-start")
+      o.h_start_m = parse_number(arg, value);
+    else if (arg == "-N" || arg == "--events")
+      o.events = event_count(parse_integer(arg, value));
+    else if (arg == "-n" || arg == "--n1" || arg == "--refraction") {
+      const double v = parse_number(arg, value);
+      if (v > 1.0 && v < 1.0003)
+        o.index_minus_one = v - 1.0;
+      else if (v > 0.0 && v < 0.0003)
+        o.index_minus_one = v;
+      else
+        throw std::invalid_argument("invalid refraction index: " + value);
+    } else if (arg == "-A" || arg == "--atmosphere") {
+      if (value != "const" && value != "-1")
+        throw std::invalid_argument("atmosphere tables are not part of dlamb; use "
+                                    "--index-profile FILE or --atmosphere const");
+    } else if (arg == "--index-profile") {
+      std::ifstream in(value);
+      if (!in)
+        throw std::invalid_argument("cannot open index profile " + value);
+      o.index_profile = read_index_profile(in, value);
+    } else if (arg == "-a" || arg == "--altitude" || arg == "--obslev" ||
+               arg == "--observation-level")
+      o.observation_level_m = parse_number(arg, value);
+    else if (arg == "-b" || arg == "--bs" || arg == "--bunch-size")
+      o.bunch_size = parse_number(arg, value);
+    else if (arg == "--run")
+      o.run_number = static_cast<int>(parse_integer(arg, value));
+    else if (arg == "--seed")
+      o.seed = static_cast<std::uint64_t>(parse_integer(arg, value));
+    else if (arg == "--primary") {
+      if (!value.empty() && value[0] >= '0' && value[0] <= '9')
+        o.primary_id = static_cast<int>(parse_integer(arg, value));
+      else
+        o.primary_id = primary_id_from_name(value);
+      mass_charge(o.primary_id, o.mass_gev, o.charge);
+    } else if (arg == "-l" || arg == "--wlmin")
+      o.wavelength_min_nm = parse_number(arg, value);
+    else if (arg == "-L" || arg == "--wlmax")
+      o.wavelength_max_nm = parse_number(arg, value);
+    else if (arg == "-q" || arg == "--charge")
+      o.charge = parse_number(arg, value);
+    else if (arg == "-m" || arg == "--mass")
+      o.mass_gev = parse_number(arg, value);
+    else if (arg == "-p" || arg == "--momentum") {
+      const double p = parse_number(arg, value);
+      if (!(p > 0.0))
+        throw std::invalid_argument("momentum must be positive");
+      o.momentum_gev = p;
+    } else if (arg == "--beta") {
+      o.beta = parse_number(arg, value);
+      beta_given = true;
+    } else if (arg == "--theta" || arg == "--zenith-angle")
+      o.theta_deg = parse_number(arg, value);
+    else if (arg == "--phi" || arg == "--orientation" || arg == "--azimuth")
+      o.phi_deg = parse_number(arg, value);
+    else if (arg == "-o" || arg == "--output")
+      parsed.output = value;
+    else
+      throw std::invalid_argument("unknown option " + arg);
+  }
+  if (beta_given && o.momentum_gev)
+    throw std::invalid_argument("--beta and --momentum are exclusive");
+  apply_momentum(o);
+  return parsed;
 }
 
 // Writes the complete stream of fake-muon. Source k of the run uses seed source_seed(seed, k).
