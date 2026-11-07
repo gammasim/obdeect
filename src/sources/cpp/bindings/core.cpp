@@ -56,6 +56,14 @@ dlamb::Vec3 vec3(const std::vector<double> &v, const char *name) {
 
 // Angular profile. Parameters in degrees for the analytic kinds; `x` and `y` for "table"
 // are u = 1 - cos(theta) and the intensity per solid angle.
+// Half angle in degrees as u = 1 - cos(theta); the angle must be finite and in [0, 180].
+double cone_u(const std::vector<double> &params, const std::string &kind) {
+  const double degrees = params[0];
+  if (!(degrees >= 0.0 && degrees <= 180.0))
+    throw nb::value_error(("'" + kind + "' angle must be finite and in [0, 180] deg").c_str());
+  return 1.0 - std::cos(degrees * dlamb::pi / 180.0);
+}
+
 AngularBox make_angular(const std::string &kind, const std::vector<double> &params,
                         const std::vector<double> &x, const std::vector<double> &y) {
   const double deg = dlamb::pi / 180.0;
@@ -65,11 +73,11 @@ AngularBox make_angular(const std::string &kind, const std::vector<double> &para
   }
   if (kind == "cone") {
     need(params, 1, kind);
-    return {dlamb::FixedAngle{1.0 - std::cos(params[0] * deg)}};
+    return {dlamb::FixedAngle{cone_u(params, kind)}};
   }
   if (kind == "filled_cone") {
     need(params, 1, kind);
-    return {dlamb::FilledCone{1.0 - std::cos(params[0] * deg)}};
+    return {dlamb::FilledCone{cone_u(params, kind)}};
   }
   if (kind == "lambertian") {
     need(params, 0, kind);

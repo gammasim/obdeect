@@ -76,8 +76,12 @@ _STAR_KEYS = ("towards_source", "distance_m", "disk_radius_m", "disk_z_m", "star
 _TOP_KEYS = ("frame", "photons", "emitter", "star", "spectrum", "pulse", "target")
 
 
-def _check_keys(section: Mapping[str, Any], allowed: tuple[str, ...], label: str) -> None:
-    unknown = sorted(set(section) - set(allowed) - {"kind"})
+def _check_keys(
+    section: Mapping[str, Any], allowed: tuple[str, ...], label: str, *, has_kind: bool = False
+) -> None:
+    """Reject unknown keys; 'kind' is allowed only in profile and target sections."""
+    extra = {"kind"} if has_kind else set()
+    unknown = sorted(set(section) - set(allowed) - extra)
     if unknown:
         raise ValueError(f"unknown {label} key(s): {', '.join(unknown)}")
 
@@ -109,7 +113,7 @@ def _profile(section, table, label, x_key, y_key):
     """Native (kind, params, x, y) of a spectrum, pulse or angular section."""
     kind = _kind(section, table, label)
     names = table[kind]
-    _check_keys(section, names + ((x_key, y_key) if kind == "table" else ()), label)
+    _check_keys(section, names + ((x_key, y_key) if kind == "table" else ()), label, has_kind=True)
     if kind == "table":
         return kind, [], list(section.get(x_key, [])), list(section.get(y_key, []))
     return kind, _numbers(section, names), [], []
@@ -119,8 +123,14 @@ def _angular(section: Mapping[str, Any]):
     kind, params, x, y = _profile(section, _ANGULAR, "angular profile", "angle_deg", "value")
     if kind == "table":
         # The core takes u = 1 - cos(theta) (a density per solid angle).
-        angles = np.radians(np.asarray(x, dtype=float))
-        x = (1.0 - np.cos(angles)).tolist()
+        degrees = np.asarray(x, dtype=float)
+        if (
+            degrees.ndim != 1
+            or not np.all(np.isfinite(degrees))
+            or np.any((degrees < 0.0) | (degrees > 180.0))
+        ):
+            raise ValueError("angle_deg values must be finite and in [0, 180]")
+        x = (1.0 - np.cos(np.radians(degrees))).tolist()
     return _core.make_angular(kind, params, x, y)
 
 
@@ -183,7 +193,7 @@ def build_source(spec: Mapping[str, Any]) -> _core.Source:
         if "emitter" not in spec:
             raise ValueError("only emitters take a target")
         kind = _kind(target, _TARGET_KEYS, "target")
-        _check_keys(target, _TARGET_KEYS[kind], "target")
+        _check_keys(target, _TARGET_KEYS[kind], "target", has_kind=True)
         for key in _TARGET_KEYS[kind]:
             if key not in target:
                 raise ValueError(f"the target needs '{key}'")

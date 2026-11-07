@@ -258,3 +258,68 @@ def test_invalid_sources_are_rejected():
         emit_chunk(FLASHER, seed=1, rows=CHUNK_ROWS + 1)
     with pytest.raises(ValueError, match="first_index"):
         emit_chunk(FLASHER, seed=1, first_index=-1)
+
+
+def test_kind_is_allowed_only_in_profile_and_target_sections():
+    def rejected(spec, match):
+        with pytest.raises(ValueError, match=match):
+            build_source(spec)
+
+    rejected(dict(FLASHER, kind="disc"), "unknown source key")
+    rejected(
+        dict(FLASHER, emitter=dict(FLASHER["emitter"], kind="isotropic")), "unknown emitter key"
+    )
+    rejected(dict(STAR, star=dict(STAR["star"], kind="plane")), "unknown star key")
+    # Accepted where a kind is expected: profiles and targets.
+    assert build_source(FLASHER) is not None
+    assert build_source(STAR) is not None
+
+
+@pytest.mark.parametrize("angle", [-10.0, 190.0, math.nan, math.inf])
+def test_cone_angles_are_degrees_in_0_180(angle):
+    # Negative and > 180 angles used to alias to valid cones through 1 - cos.
+    for kind in ("cone", "filled_cone"):
+        with pytest.raises(ValueError, match="finite and in"):
+            build_source(emitter_with({"kind": kind, "angle_deg": angle}))
+    assert build_source(emitter_with({"kind": "cone", "angle_deg": 180.0})) is not None
+
+
+@pytest.mark.parametrize("angles", [[0.0, -5.0, 10.0], [0.0, 200.0], [0.0, math.nan, 30.0]])
+def test_angular_table_angles_are_checked_before_the_cosine(angles):
+    table = {"kind": "table", "angle_deg": angles, "value": [1.0] * len(angles)}
+    with pytest.raises(ValueError, match="finite and in"):
+        build_source(emitter_with(table))
+    ok = {"kind": "table", "angle_deg": [0.0, 90.0, 180.0], "value": [1.0, 0.5, 0.1]}
+    assert build_source(emitter_with(ok)) is not None
+
+
+def test_gauss_angular_width_must_be_representable():
+    with pytest.raises(ValueError):
+        build_source(emitter_with({"kind": "gauss", "sigma_deg": 1e-200}))
+
+
+def test_photon_counts_must_be_finite_and_exact():
+    # Counts beyond 2^53 are not exact in a double; iter_chunks would loop without end.
+    with pytest.raises(ValueError):
+        build_source(dict(FLASHER, photons=1e20))
+    with pytest.raises(ValueError):
+        build_source(dict(FLASHER, photons=math.inf))
+    # A disc target at h = 1e-170 makes the candidate count overflow to inf.
+    degenerate = emitter_with(
+        {"kind": "isotropic"},
+        target={"kind": "disc", "centre_m": [0, 0, 0], "normal": [0, 0, 1], "radius_m": 2.0},
+    )
+    degenerate["emitter"]["position_m"] = [0.0, 0.0, 1e-170]
+    with pytest.raises(ValueError, match="2\\^53"):
+        photon_count(degenerate, seed=1)
+    with pytest.raises(ValueError, match="2\\^53"):
+        next(iter_chunks(degenerate, seed=1))
+
+
+def test_complex_pulse_widths_must_be_finite():
+    complex_pulse = {"kind": "complex", "flat_ns": 1.0, "gauss_rms_ns": 0.5, "decay_ns": 0.5}
+    for name, value in (("flat_ns", math.inf), ("gauss_rms_ns", math.inf), ("decay_ns", math.inf)):
+        pulse = dict(complex_pulse, **{name: value})
+        with pytest.raises(ValueError):
+            build_source(dict(FLASHER, pulse=dict(pulse, delay_ns=0.0)))
+    assert build_source(dict(FLASHER, pulse=dict(complex_pulse, delay_ns=0.0))) is not None

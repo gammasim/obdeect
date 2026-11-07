@@ -292,8 +292,9 @@ using Angular = std::variant<Isotropic, FixedAngle, FilledCone, Lambertian, Tabu
 // Gaussian intensity exp(-theta^2 / (2 sigma^2)) (LightEmission "Gauss-rms:"), tabulated
 // on a grid of 0.05 sigma up to 5 sigma (or 180 deg).
 [[nodiscard]] inline LinearDensity gaussian_angular_table(double sigma_rad) {
-  if (!(sigma_rad > 0.0) || !std::isfinite(sigma_rad))
-    throw std::invalid_argument("a Gaussian angular distribution needs a positive width");
+  // Below 1e-12 rad, sigma^2 underflows and the table would be NaN.
+  if (!(sigma_rad >= 1e-12) || !std::isfinite(sigma_rad))
+    throw std::invalid_argument("a Gaussian angular distribution needs a width >= 1e-12 rad");
   const double theta_max = std::min(5.0 * sigma_rad, pi);
   const double step = 0.05 * sigma_rad;
   std::vector<double> u, value;
