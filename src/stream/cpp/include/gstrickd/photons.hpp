@@ -18,7 +18,8 @@ using Value = std::variant<std::int64_t, double, std::string, std::vector<double
 using Metadata = std::map<std::string, Value>;
 
 // Photons of one telescope in one frame, as float32 columns (SoA). Absent
-// columns are empty; present columns all have rows() entries.
+// columns are empty; present columns all have rows() entries. A chunk without
+// rows has no columns (column mask 0), as in the stream format.
 struct PhotonChunk {
   std::uint32_t telescope_id{};
   Frame frame{Frame::ground};
@@ -45,11 +46,19 @@ struct PhotonChunk {
     return m;
   }
 
-  // Size all columns in `mask` to n rows (zero-filled) and clear the others.
+  // Size all columns in `column_mask` to n rows (zero-filled) and clear the
+  // others; n = 0 clears all columns. Throws std::invalid_argument, before
+  // changing the chunk, for n > 2^16 or bits of undefined columns.
   void resize(std::size_t n, std::uint32_t column_mask) {
+    if (n > max_chunk_rows) {
+      throw std::invalid_argument("photon chunk exceeds 2^16 rows");
+    }
+    if ((column_mask >> n_columns) != 0) {
+      throw std::invalid_argument("photon chunk column mask has undefined bits");
+    }
     rows_ = n;
     for (std::uint32_t i = 0; i < n_columns; ++i) {
-      if ((column_mask >> i) & 1U) {
+      if (n > 0 && ((column_mask >> i) & 1U)) {
         columns[i].assign(n, 0.0F);
       } else {
         columns[i].clear();
