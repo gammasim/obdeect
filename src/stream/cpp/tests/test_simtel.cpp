@@ -244,6 +244,23 @@ void test_camera_map_parsing() {
   CHECK(bypass_optics_level(2) == 2);
 }
 
+void test_invalid_camera_map() {
+  const CameraMap zero{{0, CameraTelescope{1, 0.0}}};
+  const std::vector<Record> synthetic{record_of(RecordType::run, light_source_run()),
+                                      record_of(RecordType::run_end)};
+  const std::vector<Record> raw{record_of(RecordType::run, light_source_run()),
+                                blob_of(telpos_block({2000.0, 2100.0}))};
+  CHECK(throws_error([&] { run_adapter(synthetic, zero); }));
+  CHECK(throws_error([&] { run_adapter(raw, zero); }));
+  for (double rotation :
+       {std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()}) {
+    const CameraMap bad{{1, CameraTelescope{2, rotation}}};
+    CHECK(throws_error([&] { run_adapter({}, bad); }));
+    PhotonChunk chunk = chunk_of(1, Frame::camera, {0.5}, {0.2}, {0.1}, {-0.2});
+    CHECK(throws_error([&] { camera_to_bypass_convention(chunk, CameraTelescope{2, rotation}); }));
+  }
+}
+
 // Hand-computed with simtools camera_bunches (photon_bunch_file.py:105-156), input
 // (x, y) = (0.5, 0.2) m, (cx, cy) = (0.1, -0.2), camera rotation 30 deg:
 //   single mirror: y -> -y, cy -> -cy                 -> (0.5, -0.2), (0.1, 0.2)
@@ -480,6 +497,7 @@ void test_round_trip_byte_identical() {
 int main() {
   return run_checks([] {
     test_camera_map_parsing();
+    test_invalid_camera_map();
     test_camera_conversion();
     test_camera_frame_through_adapter();
     test_telpos_zeroed_for_camera_only();

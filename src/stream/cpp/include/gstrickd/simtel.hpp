@@ -148,6 +148,9 @@ inline void camera_to_bypass_convention(PhotonChunk &chunk, const CameraTelescop
         chunk.has(Column::cy))) {
     throw std::invalid_argument("camera-frame chunk lacks x, y, cx or cy");
   }
+  if (!std::isfinite(camera.rotation_deg)) {
+    throw std::invalid_argument("camera rotation must be finite");
+  }
   const int level = bypass_optics_level(camera.mirror_class);
   std::vector<float> &x = chunk[Column::x];
   std::vector<float> &y = chunk[Column::y];
@@ -302,7 +305,17 @@ inline TelPos telpos_from_metres(const std::vector<double> &x, const std::vector
 // for the frame and header rules.
 class PsToSimtel {
 public:
-  PsToSimtel(std::ostream &out, CameraMap camera) : writer_{out}, camera_{std::move(camera)} {}
+  PsToSimtel(std::ostream &out, CameraMap camera) : writer_{out}, camera_{std::move(camera)} {
+    for (const auto &[id, telescope] : camera_) {
+      if (id == 0) {
+        throw std::invalid_argument("camera map telescope id must be at least 1");
+      }
+      static_cast<void>(bypass_optics_level(telescope.mirror_class));
+      if (!std::isfinite(telescope.rotation_deg)) {
+        throw std::invalid_argument("camera rotation must be finite");
+      }
+    }
+  }
 
   void write(const Record &record) {
     switch (record.type) {
@@ -353,8 +366,8 @@ private:
     case Frame::sky:
     case Frame::telescope:
       throw std::runtime_error(
-          "photons in the sky or telescope frame cannot go to sim_telarray: pass them through "
-          "dlufd and obdeect first");
+          "photons in the sky or telescope frame cannot go to sim_telarray: convert them to "
+          "the ground or camera frame first");
     case Frame::ground:
       if (camera_.contains(chunk.telescope_id)) {
         throw std::runtime_error("telescope " + std::to_string(chunk.telescope_id) +
@@ -388,7 +401,7 @@ private:
         const EventioBlock telpos = simtel_detail::parse_block(record.blob);
         TelPos pos = decode_telpos(telpos);
         for (const auto &entry : camera_) {
-          if (entry.first > pos.z.size()) {
+          if (entry.first == 0 || entry.first > pos.z.size()) {
             throw std::runtime_error("camera map telescope " + std::to_string(entry.first) +
                                      " is not in the TELPOS block");
           }
@@ -526,7 +539,7 @@ private:
         array_field(run_metadata_, "telescope_x_m"), array_field(run_metadata_, "telescope_y_m"),
         array_field(run_metadata_, "telescope_z_m"), array_field(run_metadata_, "telescope_r_m"));
     for (const auto &entry : camera_) {
-      if (entry.first > pos.z.size()) {
+      if (entry.first == 0 || entry.first > pos.z.size()) {
         throw std::runtime_error("camera map telescope " + std::to_string(entry.first) +
                                  " is not in the run metadata");
       }

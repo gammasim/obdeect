@@ -1,5 +1,6 @@
 """CORSIKA <-> photon stream <-> sim_telarray conversions through the Python API and the CLIs."""
 
+import os
 import shutil
 import subprocess
 import sys
@@ -181,3 +182,56 @@ def test_cli_matches_python_api(tmp_path):
     back.write_bytes(piped)
     assert set(_photons_by_telescope(back)) == {1, 2}
     assert _column(_photons_by_telescope(back)[1], "x").size == 50
+
+
+@pytest.mark.parametrize("camera", [{0: (1, 0.0)}, {2: (2, float("nan"))}, {2: (2, float("inf"))}])
+def test_rejects_invalid_camera_mapping(tmp_path, camera):
+    stream = tmp_path / "light.ps"
+    _write_light_source_stream(stream)
+    with pytest.raises((ValueError, RuntimeError)):
+        gstrickd.stream_to_simtel(stream, tmp_path / "bad.simtel", camera)
+
+
+@pytest.mark.parametrize("operation", ["stream_to_simtel", "corsika_to_stream"])
+def test_conversion_reports_output_failure(tmp_path, operation):
+    stream = tmp_path / "light.ps"
+    simtel = tmp_path / "light.simtel"
+    _write_light_source_stream(stream)
+    gstrickd.stream_to_simtel(stream, simtel, {2: (1, 0.0)})
+    source = stream if operation == "stream_to_simtel" else simtel
+    code = """
+import resource
+import signal
+import sys
+import gstrickd
+gstrickd.__path__.append(sys.argv[4])
+signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
+try:
+    if sys.argv[1] == 'stream_to_simtel':
+        gstrickd.stream_to_simtel(sys.argv[2], sys.argv[3], {2: (1, 0.0)})
+    else:
+        gstrickd.corsika_to_stream(sys.argv[2], sys.argv[3])
+except RuntimeError:
+    sys.exit(0)
+sys.exit(1)
+"""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            "-c",
+            code,
+            operation,
+            str(source),
+            str(tmp_path / "full"),
+            str(Path(gstrickd._core.__file__).parent),
+        ],
+        capture_output=True,
+        check=False,
+        env={
+            **os.environ,
+            "PYTHONPATH": os.pathsep.join([str(Path(gstrickd.__file__).parent.parent), *sys.path]),
+        },
+    )
+    assert result.returncode == 0, result.stderr.decode()

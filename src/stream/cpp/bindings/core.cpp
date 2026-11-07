@@ -290,6 +290,10 @@ NB_MODULE(_core, module) {
           throw nb::value_error(("cannot open " + output + " for writing").c_str());
         }
         gstrickd::corsika_to_stream(in.get(), out, producer_name());
+        out.close();
+        if (out.fail()) {
+          throw std::runtime_error("failed to write " + output);
+        }
       },
       nb::arg("input_path"), nb::arg("output_path"));
   module.def(
@@ -308,6 +312,10 @@ NB_MODULE(_core, module) {
           throw nb::value_error(("cannot open " + output + " for writing").c_str());
         }
         gstrickd::stream_to_simtel(in.get(), out, std::move(map));
+        out.close();
+        if (out.fail()) {
+          throw std::runtime_error("failed to write " + output);
+        }
       },
       nb::arg("input_path"), nb::arg("output_path"), nb::arg("camera"));
   module.def(

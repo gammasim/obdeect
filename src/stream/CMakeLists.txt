@@ -64,6 +64,10 @@ endif()
 
 if(GSTRICKD_BUILD_TESTING)
   enable_testing()
+  if(GSTRICKD_BUILD_BENCH)
+    add_test(NAME bench_stream_partial_chunk COMMAND bench_stream 65537
+             ${CMAKE_CURRENT_BINARY_DIR}/bench_stream_test.ps)
+  endif()
   foreach(test_name version format stream eventio corsika simtel)
     add_executable(test_${test_name} cpp/tests/test_${test_name}.cpp)
     target_link_libraries(test_${test_name} PRIVATE gstrickd_core)

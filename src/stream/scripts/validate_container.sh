@@ -89,12 +89,16 @@ EXIT
 CARD
 start=$(date +%s)
 /workdir/simulation_software/corsika7/corsika_qgs2_urqmd_flat < card.txt > corsika.log 2>&1
-echo "== corsika exit=$? seconds=$(( $(date +%s) - start )) iact_bytes=$(stat -c %s run.iact 2>/dev/null)"
+status=$?
+echo "== corsika exit=$status seconds=$(( $(date +%s) - start )) iact_bytes=$(stat -c %s run.iact 2>/dev/null)"
+[ "$status" -eq 0 ] || exit "$status"
 [ -s run.iact ] || { echo "CORSIKA produced no run.iact"; exit 1; }
 
 # Step 3: codec round trip.
 /out/bin/corsika2ps < run.iact | /out/bin/ps2simtel > roundtrip.corsika
-echo "== round trip exit=$? sizes: $(stat -c %s run.iact) $(stat -c %s roundtrip.corsika)"
+status=$?
+echo "== round trip exit=$status sizes: $(stat -c %s run.iact) $(stat -c %s roundtrip.corsika)"
+[ "$status" -eq 0 ] || exit "$status"
 cmp -l run.iact roundtrip.corsika > cmp_bytes.txt 2>&1
 echo "== differing bytes (cmp -l): $(wc -l < cmp_bytes.txt)"
 cmp run.iact roundtrip.corsika && echo "== byte-identical" || echo "== not byte-identical"
