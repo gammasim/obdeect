@@ -106,7 +106,8 @@ cmp run.iact roundtrip.corsika && echo "== byte-identical" || echo "== not byte-
 # Photon comparison of the two EventIO files with simtools' reader (per telescope and event).
 PYTHONPATH=/workdir/src /workdir/env/bin/python3 /out/work/compare_photons.py \
   run.iact roundtrip.corsika > compare_photons.txt 2>&1
-echo "== photon comparison: $(tail -1 compare_photons.txt)"
+photon_status=$?
+echo "== photon comparison (exit $photon_status): $(tail -1 compare_photons.txt)"
 
 # Step 4: sim_telarray on both files, same configuration and seed.
 run_simtel() {
@@ -129,8 +130,14 @@ run_simtel "$W/roundtrip.corsika" roundtrip || true
 if [ -s /out/simtel/direct.simtel ] && [ -s /out/simtel/roundtrip.simtel ]; then
   cmp /out/simtel/direct.simtel /out/simtel/roundtrip.simtel && echo "== sim_telarray outputs identical" \
     || echo "== sim_telarray outputs differ: $(cmp -l /out/simtel/direct.simtel /out/simtel/roundtrip.simtel | wc -l) bytes"
-  /workdir/env/bin/python3 /out/work/compare_simtel.py /out/simtel/direct.simtel /out/simtel/roundtrip.simtel || true
+  /workdir/env/bin/python3 /out/work/compare_simtel.py /out/simtel/direct.simtel /out/simtel/roundtrip.simtel
+  simtel_status=$?
+else
+  echo "== sim_telarray produced no output to compare"
+  simtel_status=1
 fi
+# Fail the validation when photons or sim_telarray events do not match.
+[ "$photon_status" -eq 0 ] && [ "$simtel_status" -eq 0 ]
 INNER
 }
 
@@ -160,9 +167,11 @@ def collect(path):
 a = collect(sys.argv[1])
 b = collect(sys.argv[2])
 print(f"blocks: {len(a)} vs {len(b)}")
+# Allowed difference: the cm -> m -> cm float32 round trip changes values by at most 1 ulp.
+RTOL = 1e-6
 if a.keys() != b.keys():
     print("MISMATCH: different (event, telescope) keys")
-    sys.exit(0)
+    sys.exit(1)
 worst = {name: 0.0 for name in FIELDS}
 photons_a = photons_b = 0
 for key in a:
@@ -172,12 +181,18 @@ for key in a:
         if a[key][name].shape != b[key][name].shape:
             worst[name] = float("inf")
             continue
-        diff = np.abs(a[key][name].astype(float) - b[key][name].astype(float))
+        va = a[key][name].astype(float)
+        vb = b[key][name].astype(float)
+        diff = np.abs(va - vb) / np.maximum(np.abs(va), 1e-30)
         if diff.size:
             worst[name] = max(worst[name], float(np.max(diff)))
 print("bunches:", photons_a, photons_b)
-print("max abs difference per field:", {k: f"{v:.3g}" for k, v in worst.items()})
-print(f"summary: {'identical' if max(worst.values()) == 0.0 else 'differs'}")
+print("max relative difference per field:", {k: f"{v:.3g}" for k, v in worst.items()})
+largest = max(worst.values())
+if photons_a != photons_b or largest > RTOL:
+    print(f"summary: differs beyond tolerance (max relative {largest:.3g} > {RTOL})")
+    sys.exit(1)
+print(f"summary: {'identical' if largest == 0.0 else 'within tolerance'}")
 PY
   cat > "$OUT/work/compare_simtel.py" <<'PY'
 """Photoelectron sums per event of two sim_telarray output files (eventio)."""
@@ -203,6 +218,9 @@ def pe_sums(path):
 a = pe_sums(sys.argv[1])
 b = pe_sums(sys.argv[2])
 print(f"events: {len(a)} vs {len(b)}; photoelectron sums: {a[:10]} vs {b[:10]}")
+if len(a) != len(b):
+    print("MISMATCH: different number of events")
+    sys.exit(1)
 PY
 }
 
