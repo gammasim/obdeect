@@ -64,8 +64,7 @@ endif()
 # Light-source programs: tool and test sources share the program name.
 option(DLAMB_BUILD_TOOLS "Build the light-source command-line tools" ON)
 set(DLAMB_LIGHT_SOURCE_PROGRAMS
-    camera-flasher secondary-flasher rotating-led pixel-led point-source beam-scan laser-beam
-    night-sky muon-track figure-eight geometry-report)
+    flasher led point-source beam-scan laser-beam night-sky muon-track)
 if(DLAMB_BUILD_TESTING)
   foreach(test_name ${DLAMB_LIGHT_SOURCE_PROGRAMS} sky_args)
     add_executable(test_${test_name} cpp/tests/test_${test_name}.cpp)

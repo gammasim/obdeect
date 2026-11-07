@@ -1,7 +1,7 @@
-# pixel-led
+# led
 
 Port of sim_telarray `LightEmission/pixled.cc`: an LED in front of selected camera pixels,
-to test trigger definitions. Command: `dlamb-pixel-led --camera-file FILE (--use LIST |
+to test trigger definitions. Command: `dlamb-led --camera-file FILE (--use LIST |
 --use-trg-rand N | --use-trg-all) [options] > out.gst`. `--list-only` prints the pixel
 combinations instead.
 
@@ -20,7 +20,7 @@ combinations instead.
 | `--photons N` | `500` | `pixled.cc:509, 571-572` | photons per pixel (the original `--help` says 2500000) |
 | `--bunchsize F` (`-b`) | `1` | `pixled.cc:573-574` | photons per bunch (at least 1) |
 | `--camera-radius R` (`-r`) | `123` | `pixled.cc:575-576` | fiducial radius [cm] |
-| `--spectrum W`, `--lightpulse S` | `400`, `Simple:0` | `pixled.cc:579-582` | as in camera-flasher |
+| `--spectrum W`, `--lightpulse S` | `400`, `Simple:0` | `pixled.cc:579-582` | as in flasher |
 | `--run N`, `--altitude M`, `--atmosphere N` | `1`, `2150`, `1` | `pixled.cc:625-628` | run keys |
 | `--list-only` (`-L`) | off | `pixled.cc:546-551` | print `(@)` labels, write no photons |
 | `--quiet` (`-q`) | | `pixled.cc:552-557` | accepted; the program prints nothing else |
@@ -51,7 +51,7 @@ combinations instead.
 
 ## Checks
 
-- `ctest`: `test_pixel-led` (camera-plane positions and directions, combinations, slaves,
+- `ctest`: `test_led` (camera-plane positions and directions, combinations, slaves,
   trigger groups, random pixels, errors).
-- Cross-check (`scripts/compare_pixel-led.sh`, 3 events of 2 pixels, 10 photons each): 20
+- Cross-check (`scripts/compare_led.sh`, 3 events of 2 pixels, 10 photons each): 20
   photons per event in both; direction (0, 0, -1) and time 0 in both.

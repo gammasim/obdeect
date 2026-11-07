@@ -1,7 +1,7 @@
 #include "check.hpp"
 #include "program_stream.hpp"
 
-#include "dlamb/programs/pixel-led.hpp"
+#include "dlamb/programs/led.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -26,18 +26,18 @@ const char *camera_text = "# test camera\n"
                           "Trigger  * of 0 1 [2]\n"
                           "Trigger  * of 2 3\n";
 
-pixel_led::Options base_options(const std::string &use) {
-  pixel_led::Options options;
+led::Options base_options(const std::string &use) {
+  led::Options options;
   std::istringstream in(camera_text);
-  options.camera = pixel_led::read_camera(in, options.slaves);
+  options.camera = led::read_camera(in, options.slaves);
   options.use = use;
   options.photons = 10.0;
   return options;
 }
 
-std::string stream_bytes(const pixel_led::Options &options) {
+std::string stream_bytes(const led::Options &options) {
   std::ostringstream out;
-  pixel_led::write_stream(out, options);
+  led::write_stream(out, options);
   return out.str();
 }
 
@@ -87,7 +87,7 @@ void slaves_and_trigger_groups() {
   with_slaves.camera.triggers.clear();
   {
     std::istringstream in(camera_text);
-    with_slaves.camera = pixel_led::read_camera(in, true);
+    with_slaves.camera = led::read_camera(in, true);
   }
   const auto a = read_stream(stream_bytes(plain));
   // Groups: {0,1} and {2,3} give two events of 2 x 10 photons.
@@ -98,7 +98,7 @@ void slaves_and_trigger_groups() {
   // Group 0 with slave 2 is three emissions of 10 photons; group 1 has two.
   CHECK(b.rows.size() == 30 + 20);
 
-  auto labels = pixel_led::build_sources(with_slaves);
+  auto labels = led::build_sources(with_slaves);
   CHECK(labels.size() == 2);
   CHECK(labels[0].labels.size() == 2); // slaves are not labels (pixled.cc list output)
 }
@@ -130,11 +130,11 @@ void all_pixels_and_list_errors() {
   CHECK(s.rows.size() == 6);
   auto too_many = base_options("0 1");
   too_many.require = 3;
-  CHECK(pixel_led::build_sources(too_many).empty());
+  CHECK(led::build_sources(too_many).empty());
   bool threw = false;
   try {
     auto bad_pixel = base_options("0 9");
-    (void)pixel_led::build_sources(bad_pixel);
+    (void)led::build_sources(bad_pixel);
   } catch (const std::invalid_argument &) {
     threw = true;
   }
@@ -146,9 +146,9 @@ void non_contiguous_ids() {
   // position (3 cm and 0 cm), and the labels are the IDs.
   const char *text = "Pixel 20 0 3.0 0.0 1.0\n"
                      "Pixel 10 0 0.0 0.0 1.0\n";
-  pixel_led::Options options;
+  led::Options options;
   std::istringstream in(text);
-  options.camera = pixel_led::read_camera(in, options.slaves);
+  options.camera = led::read_camera(in, options.slaves);
   options.use = "10 20";
   options.photons = 10.0;
   const auto s = read_stream(stream_bytes(options));
@@ -164,14 +164,14 @@ void non_contiguous_ids() {
   }
   CHECK(at_origin == 10);
   CHECK(at_3cm == 10);
-  const auto sources = pixel_led::build_sources(options);
+  const auto sources = led::build_sources(options);
   CHECK(sources.size() == 1);
   CHECK(sources[0].labels == std::vector<int>({10, 20}));
 
   bool threw = false;
   try {
     std::istringstream dup("Pixel 5 0 0.0 0.0 1.0\nPixel 5 0 1.0 0.0 1.0\n");
-    (void)pixel_led::read_camera(dup, false);
+    (void)led::read_camera(dup, false);
   } catch (const std::invalid_argument &) {
     threw = true;
   }
@@ -196,7 +196,7 @@ void spectrum_wavelengths() {
     options.spectrum = text;
     bool threw = false;
     try {
-      (void)pixel_led::build_sources(options);
+      (void)led::build_sources(options);
     } catch (const std::invalid_argument &) {
       threw = true;
     }

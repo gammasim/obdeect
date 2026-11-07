@@ -194,6 +194,33 @@ void rejects_negative_photons() {
   CHECK(threw);
 }
 
+// Source parameters are checked when the plan is built, also with zero photons.
+template <class Change> bool plan_throws(Change change) {
+  NsbOptions o;
+  o.photons = 0.0;
+  change(o);
+  try {
+    (void)plan_night_sky(o);
+  } catch (const std::invalid_argument &) {
+    return true;
+  }
+  return false;
+}
+
+void rejects_bad_source_parameters() {
+  CHECK(plan_throws([](NsbOptions &o) { o.telescope_radius_m = -1.0; }));
+  CHECK(plan_throws([](NsbOptions &o) { o.telescope_radius_m = 0.0; }));
+  CHECK(plan_throws([](NsbOptions &o) { o.viewcone_deg = 200.0; }));
+  CHECK(plan_throws([](NsbOptions &o) { o.viewcone_deg = 0.0; }));
+  CHECK(plan_throws([](NsbOptions &o) { o.pulse_width_ns = -1.0; }));
+  CHECK(plan_throws([](NsbOptions &o) { o.pulse_delay_ns = std::nan(""); }));
+  CHECK(plan_throws([](NsbOptions &o) { o.bunch_size = 0.0; }));
+  CHECK(plan_throws([](NsbOptions &o) { o.altitude_m = std::nan(""); }));
+  CHECK(!plan_throws([](NsbOptions &) {}));
+  // Viewcone 180 deg (the full sphere) is valid.
+  CHECK(!plan_throws([](NsbOptions &o) { o.viewcone_deg = 180.0; }));
+}
+
 } // namespace
 
 int main() {
@@ -205,5 +232,6 @@ int main() {
     tilted_directions_enter_sphere();
     emission_altitude();
     rejects_negative_photons();
+    rejects_bad_source_parameters();
   });
 }

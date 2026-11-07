@@ -2,7 +2,7 @@
 
 Prints per telescope: bunches, sum of bunch sizes (photons), mean wavelength and the mean
 and r.m.s. of the bunch impact positions at the observation level [m]. Run inside a
-container with python eventio, e.g. `python3 summarize_iact.py figure-eight.iact.gz`.
+container with python eventio, e.g. `python3 summarize_iact.py showers.iact.gz`.
 """
 
 import sys

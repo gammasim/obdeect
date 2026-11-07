@@ -6,7 +6,10 @@
 #include "dlamb/background.hpp"
 #include "dlamb/sky_sources.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -45,7 +48,27 @@ struct NsbEmission {
   }
 };
 
+// Checks every parameter when the plan is built, independent of the photon count (zero
+// photons must not hide a bad radius or cone).
+inline void validate_night_sky(const NsbOptions &o) {
+  if (!(o.telescope_radius_m > 0.0) || !std::isfinite(o.telescope_radius_m))
+    throw std::invalid_argument("night-sky: radius must be finite and > 0 m");
+  if (!(o.viewcone_deg > 0.0) || !(o.viewcone_deg <= 180.0))
+    throw std::invalid_argument("night-sky: viewcone must be in (0, 180] deg");
+  if (!std::isfinite(o.altitude_m))
+    throw std::invalid_argument("night-sky: altitude must be finite");
+  if (!(o.bunch_size > 0.0) || !std::isfinite(o.bunch_size))
+    throw std::invalid_argument("night-sky: bunch size must be finite and > 0");
+  if (!(o.pulse_width_ns >= 0.0) || !std::isfinite(o.pulse_width_ns))
+    throw std::invalid_argument("night-sky: pulse width must be finite and >= 0 ns");
+  if (!std::isfinite(o.pulse_delay_ns))
+    throw std::invalid_argument("night-sky: pulse delay must be finite");
+  if (!(o.photons >= 0.0) || o.photons > max_photon_count)
+    throw std::invalid_argument("night-sky: photons must be finite, >= 0 and at most 2^53");
+}
+
 [[nodiscard]] inline SkyPlan<NsbEmission> plan_night_sky(const NsbOptions &o) {
+  validate_night_sky(o);
   const double bunch = std::max(1.0, o.bunch_size);
   const auto [wl_min, wl_max] = spectrum_range(o.spectrum);
 
@@ -68,8 +91,6 @@ struct NsbEmission {
   source.spectrum = o.spectrum;
   source.pulse_width_ns = o.pulse_width_ns;
   source.pulse_delay_ns = o.pulse_delay_ns;
-  if (!(o.photons >= 0.0) || o.photons > max_photon_count)
-    throw std::invalid_argument("night-sky: photons must be finite, >= 0 and at most 2^53");
   plan.cases.push_back({NsbEmission{source, o.seed, bunch, o.photons / bunch}});
   return plan;
 }

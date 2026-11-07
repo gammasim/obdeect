@@ -41,5 +41,7 @@ Tool `dlamb-night-sky`, programme `cpp/include/dlamb/programs/night-sky.hpp`, co
 
 - Directions inside the cone (within 1e-6), |position| = R, mean and variance of cos(theta)
   (4 sigma), mean time against `-E[zi] R / c` (4 sigma), a table spectrum's mean and variance.
+- Invalid source parameters are rejected when the plan is built, also with `--photons 0`:
+  `--radius -1` and `--viewcone 200` fail with an error.
 - Original (container, `--atmosphere 1 --photons 200000`): wrote zero bunches in
   this run. Cause not found yet, so no comparison.

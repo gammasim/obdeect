@@ -57,7 +57,7 @@ struct Emission {
   double time_offset_ns{};
 };
 
-// One IACT event (one telescope). labels: pixel ids fired (pixel-led only).
+// One IACT event (one telescope). labels: pixel ids fired (led only).
 struct Event {
   std::uint32_t number{};
   std::vector<Emission> emissions;
@@ -307,8 +307,8 @@ inline Target fiducial_target(Vec3 position, double radius_m, const Angular &ang
     return std::monostate{};
   }
   if (std::holds_alternative<Isotropic>(angular)) {
-    // The cone of the original has sin(theta) = R / d (checked against the camera-flasher output
-    // in scripts/compare_camera-flasher.sh); the 1.02 margin only decides when the cut applies.
+    // The cone of the original has sin(theta) = R / d (checked against the flasher output
+    // in scripts/compare_flasher-dish.sh); the 1.02 margin only decides when the cut applies.
     return SphereTarget{Vec3{0.0, 0.0, 0.0}, radius_m};
   }
   if (std::holds_alternative<FixedAngle>(angular)) {
