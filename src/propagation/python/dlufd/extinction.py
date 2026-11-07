@@ -87,7 +87,8 @@ def apply_extinction(
         Dict of float32 arrays, one per output column.
 
     Raises:
-        ValueError: invalid input (e.g. |cz| inconsistent, weights above 2048, wavelength outside
+        ValueError: invalid input (e.g. non-finite cz or cz inconsistent with cx, cy; weights
+            above 2048; wavelengths that are not finite non-negative integers; wavelength outside
             the envelope table).
     """
     float_columns = {

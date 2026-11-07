@@ -216,6 +216,87 @@ def test_wavelengths_assigned_in_range(table):
     assert wavelength.max() <= WAVELENGTH_RANGE[1]
 
 
+def test_thinned_output_keeps_columns_when_all_rejected(table):
+    # Envelope 0 rejects every photon; the columns are still returned, with zero rows.
+    columns = _photons(50, np.random.default_rng(4))
+    kwargs = dict(
+        table=table,
+        telescope_altitude_m=TELESCOPE_ALTITUDE_M,
+        envelope_wavelength=ENVELOPE_WAVELENGTH,
+        envelope_value=[0.0, 0.0],
+        seed=20261107,
+        event=5,
+        telescope=2,
+        first_index=0,
+        wavelength_range=WAVELENGTH_RANGE,
+        pathlen_m=PATHLEN_M,
+    )
+    weighted = apply_extinction(columns, weighted=True, **kwargs)
+    thinned = apply_extinction(columns, weighted=False, **kwargs)
+    assert set(thinned) == set(weighted) == set(columns) | {"wavelength", "p"}
+    for name, values in thinned.items():
+        assert len(values) == 0, name
+        assert values.dtype == np.float32, name
+    assert np.all(weighted["p"] == 0.0)
+
+
+def test_empty_input_keeps_columns(table):
+    columns = _photons(0, np.random.default_rng(5))
+    result = _apply(table, columns, weighted=False)
+    assert set(result) == set(columns) | {"wavelength", "p"}
+    assert all(len(values) == 0 for values in result.values())
+
+
+@pytest.mark.parametrize("bad", [400.5, np.nan, np.inf, -1.0])
+def test_non_integral_or_non_finite_wavelength_rejected(table, bad):
+    columns = _photons(10, np.random.default_rng(6))
+    columns["wavelength"] = np.full(10, 400.0, dtype=np.float32)
+    columns["wavelength"][3] = bad
+    with pytest.raises(ValueError):
+        _apply(table, columns, weighted=False)
+
+
+@pytest.mark.parametrize("lambda_nm", [1000.0, 1e10])
+def test_wavelength_at_or_above_max_is_dropped(table, lambda_nm):
+    # sim_telarray never traces photons at or above MAX_LAMBDA; no int conversion overflows.
+    columns = _photons(100, np.random.default_rng(7))
+    columns["wavelength"] = np.full(100, lambda_nm, dtype=np.float32)
+    thinned = _apply(table, columns, weighted=False)
+    assert len(thinned["x"]) == 0
+    weighted = _apply(table, columns, weighted=True)
+    assert np.all(weighted["p"] == 0.0)
+    assert np.all(weighted["w"] == 0.0)
+
+
+def test_non_finite_cz_rejected(table):
+    columns = _photons(10, np.random.default_rng(8))
+    columns["cz"] = -np.sqrt(1.0 - columns["cx"].astype(np.float64) ** 2 - columns["cy"] ** 2)
+    columns["cz"] = columns["cz"].astype(np.float32)
+    _apply(table, columns, weighted=False)  # consistent cz is accepted
+    columns["cz"][4] = np.nan
+    with pytest.raises(ValueError):
+        _apply(table, columns, weighted=False)
+
+
+def test_non_finite_wavelength_range_rejected(table):
+    columns = _photons(10, np.random.default_rng(9))
+    with pytest.raises(ValueError):
+        apply_extinction(
+            columns,
+            table,
+            TELESCOPE_ALTITUDE_M,
+            ENVELOPE_WAVELENGTH,
+            ENVELOPE_VALUE,
+            seed=1,
+            event=1,
+            telescope=1,
+            first_index=0,
+            weighted=False,
+            wavelength_range=(250.0, np.inf),
+            pathlen_m=PATHLEN_M,
+        )
+
+
 def test_invalid_input_rejected(table):
     columns = _photons(10, np.random.default_rng(3))
     columns["cx"][0] = np.float32(0.9)
@@ -226,3 +307,23 @@ def test_invalid_input_rejected(table):
     columns["unknown"] = columns["w"]
     with pytest.raises(ValueError):
         _apply(table, columns, weighted=False)
+
+
+@pytest.mark.parametrize("weighted", [True, False])
+def test_split_input_matches_whole_input_bit_for_bit(table, weighted):
+    # 200000 rows exceed one photon chunk (2^16); the binding slices internally. Splitting the
+    # input by hand with matching first_index must give identical output.
+    n = 200000
+    columns = _photons(n, np.random.default_rng(10))
+    first_index = 1000
+    whole = _apply(table, columns, weighted=weighted, first_index=first_index)
+    bounds = [0, 12345, 99999, n]
+    parts = []
+    for start, stop in zip(bounds[:-1], bounds[1:]):
+        piece = {name: values[start:stop] for name, values in columns.items()}
+        parts.append(_apply(table, piece, weighted=weighted, first_index=first_index + start))
+    assert set(whole) == set(parts[0])
+    for name, values in whole.items():
+        joined = np.concatenate([part[name] for part in parts])
+        assert values.dtype == joined.dtype, name
+        assert values.tobytes() == joined.tobytes(), name
