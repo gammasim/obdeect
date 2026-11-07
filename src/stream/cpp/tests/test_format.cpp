@@ -39,6 +39,30 @@ void missing_required_column() {
   CHECK(threw);
 }
 
+void resize_rejects_bad_input() {
+  PhotonChunk chunk;
+  chunk.resize(2, required_columns);
+  bool threw = false;
+  try {
+    chunk.resize(std::size_t{max_chunk_rows} + 1, required_columns);
+  } catch (const std::invalid_argument &) {
+    threw = true;
+  }
+  CHECK(threw);
+  CHECK(chunk.rows() == 2); // unchanged
+  threw = false;
+  try {
+    chunk.resize(2, 1U << 31);
+  } catch (const std::invalid_argument &) {
+    threw = true;
+  }
+  CHECK(threw);
+  CHECK(chunk.mask() == required_columns);
+  chunk.resize(0, required_columns);
+  CHECK(chunk.rows() == 0 && chunk.mask() == 0);
+  chunk.validate();
+}
+
 void random_is_keyed() {
   const DrawKey a{.seed = 1, .stage = 2, .event = 3, .telescope = 4, .photon = 5, .stream = 0};
   DrawKey b = a;
@@ -96,6 +120,7 @@ int main() {
   return run_checks([] {
     chunk_columns();
     missing_required_column();
+    resize_rejects_bad_input();
     random_is_keyed();
     random_fields_disjoint();
     random_mean();
