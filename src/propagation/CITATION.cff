@@ -1,10 +1,11 @@
 cff-version: 1.2.0
 message: "If you use dlufd, please cite it using the metadata below."
 title: "dlufd: Atmospheric propagation of Cherenkov and artificial-source photons"
-version: 0.1.0
+version: 0.0.1
+date-released: 2026-11-07
 license: BSD-3-Clause
 type: software
-repository-code: "https://github.com/gammasim/dlufd"
+repository-code: "https://github.com/GernotMaier/dlufd"
 authors:
   - given-names: Gernot
     family-names: Maier
