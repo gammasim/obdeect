@@ -34,7 +34,7 @@ repos:
   hooks:
   - id: codespell
     args: [
-      "--ignore-words-list=als,hel",
+      "--ignore-words-list=als,hel,aer",
     ]
 # markdownlint
 - repo: https://github.com/igorshubovych/markdownlint-cli
