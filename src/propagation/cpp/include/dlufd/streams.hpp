@@ -1,12 +1,19 @@
 #pragma once
 
+#include "gstrickd/stages.hpp"
+
 #include <cstdint>
 
 namespace dlufd {
 
+// Photon-stream format major version that dlufd is written for (gstrickd::format_major).
+// A different major version of gstrickd is not read or written correctly.
+inline constexpr int expected_gstrickd_format_major = 1;
+
 // Philox stage id of the atmosphere module (gstrickd::DrawKey::stage). Every module
-// uses its own stage id, so draws of different modules never coincide.
-inline constexpr std::uint32_t stage_atmosphere = 0x444C5546U; // "DLUF"
+// uses its own stage id, so draws of different modules never coincide. Owned by gstrickd
+// (gstrickd::stage_atmosphere); this name is kept as an alias.
+inline constexpr std::uint32_t stage_atmosphere = gstrickd::stage_atmosphere;
 
 // Streams of draws within stage_atmosphere (gstrickd::DrawKey::stream).
 // Wavelength draws use block 0 only; thinning draws use blocks 0..512 (at most

@@ -5,11 +5,21 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import dlufd
 import numpy as np
 import pytest
+
+try:
+    import gstrickd
+except ImportError:
+    gstrickd = None
+
+# gstrickd's own Reader and Writer are used when importable; the local codec below is only a
+# fallback. TODO: remove the local codec once gstrickd >= 0.1 is on PyPI.
+USE_GSTRICKD_CODEC = all(hasattr(gstrickd, name) for name in ("Reader", "Writer"))
 
 DATA = Path(__file__).resolve().parents[2] / "cpp" / "tests" / "data"
 TABLE_PATH = DATA / "atm_trans_2000_1_10_0_0_2000.dat"
@@ -32,7 +42,7 @@ NAMES = {value: key for key, value in RECORD_TYPES.items()}
 COLUMNS = ["x", "y", "z", "cx", "cy", "cz", "t", "zem", "w", "wavelength", "p"]
 
 
-# Minimal writer and reader of the gstrickd stream format (docs/format.md of gstrickd).
+# Local writer and reader of the gstrickd stream format (docs/format.md of gstrickd); fallback only.
 def _metadata(values):
     out = [struct.pack("<I", len(values))]
     for key, value in values.items():
@@ -55,7 +65,7 @@ def _record(kind, payload):
     return struct.pack("<IHHQ", MAGIC, RECORD_TYPES[kind], 0, len(payload)) + payload
 
 
-class StreamWriter:
+class _LocalStreamWriter:
     def __init__(self):
         self.buffer = io.BytesIO()
         self.buffer.write(
@@ -82,7 +92,7 @@ class StreamWriter:
         return self.buffer.getvalue()
 
 
-def read_records(data):
+def _read_records_local(data):
     records = []
     pos = 0
     while pos < len(data):
@@ -141,6 +151,43 @@ def _decode_metadata(payload):
             pos += 4 + 8 * size
         values[key] = value
     return values
+
+
+class _GstrickdStreamWriter:
+    """Writes through gstrickd.Writer into a temporary file; getvalue() returns its bytes."""
+
+    def __init__(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self._path = Path(self._directory.name) / "stream.ps"
+        self._writer = gstrickd.Writer(str(self._path), "test")
+
+    def metadata(self, kind, values=None):
+        self._writer.write(kind, values or {})
+
+    def photons(self, telescope_id, frame, columns, first_index=0):
+        arrays = {name: np.asarray(values, dtype=np.float32) for name, values in columns.items()}
+        self._writer.write_photons(telescope_id, frame, first_index, arrays)
+
+    def getvalue(self):
+        self._writer.close()
+        try:
+            return self._path.read_bytes()
+        finally:
+            self._directory.cleanup()
+
+
+def _read_records_gstrickd(data):
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "stream.ps"
+        path.write_bytes(data)
+        return list(gstrickd.Reader(str(path)))
+
+
+StreamWriter = _GstrickdStreamWriter if USE_GSTRICKD_CODEC else _LocalStreamWriter
+
+
+def read_records(data):
+    return _read_records_gstrickd(data) if USE_GSTRICKD_CODEC else _read_records_local(data)
 
 
 def ground_stream(n, seed, telescopes=(1, 2), chunk_rows=65536):
