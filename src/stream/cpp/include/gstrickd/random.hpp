@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <stdexcept>
 
 namespace gstrickd {
 
@@ -35,15 +36,29 @@ struct DrawKey {
   std::uint32_t stream{};
 };
 
+// Limits of the counter fields: each field has its own bits, so different
+// (photon, block, telescope, stream, event) never share a counter.
+inline constexpr std::uint64_t max_photon_index = (std::uint64_t{1} << 40) - 1;
+inline constexpr std::uint32_t max_block = (1U << 24) - 1;
+inline constexpr std::uint32_t max_telescope = (1U << 16) - 1;
+inline constexpr std::uint32_t max_stream = (1U << 16) - 1;
+
 // Four uniform deviates in the open interval (0, 1). The 128-bit counter is
-// (photon, telescope, event ^ stream << 24); the key mixes seed and stage.
+// (photon bits 0-31, photon bits 32-39 | block << 8, telescope | stream << 16,
+// event); the 64-bit key mixes seed and stage. Fields beyond their limits are
+// rejected (std::out_of_range), never wrapped.
 [[nodiscard]] constexpr std::array<double, 4> uniform4(const DrawKey &key,
                                                        std::uint32_t block = 0) {
+  if (key.photon > max_photon_index || block > max_block || key.telescope > max_telescope ||
+      key.stream > max_stream) {
+    throw std::out_of_range("gstrickd::uniform4: random-number counter field out of range");
+  }
   const std::uint64_t seed = key.seed ^ (std::uint64_t{key.stage} * 0x9E3779B97F4A7C15ULL);
-  const auto r = philox4x32(
-      {static_cast<std::uint32_t>(key.photon), static_cast<std::uint32_t>(key.photon >> 32),
-       key.telescope, key.event ^ (key.stream << 24) ^ (block << 16)},
-      {static_cast<std::uint32_t>(seed), static_cast<std::uint32_t>(seed >> 32)});
+  const auto r =
+      philox4x32({static_cast<std::uint32_t>(key.photon),
+                  static_cast<std::uint32_t>(key.photon >> 32) | (block << 8),
+                  key.telescope | (key.stream << 16), key.event},
+                 {static_cast<std::uint32_t>(seed), static_cast<std::uint32_t>(seed >> 32)});
   constexpr double scale = 1.0 / 4294967296.0;
   return {(r[0] + 0.5) * scale, (r[1] + 0.5) * scale, (r[2] + 0.5) * scale, (r[3] + 0.5) * scale};
 }

@@ -57,6 +57,8 @@ repos:
   hooks:
   - id: towncrier-check
     files: ^docs/changes/
+    # towncrier imports the package to read its version.
+    additional_dependencies: [numpy]
 # shellcheck
 - repo: https://github.com/shellcheck-py/shellcheck-py
   rev: v0.11.0.1-1

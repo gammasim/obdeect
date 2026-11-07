@@ -57,6 +57,24 @@ void random_is_keyed() {
   }
 }
 
+void random_fields_disjoint() {
+  // Regression: event bits must not alias block bits (event 0x10000 vs block 1).
+  const DrawKey a{
+      .seed = 1, .stage = 1, .event = 0x10000U, .telescope = 0, .photon = 0, .stream = 0};
+  DrawKey b = a;
+  b.event = 0;
+  CHECK(uniform4(a, 0) != uniform4(b, 1));
+  DrawKey c = a;
+  c.telescope = 1U << 16;
+  bool threw = false;
+  try {
+    (void)uniform4(c);
+  } catch (const std::out_of_range &) {
+    threw = true;
+  }
+  CHECK(threw);
+}
+
 void random_mean() {
   double sum = 0.0;
   constexpr int n = 100000;
@@ -79,6 +97,7 @@ int main() {
     chunk_columns();
     missing_required_column();
     random_is_keyed();
+    random_fields_disjoint();
     random_mean();
   });
 }
