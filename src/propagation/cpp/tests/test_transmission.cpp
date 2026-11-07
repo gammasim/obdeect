@@ -207,6 +207,39 @@ void test_reference_table() {
   std::fprintf(stderr, "max relative deviation from sim_telarray reference: %.3g\n", max_relative);
 }
 
+// strtod accepts "nan" and "inf"; they must be rejected in H2, heights and optical depths.
+// A NaN H2 also used to pass the site altitude check (NaN > tolerance is false).
+void test_non_finite_tables_rejected() {
+  CHECK(throws_invalid(
+      [] { dlufd::TransmissionTable("# H2= nan, H1= 3.000 4.000\n400 0.5 0.5\n", 2000.0); }));
+  CHECK(throws_invalid(
+      [] { dlufd::TransmissionTable("# H2= 2.000, H1= 3.000 inf\n400 0.5 0.5\n", 2000.0); }));
+  CHECK(throws_invalid(
+      [] { dlufd::TransmissionTable("# H2= 2.000, H1= 3.000 4.000\n400 nan 0.5\n", 2000.0); }));
+  CHECK(throws_invalid(
+      [] { dlufd::TransmissionTable("# H2= 2.000, H1= 3.000 4.000\n400 -inf 0.5\n", 2000.0); }));
+  // H2 = 0 would give log10(0) = -inf in the height grid.
+  CHECK(
+      throws_invalid([] { dlufd::TransmissionTable("# H2= 0.000, H1= 3.000\n400 0 0.5\n", 0.0); }));
+  // A finite table still parses.
+  CHECK(!throws_invalid(
+      [] { dlufd::TransmissionTable("# H2= 2.000, H1= 3.000 4.000\n400 0.5 0.5\n", 2000.0); }));
+}
+
+// Wavelengths are floating point in the API: NaN throws; values far outside the table
+// are clamped to its edge rows without converting them to int first.
+void test_wavelength_lookup_bounds() {
+  const auto table = constant_table();
+  CHECK(throws_invalid([&] { (void)table.transmission<double>(std::nan(""), 3500.0, 1.0); }));
+  CHECK(throws_invalid([&] {
+    (void)table.transmission2<double>(std::numeric_limits<double>::infinity(), 3500.0, 1.0, 0.0,
+                                      0.0);
+  }));
+  const double at_table = table.transmission<double>(400.0, 3500.0, 1.0);
+  CHECK_NEAR(table.transmission<double>(1e300, 3500.0, 1.0), at_table, 0.0);
+  CHECK_NEAR(table.transmission<double>(-1e300, 3500.0, 1.0), at_table, 0.0);
+}
+
 } // namespace
 
 int main() {
@@ -218,5 +251,7 @@ int main() {
     test_extinction_kernel_constant_tau();
     test_invalid_tables();
     test_reference_table();
+    test_non_finite_tables_rejected();
+    test_wavelength_lookup_bounds();
   });
 }

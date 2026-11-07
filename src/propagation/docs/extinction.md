@@ -53,6 +53,8 @@ optical depth above 100. Photons with lambda >= 1000 nm get 0 (as sim_telarray s
 Wavelength: for photons without a wavelength, density proportional to $1/\lambda^2$ on
 [lo, hi], by inverse CDF, $\lambda = 1 / (1/\lambda_{lo} - u\,(1/\lambda_{lo} - 1/\lambda_{hi}))$
 with u uniform in (0, 1). As in sim_telarray the value is truncated to an integer nm.
+The range needs finite $1 \le \lambda_{lo} < \lambda_{hi} \le 2^{24}$ nm. Input wavelengths
+must be finite, non-negative integers (0 = not assigned); other values are rejected.
 
 Thinning: the acceptance is $p = T_{\text{atm}}(\lambda)\,E(\lambda)$, where E is linear
 between the envelope nodes. Each bunch of weight w gives

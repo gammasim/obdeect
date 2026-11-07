@@ -49,7 +49,7 @@ endif()
 
 if(DLUFD_BUILD_TESTING)
   enable_testing()
-  foreach(test_name version transmission thinning)
+  foreach(test_name version transmission thinning pipeline)
     add_executable(test_${test_name} cpp/tests/test_${test_name}.cpp)
     target_link_libraries(test_${test_name} PRIVATE dlufd_core)
     # Reference data: cpp/tests/data (copied from sim_telarray, see test_transmission.cpp).

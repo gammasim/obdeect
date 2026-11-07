@@ -88,6 +88,10 @@ inline double parse_number(std::string_view token, const char *what) {
   if (text.empty() || end != text.c_str() + text.size()) {
     throw std::invalid_argument(std::string("invalid number in ") + what + ": '" + text + "'");
   }
+  // strtod also accepts "nan" and "inf", which would reach the tables unchecked.
+  if (!std::isfinite(value)) {
+    throw std::invalid_argument(std::string("non-finite number in ") + what + ": '" + text + "'");
+  }
   return value;
 }
 
@@ -209,11 +213,15 @@ private:
   [[nodiscard]] double h2_cm() const noexcept { return h2_km_ * 1e5; }
 
   // Table row for an integer wavelength, clamped to the table range (sim_absorb.c).
+  // The clamp is done in floating point, so no out-of-range value is converted to an integer.
   [[nodiscard]] const std::vector<double> &row(double lambda_nm) const {
-    const auto iwl = static_cast<long>(lambda_nm);
-    const long first = wl_first_;
-    const long last = last_wavelength_nm();
-    return rows_[static_cast<std::size_t>(std::clamp(iwl, first, last) - first)];
+    if (!std::isfinite(lambda_nm)) {
+      throw std::invalid_argument("wavelength must be finite");
+    }
+    const double first = wl_first_;
+    const double last = last_wavelength_nm();
+    const auto iwl = static_cast<long>(std::clamp(lambda_nm, first, last));
+    return rows_[static_cast<std::size_t>(iwl - wl_first_)];
   }
 
   void parse(std::string_view text, double site_altitude_m) {
@@ -270,6 +278,11 @@ private:
     }
     if (heights_km.size() < 2) {
       throw std::invalid_argument("transmission table needs at least one H1 height");
+    }
+    for (const double h : heights_km) {
+      if (!(h > 0.0)) {
+        throw std::invalid_argument("transmission table heights must be positive");
+      }
     }
     for (std::size_t i = 1; i < heights_km.size(); ++i) {
       if (heights_km[i] <= heights_km[i - 1]) {

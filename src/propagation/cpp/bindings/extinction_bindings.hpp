@@ -129,12 +129,13 @@ inline gstrickd::Column column_from_name(const std::string &name) {
   throw std::invalid_argument("unknown photon column: " + name);
 }
 
-// Columns given as equal-length float32 arrays, keyed by column name.
-inline gstrickd::PhotonChunk chunk_from_columns(const nb::dict &columns,
-                                                std::uint64_t first_index) {
+// Columns given as equal-length float32 arrays, keyed by column name. mask receives the
+// columns given (also when there are no rows, where the chunk itself has no columns).
+inline gstrickd::PhotonChunk chunk_from_columns(const nb::dict &columns, std::uint64_t first_index,
+                                                std::uint32_t &mask) {
   std::vector<std::pair<gstrickd::Column, FloatArray>> arrays;
   std::size_t rows = 0;
-  std::uint32_t mask = 0;
+  mask = 0;
   for (auto item : columns) {
     const auto column = column_from_name(nb::cast<std::string>(item.first));
     const auto array = nb::cast<FloatArray>(item.second);
@@ -176,7 +177,13 @@ inline void bind_apply(nb::module_ &module) {
 
         // The input is processed in slices of at most 2^16 rows. The photon index and the
         // output index continue across slices, so the result does not depend on slicing.
-        const gstrickd::PhotonChunk input = chunk_from_columns(columns, first_index);
+        std::uint32_t input_mask = 0;
+        const gstrickd::PhotonChunk input = chunk_from_columns(columns, first_index, input_mask);
+        // Output columns: the input columns plus the wavelength and p columns, which the
+        // pipeline always produces, also when no photon survives.
+        const std::uint32_t output_mask = input_mask |
+                                          gstrickd::column_bit(gstrickd::Column::wavelength) |
+                                          gstrickd::column_bit(gstrickd::Column::p);
         std::vector<std::vector<float>> out(gstrickd::n_columns);
         std::uint64_t out_index = 0;
         for (std::size_t offset = 0; offset < input.rows(); offset += gstrickd::max_chunk_rows) {
@@ -205,7 +212,7 @@ inline void bind_apply(nb::module_ &module) {
         nb::dict result;
         for (std::uint32_t c = 0; c < gstrickd::n_columns; ++c) {
           const auto column = static_cast<gstrickd::Column>(c);
-          if (!out[c].empty()) {
+          if ((output_mask >> c) & 1U) {
             result[gstrickd::column_name(column)] = nb::cast(to_numpy(std::move(out[c])));
           }
         }
