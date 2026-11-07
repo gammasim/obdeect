@@ -46,9 +46,13 @@ def stream_to_simtel(
     ``telescope_id mirror_class camera_rotation_deg`` per telescope. Telescopes not listed are
     ground-frame telescopes (Bypass_Optics=0 in sim_telarray).
 
-    The efficiency ledger must list only factors that sim_telarray applies itself in the
-    telescope's frame as ``pending`` or ``envelope`` (docs/usage.md). Other factors raise
-    ``RuntimeError``; ``allow_pending`` names factors to accept as they are.
+    The efficiency ledger is checked per telescope against the frame of its photons
+    (docs/format.md): a factor is valid as ``applied`` when sim_telarray does not apply it in
+    that frame (e.g. ``atmosphere`` for camera-frame photons), and as ``pending`` when
+    sim_telarray applies it (e.g. ``qe``). ``envelope`` is never valid for factors sim_telarray
+    applies. With ground-frame photons ``atmosphere`` is valid in any state. Anything else, and
+    unknown factor names, raise ``RuntimeError``; ``allow_pending`` names factors to accept as
+    they are.
     """
     if isinstance(allow_pending, str):
         raise TypeError("allow_pending must be a sequence of factor names, not a string")

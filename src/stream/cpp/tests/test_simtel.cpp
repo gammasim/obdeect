@@ -488,7 +488,6 @@ std::vector<Record> ledger_run(Frame frame, const std::vector<Metadata> &run_led
 // itself in each frame, and which ones must be applied upstream.
 void test_ledger_rules() {
   const CameraMap camera{{2, CameraTelescope{1, 0.0}}};
-  const std::set<std::string> none;
   const std::set<std::string> constant_allowed{"telescope_transmission_constant"};
   const std::string constant = "telescope_transmission_constant";
 
