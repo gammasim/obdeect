@@ -21,6 +21,8 @@ def _frame(frame: int | str) -> int:
         if frame not in FRAMES:
             raise ValueError(f"unknown frame '{frame}', expected one of {sorted(FRAMES)}")
         return FRAMES[frame]
+    if isinstance(frame, (bool, np.bool_)) or not isinstance(frame, (int, np.integer)):
+        raise TypeError(f"frame must be a name or an integer, not {frame!r}")
     return int(frame)
 
 

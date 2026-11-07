@@ -112,6 +112,9 @@ public:
 
   nb::dict next() {
     if (!reader_->next(record_)) {
+      if (!reader_->ended()) {
+        throw std::runtime_error("gstrickd: truncated stream (no stream_end record)");
+      }
       throw nb::stop_iteration();
     }
     nb::dict out;
@@ -218,6 +221,9 @@ public:
     writer_->finish();
     if (file_->is_open()) {
       file_->close();
+      if (file_->fail()) {
+        throw std::runtime_error("gstrickd: writing the photon stream failed (e.g. disk full)");
+      }
     }
   }
 
