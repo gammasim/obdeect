@@ -22,6 +22,7 @@ public:
 
   RefractionTables(AtmosphereProfile profile, double observation_level_m)
       : profile_(std::move(profile)), obs_cm_(100. * observation_level_m) {
+    require_finite(obs_cm_, "observation level");
     if (!(obs_cm_ >= profile_.bottom_cm() && obs_cm_ < profile_.top_cm()))
       throw std::invalid_argument("observation level must lie inside the atmospheric table");
     const auto &alt = profile_.alt_cm_;
@@ -115,6 +116,7 @@ public:
 
   // atmo.c rpol() on the table levels: linear in altitude, used for vertical rays.
   double vertical_time0_cm(double zem) const {
+    require_finite(zem, "height");
     const std::size_t n = table_alt_.size();
     if (zem <= table_alt_.front())
       return table_time0_.front();
@@ -181,7 +183,8 @@ private:
 // On return the direction is the observed one, the position is displaced horizontally, and
 // the time includes the light travel time to the observation level. Returns false and leaves
 // the photon unchanged when the direction is outside the unit circle (upward or horizontal
-// rays, which atmo.c does not treat).
+// rays, which atmo.c does not treat) or when any input (or the height in cm) is not finite.
+// Rejection is a return value, not an exception, so the per-photon kernel stays allocation-free.
 //
 // Template on the scalar type of the photon state; table lookups are evaluated in double.
 template <class Scalar>
@@ -191,8 +194,14 @@ bool bend(const RefractionTables &tables, Scalar h_emission_m, Scalar &cx, Scala
   using std::cos;
   using std::sin;
   using std::sqrt;
+  const auto finite = [](Scalar value) { return std::isfinite(static_cast<double>(value)); };
+  if (!(finite(h_emission_m) && finite(cx) && finite(cy) && finite(x_m) && finite(y_m) &&
+        finite(t_ns)))
+    return false;
   const AtmosphereProfile &profile = tables.profile();
   const double zem = 100. * static_cast<double>(h_emission_m);
+  if (!std::isfinite(zem))
+    return false;
   const double rho = profile.density_cm(zem);
   const double de =
       tables.etadsn() * std::abs(tables.observation_thickness() - profile.thickness_cm(zem));

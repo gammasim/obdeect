@@ -63,7 +63,10 @@ inline double ambient_group_index(const AtmosphereProfile &profile, double obser
 
 // Light travel time over a path length in a medium of group index n [ns] (obdeect trace.hpp:
 // path * propagation_group_index / c).
+// Throws std::invalid_argument for a non-finite path or index.
 inline double propagation_time_ns(double path_m, double group_index) {
+  require_finite(path_m, "path length");
+  require_finite(group_index, "group index");
   return path_m * group_index / speed_of_light_m_per_ns;
 }
 
@@ -73,6 +76,9 @@ inline double propagation_time_ns(double path_m, double group_index) {
 // means the light is slower than in vacuum over the same geometric path.
 inline double straight_path_air_delay_ns(const AtmosphereProfile &profile, double height_low_m,
                                          double height_high_m, double zenith_rad) {
+  require_finite(height_low_m, "height_low_m");
+  require_finite(height_high_m, "height_high_m");
+  require_finite(zenith_rad, "zenith angle");
   if (!(height_high_m >= height_low_m))
     throw std::invalid_argument("height_high_m must not be below height_low_m");
   if (!(zenith_rad >= 0. && zenith_rad < 1.5707963267948966))
