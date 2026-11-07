@@ -804,6 +804,50 @@ void test_scattering_not_attenuated_twice() {
   }
 }
 
+// Scattered photons reach the plane at t_emit + |emit - P| / c + |P - plane| / c (no profile):
+// the kernel stores the time at P, the stage adds the path from P to the plane. The scattered
+// rows follow the primary rows of telescope 1's block, in kernel order.
+void test_scattered_time_reaches_plane() {
+  const auto table = real_table();
+  const std::size_t n = 50;
+  const std::string input = beam_stream(n, n, false);
+  auto off = scattering_config(table, true);
+  off.scattering = dlufd::ScatteringConfig{};
+  off.scattering_table.reset();
+  const auto without = records_of(propagate(input, off).bytes);
+  const auto with = records_of(propagate(input, scattering_config(table, true)).bytes);
+
+  dlufd::ScatteringConfig config;
+  config.enabled = true;
+  config.points_per_photon = 8;
+  const std::vector<dlufd::ScatterTelescope> sphere = {{1, 3000.0, 0.0, 0.0, 12.0},
+                                                       {2, 0.0, -2500.0, 0.0, 12.0}};
+  std::vector<std::vector<gstrickd::PhotonChunk>> lists(sphere.size());
+  dlufd::scatter_chunk(config, scattering_table(), table, sphere, beam_chunk(1, 0, n, 0.0),
+                       scatter_seed, 7, 0, lists);
+  std::vector<double> expected;
+  for (const auto &piece : lists[0]) {
+    for (std::size_t r = 0; r < piece.rows(); ++r) {
+      const double cx = piece[Column::cx][r];
+      const double cy = piece[Column::cy][r];
+      const double cz_magnitude = std::sqrt(1.0 - cx * cx - cy * cy);
+      const double to_plane = piece[Column::z][r] / cz_magnitude; // plane at z = 0
+      expected.push_back(static_cast<double>(piece[Column::t][r]) +
+                         to_plane / dlufd::speed_of_light_m_per_ns);
+    }
+  }
+  CHECK(!expected.empty());
+  const auto t_without = photon_column(without, 1, Column::t);
+  const auto t_with = photon_column(with, 1, Column::t);
+  CHECK(t_with.size() == t_without.size() + expected.size());
+  if (t_with.size() == t_without.size() + expected.size()) {
+    for (std::size_t k = 0; k < expected.size(); ++k) {
+      // float32 times near 5e4 ns resolve about 0.004 ns.
+      CHECK(std::abs(static_cast<double>(t_with[t_without.size() + k]) - expected[k]) < 0.05);
+    }
+  }
+}
+
 void test_scattering_ledger() {
   const auto table = real_table();
   const std::string input = beam_stream(100, 100, false);
@@ -876,6 +920,7 @@ int main() {
     test_rejects_invalid_input();
     test_scattering_weights();
     test_scattering_not_attenuated_twice();
+    test_scattered_time_reaches_plane();
     test_scattering_ledger();
     test_scattering_chunk_determinism();
     test_scattering_rejects();

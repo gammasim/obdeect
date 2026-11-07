@@ -47,7 +47,9 @@ def scatter(
     Each primary photon is scattered at n_points points along its downward path (sampled by
     optical depth). For each point and telescope one scattered photon is aimed at the sphere
     centre (through a uniform point of its projected disc). Its weight is
-    w * P_scatter * phase * Omega_tel * T(point -> telescope). Vacuum light speed for the time.
+    w * P_scatter * phase * Omega_tel * T(point -> telescope). Position and zem are those of the
+    scattering point; t is t_in + (emission -> point) / c in vacuum, without the path from the point
+    to the telescope plane (the atmosphere stage adds it).
 
     Columns (float32, equal length): x, y, z (z above the observation level, m), cx, cy, t, w,
     wavelength (integer nm, > 0); optional cz and zem (consistency checked).

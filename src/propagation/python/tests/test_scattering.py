@@ -130,3 +130,44 @@ def test_yield_agrees_with_analytic_integral(table, transmission):
     stderr = totals.std(ddof=1) / math.sqrt(n)
     assert abs(totals.mean() - analytic) <= 4.0 * stderr
     assert analytic > 0.0
+
+
+def test_time_is_at_scattering_point(table, transmission):
+    """t = t_in + (emission -> point) / c; the path from the point to the telescope is not added."""
+    primaries = _primaries(20, z_m=48000.0, weight=1.0)
+    primaries["t"] = np.full(20, 5.0, dtype=np.float32)
+    photons = scatter(primaries, table, transmission, [TELESCOPE], 9, 1, 0, 16)[TELESCOPE[0]]
+    assert len(photons["t"]) > 0
+    # Vertical beam from h = 50000 m a.s.l. (z 48000 m above the observation level).
+    expected = (
+        5.0 + (48000.0 + OBSERVATION_LEVEL_M - photons["zem"].astype(np.float64)) / 0.299792458
+    )
+    assert np.allclose(photons["t"], expected, rtol=0.0, atol=0.05)
+
+
+def test_rejects_missing_columns_and_non_finite_values(table, transmission):
+    for name in ("x", "y", "cx", "cy", "t", "w"):
+        primaries = _primaries(5)
+        del primaries[name]
+        with pytest.raises(ValueError):
+            scatter(primaries, table, transmission, [TELESCOPE], 1, 1, 0, 8)
+    for name, value in (("x", np.nan), ("y", np.inf), ("t", np.nan)):
+        primaries = _primaries(5)
+        primaries[name][2] = value
+        with pytest.raises(ValueError):
+            scatter(primaries, table, transmission, [TELESCOPE], 1, 1, 0, 8)
+
+
+def test_profile_rejects_bad_altitude_and_wavelength(table):
+    with pytest.raises(ValueError):
+        table.profile(np.array([LAMBDA_NM]), np.array([-100.0]))
+    with pytest.raises(ValueError):
+        table.profile(np.array([LAMBDA_NM]), np.array([0.0]))
+    with pytest.raises(ValueError):
+        table.profile(np.array([np.nan]), np.array([2000.0]))
+    # Huge wavelengths are clamped to the table edges (no integer overflow).
+    edge = table.profile(np.array([1e300, -1e300]), np.array([2000.0, 2000.0]))
+    last = table.profile(np.array([float(table.last_wavelength_nm)]), np.array([2000.0]))
+    first = table.profile(np.array([float(table.first_wavelength_nm)]), np.array([2000.0]))
+    assert edge[0][0] == last[0][0]
+    assert edge[0][1] == first[0][0]

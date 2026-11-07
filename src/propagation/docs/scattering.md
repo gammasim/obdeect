@@ -96,8 +96,14 @@ The approximations are:
 
 Scattered photons, one list per telescope, frame sky, `telescope_id` set, columns
 x, y, z (position = scattering point, z above the observation level), cx, cy, cz (towards the
-aim point), t, zem (altitude of the scattering point, a.s.l.), w, wavelength. Time is
-`t_in + (path to the scattering point + path to the aim point) / c`, c in vacuum.
+aim point), t, zem (altitude of the scattering point, a.s.l.), w, wavelength. Time is the time
+at the scattering point, `t_in + (path from emission to the scattering point) / c`, c in vacuum.
+The path from the point to the telescope plane is not included; the atmosphere stage adds it
+(see [](propagation.md)).
+
+```text
+t_in = 0 ns, emission -> point 15000 m  =>  t = 15000 / c = 50034.6 ns
+```
 
 Attention:
 

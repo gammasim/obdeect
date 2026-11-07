@@ -97,9 +97,12 @@ public:
   [[nodiscard]] double max_altitude_m() const noexcept { return altitude_m_.back(); }
 
   // State at a wavelength (truncated to integer nm, clamped to the table) and altitude
-  // [m a.s.l.] (must be positive).
+  // [m a.s.l.] (finite and positive). Throws std::invalid_argument otherwise.
   template <std::floating_point T>
   [[nodiscard]] ScatteringState<T> state(double lambda_nm, T altitude_m) const {
+    if (!std::isfinite(altitude_m) || !(altitude_m > T{0})) {
+      throw std::invalid_argument("scattering table: altitude must be finite and positive");
+    }
     const Row &row = rows_[row_index(lambda_nm)];
     const T log_h = std::log10(altitude_m);
     return {detail::rpol(log_h_m_, row.tau_mol.data(), log_h),
@@ -121,11 +124,16 @@ private:
   std::vector<double> log_h_m_{};
   std::vector<Row> rows_{};
 
+  // Row of a wavelength: truncated to integer nm and clamped to the table, in floating point
+  // (a cast of an out-of-range value to an integer type is undefined).
   [[nodiscard]] std::size_t row_index(double lambda_nm) const {
-    const auto iwl = static_cast<long>(lambda_nm);
-    const long first = wl_first_;
-    const long last = last_wavelength_nm();
-    return static_cast<std::size_t>(std::clamp(iwl, first, last) - first);
+    if (!std::isfinite(lambda_nm)) {
+      throw std::invalid_argument("scattering table: wavelength must be finite");
+    }
+    const auto first = static_cast<double>(wl_first_);
+    const auto last = static_cast<double>(last_wavelength_nm());
+    const double clamped = std::clamp(std::trunc(lambda_nm), first, last);
+    return static_cast<std::size_t>(clamped - first);
   }
 
   void parse(std::string_view text) {
@@ -455,10 +463,11 @@ inline void scatter_primary(const ScatteringConfig &config, const ScatteringTabl
       if (!(scattered > 0.0)) {
         continue;
       }
-      const double arrival = t0 + (s_path + aim) / speed_of_light_m_per_ns;
+      // Time at the scattering point; the stage adds the path from the point to the plane.
+      const double time_at_point = t0 + s_path / speed_of_light_m_per_ns;
       out[t].push_back({static_cast<float>(x_p), static_cast<float>(y_p), static_cast<float>(z_p),
                         static_cast<float>(nx), static_cast<float>(ny), static_cast<float>(nz),
-                        static_cast<float>(arrival), static_cast<float>(h_s),
+                        static_cast<float>(time_at_point), static_cast<float>(h_s),
                         static_cast<float>(scattered), static_cast<float>(lambda)});
     }
   }
@@ -506,8 +515,11 @@ inline void scatter_chunk(const ScatteringConfig &config, const ScatteringTable 
     throw std::invalid_argument("scattering needs photons in frame sky");
   }
   chunk.validate();
-  if (!chunk.has(Column::z) || !chunk.has(Column::wavelength)) {
-    throw std::invalid_argument("scattering needs the z and wavelength columns");
+  for (const Column required : {Column::x, Column::y, Column::z, Column::cx, Column::cy, Column::t,
+                                Column::w, Column::wavelength}) {
+    if (!chunk.has(required)) {
+      throw std::invalid_argument("scattering needs the columns x y z cx cy t w wavelength");
+    }
   }
   if (chunk.has(Column::p)) {
     throw std::invalid_argument("scattering needs photons before acceptance (no p column)");
@@ -524,9 +536,12 @@ inline void scatter_chunk(const ScatteringConfig &config, const ScatteringTable 
     throw std::invalid_argument("too many scattering points and telescopes for one photon");
   }
   const double observation_level = transmission.observation_level_m();
+  const auto &x = chunk[Column::x];
+  const auto &y = chunk[Column::y];
   const auto &cx = chunk[Column::cx];
   const auto &cy = chunk[Column::cy];
   const auto &z = chunk[Column::z];
+  const auto &t = chunk[Column::t];
   const auto &w = chunk[Column::w];
   const auto &wavelength = chunk[Column::wavelength];
   for (std::size_t row = 0; row < rows; ++row) {
@@ -544,8 +559,9 @@ inline void scatter_chunk(const ScatteringConfig &config, const ScatteringTable 
                                            (observation_level + z[row])) > 1.0) {
       throw std::invalid_argument("zem column does not match z plus the observation level");
     }
-    if (!(w[row] >= 0.0F) || !std::isfinite(w[row]) || !std::isfinite(z[row])) {
-      throw std::invalid_argument("weights and positions must be finite, weights >= 0");
+    if (!(w[row] >= 0.0F) || !std::isfinite(w[row]) || !std::isfinite(z[row]) ||
+        !std::isfinite(x[row]) || !std::isfinite(y[row]) || !std::isfinite(t[row])) {
+      throw std::invalid_argument("weights, positions and times must be finite, weights >= 0");
     }
     const double lambda = wavelength[row];
     if (lambda != std::floor(lambda) || lambda < table.first_wavelength_nm() ||

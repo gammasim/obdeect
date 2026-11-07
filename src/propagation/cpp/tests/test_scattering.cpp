@@ -6,12 +6,14 @@
 
 #include "gstrickd/photons.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
 #include <initializer_list>
+#include <limits>
 #include <numbers>
 #include <sstream>
 #include <stdexcept>
@@ -384,6 +386,142 @@ void test_rejects_invalid_input() {
   CHECK(rejected);
 }
 
+// Scattered photons carry the time at their scattering point: t_emit + |emit - P| / c. The
+// stage adds the rest of the path (checked in test_propagator.cpp).
+void test_scattered_time_is_at_scattering_point() {
+  const dlufd::ScatteringTable table(exponential_table_text(0.05, 7500.0));
+  const dlufd::TransmissionTable tr = site_transmission();
+  dlufd::ScatteringConfig config;
+  config.enabled = true;
+  config.points_per_photon = 16;
+  const std::vector<dlufd::ScatterTelescope> sphere = {{1, distance_m, 0.0, 0.0, radius_m}};
+  const double t_emit = 7.0;
+  const double cx = 0.2;
+  const double cy = 0.1;
+  gstrickd::PhotonChunk chunk;
+  chunk.frame = gstrickd::Frame::sky;
+  chunk.resize(1, mask_of({Column::x, Column::y, Column::z, Column::cx, Column::cy, Column::t,
+                           Column::w, Column::wavelength}));
+  chunk[Column::z][0] = static_cast<float>(h0_m - obs_m);
+  chunk[Column::cx][0] = static_cast<float>(cx);
+  chunk[Column::cy][0] = static_cast<float>(cy);
+  chunk[Column::t][0] = static_cast<float>(t_emit);
+  chunk[Column::w][0] = 1.0F;
+  chunk[Column::wavelength][0] = static_cast<float>(lambda_nm);
+  std::vector<std::vector<gstrickd::PhotonChunk>> lists;
+  dlufd::scatter_chunk(config, table, tr, sphere, chunk, seed, 1, 0, lists);
+
+  // Emission point: origin in x, y, at h0 (z above the observation level).
+  const double emit_z = h0_m - obs_m;
+  std::size_t rows = 0;
+  double worst = 0.0;
+  for (const auto &piece : lists.at(0)) {
+    for (std::size_t r = 0; r < piece.rows(); ++r) {
+      const double px = piece[Column::x][r];
+      const double py = piece[Column::y][r];
+      const double pz = piece[Column::z][r];
+      const double path = std::sqrt(px * px + py * py + (emit_z - pz) * (emit_z - pz));
+      const double expected = t_emit + path / dlufd::speed_of_light_m_per_ns;
+      worst = std::max(worst, std::abs(static_cast<double>(piece[Column::t][r]) - expected));
+      ++rows;
+    }
+  }
+  CHECK(rows > 0);
+  // float32 time near 1e5 ns resolves about 0.01 ns.
+  CHECK(worst < 0.05);
+}
+
+// The state lookup rejects altitudes that are not finite and positive, and wavelengths that are
+// not finite; far out-of-range wavelengths are clamped to the table edges.
+void test_state_rejects_bad_arguments() {
+  const dlufd::ScatteringTable table(exponential_table_text(0.05, 7500.0));
+  const auto throws = [](auto &&f) {
+    try {
+      f();
+    } catch (const std::invalid_argument &) {
+      return true;
+    }
+    return false;
+  };
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double inf = std::numeric_limits<double>::infinity();
+  CHECK(throws([&] { (void)table.state<double>(lambda_nm, -1000.0); }));
+  CHECK(throws([&] { (void)table.state<double>(lambda_nm, 0.0); }));
+  CHECK(throws([&] { (void)table.state<double>(lambda_nm, nan); }));
+  CHECK(throws([&] { (void)table.state<double>(lambda_nm, inf); }));
+  CHECK(throws([&] { (void)table.state<double>(nan, 5000.0); }));
+  CHECK(!throws([&] { (void)table.state<double>(lambda_nm, 5000.0); }));
+
+  // Out-of-range wavelengths (also huge ones, which overflow an integer cast) are clamped.
+  const auto low = table.state<double>(-1e300, 5000.0);
+  const auto first = table.state<double>(table.first_wavelength_nm(), 5000.0);
+  const auto high = table.state<double>(1e300, 5000.0);
+  const auto last = table.state<double>(table.last_wavelength_nm(), 5000.0);
+  CHECK_NEAR(low.tau_mol, first.tau_mol, 0.0);
+  CHECK_NEAR(high.tau_mol, last.tau_mol, 0.0);
+}
+
+// Missing documented columns and non-finite x, y, t are rejected.
+void test_rejects_missing_and_non_finite_columns() {
+  const dlufd::ScatteringTable table(exponential_table_text(0.05, 7500.0));
+  const dlufd::TransmissionTable tr = site_transmission();
+  dlufd::ScatteringConfig config;
+  config.enabled = true;
+  const std::vector<dlufd::ScatterTelescope> sphere = {{1, distance_m, 0.0, 0.0, radius_m}};
+  const auto run = [&](std::initializer_list<Column> columns, Column poison, double value) {
+    gstrickd::PhotonChunk chunk;
+    chunk.frame = gstrickd::Frame::sky;
+    chunk.resize(1, mask_of(columns));
+    chunk[Column::z][0] = 5000.0F;
+    chunk[Column::w][0] = 1.0F;
+    chunk[Column::wavelength][0] = static_cast<float>(lambda_nm);
+    if (chunk.has(poison)) {
+      chunk[poison][0] = static_cast<float>(value);
+    }
+    std::vector<std::vector<gstrickd::PhotonChunk>> lists;
+    try {
+      dlufd::scatter_chunk(config, table, tr, sphere, chunk, seed, 1, 0, lists);
+    } catch (const std::invalid_argument &) {
+      return true;
+    }
+    return false;
+  };
+  const std::initializer_list<Column> all = {Column::x,  Column::y, Column::z, Column::cx,
+                                             Column::cy, Column::t, Column::w, Column::wavelength};
+  CHECK(!run(all, Column::x, 0.0));
+  for (const Column missing :
+       {Column::x, Column::y, Column::cx, Column::cy, Column::t, Column::w}) {
+    std::vector<Column> columns;
+    for (const Column c : all) {
+      if (c != missing) {
+        columns.push_back(c);
+      }
+    }
+    gstrickd::PhotonChunk chunk;
+    chunk.frame = gstrickd::Frame::sky;
+    std::uint32_t mask = 0;
+    for (const Column c : columns) {
+      mask |= gstrickd::column_bit(c);
+    }
+    chunk.resize(1, mask);
+    chunk[Column::z][0] = 5000.0F;
+    chunk[Column::wavelength][0] = static_cast<float>(lambda_nm);
+    std::vector<std::vector<gstrickd::PhotonChunk>> lists;
+    bool rejected = false;
+    try {
+      dlufd::scatter_chunk(config, table, tr, sphere, chunk, seed, 1, 0, lists);
+    } catch (const std::invalid_argument &) {
+      rejected = true;
+    }
+    CHECK(rejected);
+  }
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double inf = std::numeric_limits<double>::infinity();
+  CHECK(run(all, Column::x, nan));
+  CHECK(run(all, Column::y, inf));
+  CHECK(run(all, Column::t, nan));
+}
+
 } // namespace
 
 int main() {
@@ -394,5 +532,8 @@ int main() {
     test_example_table_against_integral();
     test_determinism_across_chunk_splits();
     test_rejects_invalid_input();
+    test_scattered_time_is_at_scattering_point();
+    test_state_rejects_bad_arguments();
+    test_rejects_missing_and_non_finite_columns();
   });
 }
