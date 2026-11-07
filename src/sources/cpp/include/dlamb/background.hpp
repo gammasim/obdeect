@@ -1,7 +1,7 @@
 #pragma once
 
 // Night-sky background source (port of sim_telarray LightEmission BackgroundLightSource,
-// used by nsbls). Photons start on the sphere of one telescope, on the hemisphere that
+// used by night-sky). Photons start on the sphere of one telescope, on the hemisphere that
 // faces the sky, and travel in a cone of half angle `viewcone_rad` about `pointing`.
 
 #include "dlamb/sky_sources.hpp"

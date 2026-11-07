@@ -19,7 +19,7 @@ namespace dlamb {
 
 // Track: a moving line source (LightEmission LightSource with length and beta) that emits
 // at a fixed angle to its direction of motion, as the Cherenkov light of a charged particle
-// (fake-muon). Photons are uniform along the segment and have a uniform azimuth. The
+// (muon-track). Photons are uniform along the segment and have a uniform azimuth. The
 // sphere target keeps only the photons that reach it, with weight = the fraction of the
 // azimuths that do (importance sampling; LightEmission keeps the same photons as bunches).
 struct Track {

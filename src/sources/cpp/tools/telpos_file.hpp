@@ -1,12 +1,12 @@
 #pragma once
 
-// Telescope lists of dlamb-xyzls: --telpos-file (lines 'x y z r', cm) and
+// Telescope lists of dlamb-point-source: --telpos-file (lines 'x y z r', cm) and
 // --corsika-telpos-file (CORSIKA 'TELESCOPE x y z r' lines; other lines are CORSIKA input
 // and are skipped). '#' starts a comment. A file without telescope records, or a telescope
 // line that is not four numbers (r > 0), is an error: the caller never falls back to the
 // default telescope.
 
-#include "dlamb/programs/xyzls.hpp"
+#include "dlamb/programs/point-source.hpp"
 
 #include "sky_args.hpp"
 
