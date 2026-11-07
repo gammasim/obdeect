@@ -124,6 +124,28 @@ A module applying factor k with an envelope in the ledger applies
 f_k / f_k^env and sets `<name>.state` to `applied`. A module never applies a
 factor whose state is `applied`.
 
+Run ledgers (before the first event) apply to all telescopes; a telescope
+ledger (after its `telescope` record, before its photons) applies to that
+telescope and overrides the run ledger per factor.
+
+`ps2simtel` checks the ledger of each telescope against the frame of its
+photons. It accepts a factor that is `applied` upstream unless sim_telarray
+applies it again in that frame. It accepts `pending` only for factors that
+sim_telarray applies in that frame. `envelope` is always an error for those
+factors: sim_telarray applies the full factor, not f/f_env.
+
+| Factor | Camera frame (C) | Ground frame (G) |
+|---|---|---|
+| `qe`, `camera_transmission`, `camera_filter` | sim_telarray applies: pending ok | sim_telarray applies: pending ok |
+| `mirror_reflectivity`, `telescope_transmission` | not applied by sim_telarray: error | sim_telarray applies: pending ok |
+| `atmosphere` | must be applied upstream | any state; with `applied` sim_telarray needs an all-zero optical-depth table |
+| `telescope_transmission_constant` | not applied by sim_telarray: error | not applied by sim_telarray: error |
+| any other name | error | error |
+
+Any other factor (or unknown name) raises an error that names it, unless it is
+given to `ps2simtel --allow-pending FACTOR` or `allow_pending=` in Python.
+Usage: docs/usage.md.
+
 ## Random numbers
 
 Philox-4x32-10 (`gstrickd/random.hpp`), keyed on (seed, stage id) with a

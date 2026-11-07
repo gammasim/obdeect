@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <fstream>
 #include <iostream>
+#include <set>
 #include <string>
 #include <vector>
 #ifdef _WIN32
@@ -18,7 +19,9 @@ namespace {
 constexpr std::size_t buffer_size = std::size_t{1} << 20;
 
 void usage() {
-  std::fprintf(stderr, "usage: ps2simtel [--camera-map FILE] [-o FILE|-] [input|-]\n");
+  std::fprintf(stderr,
+               "usage: ps2simtel [--camera-map FILE] [--allow-pending FACTOR]... [-o FILE|-] "
+               "[input|-]\n");
 }
 
 void set_binary_stdio() {
@@ -47,6 +50,7 @@ int main(int argc, char **argv) {
   std::string input = "-";
   std::string output = "-";
   std::string camera_path;
+  std::set<std::string> allow_pending;
   bool have_input = false;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -54,11 +58,15 @@ int main(int argc, char **argv) {
       usage();
       return 0;
     }
-    if (arg == "--camera-map" || arg == "-o") {
+    if (arg == "--camera-map" || arg == "-o" || arg == "--allow-pending") {
       if (i + 1 >= argc) {
         std::fprintf(stderr, "ps2simtel: %s needs an argument\n", arg.c_str());
         usage();
         return 2;
+      }
+      if (arg == "--allow-pending") {
+        allow_pending.insert(argv[++i]);
+        continue;
       }
       (arg == "-o" ? output : camera_path) = argv[++i];
       continue;
@@ -118,7 +126,7 @@ int main(int argc, char **argv) {
       out = &out_file;
     }
 
-    gstrickd::stream_to_simtel(*in, *out, std::move(camera));
+    gstrickd::stream_to_simtel(*in, *out, std::move(camera), std::move(allow_pending));
     out->flush();
     if (!*out) {
       throw std::runtime_error("write error on output");

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 
 from gstrickd import _core
 
@@ -37,6 +37,7 @@ def stream_to_simtel(
     input_path: str | os.PathLike,
     output_path: str | os.PathLike,
     camera_map: Mapping[int, tuple[int, float]] | str | os.PathLike | None = None,
+    allow_pending: Iterable[str] = (),
 ) -> None:
     """Convert a photon stream file to sim_telarray input (EventIO).
 
@@ -44,7 +45,16 @@ def stream_to_simtel(
     ``(mirror_class, camera_rotation_deg)``, or the path of a text file with one line
     ``telescope_id mirror_class camera_rotation_deg`` per telescope. Telescopes not listed are
     ground-frame telescopes (Bypass_Optics=0 in sim_telarray).
+
+    The efficiency ledger must list only factors that sim_telarray applies itself in the
+    telescope's frame as ``pending`` or ``envelope`` (docs/usage.md). Other factors raise
+    ``RuntimeError``; ``allow_pending`` names factors to accept as they are.
     """
+    if isinstance(allow_pending, str):
+        raise TypeError("allow_pending must be a sequence of factor names, not a string")
     _core.stream_to_simtel(
-        os.fspath(input_path), os.fspath(output_path), _camera_entries(camera_map)
+        os.fspath(input_path),
+        os.fspath(output_path),
+        _camera_entries(camera_map),
+        [str(name) for name in allow_pending],
     )

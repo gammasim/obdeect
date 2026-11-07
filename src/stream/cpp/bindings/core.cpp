@@ -20,6 +20,7 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <tuple>
@@ -301,7 +302,8 @@ NB_MODULE(_core, module) {
       nb::arg("input_path"), nb::arg("output_path"));
   module.def(
       "stream_to_simtel",
-      [](const std::string &input, const std::string &output, const CameraEntries &camera) {
+      [](const std::string &input, const std::string &output, const CameraEntries &camera,
+         const std::vector<std::string> &allow_pending) {
         gstrickd::CameraMap map;
         for (const auto &[id, mirror_class, rotation] : camera) {
           static_cast<void>(gstrickd::bypass_optics_level(mirror_class)); // validates
@@ -314,13 +316,15 @@ NB_MODULE(_core, module) {
         if (!out) {
           throw nb::value_error(("cannot open " + output + " for writing").c_str());
         }
-        gstrickd::stream_to_simtel(in.get(), out, std::move(map));
+        gstrickd::stream_to_simtel(
+            in.get(), out, std::move(map),
+            std::set<std::string>(allow_pending.begin(), allow_pending.end()));
         out.close();
         if (out.fail()) {
           throw std::runtime_error("failed to write " + output);
         }
       },
-      nb::arg("input_path"), nb::arg("output_path"), nb::arg("camera"));
+      nb::arg("input_path"), nb::arg("output_path"), nb::arg("camera"), nb::arg("allow_pending"));
   module.def(
       "parse_camera_map",
       [](const std::string &text) {
