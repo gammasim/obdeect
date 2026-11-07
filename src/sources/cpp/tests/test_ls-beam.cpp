@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <variant>
@@ -129,6 +130,28 @@ void rejects_missing_beam() {
   CHECK(threw);
 }
 
+// The field of view must lie in (0, 90) deg: a negative cone is not accepted as its mirror.
+void rejects_fov_outside_range() {
+  const auto throws_for = [](double fov) {
+    LsBeamOptions o;
+    o.fov_deg = fov;
+    try {
+      (void)ls_beam_geometry(o);
+    } catch (const std::invalid_argument &) {
+      return true;
+    }
+    return false;
+  };
+  CHECK(throws_for(-15.0));
+  CHECK(throws_for(0.0));
+  CHECK(throws_for(90.0));
+  CHECK(throws_for(180.0));
+  CHECK(throws_for(std::nan("")));
+  CHECK(throws_for(std::numeric_limits<double>::infinity()));
+  CHECK(!throws_for(15.0));
+  CHECK(!throws_for(89.9));
+}
+
 } // namespace
 
 int main() {
@@ -137,5 +160,6 @@ int main() {
     default_steps();
     non_default_pulse();
     rejects_missing_beam();
+    rejects_fov_outside_range();
   });
 }

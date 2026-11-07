@@ -75,6 +75,9 @@ struct BeamGeometry {
 };
 
 [[nodiscard]] inline BeamGeometry ls_beam_geometry(const LsBeamOptions &o) {
+  // A negative or >= 90 deg cone is not a field of view (tan(fov/2) would fold or diverge).
+  if (!(o.fov_deg > 0.0 && o.fov_deg < 90.0))
+    throw std::invalid_argument("ls-beam: field of view must lie in (0, 90) deg");
   const double deg = pi / 180.0;
   const Vec3 dir = direction_from_altitude((90.0 - o.laser_theta_deg) * deg, o.laser_phi_deg * deg);
   // Frame of the telescope axis: Rotate_z(-phi), then Rotate_y(-theta), as ls-beam.cc.

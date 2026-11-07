@@ -34,7 +34,7 @@ const char *usage_text =
     "  --telescope-theta deg zenith angle of the telescope axis (30)\n"
     "  --telescope-phi deg   azimuth of the telescope axis, astronomical sense (0)\n"
     "  --telescope-radius m  fiducial radius [m] (12.5)\n"
-    "  --fov deg             field of view, full cone opening angle (15)\n"
+    "  --fov deg             field of view, full cone opening angle, 0 < fov < 90 (15)\n"
     "  --seed n              random seed (1, new option)\n"
     "  -o fname              output file (stdout)\n"
     "  --help                this text\n";
