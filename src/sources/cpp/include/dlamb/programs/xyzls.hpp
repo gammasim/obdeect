@@ -69,7 +69,9 @@ xyzls_emissions(const XyzlsOptions &o, const SkyRun &run, std::size_t index) {
   if (!(o.direction.x != 0.0 || o.direction.y != 0.0 || o.direction.z != 0.0))
     throw std::invalid_argument("xyzls: direction vector must not be zero");
   const double bunch = std::max(1.0, o.bunch_size);
-  const double photons = std::max(0.0, o.photons.at(index));
+  const double photons = o.photons.at(index);
+  if (!(photons >= 0.0) || photons > max_photon_count)
+    throw std::invalid_argument("xyzls: photons must be finite, >= 0 and at most 2^53");
   const Vec3 pos{o.x_cm / 100.0, o.y_cm / 100.0, o.z_cm / 100.0};
   Source s;
   s.frame = gstrickd::Frame::sky;

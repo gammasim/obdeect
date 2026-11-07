@@ -62,8 +62,11 @@ struct BackgroundSource {
   const double ri = 1.0 - std::sqrt(tu[0]);
   const double phi = two_pi * tu[1];
   const double zi = std::sqrt(std::max(0.0, 1.0 - ri * ri));
-  const double za = std::acos(std::clamp(-d.z, -1.0, 1.0));
-  const double az = std::atan2(d.y, d.x);
+  // The hemisphere is centred on -d (the direction towards the source), so every point
+  // u on it has dot(u, d) <= 0 and the photon enters the sphere. Both angles belong to -d.
+  const Vec3 towards_source = -d;
+  const double za = std::acos(std::clamp(towards_source.z, -1.0, 1.0));
+  const double az = std::atan2(towards_source.y, towards_source.x);
   const Vec3 unit = rotate_z(rotate_y({ri * std::cos(phi), ri * std::sin(phi), zi}, za), az);
   photon.position = s.centre + unit * s.radius_m;
 

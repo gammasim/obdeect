@@ -109,6 +109,34 @@ void rejects_unported_profile() {
   CHECK(threw);
 }
 
+// Emission altitude: zem = observation level + z for every sky photon (format.md, zem).
+void emission_altitude() {
+  XyzlsOptions o;
+  o.altitude_m = 1234.5;
+  o.z_cm = 20000.0;
+  o.photons = {2e4};
+  const auto s = read_stream(write_to_string([&](std::ostream &out) { write_xyzls(out, o); }));
+  CHECK(!s.chunks.empty());
+  for (const auto &c : s.chunks) {
+    CHECK((c.mask() & gstrickd::column_bit(Column::zem)) != 0U);
+    for (std::size_t i = 0; i < c.rows(); ++i)
+      CHECK_NEAR(c[Column::zem][i] - c[Column::z][i], 1234.5, 1e-2);
+  }
+}
+
+// Negative photon counts are rejected, not clamped to zero.
+void rejects_negative_photons() {
+  XyzlsOptions o;
+  o.photons = {1e6, -1.0};
+  bool threw = false;
+  try {
+    (void)plan_xyzls(o);
+  } catch (const std::invalid_argument &) {
+    threw = true;
+  }
+  CHECK(threw);
+}
+
 } // namespace
 
 int main() {
@@ -117,5 +145,7 @@ int main() {
     default_stream();
     non_default_moments();
     rejects_unported_profile();
+    emission_altitude();
+    rejects_negative_photons();
   });
 }

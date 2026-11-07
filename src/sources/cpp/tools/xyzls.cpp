@@ -82,7 +82,7 @@ int run(int argc, char **argv) {
     } else if (arg == "-R") {
       o.run_number = dlamb::cli::to_int(next(), arg);
     } else if (arg == "-N") {
-      o.events = static_cast<std::uint32_t>(dlamb::cli::to_int(next(), arg));
+      o.events = dlamb::cli::to_count(next(), arg);
     } else if (arg == "-r") {
       o.telcam_radius_cm = dlamb::cli::to_double(next(), arg);
     } else if (arg == "-x") {

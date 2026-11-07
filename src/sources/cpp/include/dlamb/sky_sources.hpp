@@ -120,6 +120,7 @@ public:
 
   void begin_run(const SkyRun &run) {
     telescopes_ = run.telescopes;
+    observation_level_m_ = run.observation_level_m;
     gstrickd::Metadata m;
     m["run_number"] = run.run_number;
     m["observation_level_m"] = run.observation_level_m;
@@ -173,6 +174,12 @@ public:
           const auto rows = static_cast<std::size_t>(
               std::min<std::uint64_t>(gstrickd::max_chunk_rows, counts[k] - first));
           emissions[k].fill(event, first, rows, chunk);
+          // Emission altitude a.s.l. (format.md, zem), as stream_output.hpp.
+          auto &zem = chunk[gstrickd::Column::zem];
+          const auto &z = chunk[gstrickd::Column::z];
+          zem.resize(rows);
+          for (std::size_t i = 0; i < rows; ++i)
+            zem[i] = static_cast<float>(observation_level_m_ + z[i]);
           chunk.telescope_id = tel.id;
           chunk.frame = gstrickd::Frame::sky;
           chunk.first_index = index + first;
@@ -198,6 +205,7 @@ public:
 private:
   gstrickd::Writer writer_;
   std::vector<SkyTelescope> telescopes_;
+  double observation_level_m_{};
 };
 
 // A complete program output: run keys, and the emissions of each case. Each case is

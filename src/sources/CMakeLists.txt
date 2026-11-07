@@ -64,7 +64,7 @@ endif()
 # LightEmission programs
 option(DLAMB_BUILD_TOOLS "Build the light-source command-line tools" ON)
 if(DLAMB_BUILD_TESTING)
-  foreach(test_name ff-1m ff-gct fpls pixled xyzls xyls ls-beam nsbls)
+  foreach(test_name ff-1m ff-gct fpls pixled xyzls xyls ls-beam nsbls sky_args)
     add_executable(test_${test_name} cpp/tests/test_${test_name}.cpp)
     target_link_libraries(test_${test_name} PRIVATE dlamb_core)
     dlamb_enable_warnings(test_${test_name})

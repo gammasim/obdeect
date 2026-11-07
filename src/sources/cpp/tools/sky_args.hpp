@@ -11,8 +11,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -47,6 +47,14 @@ inline std::int64_t to_int(const std::string &text, const std::string &option) {
   return value;
 }
 
+// Event count: an integer in 0..2^32-1 (negative values would wrap when cast).
+inline std::uint32_t to_count(const std::string &text, const std::string &option) {
+  const std::int64_t value = to_int(text, option);
+  if (value < 0 || value > static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max()))
+    throw std::invalid_argument(option + ": must be an integer in 0..4294967295: " + text);
+  return static_cast<std::uint32_t>(value);
+}
+
 inline std::vector<double> to_list(const std::string &text, const std::string &option) {
   std::vector<double> values;
   std::size_t start = 0;
@@ -70,14 +78,33 @@ inline Vec3 to_vec3(const std::string &text, const std::string &option) {
   return {v[0], v[1], v[2]};
 }
 
-inline bool starts_with_ci(const std::string &text, const std::string &prefix) {
-  if (text.size() < prefix.size())
+// Case-insensitive comparison of two ASCII strings.
+inline bool iequals(const std::string &a, const std::string &b) {
+  if (a.size() != b.size())
     return false;
-  for (std::size_t i = 0; i < prefix.size(); ++i)
-    if (std::tolower(static_cast<unsigned char>(text[i])) !=
-        std::tolower(static_cast<unsigned char>(prefix[i])))
+  for (std::size_t i = 0; i < a.size(); ++i)
+    if (std::tolower(static_cast<unsigned char>(a[i])) !=
+        std::tolower(static_cast<unsigned char>(b[i])))
       return false;
   return true;
+}
+
+inline bool starts_with_ci(const std::string &text, const std::string &prefix) {
+  return text.size() >= prefix.size() && iequals(text.substr(0, prefix.size()), prefix);
+}
+
+// Fields separated by `sep`; empty fields are kept.
+inline std::vector<std::string> split_fields(const std::string &text, char sep) {
+  std::vector<std::string> fields;
+  std::size_t start = 0;
+  while (true) {
+    const std::size_t pos = text.find(sep, start);
+    fields.push_back(
+        text.substr(start, pos == std::string::npos ? std::string::npos : pos - start));
+    if (pos == std::string::npos)
+      return fields;
+    start = pos + 1;
+  }
 }
 
 inline bool is_number(const std::string &text) {
@@ -131,8 +158,8 @@ merge_equal_nodes(const std::vector<std::pair<double, double>> &rows) {
   return merged;
 }
 
-// Spectrum: "400" (nm, 200..2000), "Cherenkov:a:b" (1/lambda^2, fixed if a == b), or a
-// table file (nm, value).
+// Spectrum: "400" (nm, 200..2000), "Cherenkov:a:b" (1/lambda^2, fixed if a == b, both
+// ends in 200..2000 nm with a <= b), or a table file (nm, value).
 inline Spectrum parse_spectrum(const std::string &text, const std::string &option) {
   if (is_number(text)) {
     const double wl = to_double(text, option);
@@ -141,9 +168,14 @@ inline Spectrum parse_spectrum(const std::string &text, const std::string &optio
     return Fixed{wl};
   }
   if (starts_with_ci(text, "Cherenkov:")) {
-    double a = 0.0, b = 0.0;
-    if (std::sscanf(text.c_str() + 10, "%lf:%lf", &a, &b) != 2)
+    const auto ends = split_fields(text.substr(10), ':');
+    if (ends.size() != 2)
       throw std::invalid_argument(option + ": use Cherenkov:<from_nm>:<to_nm>");
+    const double a = to_double(ends[0], option), b = to_double(ends[1], option);
+    if (a < 200.0 || a > 2000.0 || b < 200.0 || b > 2000.0)
+      throw std::invalid_argument(option + ": Cherenkov range must lie in 200..2000 nm");
+    if (a > b)
+      throw std::invalid_argument(option + ": Cherenkov range needs from <= to");
     if (a == b)
       return Fixed{a};
     return InverseSquare{a, b};
@@ -180,20 +212,34 @@ inline Pulse parse_pulse(const std::string &text, const std::string &option, boo
   }
   const std::string name = text.substr(0, colon);
   const auto params = to_list(text.substr(colon + 1), option);
-  const double delay = params.size() > 1 ? params[1] : 0.0;
-  if (name == "Simple" || name == "simple" || name == "SIMPLE") {
-    const double w = params.at(0);
+  // Wrong parameter counts are errors, not silently ignored extras.
+  const auto arity = [&](std::size_t fewest, std::size_t most) {
+    if (params.size() < fewest || params.size() > most)
+      throw std::invalid_argument(option + ": " + text + " takes " + std::to_string(fewest) +
+                                  " to " + std::to_string(most) + " parameters");
+  };
+  const auto delay_param = [&]() { return params.size() > 1 ? params[1] : 0.0; };
+  if (iequals(name, "Simple")) {
+    arity(1, 2);
+    const double w = params[0], delay = delay_param();
     return w > 0.0 ? Pulse{UniformRange{delay - 0.5 * w, delay + 0.5 * w}} : Pulse{Fixed{delay}};
   }
-  if (starts_with_ci(name, "Gauss-fwhm"))
-    return GaussianShape{delay, params.at(0) / 2.35482004503095};
-  if (starts_with_ci(name, "Gauss"))
-    return GaussianShape{delay, params.at(0)};
-  if (starts_with_ci(name, "Exp"))
-    return Exponential{delay, params.at(0)};
+  if (starts_with_ci(name, "Gauss-fwhm")) {
+    arity(1, 2);
+    return GaussianShape{delay_param(), params[0] / 2.35482004503095};
+  }
+  if (starts_with_ci(name, "Gauss")) {
+    arity(1, 2);
+    return GaussianShape{delay_param(), params[0]};
+  }
+  if (starts_with_ci(name, "Exp")) {
+    arity(1, 2);
+    return Exponential{delay_param(), params[0]};
+  }
   if (starts_with_ci(name, "Complex")) {
+    arity(3, 4);
     const double d = params.size() > 3 ? params[3] : 0.0;
-    return ComplexPulse{params.at(0), params.at(1), params.at(2), d};
+    return ComplexPulse{params[0], params[1], params[2], d};
   }
   throw std::invalid_argument(option + ": unknown pulse " + text);
 }
@@ -203,9 +249,9 @@ inline Pulse parse_pulse(const std::string &text, const std::string &option, boo
 // "FilledCone:a" (deg), or a table file (angle deg, value).
 inline Angular parse_angular(const std::string &text, const std::string &option) {
   const double deg = pi / 180.0;
-  if (starts_with_ci(text, "isotropic") && text.size() == 9)
+  if (iequals(text, "isotropic"))
     return Isotropic{};
-  if (text == "Parallel" || text == "parallel")
+  if (iequals(text, "Parallel"))
     return FixedAngle{0.0};
   if (starts_with_ci(text, "Gauss-fwhm:"))
     return TabulatedAngular{
@@ -214,7 +260,7 @@ inline Angular parse_angular(const std::string &text, const std::string &option)
     return TabulatedAngular{gaussian_angular_table(to_double(text.substr(10), option) * deg)};
   if (starts_with_ci(text, "Gauss:"))
     return TabulatedAngular{gaussian_angular_table(to_double(text.substr(6), option) * deg)};
-  if (text == "Rayleigh" || text == "rayleigh")
+  if (iequals(text, "Rayleigh"))
     return TabulatedAngular{rayleigh_angular_table()};
   if (starts_with_ci(text, "Cone:"))
     return FixedAngle{1.0 - std::cos(to_double(text.substr(5), option) * deg)};
