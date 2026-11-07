@@ -470,6 +470,14 @@ public:
         return false;
       }
       const auto type = static_cast<std::uint16_t>(load_le(raw_.data() + 4, 2));
+      if (static_cast<RecordType>(type) == RecordType::stream) {
+        if (header_seen_) {
+          malformed("second stream record");
+        }
+        header_seen_ = true;
+      } else if (!header_seen_) {
+        malformed("stream does not start with a stream record");
+      }
       const std::uint8_t *payload = raw_.data() + record_header_size;
       const std::size_t size = raw_.size() - record_header_size;
       switch (static_cast<RecordType>(type)) {
@@ -526,6 +534,7 @@ public:
 private:
   std::istream &in_;
   std::vector<std::uint8_t> raw_;
+  bool header_seen_{false};
   bool ended_{false};
 };
 

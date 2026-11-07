@@ -253,6 +253,20 @@ void wrong_format_major() {
   CHECK(throws([&] { read_all(bytes, nullptr); }));
 }
 
+void header_required_once() {
+  // Records before the stream header, and a second header, are malformed.
+  CHECK(throws([&] { read_all(raw_record(15, ""), nullptr); }));
+  CHECK(throws([&] { read_all(raw_record(2, as_string(encode_metadata({}))), nullptr); }));
+  std::ostringstream out;
+  {
+    Writer writer(out, "test");
+    writer.finish();
+  }
+  std::string twice = out.str();
+  twice = twice.substr(0, twice.size() - 16) + twice; // header, header, stream_end
+  CHECK(throws([&] { read_all(twice, nullptr); }));
+}
+
 } // namespace
 
 int main() {
@@ -267,5 +281,6 @@ int main() {
     bad_magic();
     truncated_record();
     wrong_format_major();
+    header_required_once();
   });
 }

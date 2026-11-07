@@ -3,6 +3,7 @@
 
 #include "gstrickd/stream.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -55,6 +56,16 @@ int main(int argc, char **argv) {
     const auto start = std::chrono::steady_clock::now();
     gstrickd::Writer writer(out, "bench_stream");
     for (std::uint64_t i = 0; i < n_chunks; ++i) {
+      const std::uint64_t rows = std::min<std::uint64_t>(chunk_rows, photons - i * chunk_rows);
+      if (rows != chunk.rows()) { // last, shorter chunk
+        const std::uint32_t mask = chunk.mask();
+        chunk.resize(rows, mask);
+        for (auto &column : chunk.columns) {
+          for (std::size_t r = 0; r < column.size(); ++r) {
+            column[r] = static_cast<float>(r) * 0.001F;
+          }
+        }
+      }
       chunk.first_index = i * chunk_rows;
       writer.write_chunk(chunk);
     }

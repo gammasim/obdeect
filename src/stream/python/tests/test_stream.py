@@ -127,6 +127,27 @@ def test_garbage_input_rejected(tmp_path):
         list(gstrickd.Reader(str(path)))
 
 
+def test_missing_stream_end_rejected(tmp_path):
+    path = tmp_path / "full.ps"
+    _write_stream(path)
+    data = path.read_bytes()
+    cut = tmp_path / "cut.ps"
+    cut.write_bytes(data[:-16])  # drop the 16-byte stream_end record
+    with pytest.raises(RuntimeError):
+        list(gstrickd.Reader(str(cut)))
+    empty = tmp_path / "empty.ps"
+    empty.write_bytes(b"")
+    with pytest.raises(RuntimeError):
+        list(gstrickd.Reader(str(empty)))
+
+
+def test_non_integral_frame_rejected(tmp_path):
+    with gstrickd.Writer(str(tmp_path / "frame.ps"), "pytest") as writer:
+        for frame in (2.9, True):
+            with pytest.raises(TypeError):
+                writer.write_photons(1, frame, 0, _columns(2, REQUIRED))
+
+
 def test_write_after_close_rejected(tmp_path):
     writer = gstrickd.Writer(str(tmp_path / "closed.ps"), "pytest")
     writer.close()
