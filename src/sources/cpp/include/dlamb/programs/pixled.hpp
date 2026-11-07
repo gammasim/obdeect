@@ -17,21 +17,22 @@
 #include <cstdint>
 #include <iostream>
 #include <istream>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
 
 namespace dlamb::programs::pixled {
 
-// Pixel centre in the camera frame [cm]; the pixel index is the position in the file
-// (pixled.cc:175, cam[id]).
+// Pixel centre in the camera frame [cm].
 struct PixelPosition {
   double x_cm{};
   double y_cm{};
 };
 
 struct Camera {
-  std::vector<PixelPosition> pixels;
+  // Keyed by pixel ID as cam[id] (pixled.cc:175); the file order does not matter.
+  std::map<int, PixelPosition> pixels;
   std::vector<std::string> triggers; // cleaned trigger-group pixel lists
 };
 
@@ -114,7 +115,12 @@ inline Camera read_camera(std::istream &in, bool keep_slaves) {
         std::cerr << "pixled: problem with pixel definition: " << line << "\n";
         continue;
       }
-      camera.pixels.push_back({x, y});
+      if (id < 0) {
+        bad("pixled: negative pixel ID in camera definition: " + line);
+      }
+      if (!camera.pixels.emplace(id, PixelPosition{x, y}).second) {
+        bad("pixled: duplicate pixel ID " + std::to_string(id) + " in camera definition");
+      }
     } else if (starts_with(key, "rotate") || starts_with(key, "pixtype")) {
       continue;
     } else if (line.find("Trigger") != std::string::npos) {
@@ -273,11 +279,11 @@ inline std::vector<Event> build_sources(const Options &o) {
   std::vector<Event> result;
   std::uint64_t emission = 0;
   const auto add_pixel = [&](Event &event, int id, bool label) {
-    if (id < 0 || static_cast<std::size_t>(id) >= o.camera.pixels.size()) {
-      bad("pixled: pixel ID " + std::to_string(id) + " is outside the valid range (0-" +
-          std::to_string(o.camera.pixels.size()) + ")");
+    const auto found = o.camera.pixels.find(id);
+    if (found == o.camera.pixels.end()) {
+      bad("pixled: pixel ID " + std::to_string(id) + " is not defined in the camera file");
     }
-    const auto &pixel = o.camera.pixels[static_cast<std::size_t>(id)];
+    const auto &pixel = found->second;
     const Vec3 position{0.01 * pixel.x_cm, 0.01 * pixel.y_cm, 0.0};
     Source source;
     source.frame = gstrickd::Frame::camera;
