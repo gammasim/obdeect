@@ -20,7 +20,11 @@ namespace obdeect::json {
 struct Value {
   enum class Kind { null, boolean, number, string, array, object };
   using Array = std::vector<Value>;
-  using Object = std::vector<std::pair<std::string, Value>>;
+  // Parallel vectors: std::vector accepts the incomplete Value, std::pair does not.
+  struct Object {
+    std::vector<std::string> names;
+    std::vector<Value> values;
+  };
 
   std::variant<std::monostate, bool, double, std::string, Array, Object> data;
 
@@ -28,9 +32,10 @@ struct Value {
   [[nodiscard]] const Value *find(std::string_view key) const {
     if (kind() != Kind::object)
       return nullptr;
-    for (const auto &[name, value] : std::get<Object>(data))
-      if (name == key)
-        return &value;
+    const auto &object = std::get<Object>(data);
+    for (std::size_t i = 0; i < object.names.size(); ++i)
+      if (object.names[i] == key)
+        return &object.values[i];
     return nullptr;
   }
 };
@@ -194,7 +199,8 @@ private:
         space();
         expect(':');
         space();
-        members.emplace_back(std::move(key), value(depth + 1));
+        members.names.push_back(std::move(key));
+        members.values.push_back(value(depth + 1));
         space();
       } while (take(','));
       expect('}');
