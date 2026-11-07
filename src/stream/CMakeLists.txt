@@ -61,7 +61,7 @@ endif()
 
 if(GSTRICKD_BUILD_TESTING)
   enable_testing()
-  foreach(test_name version format stream)
+  foreach(test_name version format stream eventio corsika)
     add_executable(test_${test_name} cpp/tests/test_${test_name}.cpp)
     target_link_libraries(test_${test_name} PRIVATE gstrickd_core)
     gstrickd_enable_warnings(test_${test_name})
