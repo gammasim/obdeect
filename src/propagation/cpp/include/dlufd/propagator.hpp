@@ -67,6 +67,11 @@ struct PropagatorConfig {
   std::optional<TransmissionTable> transmission;
   std::string transmission_source; // ledger provenance; default "transmission table"
   double site_altitude_m{};        // observation level [m a.s.l.]
+  // Optical path inside a telescope [m] (sim_telarray pathlen_tel, the od2focus part of the
+  // telescope depths). default_pathlen_m applies to every telescope; telescope_pathlen_m (key:
+  // telescope_id, 1-based) overrides it for one telescope. 0: no path inside the telescope.
+  double default_pathlen_m{0.0};
+  std::map<std::uint32_t, double> telescope_pathlen_m;
   // Optional: air delay for sky photons, and refraction (bending) unless the run says that
   // refraction is already applied.
   std::optional<AtmosphereProfile> profile;
@@ -164,6 +169,13 @@ public:
     }
     if (config_.wavelength_range) {
       config_.wavelength_range->validate();
+    }
+    check_pathlen(config_.default_pathlen_m);
+    for (const auto &[id, pathlen] : config_.telescope_pathlen_m) {
+      if (id < 1 || id > gstrickd::max_telescope) {
+        throw std::invalid_argument("telescope_pathlen_m: telescope ids are 1-based");
+      }
+      check_pathlen(pathlen);
     }
     if (config_.scattering.enabled != config_.scattering_table.has_value()) {
       throw std::invalid_argument(config_.scattering.enabled
@@ -296,6 +308,7 @@ private:
     double observation_m{};
     bool refraction_applied{};
     std::vector<double> x_m, y_m, z_m;
+    std::vector<double> pathlen_m; // path inside each telescope [m], index = telescope_id - 1
     WavelengthRange wavelengths{};
     Envelope envelope;
     gstrickd::Metadata ledger;
@@ -305,11 +318,18 @@ private:
     bool open{};
     std::uint32_t id{};
     double altitude_m{}; // a.s.l. of the telescope plane
+    double pathlen_m{};  // path inside the telescope [m]
     double x_m{}, y_m{}, z_m{};
-    const TelescopeDepths *depths{}; // cached per altitude (depths_cache_)
+    const TelescopeDepths *depths{}; // cached per (altitude, pathlen) (depths_cache_)
     std::uint64_t out_index{};       // output rows so far (first_index of the next chunk)
     double weight_out{};
   };
+
+  static void check_pathlen(double pathlen_m) {
+    if (!std::isfinite(pathlen_m) || pathlen_m < 0.0) {
+      throw std::invalid_argument("pathlen must be finite and not negative");
+    }
+  }
 
   static bool valid_factor_name(const std::string &name) {
     if (name.empty() || name == "atmosphere" || name == "wavelength" || name == "scattering") {
@@ -423,14 +443,23 @@ private:
       }
       scattered_.assign(x_m.size(), {});
     }
+    std::vector<double> pathlen_m(x_m.size(), config_.default_pathlen_m);
+    for (const auto &[id, pathlen] : config_.telescope_pathlen_m) {
+      if (id > x_m.size()) {
+        throw std::invalid_argument("telescope_pathlen_m names telescope " + std::to_string(id) +
+                                    ", the run has " + std::to_string(x_m.size()));
+      }
+      pathlen_m[id - 1] = pathlen;
+    }
     Run run{observation_m,
             refraction_applied,
             x_m,
             y_m,
             z_m,
+            pathlen_m,
             wavelengths,
             product_envelope(wavelengths),
-            make_ledger(wavelengths)};
+            make_ledger(wavelengths, pathlen_m)};
     if (config_.profile) {
       out["refraction_applied"] = std::int64_t{1}; // sky photons are refracted from here on
     }
@@ -461,13 +490,15 @@ private:
     return Envelope(std::move(grid), std::move(product));
   }
 
-  [[nodiscard]] gstrickd::Metadata make_ledger(const WavelengthRange &range) const {
+  [[nodiscard]] gstrickd::Metadata make_ledger(const WavelengthRange &range,
+                                               const std::vector<double> &pathlen_m) const {
     gstrickd::Metadata ledger;
     std::string factors = "atmosphere,wavelength";
     ledger["atmosphere.state"] = std::string("applied");
     ledger["atmosphere.source"] = config_.transmission_source.empty()
                                       ? std::string("transmission table")
                                       : config_.transmission_source;
+    ledger["atmosphere.pathlen_m"] = pathlen_m;
     if (config_.profile) {
       ledger["atmosphere.profile_source"] = config_.profile_source.empty()
                                                 ? std::string("atmospheric profile")
@@ -530,11 +561,13 @@ private:
     telescope_.y_m = run_->y_m[index];
     telescope_.z_m = run_->z_m[index];
     telescope_.altitude_m = run_->observation_m + telescope_.z_m; // the run's observation level
-    auto cached = depths_cache_.find(telescope_.altitude_m);
+    telescope_.pathlen_m = run_->pathlen_m[index];
+    const auto key = std::make_pair(telescope_.altitude_m, telescope_.pathlen_m);
+    auto cached = depths_cache_.find(key);
     if (cached == depths_cache_.end()) {
       cached = depths_cache_
-                   .emplace(telescope_.altitude_m,
-                            config_.transmission->telescope_depths(telescope_.altitude_m, 0.0))
+                   .emplace(key, config_.transmission->telescope_depths(telescope_.altitude_m,
+                                                                        telescope_.pathlen_m))
                    .first;
     }
     telescope_.depths = &cached->second;
@@ -820,9 +853,9 @@ private:
   bool have_event_{};
   std::uint32_t event_number_{};
   bool ledger_pending_{};
-  // Caches: telescope depths per altitude (the table is fixed), refraction tables of the
-  // last altitude used for sky photons.
-  std::map<double, TelescopeDepths> depths_cache_;
+  // Caches: telescope depths per (altitude, pathlen) (the table is fixed), refraction tables of
+  // the last altitude used for sky photons.
+  std::map<std::pair<double, double>, TelescopeDepths> depths_cache_;
   std::optional<RefractionTables> tables_;
   double tables_altitude_m_{};
   gstrickd::PhotonChunk chunk_; // reused by photons()

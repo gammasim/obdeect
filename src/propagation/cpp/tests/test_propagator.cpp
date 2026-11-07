@@ -1047,10 +1047,116 @@ void test_rejects_non_finite_input() {
   CHECK(throws_invalid([&] { propagate(only_run, config_for(zero_table())); }));
 }
 
+// sim_telarray's acceptance of one photon with od2focus taken from the table as
+// tau(h + pathlen) - tau(h) (telescope_depths), at the telescope altitude h.
+double expected_acceptance(const dlufd::TransmissionTable &table, double lambda_nm, double zem_m,
+                           double cx, double cy, double h_m, double pathlen_m) {
+  const double od_tel = table.optical_depth(lambda_nm, h_m);
+  const double od_focus = table.optical_depth(lambda_nm, h_m + pathlen_m) - od_tel;
+  return table.transmission2<double>(lambda_nm, zem_m, dlufd::airmass<double>(cx, cy), od_tel,
+                                     od_focus);
+}
+
+// Telescope 1 gets the default path (28 m), telescope 2 its override (0 m). The acceptance p of
+// every output row matches the formula with that telescope's path, and the ledger lists both.
+void test_pathlen_per_telescope() {
+  const auto table = real_table();
+  const auto input = ground_stream(3000, 3000);
+  auto config = config_for(table);
+  config.store_p = true;
+  config.mode = dlufd::OutputMode::weighted;
+  config.default_pathlen_m = 28.0;
+  config.telescope_pathlen_m = {{2, 0.0}};
+  const auto records = records_of(propagate(input, config).bytes);
+  const auto *ledger = first_ledger(records);
+  CHECK(ledger != nullptr);
+  if (ledger != nullptr) {
+    const auto it = ledger->find("atmosphere.pathlen_m");
+    CHECK(it != ledger->end());
+    if (it != ledger->end()) {
+      CHECK(std::get<std::vector<double>>(it->second) == std::vector<double>({28.0, 0.0}));
+    }
+  }
+  // Without overrides the ledger holds the default for every telescope (0 unless set).
+  auto plain = config_for(table);
+  plain.store_p = true;
+  plain.mode = dlufd::OutputMode::weighted;
+  const auto plain_records = records_of(propagate(input, plain).bytes);
+  const auto *plain_ledger = first_ledger(plain_records);
+  CHECK(plain_ledger != nullptr);
+  if (plain_ledger != nullptr) {
+    CHECK(std::get<std::vector<double>>(plain_ledger->at("atmosphere.pathlen_m")) ==
+          std::vector<double>({0.0, 0.0}));
+  }
+
+  for (const std::uint32_t telescope : {1U, 2U}) {
+    const double pathlen = telescope == 1 ? 28.0 : 0.0;
+    const auto p = photon_column(records, telescope, Column::p);
+    const auto lambda = photon_column(records, telescope, Column::wavelength);
+    const auto zem = photon_column(records, telescope, Column::zem);
+    const auto cx = photon_column(records, telescope, Column::cx);
+    const auto cy = photon_column(records, telescope, Column::cy);
+    CHECK(!p.empty());
+    CHECK(p.size() == lambda.size() && p.size() == zem.size() && p.size() == cx.size() &&
+          p.size() == cy.size());
+    if (p.size() != lambda.size() || p.size() != zem.size() || p.size() != cx.size() ||
+        p.size() != cy.size()) {
+      continue;
+    }
+    double max_deviation = 0.0;
+    for (std::size_t i = 0; i < p.size(); ++i) {
+      const double expected =
+          expected_acceptance(table, lambda[i], zem[i], cx[i], cy[i], site_m, pathlen);
+      max_deviation = std::max(max_deviation, std::abs(static_cast<double>(p[i]) - expected));
+    }
+    CHECK(max_deviation <= 1e-6);
+    std::fprintf(stderr, "telescope %u (pathlen %g m): max |p - reference| = %.3g\n", telescope,
+                 pathlen, max_deviation);
+  }
+
+  // The 28 m path changes the acceptance (telescope 1 against the same photons with 0 m).
+  const auto records_zero = records_of(propagate(input, plain).bytes);
+  const auto p_28 = photon_column(records, 1, Column::p);
+  const auto p_0 = photon_column(records_zero, 1, Column::p);
+  double largest_change = 0.0;
+  for (std::size_t i = 0; i < std::min(p_28.size(), p_0.size()); ++i) {
+    largest_change = std::max(largest_change, std::abs(static_cast<double>(p_28[i] - p_0[i])));
+  }
+  CHECK(largest_change > 1e-5);
+}
+
+// Invalid path lengths and ids are rejected: negative, NaN, infinite, id 0, and an id the run does
+// not have (checked when the run record is read).
+void test_pathlen_rejects() {
+  const auto input = ground_stream(10, 10);
+  const auto table = zero_table();
+  const auto rejected = [&](const std::function<void(dlufd::PropagatorConfig &)> &edit) {
+    auto config = config_for(table);
+    edit(config);
+    return throws_invalid([&] { propagate(input, config); });
+  };
+  CHECK(rejected([](dlufd::PropagatorConfig &c) { c.default_pathlen_m = -1.0; }));
+  CHECK(rejected([](dlufd::PropagatorConfig &c) {
+    c.default_pathlen_m = std::numeric_limits<double>::quiet_NaN();
+  }));
+  CHECK(rejected([](dlufd::PropagatorConfig &c) {
+    c.default_pathlen_m = std::numeric_limits<double>::infinity();
+  }));
+  CHECK(rejected([](dlufd::PropagatorConfig &c) { c.telescope_pathlen_m = {{1, -0.5}}; }));
+  CHECK(rejected([](dlufd::PropagatorConfig &c) {
+    c.telescope_pathlen_m = {{2, std::numeric_limits<double>::quiet_NaN()}};
+  }));
+  CHECK(rejected([](dlufd::PropagatorConfig &c) { c.telescope_pathlen_m = {{0, 1.0}}; }));
+  CHECK(rejected([](dlufd::PropagatorConfig &c) { c.telescope_pathlen_m = {{3, 1.0}}; }));
+  CHECK(!rejected([](dlufd::PropagatorConfig &c) { c.telescope_pathlen_m = {{2, 0.0}}; }));
+}
+
 } // namespace
 
 int main() {
   return run_checks([] {
+    test_pathlen_per_telescope();
+    test_pathlen_rejects();
     test_ledger_layout();
     test_expected_count();
     test_weighted_analytic();
