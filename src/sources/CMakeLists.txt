@@ -10,17 +10,58 @@ endif()
 option(DLAMB_BUILD_PYTHON_API "Build the Python extension" ${DLAMB_BUILD_PYTHON_API_DEFAULT})
 
 include(FetchContent)
-FetchContent_Declare(gstrickd GIT_REPOSITORY https://github.com/GernotMaier/gstrickd.git
-                     GIT_TAG 9ac0c0ee7c8edce7f24d190cedda6d8c67397f19)
-set(GSTRICKD_BUILD_TESTING OFF CACHE BOOL "" FORCE)
-set(GSTRICKD_BUILD_PYTHON_API OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(gstrickd)
+
+# gstrickd (photon-stream format, Philox draws, stage ids). Lookup order:
+#   1. an installed package: gstrickd_DIR or CMAKE_PREFIX_PATH;
+#   2. the package of the Python interpreter: python -m gstrickd --cmake-dir;
+#   3. FetchContent of a pinned commit (not with DLAMB_REQUIRE_INSTALLED_GSTRICKD=ON).
+option(DLAMB_REQUIRE_INSTALLED_GSTRICKD
+       "Require an installed gstrickd package (no FetchContent fallback)" OFF)
+set(DLAMB_GSTRICKD_GIT_TAG 5af00790005283f81a46a4a49cfef97cd41556ff)
+
+find_package(gstrickd 0.1 CONFIG QUIET)
+if(NOT gstrickd_FOUND AND NOT gstrickd_DIR)
+  find_package(Python 3.14 COMPONENTS Interpreter QUIET)
+  if(Python_EXECUTABLE)
+    execute_process(COMMAND "${Python_EXECUTABLE}" -m gstrickd --cmake-dir
+                    OUTPUT_VARIABLE dlamb_gstrickd_python_dir
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    RESULT_VARIABLE dlamb_gstrickd_python_result
+                    ERROR_QUIET)
+    if(dlamb_gstrickd_python_result EQUAL 0 AND
+       EXISTS "${dlamb_gstrickd_python_dir}/gstrickd-config.cmake")
+      set(gstrickd_DIR "${dlamb_gstrickd_python_dir}")
+      find_package(gstrickd 0.1 CONFIG QUIET)
+    endif()
+  endif()
+endif()
+
+if(gstrickd_FOUND)
+  message(STATUS "gstrickd: installed package ${gstrickd_DIR} (version ${gstrickd_VERSION})")
+else()
+  if(DLAMB_REQUIRE_INSTALLED_GSTRICKD)
+    message(FATAL_ERROR "gstrickd: no installed package found. Set gstrickd_DIR to the "
+                        "directory of gstrickd-config.cmake, or install gstrickd.")
+  endif()
+  message(STATUS "gstrickd: no installed package found, fetching commit "
+                 "${DLAMB_GSTRICKD_GIT_TAG} from GitHub (headers only)")
+  # Only the source is fetched and not added as a subdirectory: the install rules, tests
+  # and tools of the fetched project then stay out of dlamb's build and install.
+  FetchContent_Populate(gstrickd
+                        GIT_REPOSITORY https://github.com/GernotMaier/gstrickd.git
+                        GIT_TAG ${DLAMB_GSTRICKD_GIT_TAG})
+  add_library(gstrickd_fetched INTERFACE)
+  target_include_directories(gstrickd_fetched INTERFACE
+                             ${gstrickd_SOURCE_DIR}/cpp/include)
+  target_compile_features(gstrickd_fetched INTERFACE cxx_std_20)
+  add_library(gstrickd::gstrickd_core ALIAS gstrickd_fetched)
+endif()
 
 # Header-only, standard-library-only core. Photon chunks use the gstrickd headers.
 add_library(dlamb_core INTERFACE)
 target_include_directories(dlamb_core INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/cpp/include)
 target_compile_features(dlamb_core INTERFACE cxx_std_20)
-target_link_libraries(dlamb_core INTERFACE gstrickd_core)
+target_link_libraries(dlamb_core INTERFACE gstrickd::gstrickd_core)
 # Identical floating-point results for any thread count and chunk size on one
 # platform: no implicit fused multiply-add contraction.
 if(NOT MSVC)
@@ -53,7 +94,7 @@ endif()
 
 if(DLAMB_BUILD_TESTING)
   enable_testing()
-  foreach(test_name version density source)
+  foreach(test_name version density source gstrickd_contract)
     add_executable(test_${test_name} cpp/tests/test_${test_name}.cpp)
     target_link_libraries(test_${test_name} PRIVATE dlamb_core)
     dlamb_enable_warnings(test_${test_name})

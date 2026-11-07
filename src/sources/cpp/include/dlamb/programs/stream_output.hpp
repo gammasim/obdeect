@@ -12,6 +12,7 @@
 #include "gstrickd/format.hpp"
 #include "gstrickd/photons.hpp"
 #include "gstrickd/random.hpp"
+#include "gstrickd/stages.hpp"
 #include "gstrickd/stream.hpp"
 
 #include <algorithm>
@@ -37,9 +38,9 @@
 
 namespace dlamb::programs {
 
-// Stage id of the program-level random choices (pixel selection). Sources use
-// dlamb::stage_sources.
-inline constexpr std::uint32_t stage_programs = 0x444C0002U;
+// Stage id of the program-level random choices (pixel selection). Alias of
+// gstrickd::stage_programs; sources use dlamb::stage_sources.
+inline constexpr std::uint32_t stage_programs = gstrickd::stage_programs;
 
 // LightSource::Emit only restricts emission to the fiducial sphere when the source is
 // farther than 1.02 times the sphere radius (IactLightEmission.cc, rls > 1.02 Rmax).

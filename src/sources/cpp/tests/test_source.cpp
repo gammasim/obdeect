@@ -7,6 +7,7 @@
 #include "gstrickd/photons.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -21,14 +22,28 @@ namespace {
 
 constexpr double inf = std::numeric_limits<double>::infinity();
 
+// All photons of a test source, one array per column. A PhotonChunk holds at most 2^16
+// rows, so the test keeps the columns itself.
+struct Photons {
+  gstrickd::Frame frame{gstrickd::Frame::ground};
+  std::array<std::vector<float>, gstrickd::n_columns> columns{};
+
+  std::size_t rows() const { return columns[static_cast<std::size_t>(Column::x)].size(); }
+  const std::vector<float> &operator[](Column c) const {
+    return columns[static_cast<std::size_t>(c)];
+  }
+};
+
 // Emit photons [0, n) of a source in chunks of `chunk` rows.
-gstrickd::PhotonChunk emit_all(const Source &source, std::uint64_t seed, std::uint64_t n,
-                               std::size_t chunk = 1 << 16, std::uint32_t event = 1,
-                               std::uint32_t telescope = 2) {
-  gstrickd::PhotonChunk all;
-  all.telescope_id = telescope;
+Photons emit_all(const Source &source, std::uint64_t seed, std::uint64_t n,
+                 std::size_t chunk = 1 << 16, std::uint32_t event = 1,
+                 std::uint32_t telescope = 2) {
+  Photons all;
   all.frame = source.frame;
-  all.resize(n, source_columns);
+  for (std::uint32_t c = 0; c < gstrickd::n_columns; ++c) {
+    if (source_columns & (std::uint32_t{1} << c))
+      all.columns[c].resize(n);
+  }
   gstrickd::PhotonChunk part;
   for (std::uint64_t first = 0; first < n; first += chunk) {
     const std::size_t rows = static_cast<std::size_t>(std::min<std::uint64_t>(chunk, n - first));
@@ -46,7 +61,7 @@ gstrickd::PhotonChunk emit_all(const Source &source, std::uint64_t seed, std::ui
   return all;
 }
 
-bool same_chunk(const gstrickd::PhotonChunk &a, const gstrickd::PhotonChunk &b) {
+bool same_chunk(const Photons &a, const Photons &b) {
   if (a.rows() != b.rows())
     return false;
   for (std::uint32_t c = 0; c < gstrickd::n_columns; ++c)
@@ -73,7 +88,7 @@ Source lamp_source(double photons = 1e5) {
 }
 
 // Position and direction of a photon at the plane z = z0 (for rays from the emission point).
-Vec3 at_plane(const gstrickd::PhotonChunk &c, std::size_t i, double z0) {
+Vec3 at_plane(const Photons &c, std::size_t i, double z0) {
   const double x = c[Column::x][i], y = c[Column::y][i], z = c[Column::z][i];
   const double cx = c[Column::cx][i], cy = c[Column::cy][i], cz = c[Column::cz][i];
   const double s = (z0 - z) / cz;

@@ -1,11 +1,17 @@
 #pragma once
 
+#include "gstrickd/stages.hpp"
+
 #include <cstdint>
 
 namespace dlamb {
 
-// Stage id of dlamb draws: gstrickd::DrawKey::stage. Other modules use their own ids.
-inline constexpr std::uint32_t stage_sources = 0x444C0001U;
+// Stage id of dlamb draws (gstrickd::DrawKey::stage). Alias of the gstrickd constant.
+inline constexpr std::uint32_t stage_sources = gstrickd::stage_sources;
+
+// Photon-stream format major version that dlamb writes and reads. The C++ test
+// gstrickd_contract checks it against gstrickd::format_major.
+inline constexpr int photon_stream_format_major = 1;
 
 // Streams of one photon (gstrickd::DrawKey::stream). Each stream is one uniform4 call,
 // so the draws of a photon never depend on the other streams or on chunking.
