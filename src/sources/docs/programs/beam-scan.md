@@ -1,7 +1,7 @@
 # beam-scan
 
 Parallel downward light beam scanned along two lines over the camera area
-Port of sim_telarray `LightEmission/xyls.cc`, a test program.. Tool `dlamb-beam-scan`, programme
+Port of sim_telarray `LightEmission/xyls.cc`, a test program. Tool `dlamb-beam-scan`, programme
 `cpp/include/dlamb/programs/beam-scan.hpp`.
 
 ## Options (original units, cm)
