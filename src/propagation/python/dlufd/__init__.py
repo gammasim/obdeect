@@ -17,6 +17,7 @@ _EXPORTS = {
     "air_delay_ns": "dlufd.profile",
     "propagation_time_ns": "dlufd.profile",
     "refract": "dlufd.profile",
+    "propagate": "dlufd.propagation",
 }
 __all__ = [*_EXPORTS, "__version__"]
 

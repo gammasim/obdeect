@@ -1,0 +1,73 @@
+"""Atmosphere stage on a gstrickd photon stream: extinction, envelope thinning, refraction.
+
+The stream is read from and written to files; the work is done by the C++ core, the same code
+as the ``dlufd-propagate`` command-line tool.
+"""
+
+import os
+from collections.abc import Mapping, Sequence
+
+from dlufd import _core
+
+MODES = ("thinned", "weighted")
+
+
+def propagate(
+    input_path: str | os.PathLike,
+    output_path: str | os.PathLike,
+    *,
+    transmission: str | os.PathLike,
+    site_altitude_m: float,
+    seed: int,
+    profile: str | os.PathLike | None = None,
+    envelope: Mapping[str, str | os.PathLike] | Sequence[tuple[str, str | os.PathLike]] = (),
+    wavelength_range: tuple[float, float] | None = None,
+    mode: str = "thinned",
+    store_p: bool = False,
+) -> dict[str, float]:
+    """Run the atmosphere stage on a photon stream file.
+
+    Args:
+        input_path: input gstrickd stream.
+        output_path: output gstrickd stream (overwritten).
+        transmission: sim_telarray transmission file of the site (``# H2=`` header).
+        site_altitude_m: observation level [m a.s.l.]; must match the table within 25 m.
+        seed: Philox seed of the wavelength and thinning draws.
+        profile: optional atmospheric profile (atmprof format); enables the air delay and
+            refraction of sky-frame photons (unless the run says refraction is applied).
+        envelope: envelope factors, as a mapping name -> file or (name, file) pairs. Each file
+            is a two-column text table (wavelength nm, value). The product is applied.
+        wavelength_range: (lo, hi) nm for wavelengths drawn from 1/lambda^2. Default: the run
+            keys wavelength_min_nm and wavelength_max_nm.
+        mode: ``"thinned"`` (one row per surviving photon, w = 1) or ``"weighted"``
+            (w multiplied by the acceptance).
+        store_p: keep the acceptance column p in the output.
+
+    Returns:
+        Dict with photons_in, photons_out, dropped (sky photons not reaching the telescope
+        plane) and weight_out (sum of w of the output).
+
+    Raises:
+        ValueError: invalid settings or input, or an input ledger that shows a factor as applied.
+        RuntimeError: unreadable or truncated files.
+    """
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}, not {mode!r}")
+    items = envelope.items() if isinstance(envelope, Mapping) else envelope
+    factors = [(str(name), os.fspath(path)) for name, path in items]
+    return dict(
+        _core.propagate(
+            os.fspath(input_path),
+            os.fspath(output_path),
+            os.fspath(transmission),
+            float(site_altitude_m),
+            None if profile is None else os.fspath(profile),
+            factors,
+            None
+            if wavelength_range is None
+            else (float(wavelength_range[0]), float(wavelength_range[1])),
+            int(seed),
+            mode == "weighted",
+            bool(store_p),
+        )
+    )
