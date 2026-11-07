@@ -22,17 +22,23 @@ record and ends with `stream_end`.
 | 1 | `stream` | metadata: `format_major` (int), `format_minor` (int), `producer` (string) |
 | 2 | `run` | metadata (run keys below) |
 | 3 | `event` | metadata (event keys below) |
-| 4 | `telescope` | metadata: `telescope_id` (int), `frame` (int), optional `x_m`, `y_m`, `z_m`, `r_m` |
+| 4 | `telescope` | metadata: `telescope_id` (int), `frame` (int), optional `array_index` (int, CORSIKA array reuse), `x_m`, `y_m`, `z_m`, `r_m` |
 | 5 | `photons` | photon chunk (below) |
-| 6 | `telescope_end` | metadata: `telescope_id` (int), `photons` (float, sum of weights) |
+| 6 | `telescope_end` | metadata: `telescope_id` (int), `photons` (float, sum of weights; from CORSIKA: the photon sum of its block header) |
 | 7 | `event_end` | metadata (optional keys) |
 | 8 | `run_end` | metadata (optional keys) |
 | 9 | `blob` | u32 `eventio_type`, u32 `eventio_id`, then the raw EventIO block (header + body) |
 | 10 | `ledger` | metadata: efficiency ledger (below) |
 | 15 | `stream_end` | empty |
 
-Nesting: `stream` (`run` (`ledger`* `blob`* (`event` `blob`* (`telescope`
-`photons`* `telescope_end`)* `event_end`)* `run_end`)*) `stream_end`.
+Nesting: `stream` (`run` (`ledger`* (`event` (`telescope` `photons`*
+`telescope_end`)* `event_end`)* `run_end`)*) `stream_end`, with `blob`
+records allowed anywhere between `run` and `run_end`. Blobs keep the order
+of the input (CORSIKA: RUNH and TELPOS after `run`, EVTH and TELOFF before
+the telescopes, EVTE after them, RUNE before `run_end`); writers of EventIO
+output emit them in that order. CORSIKA split-mode markers (1213, 1214) are
+blobs too, between the telescopes of an event. The sim_telarray writer omits
+them, since normal-mode output has no markers.
 A `ledger` record may also follow a `telescope` record and then applies to
 that telescope only.
 
@@ -61,7 +67,8 @@ Run keys (from CORSIKA RUNH and TELPOS, or from dlamb): `run_number`,
 Event keys (from CORSIKA EVTH and TELOFF): `event_number`,
 `primary_id` (CORSIKA particle code), `energy_gev`, `zenith_rad`,
 `azimuth_rad` (CORSIKA convention), `first_interaction_m`, `core_x_m`,
-`core_y_m` (float arrays, one per array reuse), `array_index`.
+`core_y_m`, `time_offset_ns` (float arrays, one entry per array reuse). One
+`event` record per shower; telescope records carry the `array_index`.
 
 ## Photon chunk
 
