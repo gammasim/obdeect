@@ -4,7 +4,9 @@
 #include "dlufd/refraction.hpp"
 #include "dlufd/timing.hpp"
 
+#include <array>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -20,6 +22,15 @@ constexpr double kObservationM = 2180.;
 struct Photon {
   double cx, cy, x, y, t;
 };
+
+bool throws_invalid(auto &&action) {
+  try {
+    action();
+  } catch (const std::invalid_argument &) {
+    return true;
+  }
+  return false;
+}
 
 // Photon emitted at height h with zenith angle theta (degrees) in the x-z plane.
 Photon start(double zenith_deg) {
@@ -44,6 +55,46 @@ int main() {
       rejected = true;
     }
     CHECK(rejected);
+
+    // Non-finite observation levels are rejected as well.
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double inf = std::numeric_limits<double>::infinity();
+    for (double bad : {nan, inf, -inf}) {
+      CHECK(throws_invalid([&] { dlufd::RefractionTables t(profile, bad); }));
+      CHECK(throws_invalid([&] { tables.vertical_time0_cm(bad); }));
+    }
+
+    // Non-finite photon inputs (height, direction, position, time) are rejected per photon: bend()
+    // returns false and leaves every input unchanged. Each field is tried in turn.
+    for (double bad : {nan, inf, -inf}) {
+      for (std::size_t field = 0; field < 6; ++field) {
+        std::array<double, 6> v{15000., std::sin(0.7), 0., 1., 2., 3.}; // h, cx, cy, x, y, t
+        v[field] = bad;
+        const std::array<double, 6> before = v;
+        CHECK(!dlufd::bend(tables, v[0], v[1], v[2], v[3], v[4], v[5]));
+        for (std::size_t k = 0; k < v.size(); ++k)
+          CHECK(v[k] == before[k] || (std::isnan(v[k]) && std::isnan(before[k])));
+      }
+    }
+    // A finite height whose conversion to cm overflows is rejected too.
+    {
+      std::array<double, 6> v{std::numeric_limits<double>::max(), std::sin(0.7), 0., 1., 2., 3.};
+      const std::array<double, 6> before = v;
+      CHECK(!dlufd::bend(tables, v[0], v[1], v[2], v[3], v[4], v[5]));
+      CHECK(v == before);
+    }
+    // The same for the float instantiation (NaN and infinite height and direction).
+    {
+      float bh = std::numeric_limits<float>::quiet_NaN(), bcx = 0.5f, bcy = 0.f, bx = 0.f, by = 0.f,
+            bt = 0.f;
+      CHECK(!dlufd::bend(tables, bh, bcx, bcy, bx, by, bt));
+      bh = std::numeric_limits<float>::infinity();
+      CHECK(!dlufd::bend(tables, bh, bcx, bcy, bx, by, bt));
+      CHECK(bcx == 0.5f && bx == 0.f && bt == 0.f);
+      bh = 15000.f;
+      bcx = std::numeric_limits<float>::quiet_NaN();
+      CHECK(!dlufd::bend(tables, bh, bcx, bcy, bx, by, bt));
+    }
 
     // Vertical photon: no displacement or direction change; the time delay equals the
     // straight-path air delay of the profile (both use the same table).

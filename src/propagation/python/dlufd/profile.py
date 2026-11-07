@@ -80,7 +80,7 @@ def refract(tables: RefractionTables, height_m, cx, cy, x_m, y_m, t_ns):
     Inputs are one-dimensional arrays of equal length: emission height, direction cosines
     (cx, cy), straight-line position (x_m, y_m) and time (t_ns) at the observation level.
     Returns (cx, cy, x_m, y_m, t_ns, bent) where bent is a bool array; photons with bent False
-    (direction outside the unit circle) are returned unchanged.
+    (direction outside the unit circle, or any non-finite input) are returned unchanged.
     """
     arrays = [
         np.ascontiguousarray(_as_float_array(values))

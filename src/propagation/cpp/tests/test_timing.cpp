@@ -4,6 +4,7 @@
 #include "dlufd/timing.hpp"
 
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -69,5 +70,19 @@ int main() {
     CHECK_NEAR(dlufd::straight_path_air_delay_ns(profile, low, low, zenith), 0., 1e-15);
     CHECK(throws_invalid([&] { dlufd::straight_path_air_delay_ns(profile, high, low, 0.); }));
     CHECK(throws_invalid([&] { dlufd::straight_path_air_delay_ns(profile, low, high, 1.6); }));
+
+    // Non-finite inputs throw (heights, zenith angle, group index, path length).
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double inf = std::numeric_limits<double>::infinity();
+    for (double bad : {nan, inf, -inf}) {
+      CHECK(throws_invalid([&] { dlufd::ambient_group_index(profile, bad); }));
+      CHECK(throws_invalid([&] { dlufd::straight_path_air_delay_ns(profile, bad, high, zenith); }));
+      CHECK(throws_invalid([&] { dlufd::straight_path_air_delay_ns(profile, low, bad, zenith); }));
+      CHECK(throws_invalid([&] { dlufd::straight_path_air_delay_ns(profile, low, high, bad); }));
+      CHECK(throws_invalid([&] { dlufd::propagation_time_ns(bad, 1.0002); }));
+      CHECK(throws_invalid([&] { dlufd::propagation_time_ns(1000., bad); }));
+    }
+    CHECK(throws_invalid([&] { dlufd::ambient_group_index(heights, index_ok, nan); }));
+    CHECK(throws_invalid([&] { dlufd::ambient_group_index(heights, index_ok, inf); }));
   });
 }

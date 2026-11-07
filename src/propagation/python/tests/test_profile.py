@@ -107,6 +107,54 @@ def test_time_helpers():
     assert math.isfinite(delay)
 
 
+NON_FINITE = [math.nan, math.inf, -math.inf]
+
+
+@pytest.mark.parametrize("bad", NON_FINITE)
+def test_non_finite_heights_raise(profile, bad):
+    with pytest.raises(ValueError):
+        profile.density(bad)
+    with pytest.raises(ValueError):
+        profile.thickness(bad)
+    with pytest.raises(ValueError):
+        profile.refractive_index_minus_one(bad)
+    with pytest.raises(ValueError):
+        profile.density(np.array([1000.0, bad]))
+    with pytest.raises(ValueError):
+        profile.group_index(bad)
+    with pytest.raises(ValueError):
+        dlufd.air_delay_ns(profile, 2180.0, bad, 0.0)
+    with pytest.raises(ValueError):
+        dlufd.air_delay_ns(profile, bad, 10000.0, 0.0)
+    with pytest.raises(ValueError):
+        dlufd.air_delay_ns(profile, 2180.0, 10000.0, bad)
+    with pytest.raises(ValueError):
+        dlufd.propagation_time_ns(bad, 1.0002)
+    with pytest.raises(ValueError):
+        dlufd.propagation_time_ns(1000.0, bad)
+
+
+@pytest.mark.parametrize("bad", NON_FINITE)
+def test_refract_reports_non_finite_inputs_as_not_bent(tables, bad):
+    # Photon 0: non-finite height. Photon 1: finite, bent as usual. Photon 2: non-finite
+    # direction. Photon 3: non-finite position. Rejected photons come back unchanged.
+    height = np.array([bad, 20000.0, 20000.0, 20000.0])
+    cx = np.full(4, np.sin(np.radians(40.0)))
+    cy = np.zeros(4)
+    x = np.zeros(4)
+    y = np.zeros(4)
+    t = np.zeros(4)
+    cx[2] = bad
+    x[3] = bad
+    new_cx, new_cy, new_x, new_y, new_t, bent = dlufd.refract(tables, height, cx, cy, x, y, t)
+    assert bent.dtype == bool
+    assert list(bent) == [False, True, False, False]
+    np.testing.assert_array_equal(new_cx[[0, 2, 3]], cx[[0, 2, 3]])
+    np.testing.assert_array_equal(new_x[[0, 3]], x[[0, 3]])
+    assert new_t[0] == 0.0 and new_t[2] == 0.0 and new_t[3] == 0.0
+    assert new_t[1] > 0.0 and new_x[1] < 0.0
+
+
 def test_missing_profile_is_an_error(tmp_path):
     with pytest.raises(ValueError):
         dlufd.AtmosphereProfile(tmp_path / "missing.dat")
