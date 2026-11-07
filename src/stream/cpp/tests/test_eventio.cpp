@@ -350,6 +350,25 @@ void photon_count_is_checked() {
   CHECK(throws([&] { (void)decode_photons(make_block(1205, 0, 0, body)); }));
 }
 
+// Array and telescope indices are int16 on disk: only 0..32767 is encoded.
+void photon_block_indices_are_range_checked() {
+  TelPhotons p;
+  p.photons = 1.0F;
+  p.array = -1;
+  CHECK(throws([&] { (void)make_photons_block(p); }));
+  p.array = 32768;
+  CHECK(throws([&] { (void)make_photons_block(p); }));
+  p.array = 0;
+  p.tel = -1;
+  CHECK(throws([&] { (void)make_photons_block(p); }));
+  p.tel = 32768;
+  CHECK(throws([&] { (void)make_photons_block(p); }));
+  p.array = 32767;
+  p.tel = 32767;
+  const TelPhotons back = decode_photons(make_photons_block(p));
+  CHECK(back.array == 32767 && back.tel == 32767);
+}
+
 } // namespace
 
 int main() {
@@ -368,5 +387,6 @@ int main() {
     compact_encoding_quantises();
     photons3d_decoding();
     photon_count_is_checked();
+    photon_block_indices_are_range_checked();
   });
 }

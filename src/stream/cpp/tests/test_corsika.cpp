@@ -2,6 +2,7 @@
 
 #include "gstrickd/corsika.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -279,16 +280,19 @@ void stream_a_round_trips_byte_identically() {
 void stream_b_records_and_split_mode() {
   const std::vector<Record> records = convert(build_stream_b());
   using T = RecordType;
+  // Split-mode markers 1213 and 1214 are blobs in input order (records 21, 25).
   const std::vector<RecordType> expected{
       T::run,           T::blob,      T::blob,    T::blob,          T::event,     T::blob,
       T::blob,          T::telescope, T::photons, T::telescope_end, T::telescope, T::photons,
       T::telescope_end, T::telescope, T::photons, T::telescope_end, T::blob,      T::event_end,
-      T::event,         T::blob,      T::blob,    T::telescope,     T::photons,   T::telescope_end,
-      T::blob,          T::event_end, T::blob,    T::run_end};
+      T::event,         T::blob,      T::blob,    T::blob,          T::telescope, T::photons,
+      T::telescope_end, T::blob,      T::blob,    T::event_end,     T::blob,      T::run_end};
   CHECK(types_of(records) == expected);
   if (types_of(records) != expected) {
     return;
   }
+  CHECK(records[21].blob_eventio_type == iact::telarray_head);
+  CHECK(records[25].blob_eventio_type == iact::telarray_end);
   // Telescope 3 is compact: values are quantised, positions in m.
   const PhotonChunk &compact = records[14].chunk;
   CHECK(compact.rows() == 2);
@@ -300,9 +304,9 @@ void stream_b_records_and_split_mode() {
     CHECK(std::abs(compact[Column::zem][1] - 1000.0F) < 2.4F);
   }
   // Split-mode telescope: array reuse 1, telescope 1 (ident 1000 * 1 + 0).
-  CHECK(meta<std::int64_t>(records[21].metadata, "array_index") == 1);
-  CHECK(meta<std::int64_t>(records[21].metadata, "telescope_id") == 1);
-  CHECK(records[22].chunk[Column::x] == (std::vector<float>{corsika_cm_to_m(5.0F)}));
+  CHECK(meta<std::int64_t>(records[22].metadata, "array_index") == 1);
+  CHECK(meta<std::int64_t>(records[22].metadata, "telescope_id") == 1);
+  CHECK(records[23].chunk[Column::x] == (std::vector<float>{corsika_cm_to_m(5.0F)}));
 }
 
 void split_mode_is_written_as_normal_container() {
@@ -347,6 +351,148 @@ void malformed_input_throws() {
   CHECK(throws_error([&] { convert(orphan); }));
 }
 
+// Block-aligned truncation (no EVTE, no RUNE) must not count as a complete file.
+void truncated_input_throws() {
+  CHECK(throws_error([&] { convert(serialize({runh_block(), telpos_block(), evth_block(1)})); }));
+  CHECK(throws_error(
+      [&] { convert(serialize({runh_block(), telpos_block(), evth_block(1), evte_block(1)})); }));
+  CHECK(throws_error([&] { convert(serialize({runh_block()})); }));
+  // A run with RUNE but no events is complete.
+  CHECK(!throws_error([&] { convert(serialize({runh_block(), rune_block()})); }));
+}
+
+// A raw 1205 block (no range checks on write) with the given indices.
+EventioBlock raw_photons_block(std::int16_t array, std::int16_t tel) {
+  Bytes body;
+  ByteWriter out{body};
+  out.i16(array);
+  out.i16(tel);
+  out.f32(0.0F);
+  out.i32(0);
+  return make_block(iact::photons, 0, 0, std::move(body));
+}
+
+// Negative indices are rejected; the particle block 999/999 stays a blob.
+void negative_photon_indices_are_rejected() {
+  CHECK(throws_error([&] {
+    convert(serialize(
+        {runh_block(), evth_block(1), raw_photons_block(0, -1), evte_block(1), rune_block()}));
+  }));
+  CHECK(throws_error([&] {
+    convert(serialize(
+        {runh_block(), evth_block(1), raw_photons_block(-1, 0), evte_block(1), rune_block()}));
+  }));
+  TelPhotons particle;
+  particle.array = 999;
+  particle.tel = 999;
+  particle.photons = 1.0F;
+  const std::vector<Record> records = convert(serialize(
+      {runh_block(), evth_block(1), make_photons_block(particle), evte_block(1), rune_block()}));
+  bool particle_blob = false;
+  for (const Record &r : records) {
+    particle_blob |= r.type == RecordType::blob && r.blob_eventio_type == iact::photons;
+  }
+  CHECK(particle_blob);
+  const std::vector<RecordType> types = types_of(records);
+  CHECK(std::find(types.begin(), types.end(), RecordType::telescope) == types.end());
+}
+
+PhotonChunk photon_chunk(std::uint32_t telescope_id, std::uint64_t first_index, std::size_t rows) {
+  PhotonChunk chunk;
+  chunk.telescope_id = telescope_id;
+  chunk.frame = Frame::ground;
+  chunk.first_index = first_index;
+  chunk.resize(rows, column_bit(Column::x) | column_bit(Column::y) | column_bit(Column::cx) |
+                         column_bit(Column::cy) | column_bit(Column::t) | column_bit(Column::zem) |
+                         column_bit(Column::w));
+  return chunk;
+}
+
+Record telescope_record(std::int64_t telescope_id) {
+  Record r;
+  r.type = RecordType::telescope;
+  r.metadata["telescope_id"] = telescope_id;
+  r.metadata["array_index"] = std::int64_t{0};
+  return r;
+}
+
+Record photons_record(PhotonChunk chunk) {
+  Record r;
+  r.type = RecordType::photons;
+  r.chunk = std::move(chunk);
+  return r;
+}
+
+Record telescope_end_record(std::int64_t telescope_id) {
+  Record r;
+  r.type = RecordType::telescope_end;
+  r.metadata["telescope_id"] = telescope_id;
+  r.metadata["photons"] = 0.0;
+  return r;
+}
+
+void feed_writer(const std::vector<Record> &records) {
+  std::ostringstream out;
+  SimtelWriter writer{out};
+  for (const Record &r : records) {
+    writer.write(r);
+  }
+  writer.finish();
+}
+
+// Chunk indices continue per telescope; gaps, overlaps and reordering throw.
+void chunk_indices_must_be_contiguous() {
+  const Record tel = telescope_record(1);
+  CHECK(!throws_error([&] {
+    feed_writer({tel, photons_record(photon_chunk(1, 0, 2)), photons_record(photon_chunk(1, 2, 2)),
+                 telescope_end_record(1)});
+  }));
+  CHECK(throws_error([&] {
+    feed_writer({tel, photons_record(photon_chunk(1, 0, 2)), photons_record(photon_chunk(1, 3, 2)),
+                 telescope_end_record(1)});
+  }));
+  CHECK(throws_error([&] {
+    feed_writer({tel, photons_record(photon_chunk(1, 0, 2)), photons_record(photon_chunk(1, 1, 2)),
+                 telescope_end_record(1)});
+  }));
+  CHECK(throws_error([&] {
+    feed_writer({tel, photons_record(photon_chunk(1, 2, 2)), photons_record(photon_chunk(1, 0, 2)),
+                 telescope_end_record(1)});
+  }));
+  // The next telescope starts again at index 0.
+  CHECK(!throws_error([&] {
+    feed_writer({tel, photons_record(photon_chunk(1, 0, 2)), telescope_end_record(1),
+                 telescope_record(2), photons_record(photon_chunk(2, 0, 3)),
+                 telescope_end_record(2)});
+  }));
+}
+
+// telescope_end must name the open telescope.
+void telescope_end_must_match_open_telescope() {
+  const Record tel = telescope_record(1);
+  CHECK(throws_error(
+      [&] { feed_writer({tel, photons_record(photon_chunk(1, 0, 2)), telescope_end_record(2)}); }));
+  Record no_id;
+  no_id.type = RecordType::telescope_end;
+  CHECK(throws_error([&] { feed_writer({tel, photons_record(photon_chunk(1, 0, 2)), no_id}); }));
+  CHECK(!throws_error(
+      [&] { feed_writer({tel, photons_record(photon_chunk(1, 0, 2)), telescope_end_record(1)}); }));
+}
+
+// An open telescope must not be dropped by an array flush or finish().
+void open_telescope_blocks_array_flush() {
+  const Record tel = telescope_record(1);
+  Record evte;
+  evte.type = RecordType::blob;
+  evte.blob_eventio_type = iact::evte;
+  CHECK(throws_error([&] { feed_writer({tel, photons_record(photon_chunk(1, 0, 2)), evte}); }));
+  CHECK(throws_error([&] { feed_writer({tel, photons_record(photon_chunk(1, 0, 2))}); }));
+  // Array indices above 32767 are rejected before anything is written.
+  Record big = telescope_record(1);
+  big.metadata["array_index"] = std::int64_t{40000};
+  CHECK(throws_error([&] { feed_writer({big}); }));
+}
+
 } // namespace
 
 int main() {
@@ -358,5 +504,10 @@ int main() {
     stream_b_records_and_split_mode();
     split_mode_is_written_as_normal_container();
     malformed_input_throws();
+    truncated_input_throws();
+    negative_photon_indices_are_rejected();
+    chunk_indices_must_be_contiguous();
+    telescope_end_must_match_open_telescope();
+    open_telescope_blocks_array_flush();
   });
 }
