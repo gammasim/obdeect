@@ -118,6 +118,8 @@ factor whose state is `applied`.
 
 ## Random numbers
 
-Philox-4x32-10 (`gstrickd/random.hpp`), keyed on (seed, stage id) with
-counter (event, telescope, photon index, stream). Results do not depend on
-chunk size, photon order or thread count.
+Philox-4x32-10 (`gstrickd/random.hpp`), keyed on (seed, stage id) with a
+counter of disjoint bit fields: photon index (40 bits), block (24 bits),
+telescope (16 bits), stream (16 bits), event (32 bits). Out-of-range fields
+are rejected. Results do not depend on chunk size, photon order or thread
+count.
