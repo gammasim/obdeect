@@ -107,9 +107,13 @@ inline void validate(const Options &o) {
     bad("flasher: --photons needs at least one value");
   }
   for (const double p : o.photons) {
-    if (!(p >= 0.0)) {
-      bad("flasher: --photons must be >= 0");
+    if (!(p >= 0.0) || !std::isfinite(p)) {
+      bad("flasher: --photons must be finite and >= 0");
     }
+  }
+  // Bunch sizes below 1 are raised to 1 when the sources are built, as in the originals.
+  if (!std::isfinite(o.bunch_size)) {
+    bad("flasher: --bunchsize must be finite");
   }
   if (o.type == Type::dish) {
     if (!(o.distance_cm > 0.0) || !(o.camera_radius_cm > 0.0)) {

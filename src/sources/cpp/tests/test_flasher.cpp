@@ -5,6 +5,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -292,6 +293,26 @@ void type_rules() {
   CHECK_NEAR(flasher::observation_level_m(secondary), 1800.0, 0.0);
 }
 
+void non_finite_inputs_rejected() {
+  for (const auto type : {flasher::Type::dish, flasher::Type::secondary}) {
+    flasher::Options bunch;
+    bunch.type = type;
+    bunch.bunch_size = std::numeric_limits<double>::infinity();
+    flasher::Options photons;
+    photons.type = type;
+    photons.photons = {std::numeric_limits<double>::infinity()};
+    for (const auto &o : {bunch, photons}) {
+      bool threw = false;
+      try {
+        (void)flasher::build_sources(o);
+      } catch (const std::invalid_argument &) {
+        threw = true;
+      }
+      CHECK(threw);
+    }
+  }
+}
+
 } // namespace
 
 int main() {
@@ -302,5 +323,6 @@ int main() {
     secondary_geometry_and_counts();
     secondary_delays_and_fire_pattern();
     type_rules();
+    non_finite_inputs_rejected();
   });
 }
