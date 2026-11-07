@@ -52,10 +52,10 @@ def _write_light_source_stream(path, rows=50):
         writer.write("event", {"event_number": 1})
         writer.write("telescope", {"telescope_id": 1, "frame": "ground", "array_index": 0})
         writer.write_photons(1, "ground", 0, _photons(rows))
-        writer.write("telescope_end", {"photons": float(rows)})
+        writer.write("telescope_end", {"telescope_id": 1, "photons": float(rows)})
         writer.write("telescope", {"telescope_id": 2, "frame": "camera", "array_index": 0})
         writer.write_photons(2, "camera", 0, _photons(rows, telescope_offset=1.0))
-        writer.write("telescope_end", {"photons": float(rows)})
+        writer.write("telescope_end", {"telescope_id": 2, "photons": float(rows)})
         writer.write("event_end", {})
         writer.write("run_end", {})
 
@@ -129,7 +129,7 @@ def test_rejects_sky_frame(tmp_path):
         writer.write("event", {"event_number": 1})
         writer.write("telescope", {"telescope_id": 1})
         writer.write_photons(1, "sky", 0, _photons(3))
-        writer.write("telescope_end", {"photons": 3.0})
+        writer.write("telescope_end", {"telescope_id": 1, "photons": 3.0})
         writer.write("event_end", {})
         writer.write("run_end", {})
     with pytest.raises(RuntimeError, match="sky or telescope frame"):
