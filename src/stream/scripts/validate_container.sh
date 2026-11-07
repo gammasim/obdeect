@@ -44,10 +44,15 @@ if [ ! -f /out/data/EGSDAT6_1. ]; then
   cp /hostdata/corsika_run/sectnu-II-04 /out/data/SECTNU-II-04
 fi
 
-# Step 2: build the adapters from the mounted sources (no cmake in the image).
+# Step 2: build the adapters from the mounted sources (no cmake in the image). CMake
+# generates gstrickd/version.hpp and defines GSTRICKD_PACKAGE_VERSION; do the same here.
+mkdir -p /out/gen/gstrickd
+sed -e 's/@PROJECT_VERSION_MAJOR@/0/' -e 's/@PROJECT_VERSION_MINOR@/0/' \
+    -e 's/@PROJECT_VERSION_PATCH@/0/' /src/cmake/version.hpp.in > /out/gen/gstrickd/version.hpp
 for tool in corsika2ps ps2simtel; do
   g++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror -ffp-contract=off \
-      -I/src/cpp/include "/src/cpp/tools/$tool.cpp" -o "/out/bin/$tool" || exit 1
+      -DGSTRICKD_PACKAGE_VERSION='"0.0.0+validation"' -I/out/gen -I/src/cpp/include \
+      "/src/cpp/tools/$tool.cpp" -o "/out/bin/$tool" || exit 1
 done
 echo "== built: $(/out/bin/corsika2ps --help 2>&1 | head -1)"
 

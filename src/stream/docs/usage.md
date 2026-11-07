@@ -68,7 +68,7 @@ $ ps-cat run.ps | ps-tee copy.ps > out.ps  # copy.ps and out.ps get the same rec
 $ corsika2ps run.iact > run.ps           # CORSIKA IACT EventIO to a photon stream
 $ ps2simtel --camera-map cam.txt run.ps > sim.simtel   # stream to sim_telarray input
 $ corsika2ps < run.iact | ps2simtel > sim.simtel       # pipe; "-" reads stdin
-$ ps-cat --version                       # ps-cat 0.0.1 (photon-stream format 1.0)
+$ ps-cat --version                       # ps-cat <package version> (photon-stream format 1.0)
 ```
 
 The camera map lists the camera-frame telescopes, one per line:
@@ -95,7 +95,7 @@ $ python -m gstrickd --include-dir    # directory of the gstrickd/ headers
 A consumer (e.g. dlufd or dlamb) links the header-only core:
 
 ```cmake
-find_package(gstrickd 0.0 CONFIG REQUIRED)   # SameMinorVersion
+find_package(gstrickd 0.1 CONFIG REQUIRED)   # SameMinorVersion: any 0.1.x
 target_link_libraries(<target> PRIVATE gstrickd::gstrickd_core)
 ```
 
