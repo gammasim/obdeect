@@ -65,4 +65,18 @@ must be float32 arrays; the names are `gstrickd.COLUMNS`, the frames are `gstric
 $ ps-cat run1.ps run2.ps > all.ps        # one stream: one stream and one stream_end record
 $ ps-cat --summary all.ps                # records per type, photons and weight per telescope
 $ ps-cat run.ps | ps-tee copy.ps > out.ps  # copy.ps and out.ps get the same records
+$ corsika2ps run.iact > run.ps           # CORSIKA IACT EventIO to a photon stream
+$ ps2simtel --camera-map cam.txt run.ps > sim.simtel   # stream to sim_telarray input
+$ corsika2ps < run.iact | ps2simtel > sim.simtel       # pipe; "-" reads stdin
 ```
+
+The camera map lists the camera-frame telescopes, one per line:
+
+```text
+# telescope_id mirror_class(1 single | 2 dual) camera_rotation_deg
+2 1 0.0
+```
+
+Telescopes not listed are ground-frame (sim_telarray `Bypass_Optics=0`). Listed telescopes are
+converted to the bypass convention and need `Bypass_Optics=1` (class 1) or `2` (class 2) in
+sim_telarray; `ps2simtel` prints the value for each.

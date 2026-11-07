@@ -1,0 +1,491 @@
+#include "check.hpp"
+
+#include "gstrickd/simtel.hpp"
+
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <random>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+using namespace gstrickd;
+
+namespace {
+
+template <class Action> bool throws_error(Action action) {
+  try {
+    action();
+  } catch (const std::exception &) {
+    return true;
+  }
+  return false;
+}
+
+// Corsika-style float block with one value per CORSIKA word (word n at index n-1).
+std::vector<float> words273() { return std::vector<float>(273, 0.0F); }
+
+EventioBlock runh_block() {
+  std::vector<float> w = words273();
+  w[1] = 12345.0F;   // run number
+  w[3] = 7.41F;      // version
+  w[4] = 1.0F;       // number of observation levels
+  w[5] = 2200000.0F; // observation level 1 [cm]
+  w[15] = -2.0F;     // spectral slope
+  w[16] = 10.0F;     // energy min [GeV]
+  w[17] = 100000.0F; // energy max [GeV]
+  return make_float_block(iact::runh, 12345, w);
+}
+
+EventioBlock evth_block(float event) {
+  std::vector<float> w = words273();
+  w[1] = event;
+  w[2] = 14.0F;      // gamma
+  w[3] = 1000.0F;    // energy [GeV]
+  w[6] = 2500000.0F; // first interaction at 25 km [cm]
+  w[10] = 0.3F;      // zenith [rad]
+  w[11] = 1.2F;      // azimuth [rad]
+  w[76] = 5136.0F;   // atmosphere 5, refraction on
+  w[95] = 250.0F;    // Cherenkov wavelength range [nm]
+  w[96] = 800.0F;
+  return make_float_block(iact::evth, static_cast<std::uint32_t>(event), w);
+}
+
+EventioBlock evte_block(float event) {
+  std::vector<float> w = words273();
+  w[1] = event;
+  return make_float_block(iact::evte, static_cast<std::uint32_t>(event), w);
+}
+
+EventioBlock rune_block() {
+  std::vector<float> w = words273();
+  w[1] = 12345.0F;
+  w[2] = 1.0F;
+  return make_float_block(iact::rune, 12345, w);
+}
+
+EventioBlock teloff_block() {
+  TelOffset off;
+  off.xoff = {0.0};
+  off.yoff = {0.0};
+  return make_teloff_block(off);
+}
+
+// Telescope positions in cm: x, y, z, r per telescope.
+EventioBlock telpos_block(const std::vector<double> &z_cm) {
+  TelPos pos;
+  for (std::size_t i = 0; i < z_cm.size(); ++i) {
+    pos.x.push_back(100.0 * static_cast<double>(i));
+    pos.y.push_back(0.0);
+    pos.z.push_back(z_cm[i]);
+    pos.r.push_back(1200.0);
+  }
+  return make_telpos_block(pos);
+}
+
+// Long-format 1205 block with integer-cm positions, as CORSIKA writes them.
+EventioBlock photons_block(int tel, const std::vector<float> &x_cm,
+                           const std::vector<float> &y_cm) {
+  TelPhotons p;
+  p.array = 0;
+  p.tel = tel;
+  for (std::size_t i = 0; i < x_cm.size(); ++i) {
+    Bunch b;
+    b.x = x_cm[i];
+    b.y = y_cm[i];
+    b.cx = 0.125F * static_cast<float>(i % 8) - 0.25F;
+    b.cy = 0.0625F * static_cast<float>(i % 5) - 0.125F;
+    b.ctime = 0.5F * static_cast<float>(i);
+    b.zem = 2000000.0F; // 20 km
+    b.photons = (i % 3 == 0) ? 2.0F : 1.0F;
+    b.lambda = 400.0F;
+    p.photons += b.photons;
+    p.bunches.push_back(b);
+  }
+  return make_photons_block(p);
+}
+
+std::vector<EventioBlock> read_blocks(const std::string &bytes) {
+  std::istringstream in(bytes);
+  EventioReader reader{in};
+  std::vector<EventioBlock> blocks;
+  EventioBlock block;
+  while (reader.next(block)) {
+    blocks.push_back(block);
+  }
+  return blocks;
+}
+
+// True when cm -> m (float) -> cm (float) returns the same float.
+bool round_trips(float cm) { return corsika_m_to_cm(corsika_cm_to_m(cm)) == cm; }
+
+// Two telescopes of one event in normal mode (one 1204 container), plus RUNH, TELPOS,
+// EVTH, TELOFF and EVTE, as in CORSIKA output. Positions are integer cm that round-trip.
+std::string corsika_file(int events) {
+  std::vector<float> exact;
+  for (int k = -60000; exact.size() < 400 && k <= 60000; k += 7) {
+    if (round_trips(static_cast<float>(k))) {
+      exact.push_back(static_cast<float>(k));
+    }
+  }
+  std::string bytes;
+  const auto add = [&bytes](const EventioBlock &block) {
+    const std::vector<std::uint8_t> raw = simtel_detail::block_bytes(block);
+    bytes.append(raw.begin(), raw.end());
+  };
+  add(runh_block());
+  add(telpos_block({2000.0, 2100.0}));
+  for (int e = 1; e <= events; ++e) {
+    add(evth_block(static_cast<float>(e)));
+    add(teloff_block());
+    std::vector<EventioBlock> children;
+    for (int tel = 0; tel < 2; ++tel) {
+      std::vector<float> x;
+      std::vector<float> y;
+      for (std::size_t i = 0; i < 200; ++i) {
+        x.push_back(exact[(i * 3 + static_cast<std::size_t>(tel) * 11) % exact.size()]);
+        y.push_back(exact[(i * 5 + 1) % exact.size()]);
+      }
+      children.push_back(photons_block(tel, x, y));
+    }
+    add(make_container(iact::telarray, 0, 0, children));
+    add(evte_block(static_cast<float>(e)));
+  }
+  add(rune_block());
+  return bytes;
+}
+
+// Photon-stream records of one telescope in one frame.
+PhotonChunk chunk_of(std::uint32_t telescope, Frame frame, const std::vector<double> &x,
+                     const std::vector<double> &y, const std::vector<double> &cx,
+                     const std::vector<double> &cy) {
+  PhotonChunk chunk;
+  chunk.telescope_id = telescope;
+  chunk.frame = frame;
+  const std::size_t n = x.size();
+  chunk.resize(n, required_columns | column_bit(Column::zem) | column_bit(Column::wavelength));
+  for (std::size_t i = 0; i < n; ++i) {
+    chunk[Column::x][i] = static_cast<float>(x[i]);
+    chunk[Column::y][i] = static_cast<float>(y[i]);
+    chunk[Column::cx][i] = static_cast<float>(cx[i]);
+    chunk[Column::cy][i] = static_cast<float>(cy[i]);
+    chunk[Column::t][i] = 0.0F;
+    chunk[Column::w][i] = 1.0F;
+    chunk[Column::zem][i] = 20000.0F; // m
+    chunk[Column::wavelength][i] = 400.0F;
+  }
+  return chunk;
+}
+
+Record record_of(RecordType type, Metadata metadata = {}) {
+  Record record;
+  record.type = type;
+  record.metadata = std::move(metadata);
+  return record;
+}
+
+Record photons_of(const PhotonChunk &chunk) {
+  Record record;
+  record.type = RecordType::photons;
+  record.chunk = chunk;
+  return record;
+}
+
+Record blob_of(const EventioBlock &block) {
+  Record record;
+  record.type = RecordType::blob;
+  record.blob_eventio_type = block.type;
+  record.blob_eventio_id = block.ident;
+  record.blob = simtel_detail::block_bytes(block);
+  return record;
+}
+
+// Run metadata of a stream without CORSIKA blobs: two telescopes at (0, 0) and (100, 0) m.
+Metadata light_source_run() {
+  Metadata m;
+  m["run_number"] = std::int64_t{7};
+  m["observation_level_m"] = 2200.0;
+  m["telescope_x_m"] = std::vector<double>{0.0, 100.0};
+  m["telescope_y_m"] = std::vector<double>{0.0, 0.0};
+  m["telescope_z_m"] = std::vector<double>{0.0, 0.0};
+  m["telescope_r_m"] = std::vector<double>{12.0, 12.0};
+  return m;
+}
+
+// Writes records through a PsToSimtel and returns the EventIO bytes.
+std::string run_adapter(const std::vector<Record> &records, const CameraMap &camera) {
+  std::ostringstream out;
+  PsToSimtel converter{out, camera};
+  for (const Record &record : records) {
+    converter.write(record);
+  }
+  converter.finish();
+  return out.str();
+}
+
+void test_camera_map_parsing() {
+  std::istringstream good("# comment\n1 1 0\n\n2 2 30.5  # dual\n");
+  const CameraMap map = read_camera_map(good);
+  CHECK(map.size() == 2);
+  CHECK(map.at(2).mirror_class == 2);
+  CHECK_NEAR(map.at(2).rotation_deg, 30.5, 1e-12);
+  std::istringstream bad_class("1 3 0\n");
+  CHECK(throws_error([&] { read_camera_map(bad_class); }));
+  std::istringstream duplicate("1 1 0\n1 2 0\n");
+  CHECK(throws_error([&] { read_camera_map(duplicate); }));
+  std::istringstream extra("1 1 0 0\n");
+  CHECK(throws_error([&] { read_camera_map(extra); }));
+  std::istringstream nan("1 1 nan\n");
+  CHECK(throws_error([&] { read_camera_map(nan); }));
+  CHECK(bypass_optics_level(1) == 1);
+  CHECK(bypass_optics_level(2) == 2);
+}
+
+// Hand-computed with simtools camera_bunches (photon_bunch_file.py:105-156), input
+// (x, y) = (0.5, 0.2) m, (cx, cy) = (0.1, -0.2), camera rotation 30 deg:
+//   single mirror: y -> -y, cy -> -cy                 -> (0.5, -0.2), (0.1, 0.2)
+//   dual mirror:   x' = x cos r + y sin r = 0.5 cos30 + 0.2 sin30 = 0.5330127019
+//                  y' = y cos r - x sin r = 0.2 cos30 - 0.5 sin30 = -0.0767949192
+//                  cx' = cx cos r + cy sin r = -0.0133974596
+//                  cy' = cy cos r - cx sin r = -0.2232050808
+void test_camera_conversion() {
+  PhotonChunk single = chunk_of(1, Frame::camera, {0.5}, {0.2}, {0.1}, {-0.2});
+  camera_to_bypass_convention(single, CameraTelescope{1, 30.0});
+  CHECK_NEAR(single[Column::x][0], 0.5, 1e-6);
+  CHECK_NEAR(single[Column::y][0], -0.2, 1e-6);
+  CHECK_NEAR(single[Column::cx][0], 0.1, 1e-6);
+  CHECK_NEAR(single[Column::cy][0], 0.2, 1e-6);
+
+  PhotonChunk dual = chunk_of(2, Frame::camera, {0.5}, {0.2}, {0.1}, {-0.2});
+  camera_to_bypass_convention(dual, CameraTelescope{2, 30.0});
+  CHECK_NEAR(dual[Column::x][0], 0.5330127019, 1e-6);
+  CHECK_NEAR(dual[Column::y][0], -0.0767949192, 1e-6);
+  CHECK_NEAR(dual[Column::cx][0], -0.0133974596, 1e-6);
+  CHECK_NEAR(dual[Column::cy][0], -0.2232050808, 1e-6);
+
+  // Dual mirror with no rotation is the identity.
+  PhotonChunk identity = chunk_of(2, Frame::camera, {0.5}, {0.2}, {0.1}, {-0.2});
+  camera_to_bypass_convention(identity, CameraTelescope{2, 0.0});
+  CHECK_NEAR(identity[Column::y][0], 0.2, 1e-6);
+  CHECK_NEAR(identity[Column::cy][0], -0.2, 1e-6);
+}
+
+// Adapter output for a camera-frame telescope: cm, rotated, labelled ground for sim_telarray.
+void test_camera_frame_through_adapter() {
+  const CameraMap camera{{2, CameraTelescope{2, 30.0}}};
+  const std::vector<Record> records = {
+      record_of(RecordType::run, light_source_run()),
+      record_of(RecordType::event, Metadata{{"event_number", std::int64_t{1}}}),
+      record_of(RecordType::telescope,
+                Metadata{{"telescope_id", std::int64_t{2}}, {"array_index", std::int64_t{0}}}),
+      photons_of(chunk_of(2, Frame::camera, {0.5}, {0.2}, {0.1}, {-0.2})),
+      record_of(RecordType::telescope_end, Metadata{{"telescope_id", std::int64_t{2}}}),
+      record_of(RecordType::event_end),
+      record_of(RecordType::run_end),
+  };
+  const std::vector<EventioBlock> blocks = read_blocks(run_adapter(records, camera));
+  bool found = false;
+  for (const EventioBlock &block : blocks) {
+    if (block.type != iact::telarray) {
+      continue;
+    }
+    for (const EventioBlock &child : subblocks(block)) {
+      const TelPhotons p = decode_photons(child);
+      CHECK(p.tel == 1);
+      CHECK(p.bunches.size() == 1);
+      if (p.bunches.size() == 1) {
+        CHECK_NEAR(p.bunches[0].x, 53.30127, 1e-3);
+        CHECK_NEAR(p.bunches[0].y, -7.6794919, 1e-3);
+        CHECK_NEAR(p.bunches[0].cx, -0.0133974596, 1e-6);
+        CHECK_NEAR(p.bunches[0].cy, -0.2232050808, 1e-6);
+        CHECK_NEAR(p.bunches[0].zem, 2000000.0, 1.0);
+      }
+      found = true;
+    }
+  }
+  CHECK(found);
+}
+
+// TELPOS z is zeroed for camera-frame telescopes only (see simtel.hpp).
+void test_telpos_zeroed_for_camera_only() {
+  const CameraMap camera{{1, CameraTelescope{1, 0.0}}};
+  const std::vector<Record> records = {
+      record_of(RecordType::run, light_source_run()),
+      blob_of(telpos_block({2000.0, 2100.0})),
+      record_of(RecordType::event, Metadata{{"event_number", std::int64_t{1}}}),
+      record_of(RecordType::telescope,
+                Metadata{{"telescope_id", std::int64_t{1}}, {"array_index", std::int64_t{0}}}),
+      photons_of(chunk_of(1, Frame::camera, {0.5}, {0.2}, {0.1}, {-0.2})),
+      record_of(RecordType::telescope_end, Metadata{{"telescope_id", std::int64_t{1}}}),
+      record_of(RecordType::telescope,
+                Metadata{{"telescope_id", std::int64_t{2}}, {"array_index", std::int64_t{0}}}),
+      photons_of(chunk_of(2, Frame::ground, {0.5}, {0.2}, {0.1}, {-0.2})),
+      record_of(RecordType::telescope_end, Metadata{{"telescope_id", std::int64_t{2}}}),
+      record_of(RecordType::event_end),
+      record_of(RecordType::run_end),
+  };
+  const std::vector<EventioBlock> blocks = read_blocks(run_adapter(records, camera));
+  bool checked = false;
+  for (const EventioBlock &block : blocks) {
+    if (block.type == iact::telpos) {
+      const TelPos pos = decode_telpos(block);
+      CHECK(pos.z.size() == 2);
+      if (pos.z.size() == 2) {
+        CHECK_NEAR(pos.z[0], 0.0, 1e-9);    // camera-frame telescope 1
+        CHECK_NEAR(pos.z[1], 2100.0, 1e-3); // ground-frame telescope 2 unchanged
+        CHECK_NEAR(pos.r[0], 1200.0, 1e-3); // other columns kept
+      }
+      checked = true;
+      break;
+    }
+  }
+  CHECK(checked);
+
+  // A telescope in the camera map must not carry ground-frame photons.
+  const std::vector<Record> mixed = {
+      record_of(RecordType::run, light_source_run()),
+      record_of(RecordType::event, Metadata{{"event_number", std::int64_t{1}}}),
+      record_of(RecordType::telescope,
+                Metadata{{"telescope_id", std::int64_t{1}}, {"array_index", std::int64_t{0}}}),
+      photons_of(chunk_of(1, Frame::ground, {0.5}, {0.2}, {0.1}, {-0.2})),
+  };
+  CHECK(throws_error([&] { run_adapter(mixed, camera); }));
+  // ... and a camera-frame telescope needs a camera map entry.
+  const std::vector<Record> unmapped = {
+      record_of(RecordType::run, light_source_run()),
+      record_of(RecordType::event, Metadata{{"event_number", std::int64_t{1}}}),
+      record_of(RecordType::telescope,
+                Metadata{{"telescope_id", std::int64_t{2}}, {"array_index", std::int64_t{0}}}),
+      photons_of(chunk_of(2, Frame::camera, {0.5}, {0.2}, {0.1}, {-0.2})),
+  };
+  CHECK(throws_error([&] { run_adapter(unmapped, camera); }));
+}
+
+// Without CORSIKA blobs, RUNH, TELPOS, EVTH, TELOFF, EVTE and RUNE are synthesised.
+void test_synthesised_headers() {
+  const std::vector<Record> records = {
+      record_of(RecordType::run, light_source_run()),
+      record_of(RecordType::event, Metadata{{"event_number", std::int64_t{3}}}),
+      record_of(RecordType::telescope,
+                Metadata{{"telescope_id", std::int64_t{1}}, {"array_index", std::int64_t{0}}}),
+      photons_of(chunk_of(1, Frame::ground, {0.5, 1.5}, {0.2, 0.0}, {0.1, 0.0}, {-0.2, 0.0})),
+      record_of(RecordType::telescope_end, Metadata{{"telescope_id", std::int64_t{1}}}),
+      record_of(RecordType::event_end),
+      record_of(RecordType::run_end),
+  };
+  const std::vector<EventioBlock> blocks = read_blocks(run_adapter(records, {}));
+  std::vector<std::uint32_t> types;
+  for (const EventioBlock &block : blocks) {
+    types.push_back(block.type);
+  }
+  const std::vector<std::uint32_t> expected = {
+      iact::runh, iact::telpos, iact::evth, iact::teloff, iact::telarray, iact::evte, iact::rune};
+  CHECK(types == expected);
+  if (types == expected) {
+    const std::vector<float> runh = decode_float_block(blocks[0]);
+    CHECK_NEAR(runh[1], 7.0, 0.0);       // run number, word 2
+    CHECK_NEAR(runh[5], 220000.0, 1e-3); // observation level, word 6 [cm]
+    const TelPos pos = decode_telpos(blocks[1]);
+    CHECK(pos.x.size() == 2);
+    CHECK_NEAR(pos.x[1], 10000.0, 1e-3); // second telescope at 100 m
+    CHECK_NEAR(pos.r[0], 1200.0, 1e-3);
+    const std::vector<float> evth = decode_float_block(blocks[2]);
+    CHECK_NEAR(evth[1], 3.0, 0.0);       // event number, word 2
+    CHECK_NEAR(evth[43], 7.0, 0.0);      // run number, word 44
+    CHECK_NEAR(evth[4], 220000.0, 1e-3); // word 5 [cm]
+    const std::vector<float> evte = decode_float_block(blocks[5]);
+    CHECK_NEAR(evte[1], 3.0, 0.0);
+    // RUNE body: count 3, "RUNE", run number, number of showers.
+    const std::vector<std::uint8_t> &body = blocks[6].body;
+    CHECK(body.size() == 16);
+    if (body.size() == 16) {
+      CHECK(std::string(body.begin() + 4, body.begin() + 8) == "RUNE");
+      float run_value = 0.0F;
+      float showers = 0.0F;
+      std::memcpy(&run_value, body.data() + 8, 4);
+      std::memcpy(&showers, body.data() + 12, 4);
+      CHECK_NEAR(run_value, 7.0, 0.0);
+      CHECK_NEAR(showers, 1.0, 0.0);
+    }
+  }
+}
+
+// A stream without the metadata sim_telarray needs is rejected, not padded with defaults.
+void test_missing_metadata_rejected() {
+  Metadata run;
+  run["run_number"] = std::int64_t{1};
+  const std::vector<Record> records = {
+      record_of(RecordType::run, run),
+      record_of(RecordType::event, Metadata{{"event_number", std::int64_t{1}}}),
+  };
+  CHECK(throws_error([&] { run_adapter(records, {}); }));
+}
+
+// Sky and telescope frames must not reach sim_telarray.
+void test_frames_rejected() {
+  const std::vector<Record> sky = {
+      record_of(RecordType::run, light_source_run()),
+      record_of(RecordType::event, Metadata{{"event_number", std::int64_t{1}}}),
+      record_of(RecordType::telescope,
+                Metadata{{"telescope_id", std::int64_t{1}}, {"array_index", std::int64_t{0}}}),
+      photons_of(chunk_of(1, Frame::sky, {0.5}, {0.2}, {0.1}, {-0.2})),
+  };
+  CHECK(throws_error([&] { run_adapter(sky, {}); }));
+  std::vector<Record> telescope_frame = sky;
+  telescope_frame.back() = photons_of(chunk_of(1, Frame::telescope, {0.5}, {0.2}, {0.1}, {-0.2}));
+  CHECK(throws_error([&] { run_adapter(telescope_frame, {}); }));
+}
+
+// CORSIKA-style file -> corsika_to_records -> Writer -> Reader -> SimtelWriter gives the
+// input back byte for byte, for positions that round-trip cm -> m -> cm.
+void test_round_trip_byte_identical() {
+  const std::string input = corsika_file(2);
+  std::istringstream in(input);
+  std::ostringstream stream_bytes;
+  {
+    Writer writer{stream_bytes, "test_simtel"};
+    corsika_to_records(in, [&writer](const Record &record) { write_record(writer, record); });
+    writer.finish();
+  }
+  std::istringstream stream_in(stream_bytes.str());
+  Reader reader{stream_in};
+  std::ostringstream output;
+  SimtelWriter sim{output};
+  Record record;
+  while (reader.next(record)) {
+    sim.write(record);
+  }
+  sim.finish();
+  CHECK(reader.ended());
+  CHECK(output.str() == input);
+  CHECK(!input.empty());
+
+  // Fraction of random float positions that survive cm -> m -> cm (not a pass criterion).
+  std::mt19937 rng{20261107};
+  std::uniform_real_distribution<float> uniform{-1.0e5F, 1.0e5F};
+  int survived = 0;
+  const int trials = 100000;
+  for (int i = 0; i < trials; ++i) {
+    survived += round_trips(uniform(rng)) ? 1 : 0;
+  }
+  std::printf("round trip cm->m->cm: %.2f%% of %d random float positions in +-1e5 cm\n",
+              100.0 * survived / trials, trials);
+}
+
+} // namespace
+
+int main() {
+  return run_checks([] {
+    test_camera_map_parsing();
+    test_camera_conversion();
+    test_camera_frame_through_adapter();
+    test_telpos_zeroed_for_camera_only();
+    test_synthesised_headers();
+    test_missing_metadata_rejected();
+    test_frames_rejected();
+    test_round_trip_byte_identical();
+  });
+}

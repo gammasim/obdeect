@@ -11,9 +11,11 @@ except PackageNotFoundError:
 # Imported on first use, so that reading the version needs neither NumPy nor the extension.
 _EXPORTS = {
     "COLUMNS": "gstrickd.stream",
+    "corsika_to_stream": "gstrickd.convert",
     "FRAMES": "gstrickd.stream",
     "METADATA_RECORDS": "gstrickd.stream",
     "REQUIRED_COLUMNS": "gstrickd.stream",
+    "stream_to_simtel": "gstrickd.convert",
     "Reader": "gstrickd.stream",
     "Writer": "gstrickd.stream",
 }

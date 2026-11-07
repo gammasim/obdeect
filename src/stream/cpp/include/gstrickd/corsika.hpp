@@ -478,6 +478,9 @@ public:
   // call this after the last record if the stream does not end with one.
   void finish() { flush_array(); }
 
+  // Photons of the open telescope record (ground frame), without a Record copy.
+  void write_chunk(const PhotonChunk &chunk) { append(chunk); }
+
 private:
   void append(const PhotonChunk &chunk) {
     if (!tel_open_ || chunk.telescope_id != static_cast<std::uint32_t>(telescope_id_)) {
