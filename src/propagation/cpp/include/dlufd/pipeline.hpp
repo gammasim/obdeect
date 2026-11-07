@@ -72,8 +72,11 @@ apply_extinction_chunk(gstrickd::PhotonChunk chunk, const ExtinctionSettings &se
     }
     if (chunk.has(Column::cz)) {
       const double cz = -std::sqrt(1.0 - r2);
-      if (std::abs(static_cast<double>(chunk[Column::cz][row]) - cz) > 1e-5) {
-        throw std::invalid_argument("cz column does not match cx, cy (cz = -sqrt(1-cx^2-cy^2))");
+      const auto cz_given = static_cast<double>(chunk[Column::cz][row]);
+      // NaN fails the finiteness test; a NaN difference would pass the tolerance test.
+      if (!std::isfinite(cz_given) || std::abs(cz_given - cz) > 1e-5) {
+        throw std::invalid_argument(
+            "cz column must be finite and match cx, cy (cz = -sqrt(1-cx^2-cy^2))");
       }
     }
     if (!(w[row] >= 0.0F &&
@@ -87,8 +90,9 @@ apply_extinction_chunk(gstrickd::PhotonChunk chunk, const ExtinctionSettings &se
 
   auto &wavelength = chunk[Column::wavelength];
   for (std::size_t row = 0; row < rows; ++row) {
-    if (wavelength[row] < 0.0F) {
-      throw std::invalid_argument("wavelength must be 0 (not assigned) or positive");
+    // 0 means not assigned; any other value must be a finite, non-negative integer.
+    if (wavelength[row] != 0.0F) {
+      check_wavelength(static_cast<double>(wavelength[row]));
     }
   }
   assign_wavelengths(chunk, settings.wavelengths, settings.seed, settings.event,
@@ -99,8 +103,8 @@ apply_extinction_chunk(gstrickd::PhotonChunk chunk, const ExtinctionSettings &se
   atmospheric_acceptance<double>(chunk, *settings.table, *settings.depths, p);
   const Envelope &envelope = *settings.envelope;
   for (std::size_t row = 0; row < rows; ++row) {
-    const auto iwl = static_cast<int>(wavelength[row]);
-    if (iwl >= max_lambda_nm) {
+    const int iwl = table_wavelength(static_cast<double>(wavelength[row]));
+    if (iwl < 0) {
       p[row] = 0.0;
       continue;
     }

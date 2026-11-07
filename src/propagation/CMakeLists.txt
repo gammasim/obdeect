@@ -11,7 +11,7 @@ option(DLUFD_BUILD_PYTHON_API "Build the Python extension" ${DLUFD_BUILD_PYTHON_
 
 include(FetchContent)
 FetchContent_Declare(gstrickd GIT_REPOSITORY https://github.com/GernotMaier/gstrickd.git
-                     GIT_TAG 1e488f48a59230214a3f7fa75b1d1e7f584f5b2d)
+                     GIT_TAG fcffa70530510ad013edf644f700ed9989912682)
 set(GSTRICKD_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(GSTRICKD_BUILD_PYTHON_API OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(gstrickd)
@@ -49,7 +49,8 @@ endif()
 
 if(DLUFD_BUILD_TESTING)
   enable_testing()
-  foreach(test_name version transmission thinning profile refraction timing scattering)
+  foreach(test_name version transmission thinning pipeline profile refraction timing
+                    scattering)
     add_executable(test_${test_name} cpp/tests/test_${test_name}.cpp)
     target_link_libraries(test_${test_name} PRIVATE dlufd_core)
     # Reference data: cpp/tests/data (copied from sim_telarray, see test_transmission.cpp).
