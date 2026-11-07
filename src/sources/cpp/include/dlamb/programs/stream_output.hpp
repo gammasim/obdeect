@@ -165,10 +165,10 @@ inline Spectrum parse_spectrum(const std::string &text) {
     }
     return InverseSquare{from, to};
   }
-  const bool digits = !text.empty() && std::all_of(text.begin(), text.end(), [](char c) {
-    return std::isdigit(static_cast<unsigned char>(c)) != 0;
-  });
-  if (digits) {
+  // Any plain number (400, 400.5, 4e2) is a wavelength; other text is rejected below.
+  char *end = nullptr;
+  std::strtod(text.c_str(), &end);
+  if (!text.empty() && end != text.c_str() && *end == '\0') {
     const double wavelength = parse_real(text, "spectrum");
     if (wavelength < 200.0 || wavelength > 2000.0) {
       bad("spectrum '" + text + "': wavelength must be 200-2000 nm");

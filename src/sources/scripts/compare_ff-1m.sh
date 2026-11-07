@@ -3,8 +3,8 @@
 # in the simtools-dev container. Needs the built dlamb tool (build/debug/dlamb-ff-1m) and podman.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WORK="${WORK:-/private/tmp/claude-502/xcheck/ff-1m}"
-CFG="${CFG:-/Users/maierg/DESYCloud/WIP/cta/202611/full-simulation-chain/sim_telarray/cfg/common}"
+: "${WORK:?set WORK to a scratch directory for the cross-check outputs}"
+: "${CFG:?set CFG to the sim_telarray cfg/common directory}"
 mkdir -p "$WORK"
 "$ROOT/build/debug/dlamb-ff-1m" --events 20 -o "$WORK/dlamb.gst"
 podman run --rm -v "$CFG:/cfg:ro" -v "$WORK:/out" -v "$ROOT/scripts:/scripts:ro" \

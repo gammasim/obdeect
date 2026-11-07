@@ -7,7 +7,9 @@
 #include <cstdint>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace dlamb;
@@ -139,6 +141,69 @@ void all_pixels_and_list_errors() {
   CHECK(threw);
 }
 
+void non_contiguous_ids() {
+  // IDs 20 and 10 are listed out of order and are not 0..N-1: each ID keeps its own
+  // position (3 cm and 0 cm), and the labels are the IDs.
+  const char *text = "Pixel 20 0 3.0 0.0 1.0\n"
+                     "Pixel 10 0 0.0 0.0 1.0\n";
+  pixled::Options options;
+  std::istringstream in(text);
+  options.camera = pixled::read_camera(in, options.slaves);
+  options.use = "10 20";
+  options.photons = 10.0;
+  const auto s = read_stream(stream_bytes(options));
+  CHECK(s.rows.size() == 20);
+  int at_origin = 0;
+  int at_3cm = 0;
+  for (const Row &r : s.rows) {
+    if (std::abs(r.x) < 1e-6) {
+      ++at_origin;
+    } else if (std::abs(r.x - 0.03) < 1e-6) {
+      ++at_3cm;
+    }
+  }
+  CHECK(at_origin == 10);
+  CHECK(at_3cm == 10);
+  const auto sources = pixled::build_sources(options);
+  CHECK(sources.size() == 1);
+  CHECK(sources[0].labels == std::vector<int>({10, 20}));
+
+  bool threw = false;
+  try {
+    std::istringstream dup("Pixel 5 0 0.0 0.0 1.0\nPixel 5 0 1.0 0.0 1.0\n");
+    (void)pixled::read_camera(dup, false);
+  } catch (const std::invalid_argument &) {
+    threw = true;
+  }
+  CHECK(threw);
+}
+
+void spectrum_wavelengths() {
+  // Plain numbers in nm, with a decimal point or an exponent, give a fixed wavelength.
+  for (const auto &[text, nm] : std::vector<std::pair<std::string, double>>{
+           {"400", 400.0}, {"400.5", 400.5}, {"4e2", 400.0}}) {
+    auto options = base_options("0");
+    options.spectrum = text;
+    const auto s = read_stream(stream_bytes(options));
+    CHECK(s.rows.size() == 10);
+    for (const Row &r : s.rows) {
+      CHECK_NEAR(r.wavelength, nm, 1e-3);
+    }
+  }
+  // Out of range, not a number, or a file name: rejected.
+  for (const char *text : {"1e5", "100", "400x", "table.dat"}) {
+    auto options = base_options("0");
+    options.spectrum = text;
+    bool threw = false;
+    try {
+      (void)pixled::build_sources(options);
+    } catch (const std::invalid_argument &) {
+      threw = true;
+    }
+    CHECK(threw);
+  }
+}
+
 } // namespace
 
 int main() {
@@ -147,5 +212,7 @@ int main() {
     slaves_and_trigger_groups();
     random_pixels();
     all_pixels_and_list_errors();
+    non_contiguous_ids();
+    spectrum_wavelengths();
   });
 }

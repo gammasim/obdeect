@@ -4,8 +4,8 @@
 # The original's photon bunches carry cx, cy only (eventio), so cz is not comparable here.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WORK="${WORK:-/private/tmp/claude-502/xcheck/ff-gct}"
-CFG="${CFG:-/Users/maierg/DESYCloud/WIP/cta/202611/full-simulation-chain/sim_telarray/cfg/common}"
+: "${WORK:?set WORK to a scratch directory for the cross-check outputs}"
+: "${CFG:?set CFG to the sim_telarray cfg/common directory}"
 mkdir -p "$WORK"
 "$ROOT/build/debug/dlamb-ff-gct" --photons 1e5 --events 1 -o "$WORK/dlamb.gst"
 podman run --rm -v "$CFG:/cfg:ro" -v "$WORK:/out" -v "$ROOT/scripts:/scripts:ro" \
