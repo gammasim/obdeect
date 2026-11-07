@@ -118,6 +118,9 @@ public:
       if (!reader_->ended()) {
         throw std::runtime_error("gstrickd: truncated stream (no stream_end record)");
       }
+      if (!reader_->at_clean_end()) {
+        throw std::runtime_error("gstrickd: data after stream_end");
+      }
       throw nb::stop_iteration();
     }
     nb::dict out;

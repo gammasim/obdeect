@@ -141,6 +141,17 @@ def test_missing_stream_end_rejected(tmp_path):
         list(gstrickd.Reader(str(empty)))
 
 
+def test_data_after_stream_end_rejected(tmp_path):
+    path = tmp_path / "full.ps"
+    _write_stream(path)
+    data = path.read_bytes()
+    for name, extra in (("one_byte.ps", b"\x00"), ("concatenated.ps", data)):
+        bad = tmp_path / name
+        bad.write_bytes(data + extra)
+        with pytest.raises(RuntimeError, match="after stream_end"):
+            list(gstrickd.Reader(str(bad)))
+
+
 def test_non_integral_frame_rejected(tmp_path):
     with gstrickd.Writer(str(tmp_path / "frame.ps"), "pytest") as writer:
         for frame in (2.9, True):
@@ -209,6 +220,34 @@ def test_ps_tee(tmp_path):
     )
     assert proc.stdout == source.read_bytes()
     assert copy.read_bytes() == source.read_bytes()
+
+
+@pytest.mark.skipif(_tool("ps-tee") is None, reason="ps-tee not installed")
+@pytest.mark.parametrize(
+    ("case", "message"),
+    [
+        ("missing_header", "does not start with a stream record"),
+        ("missing_stream_end", "no stream_end"),
+        ("trailing_data", "after stream_end"),
+        ("empty", "empty input"),
+    ],
+)
+def test_ps_tee_rejects_bad_record_order(tmp_path, case, message):
+    tee = _tool("ps-tee")
+    source = tmp_path / "source.ps"
+    _write_stream(source)
+    data = source.read_bytes()
+    header_size = 16 + int.from_bytes(data[8:16], "little")  # stream record: header + payload
+    bad = {
+        "missing_header": data[header_size:],
+        "missing_stream_end": data[:-16],
+        "trailing_data": data + data[-16:],
+        "empty": b"",
+    }[case]
+    copy = tmp_path / "copy.ps"
+    proc = subprocess.run([tee, str(copy)], input=bad, capture_output=True)
+    assert proc.returncode != 0
+    assert message in proc.stderr.decode()
 
 
 def _bytes_path(directory, data):

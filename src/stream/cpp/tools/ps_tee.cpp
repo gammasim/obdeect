@@ -25,6 +25,42 @@ void set_binary_stdio() {
 #endif
 }
 
+// Checks the record order of a raw copy: one stream record first, stream_end
+// last, nothing after stream_end. Records are checked before they are written.
+class StreamOrder {
+public:
+  void accept(gstrickd::RecordType type) {
+    if (ended_) {
+      throw std::runtime_error("data after stream_end");
+    }
+    if (type == gstrickd::RecordType::stream) {
+      if (header_seen_) {
+        throw std::runtime_error("second stream record");
+      }
+      header_seen_ = true;
+      return;
+    }
+    if (!header_seen_) {
+      throw std::runtime_error("stream does not start with a stream record");
+    }
+    ended_ = type == gstrickd::RecordType::stream_end;
+  }
+
+  // Called at EOF on a record boundary.
+  void finish() const {
+    if (!header_seen_) {
+      throw std::runtime_error("empty input (no stream record)");
+    }
+    if (!ended_) {
+      throw std::runtime_error("no stream_end (truncated stream)");
+    }
+  }
+
+private:
+  bool header_seen_{false};
+  bool ended_{false};
+};
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -63,7 +99,11 @@ int main(int argc, char **argv) {
     }
 
     std::vector<std::uint8_t> record;
+    StreamOrder order;
     while (gstrickd::read_record_raw(std::cin, record)) {
+      const auto type =
+          static_cast<gstrickd::RecordType>(gstrickd::stream_detail::load_le(record.data() + 4, 2));
+      order.accept(type);
       const auto *data = reinterpret_cast<const char *>(record.data());
       const auto size = static_cast<std::streamsize>(record.size());
       std::cout.write(data, size);
@@ -81,6 +121,7 @@ int main(int argc, char **argv) {
         }
       }
     }
+    order.finish();
   } catch (const std::exception &error) {
     std::fprintf(stderr, "ps-tee: %s\n", error.what());
     return 1;

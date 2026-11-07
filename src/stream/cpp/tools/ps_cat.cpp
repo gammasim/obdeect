@@ -51,7 +51,7 @@ void copy_stream(std::istream &in, const std::string &name, gstrickd::Writer &wr
   if (!reader.ended()) {
     throw std::runtime_error(name + ": no stream_end (truncated stream)");
   }
-  if (in.peek() != std::char_traits<char>::eof()) {
+  if (!reader.at_clean_end()) {
     throw std::runtime_error(name + ": data after stream_end");
   }
 }
@@ -74,7 +74,7 @@ void summarize_stream(std::istream &in, const std::string &name, Summary &summar
   if (!reader.ended()) {
     throw std::runtime_error(name + ": no stream_end (truncated stream)");
   }
-  if (in.peek() != std::char_traits<char>::eof()) {
+  if (!reader.at_clean_end()) {
     throw std::runtime_error(name + ": data after stream_end");
   }
 }

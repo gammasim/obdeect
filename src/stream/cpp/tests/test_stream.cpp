@@ -267,6 +267,25 @@ void header_required_once() {
   CHECK(throws([&] { read_all(twice, nullptr); }));
 }
 
+void clean_end_required() {
+  // Bytes after stream_end (here a whole extra record) are not a clean end.
+  std::ostringstream out;
+  {
+    Writer writer(out, "test");
+    writer.finish();
+  }
+  const std::string clean = out.str();
+  for (const std::string &bytes : {clean, clean + raw_record(12, "trailing")}) {
+    std::istringstream in(bytes);
+    Reader reader(in);
+    Record record;
+    while (reader.next(record)) {
+    }
+    CHECK(reader.ended());
+    CHECK(reader.at_clean_end() == (bytes == clean));
+  }
+}
+
 } // namespace
 
 int main() {
@@ -282,5 +301,6 @@ int main() {
     truncated_record();
     wrong_format_major();
     header_required_once();
+    clean_end_required();
   });
 }

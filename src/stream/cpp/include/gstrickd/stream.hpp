@@ -531,6 +531,19 @@ public:
   // True once stream_end has been read.
   [[nodiscard]] bool ended() const { return ended_; }
 
+  // True if stream_end has been read and the input is at EOF, i.e. nothing
+  // (not even a partial record) follows it. Throws on a read error.
+  [[nodiscard]] bool at_clean_end() {
+    if (!ended_) {
+      return false;
+    }
+    const auto next = in_.peek();
+    if (in_.bad()) {
+      throw std::runtime_error("gstrickd: read error on input stream");
+    }
+    return next == std::istream::traits_type::eof();
+  }
+
 private:
   std::istream &in_;
   std::vector<std::uint8_t> raw_;
