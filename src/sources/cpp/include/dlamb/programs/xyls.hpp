@@ -8,6 +8,7 @@
 #include "dlamb/source.hpp"
 
 #include <cstdint>
+#include <stdexcept>
 #include <vector>
 
 namespace dlamb::programs {
@@ -38,6 +39,8 @@ struct XylsOptions {
 
   const double bunch = std::max(1.0, o.bunch_size);
   const double r = o.radius_cm;
+  if (!(o.photons_per_position >= 0.0) || o.photons_per_position > max_photon_count)
+    throw std::invalid_argument("xyls: photons per position must be finite, >= 0 and at most 2^53");
   std::vector<SourceEmission> list;
   const auto add = [&](double x_cm, double y_cm) {
     Source s;
@@ -46,7 +49,7 @@ struct XylsOptions {
         {x_cm / 100.0, y_cm / 100.0, o.height_cm / 100.0}, {0.0, 0.0, -1.0}, FixedAngle{0.0}};
     s.spectrum = Fixed{400.0};
     s.pulse = GaussianShape{0.0, 0.0};
-    s.photons = std::max(0.0, o.photons_per_position) / bunch;
+    s.photons = o.photons_per_position / bunch;
     list.push_back({s, o.seed + list.size(), bunch, 0.0});
   };
   // Same loops as xyls.cc: a line along x at y = y0, then a line along y at x = x0.

@@ -62,7 +62,7 @@ int run(int argc, char **argv) {
     } else if (arg == "-b" || arg == "--bs" || arg == "--bunch-size") {
       o.bunch_size = dlamb::cli::to_double(next(), arg);
     } else if (arg == "--events") {
-      o.events = static_cast<std::uint32_t>(dlamb::cli::to_int(next(), arg));
+      o.events = dlamb::cli::to_count(next(), arg);
     } else if (arg == "--run") {
       o.run_number = dlamb::cli::to_int(next(), arg);
     } else if (arg == "-s" || arg == "--spectrum") {

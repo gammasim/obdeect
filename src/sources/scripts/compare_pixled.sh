@@ -3,8 +3,8 @@
 # 0 1 2 with two pixels per event, 10 photons per pixel). Both write pixel positions.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WORK="${WORK:-/private/tmp/claude-502/xcheck/pixled}"
-CFG="${CFG:-/Users/maierg/DESYCloud/WIP/cta/202611/full-simulation-chain/sim_telarray/cfg/common}"
+: "${WORK:?set WORK to a scratch directory for the cross-check outputs}"
+: "${CFG:?set CFG to the sim_telarray cfg/common directory}"
 mkdir -p "$WORK"
 cp "$ROOT/scripts/compare_pixled_camera.txt" "$WORK/camera.txt"
 "$ROOT/build/debug/dlamb-pixled" -c "$WORK/camera.txt" --use "0 1 2" --require 2 --photons 10 -o "$WORK/dlamb.gst"

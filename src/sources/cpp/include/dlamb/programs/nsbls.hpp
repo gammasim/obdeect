@@ -68,7 +68,9 @@ struct NsbEmission {
   source.spectrum = o.spectrum;
   source.pulse_width_ns = o.pulse_width_ns;
   source.pulse_delay_ns = o.pulse_delay_ns;
-  plan.cases.push_back({NsbEmission{source, o.seed, bunch, std::max(0.0, o.photons) / bunch}});
+  if (!(o.photons >= 0.0) || o.photons > max_photon_count)
+    throw std::invalid_argument("nsbls: photons must be finite, >= 0 and at most 2^53");
+  plan.cases.push_back({NsbEmission{source, o.seed, bunch, o.photons / bunch}});
   return plan;
 }
 

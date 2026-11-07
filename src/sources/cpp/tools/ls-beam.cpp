@@ -63,7 +63,7 @@ int run(int argc, char **argv) {
       throw std::invalid_argument("--brightness is replaced by --primary-per-m "
                                   "(see docs/programs/ls-beam.md)");
     } else if (arg == "--events") {
-      o.events = static_cast<std::uint32_t>(dlamb::cli::to_int(next(), arg));
+      o.events = dlamb::cli::to_count(next(), arg);
     } else if (arg == "--step" || arg == "--steplength") {
       o.step_m = dlamb::cli::to_double(next(), arg);
     } else if (arg == "--bunchsize") {

@@ -4,6 +4,7 @@
 #include "dlamb/programs/xyls.hpp"
 
 #include <cstdint>
+#include <stdexcept>
 #include <variant>
 
 using namespace dlamb;
@@ -73,11 +74,25 @@ void non_default_scan() {
     }
 }
 
+// Negative photon counts per position are rejected, not clamped to zero.
+void rejects_negative_photons() {
+  XylsOptions o;
+  o.photons_per_position = -1.0;
+  bool threw = false;
+  try {
+    (void)plan_xyls(o);
+  } catch (const std::invalid_argument &) {
+    threw = true;
+  }
+  CHECK(threw);
+}
+
 } // namespace
 
 int main() {
   return run_checks([] {
     default_scan();
     non_default_scan();
+    rejects_negative_photons();
   });
 }

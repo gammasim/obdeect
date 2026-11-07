@@ -1,10 +1,12 @@
 #include "check.hpp"
 #include "sky_stream_check.hpp"
 
+#include "dlamb/background.hpp"
 #include "dlamb/programs/nsbls.hpp"
 
 #include <cmath>
 #include <cstdint>
+#include <stdexcept>
 #include <variant>
 #include <vector>
 
@@ -116,6 +118,38 @@ void table_spectrum() {
   CHECK_NEAR(m.var, 7500.0, 4.0 * 7500.0 * std::sqrt(0.8 / n));
 }
 
+// Tilted viewing directions: every photon starts on the hemisphere that faces its own
+// direction, so it travels inward (dot(pos - centre, d) < 0). Its emission distance
+// zi = -dot(u, d) has the mean of the hemisphere point distribution, E[zi].
+void tilted_directions_enter_sphere() {
+  const Vec3 pointings[] = {
+      {0.5, 0.0, -0.866}, {0.3, -0.4, -0.866}, {0.0, 0.7, -0.714}, {-0.6, 0.6, -0.529}};
+  const double cone_deg = 60.0;
+  for (const Vec3 &pointing : pointings) {
+    BackgroundSource s;
+    s.centre = {1.0, -2.0, 3.0};
+    s.radius_m = 15.0;
+    s.pointing = normalised(pointing);
+    s.viewcone_rad = cone_deg * deg;
+    const std::uint64_t n = 20000;
+    int inside = 0, outside_cone = 0;
+    std::vector<double> zl;
+    for (std::uint64_t i = 0; i < n; ++i) {
+      const Photon ph = sample_background(s, 7, 1, 1, i);
+      const Vec3 u = (ph.position - s.centre) * (1.0 / s.radius_m);
+      if (dot(u, ph.direction) < 0.0)
+        ++inside;
+      if (dot(ph.direction, s.pointing) < std::cos(cone_deg * deg) - 1e-9)
+        ++outside_cone;
+      zl.push_back(-dot(u, ph.direction));
+    }
+    CHECK(inside == static_cast<int>(n));
+    CHECK(outside_cone == 0);
+    const auto m = moments_of(zl);
+    CHECK_NEAR(m.mean, mean_zi(), 4.0 * std::sqrt(m.var / static_cast<double>(n)));
+  }
+}
+
 // Stream: run, one telescope block on the sphere, photon total and events.
 void stream_layout() {
   NsbOptions o;
@@ -130,6 +164,36 @@ void stream_layout() {
   CHECK(s.photons.at(1) == 2 * 20000U);
 }
 
+// Emission altitude: zem = observation level + z (format.md, zem), set by the stream.
+void emission_altitude() {
+  NsbOptions o;
+  o.photons = 4e4;
+  o.altitude_m = 1000.0;
+  o.spectrum = Fixed{400.0};
+  const auto s = read_stream(write_to_string([&](std::ostream &out) { write_nsbls(out, o); }));
+  CHECK(!s.chunks.empty());
+  for (const auto &c : s.chunks) {
+    CHECK((c.mask() & gstrickd::column_bit(Column::zem)) != 0U);
+    if ((c.mask() & gstrickd::column_bit(Column::zem)) == 0U)
+      continue;
+    for (std::size_t i = 0; i < c.rows(); ++i)
+      CHECK_NEAR(c[Column::zem][i] - c[Column::z][i], 1000.0, 1e-2);
+  }
+}
+
+// Negative photon counts are rejected, not clamped to zero.
+void rejects_negative_photons() {
+  NsbOptions o;
+  o.photons = -5.0;
+  bool threw = false;
+  try {
+    (void)plan_nsbls(o);
+  } catch (const std::invalid_argument &) {
+    threw = true;
+  }
+  CHECK(threw);
+}
+
 } // namespace
 
 int main() {
@@ -138,5 +202,8 @@ int main() {
     timing_and_delay();
     table_spectrum();
     stream_layout();
+    tilted_directions_enter_sphere();
+    emission_altitude();
+    rejects_negative_photons();
   });
 }
