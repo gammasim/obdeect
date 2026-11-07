@@ -10,3 +10,13 @@ Status: pre-alpha. Light sources (profiles, stars, emitters, targets) are implem
 sources
 changelog
 ```
+
+```{toctree}
+:maxdepth: 1
+:caption: Programs
+
+programs/ff-1m
+programs/ff-gct
+programs/fpls
+programs/pixled
+```
