@@ -326,6 +326,43 @@ void scatter_widths() {
   }
 }
 
+// On a strongly curved facet the tangent at the vertex is far from perpendicular to
+// the normal at the hit point (here 24 deg); the two scatter rotations must still be
+// about orthonormal axes. The rotation about the in-plane axis moves the ray by
+// sigma sin(angle to that axis) = sigma cos(incidence), so the mean squared
+// deviation is sigma^2 (1 + cos^2(incidence)).
+void scatter_on_curved_facet() {
+  const double radius = 0.5, x = 0.2, sigma = 0.002;
+  Mirror mirror;
+  mirror.facets.push_back({1,
+                           {0, 0, 0},
+                           {0, 0, 1},
+                           {1, 0, 0},
+                           {0, 1, 0},
+                           {1, 0, 0},
+                           {0, 1, 0},
+                           0.3,
+                           radius,
+                           Aperture::circle});
+  mirror.scatter = Scatter{sigma, 0.0, 0.0, false};
+  const Vec3 point{x, 0.0, radius - std::sqrt(radius * radius - x * x)};
+  detail::MirrorHit hit;
+  hit.hit = {1.0, point, (Vec3{0.0, 0.0, radius} - point) * (1.0 / radius), 1};
+  const Vec3 direction{0.0, 0.0, -1.0};
+  const Vec3 specular = reflect(direction, hit.hit.normal);
+  const int n = 100000;
+  double sum = 0.0;
+  for (int i = 0; i < n; ++i) {
+    const Vec3 d = detail::reflect_at(mirror, hit, direction, static_cast<std::uint64_t>(i), 1,
+                                      Stream::primary_scatter) -
+                   specular;
+    sum += dot(d, d);
+  }
+  const double expected =
+      sigma * sigma * (1.0 + dot(direction, hit.hit.normal) * dot(direction, hit.hit.normal));
+  CHECK_NEAR(sum / n, expected, 0.01 * expected);
+}
+
 // The sub-photon index selects other scatter draws; 0 is the default.
 void sub_photon_index() {
   for (const bool dual : {false, true}) {
@@ -702,6 +739,7 @@ void all_tests() {
   direct_photons();
   responses_and_timing();
   scatter_widths();
+  scatter_on_curved_facet();
   sub_photon_index();
   block_invariance();
   thread_pool();

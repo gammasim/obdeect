@@ -126,14 +126,23 @@ inline Vec3 reflect_at(const Mirror &mirror, const MirrorHit &mh, const Vec3 &di
   const double a1 = radius * std::cos(phi), a2 = radius * std::sin(phi);
   if (s.surface_slopes) {
     // Graph-surface normal (-dz/dx, -dz/dy, 1): perturb each slope by half
-    // the angle, so the reflected ray deviates by about the full angle.
+    // the angle, so the reflected ray deviates by about the full angle where
+    // the surface is flat. A slope is not an angle: on a tilted surface the
+    // effective width is smaller (docs/optics.md, mirror scatter conventions).
     const Vec3 tilted{n.x / n.z + 0.5 * a1, n.y / n.z + 0.5 * a2, 1.0};
     return reflect(direction, normalized(tilted));
   }
   // Rotate the reflected ray about two axes in the mirror's tangent plane.
-  const Vec3 e1 = mirror.facets.empty() ? normalized(std::abs(n.z) < 0.9 ? cross(Vec3{0, 0, 1}, n)
-                                                                         : cross(Vec3{1, 0, 0}, n))
-                                        : mirror.facets[mh.facet_index].u;
+  // The facet tangent is perpendicular to the normal at the vertex only; on a
+  // curved facet remove its component along the hit normal, so that e1, e2 and n
+  // are orthonormal (the rotations need unit axes).
+  Vec3 e1;
+  if (mirror.facets.empty()) {
+    e1 = normalized(std::abs(n.z) < 0.9 ? cross(Vec3{0, 0, 1}, n) : cross(Vec3{1, 0, 0}, n));
+  } else {
+    const Vec3 &u = mirror.facets[mh.facet_index].u;
+    e1 = normalized(u - n * dot(u, n));
+  }
   const Vec3 e2 = cross(n, e1);
   return normalized(rotate(rotate(reflect(direction, n), e2, a1), e1, a2));
 }
@@ -472,22 +481,46 @@ template <class T> void add_column(std::vector<Column> &columns, T *pointer, std
     columns.push_back({pointer, per_row * sizeof(T)});
 }
 
+// Calls task(i) for every i in [0, count) on up to `threads` threads (the
+// calling thread works too); the tasks must be independent.
+template <class Task> void run_tasks(std::size_t count, unsigned threads, const Task &task) {
+  const std::size_t workers = std::max<std::size_t>(1, std::min<std::size_t>(threads, count));
+  std::atomic<std::size_t> next{0};
+  const auto work = [&] {
+    for (std::size_t i = next.fetch_add(1, std::memory_order_relaxed); i < count;
+         i = next.fetch_add(1, std::memory_order_relaxed))
+      task(i);
+  };
+  std::vector<std::thread> pool;
+  for (std::size_t w = 1; w < workers; ++w)
+    pool.emplace_back(work);
+  work();
+  for (auto &t : pool)
+    t.join();
+}
+
 // Chunk c wrote found[c] rows from row chunk_start[c] on (starts increasing);
 // move them down in order so that all rows are contiguous, and return their
-// number. Moving in order never overwrites rows not yet moved.
+// number. Moving in order never overwrites rows not yet moved. The columns are
+// independent: `run(count, task)` calls task(k) for every column k, on any
+// threads.
+template <class Run>
 inline std::size_t compact_chunks(const std::vector<Column> &columns,
                                   const std::vector<std::size_t> &chunk_start,
-                                  const std::vector<std::size_t> &found) {
+                                  const std::vector<std::size_t> &found, const Run &run) {
+  std::vector<std::size_t> destination(found.size());
   std::size_t total = 0;
   for (std::size_t c = 0; c < found.size(); ++c) {
-    if (total != chunk_start[c])
-      for (const Column &column : columns) {
-        auto *bytes = static_cast<char *>(column.data);
-        std::memmove(bytes + total * column.bytes, bytes + chunk_start[c] * column.bytes,
-                     found[c] * column.bytes);
-      }
+    destination[c] = total;
     total += found[c];
   }
+  run(columns.size(), [&](std::size_t k) {
+    auto *bytes = static_cast<char *>(columns[k].data);
+    for (std::size_t c = 0; c < found.size(); ++c)
+      if (destination[c] != chunk_start[c])
+        std::memmove(bytes + destination[c] * columns[k].bytes,
+                     bytes + chunk_start[c] * columns[k].bytes, found[c] * columns[k].bytes);
+  });
   return total;
 }
 
@@ -527,8 +560,9 @@ public:
     }
   }
 
-  // Number of rows written; with detected_only the chunks are moved down.
-  std::size_t finish() const {
+  // Number of rows written; with detected_only the chunks are moved down, the
+  // columns in parallel through `run` (see compact_chunks).
+  template <class Run> std::size_t finish(const Run &run) const {
     if (!detected_only_)
       return in_.size;
     std::vector<Column> columns;
@@ -550,7 +584,7 @@ public:
     std::vector<std::size_t> chunk_start(found_.size());
     for (std::size_t c = 0; c < found_.size(); ++c)
       chunk_start[c] = c * kChunkSize;
-    return compact_chunks(columns, chunk_start, found_);
+    return compact_chunks(columns, chunk_start, found_, run);
   }
 
 private:
@@ -614,7 +648,8 @@ inline std::size_t trace_block(const OpticalModel &model, const PhotonBlock &in,
   detail::BlockTask task(model, in, out, seed, apply_responses, direct, detected_only,
                          classify_losses);
   parallel_for(in.size, threads, [&](std::size_t begin, std::size_t end) { task.run(begin, end); });
-  return task.finish();
+  return task.finish(
+      [&](std::size_t count, const auto &each) { detail::run_tasks(count, threads, each); });
 }
 
 // The same on a persistent pool; the results are equal.
@@ -625,7 +660,7 @@ inline std::size_t trace_block(const OpticalModel &model, const PhotonBlock &in,
   detail::BlockTask task(model, in, out, seed, apply_responses, direct, detected_only,
                          classify_losses);
   parallel_for(in.size, pool, [&](std::size_t begin, std::size_t end) { task.run(begin, end); });
-  return task.finish();
+  return task.finish([&](std::size_t count, const auto &each) { pool.run(count, each); });
 }
 
 // One block of trace_blocks.
@@ -659,7 +694,8 @@ inline std::vector<std::size_t> trace_blocks(const std::vector<BlockRequest> &re
   std::vector<std::size_t> rows;
   rows.reserve(tasks.size());
   for (const auto &task : tasks)
-    rows.push_back(task.finish());
+    rows.push_back(
+        task.finish([&](std::size_t count, const auto &each) { pool.run(count, each); }));
   return rows;
 }
 

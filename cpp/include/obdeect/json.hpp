@@ -1,15 +1,18 @@
 #pragma once
 
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <cstddef>
-#include <cstdlib>
+#include <locale>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
+#include <version>
 
 namespace obdeect::json {
 
@@ -140,8 +143,20 @@ private:
       if (!digits())
         fail("invalid exponent");
     }
-    const std::string literal{text_.substr(start, at_ - start)};
-    const double result = std::strtod(literal.c_str(), nullptr);
+    // The text was checked against the JSON grammar above. Parse it independent of
+    // the process locale (strtod would read "1.5" as 1 under a decimal-comma locale).
+    const std::string_view literal = text_.substr(start, at_ - start);
+    double result = 0.0;
+#if defined(__cpp_lib_to_chars) && __cpp_lib_to_chars >= 201611L
+    const auto parsed = std::from_chars(literal.data(), literal.data() + literal.size(), result);
+    if (parsed.ec != std::errc{} || parsed.ptr != literal.data() + literal.size())
+      fail("number out of range");
+#else
+    std::istringstream stream{std::string(literal)};
+    stream.imbue(std::locale::classic());
+    if (!(stream >> result))
+      fail("number out of range");
+#endif
     if (!std::isfinite(result))
       fail("number out of range");
     return result;

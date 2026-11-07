@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <clocale>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -143,9 +144,26 @@ void axes_offset_is_applied_by_the_tracer() {
   CHECK(unshifted.position != offset_model.position);
 }
 
+// Numbers parse the same under a locale with a decimal comma (where one is installed).
+void decimal_comma_locale() {
+  const std::string previous = std::setlocale(LC_NUMERIC, nullptr);
+  for (const char *name : {"de_DE.UTF-8", "de_DE.utf8", "de_DE", "fr_FR.UTF-8", "fr_FR.utf8"})
+    if (std::setlocale(LC_NUMERIC, name))
+      break;
+  const auto value = json::Parser::parse(R"([1.5, -2.25e-3, 12345.678901234567, 0.1])");
+  std::setlocale(LC_NUMERIC, previous.c_str());
+  const auto &numbers = std::get<json::Value::Array>(value.data);
+  CHECK(numbers.size() == 4);
+  CHECK(std::get<double>(numbers[0].data) == 1.5);
+  CHECK(std::get<double>(numbers[1].data) == -2.25e-3);
+  CHECK(std::get<double>(numbers[2].data) == 12345.678901234567);
+  CHECK(std::get<double>(numbers[3].data) == 0.1);
+}
+
 } // namespace
 
 void all_tests() {
+  decimal_comma_locale();
   const auto model = load_model(kValid);
   CHECK(model.primary.facets.size() == 1);
   CHECK_NEAR(model.primary.facets[0].half_width, 0.6, 0.0);
