@@ -15,15 +15,11 @@ changelog
 :maxdepth: 1
 :caption: Programs
 
-programs/camera-flasher
-programs/secondary-flasher
-programs/rotating-led
-programs/pixel-led
+programs/flasher
+programs/led
 programs/point-source
 programs/beam-scan
 programs/laser-beam
 programs/night-sky
 programs/muon-track
-programs/figure-eight
-programs/geometry-report
 ```

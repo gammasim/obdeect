@@ -22,7 +22,7 @@
 #include <string>
 #include <vector>
 
-namespace dlamb::programs::pixel_led {
+namespace dlamb::programs::led {
 
 // Pixel centre in the camera frame [cm].
 struct PixelPosition {
@@ -112,14 +112,14 @@ inline Camera read_camera(std::istream &in, bool keep_slaves) {
       double x = 0.0;
       double y = 0.0;
       if (!(fields >> id >> type >> x >> y)) {
-        std::cerr << "pixel-led: problem with pixel definition: " << line << "\n";
+        std::cerr << "led: problem with pixel definition: " << line << "\n";
         continue;
       }
       if (id < 0) {
-        bad("pixel-led: negative pixel ID in camera definition: " + line);
+        bad("led: negative pixel ID in camera definition: " + line);
       }
       if (!camera.pixels.emplace(id, PixelPosition{x, y}).second) {
-        bad("pixel-led: duplicate pixel ID " + std::to_string(id) + " in camera definition");
+        bad("led: duplicate pixel ID " + std::to_string(id) + " in camera definition");
       }
     } else if (starts_with(key, "rotate") || starts_with(key, "pixtype")) {
       continue;
@@ -169,7 +169,7 @@ inline std::vector<Use> parse_pixel_list(const std::string &text) {
       ++i;
     }
     if (!detail::is_digit_at(text, i)) {
-      bad("pixel-led: invalid in list of pixels to use: '" + text.substr(i) + "'");
+      bad("led: invalid in list of pixels to use: '" + text.substr(i) + "'");
     }
     use.id = detail::read_int(text, i);
     skip_blanks();
@@ -186,7 +186,7 @@ inline std::vector<Use> parse_pixel_list(const std::string &text) {
           break;
         }
         if (!detail::is_digit_at(text, i)) {
-          bad("pixel-led: pre-sum pixel group not terminated in '" + text + "'");
+          bad("led: pre-sum pixel group not terminated in '" + text + "'");
         }
         use.slaves.push_back(detail::read_int(text, i));
       }
@@ -194,7 +194,7 @@ inline std::vector<Use> parse_pixel_list(const std::string &text) {
     const bool duplicate =
         std::any_of(result.begin(), result.end(), [&](const Use &u) { return u.id == use.id; });
     if (duplicate) {
-      std::cerr << "pixel-led: duplicated pixel " << use.id << " in use list, used only once\n";
+      std::cerr << "led: duplicated pixel " << use.id << " in use list, used only once\n";
       continue;
     }
     result.push_back(use);
@@ -206,16 +206,16 @@ inline void validate(const Options &o) {
   const int modes =
       (o.use.empty() ? 0 : 1) + (o.trigger_random > 0 ? 1 : 0) + (o.trigger_all ? 1 : 0);
   if (modes != 1) {
-    bad("pixel-led: give exactly one of --use, --use-trg-rand n, --use-trg-all");
+    bad("led: give exactly one of --use, --use-trg-rand n, --use-trg-all");
   }
   if (o.camera.pixels.empty()) {
-    bad("pixel-led: no pixels available in the camera definition");
+    bad("led: no pixels available in the camera definition");
   }
   if (o.events < 0 || o.require < 0) {
-    bad("pixel-led: --events and --require must be >= 0");
+    bad("led: --events and --require must be >= 0");
   }
   if (!(o.photons >= 0.0) || !(o.bunch_size > 0.0) || !(o.camera_radius_cm > 0.0)) {
-    bad("pixel-led: photons >= 0, bunch size > 0 and camera radius > 0 required");
+    bad("led: photons >= 0, bunch size > 0 and camera radius > 0 required");
   }
 }
 
@@ -253,14 +253,14 @@ inline std::vector<Event> build_sources(const Options &o) {
   std::vector<std::vector<Use>> lists;
   if (o.trigger_all) {
     if (o.camera.triggers.empty()) {
-      bad("pixel-led: the camera definition has no trigger groups");
+      bad("led: the camera definition has no trigger groups");
     }
     for (const auto &group : o.camera.triggers) {
       lists.push_back(parse_pixel_list(group));
     }
   } else if (o.trigger_random > 0) {
     if (o.camera.triggers.empty()) {
-      bad("pixel-led: the camera definition has no trigger groups");
+      bad("led: the camera definition has no trigger groups");
     }
     const auto groups = o.camera.triggers.size();
     std::uint64_t draw = 0;
@@ -281,7 +281,7 @@ inline std::vector<Event> build_sources(const Options &o) {
   const auto add_pixel = [&](Event &event, int id, bool label) {
     const auto found = o.camera.pixels.find(id);
     if (found == o.camera.pixels.end()) {
-      bad("pixel-led: pixel ID " + std::to_string(id) + " is not defined in the camera file");
+      bad("led: pixel ID " + std::to_string(id) + " is not defined in the camera file");
     }
     const auto &pixel = found->second;
     const Vec3 position{0.01 * pixel.x_cm, 0.01 * pixel.y_cm, 0.0};
@@ -308,11 +308,11 @@ inline std::vector<Event> build_sources(const Options &o) {
 
   for (const auto &list : lists) {
     if (list.empty()) {
-      bad("pixel-led: failed to obtain a pixel list");
+      bad("led: failed to obtain a pixel list");
     }
     std::size_t nreq = o.require == 0 ? list.size() : static_cast<std::size_t>(o.require);
     if (nreq > list.size()) {
-      std::cerr << "pixel-led: required " << nreq << " pixels but the list has " << list.size()
+      std::cerr << "led: required " << nreq << " pixels but the list has " << list.size()
                 << "; list skipped\n";
       continue;
     }
@@ -364,7 +364,7 @@ inline std::vector<Event> build_sources(const Options &o) {
 
 inline RunSetup run_setup(const Options &o) {
   RunSetup run;
-  run.producer = "dlamb-pixel-led";
+  run.producer = "dlamb-led";
   run.run_number = o.run_number;
   run.observation_level_m = o.altitude_m;
   run.atmosphere = o.atmosphere;
@@ -388,4 +388,4 @@ inline void write_stream(std::ostream &out, const Options &o) {
   dlamb::programs::write_stream(out, run_setup(o), build_sources(o));
 }
 
-} // namespace dlamb::programs::pixel_led
+} // namespace dlamb::programs::led

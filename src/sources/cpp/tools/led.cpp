@@ -1,8 +1,8 @@
-// dlamb-pixel-led: LED photon stream for selected camera pixels (port of LightEmission/pixled.cc).
+// dlamb-led: LED photon stream for selected camera pixels (port of LightEmission/pixled.cc).
 // Writes a gstrickd stream to stdout or to -o FILE; --list-only prints the pixel combinations
 // instead.
 
-#include "dlamb/programs/pixel-led.hpp"
+#include "dlamb/programs/led.hpp"
 
 #include <cstdint>
 #include <exception>
@@ -17,7 +17,7 @@ namespace {
 void usage(std::ostream &out, const char *name) {
   out << "usage: " << name << " --camera-file FILE (--use LIST | --use-trg-rand N | "
       << "--use-trg-all) [options]\n"
-      << "Options (default in braces; names as in pixel-led):\n"
+      << "Options (default in braces; names as in led):\n"
       << "  --camera-file FILE        sim_telarray camera definition (required)\n"
       << "  --use LIST                pixels, '+' required, [a,b] pre-sum slaves\n"
       << "  --use-trg-rand N          N random trigger groups of the camera file\n"
@@ -30,7 +30,7 @@ void usage(std::ostream &out, const char *name) {
       << "  --bunchsize F             photons per bunch (at least 1) {1}\n"
       << "  --camera-radius R         fiducial camera radius [cm] {123}\n"
       << "  --spectrum WLEN|Cherenkov:A:B  wavelength [nm] {400}\n"
-      << "  --lightpulse SPEC         pulse, as in camera-flasher {Simple:0}\n"
+      << "  --lightpulse SPEC         pulse, as in flasher {Simple:0}\n"
       << "  --run N                   run number {1}\n"
       << "  --altitude M              observation level [m] {2150}\n"
       << "  --atmosphere N            atmospheric profile number {1}\n"
@@ -44,7 +44,7 @@ void usage(std::ostream &out, const char *name) {
 } // namespace
 
 int main(int argc, char **argv) {
-  pixel_led::Options options;
+  led::Options options;
   std::string camera_file;
   std::string output;
   bool list_only = false;
@@ -106,14 +106,14 @@ int main(int argc, char **argv) {
     if (!camera) {
       bad("cannot open camera configuration file " + camera_file);
     }
-    options.camera = pixel_led::read_camera(camera, options.slaves);
+    options.camera = led::read_camera(camera, options.slaves);
 
     if (list_only) {
-      for (const auto &event : pixel_led::build_sources(options)) {
-        pixel_led::print_labels(std::cout, event);
+      for (const auto &event : led::build_sources(options)) {
+        led::print_labels(std::cout, event);
       }
     } else {
-      write_output(output, [&](std::ostream &out) { pixel_led::write_stream(out, options); });
+      write_output(output, [&](std::ostream &out) { led::write_stream(out, options); });
     }
   } catch (const std::exception &error) {
     std::cerr << argv[0] << ": " << error.what() << "\n";

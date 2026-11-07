@@ -8,7 +8,7 @@ Over all photons: means of cx, cy, cz, time [ns], wavelength [nm] with standard 
 Original cz = -sqrt(1 - cx^2 - cy^2) (IACT stores w = -cz with cz < 0 downwards).
 Positions are not compared: the original writes them at the observation plane.
 Times: the original adds the flight time to the observation plane; dlamb writes emission
-times, so the t difference equals the path length / c (camera-flasher: 16 m, 53.4 ns).
+times, so the t difference equals the path length / c (flasher --type dish: 16 m, 53.4 ns).
 """
 
 import struct
