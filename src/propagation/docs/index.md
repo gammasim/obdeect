@@ -2,7 +2,7 @@
 
 Atmospheric propagation for Cherenkov-telescope simulations: extinction, refraction and timing from the refractive-index profile, optional single scattering, and early photon thinning, as a standard-library-only C++20 core with a Python API, working on gstrickd photon streams.
 
-Status: pre-alpha. Extinction, refraction and timing are implemented; the atmosphere stage on photon streams is in [propagation](propagation.md). Single scattering is not.
+Status: pre-alpha. Extinction (with wavelength assignment and thinning), refraction and timing, optional single scattering ([scattering](scattering.md)) and the atmosphere stage on photon streams ([propagation](propagation.md)) are implemented.
 
 ```{toctree}
 :maxdepth: 1
@@ -11,4 +11,5 @@ changelog
 extinction
 refraction
 propagation
+scattering
 ```

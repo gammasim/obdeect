@@ -7,6 +7,7 @@
 #include "extinction_bindings.hpp"
 #include "profile_bindings.hpp"
 #include "propagator_bindings.hpp"
+#include "scattering_bindings.hpp"
 
 #include <tuple>
 
@@ -20,4 +21,5 @@ NB_MODULE(_core, module) {
   bind_extinction(module);
   bind_profile(module);
   bind_propagator(module);
+  bind_scattering(module);
 }

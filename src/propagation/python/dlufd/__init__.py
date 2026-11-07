@@ -13,6 +13,8 @@ _EXPORTS = {
     "TransmissionTable": "dlufd.extinction",
     "apply_extinction": "dlufd.extinction",
     "AtmosphereProfile": "dlufd.profile",
+    "ScatteringTable": "dlufd.scattering",
+    "scatter": "dlufd.scattering",
     "RefractionTables": "dlufd.profile",
     "air_delay_ns": "dlufd.profile",
     "propagation_time_ns": "dlufd.profile",

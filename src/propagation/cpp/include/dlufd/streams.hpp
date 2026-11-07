@@ -10,8 +10,11 @@ inline constexpr std::uint32_t stage_atmosphere = 0x444C5546U; // "DLUF"
 
 // Streams of draws within stage_atmosphere (gstrickd::DrawKey::stream).
 // Wavelength draws use block 0 only; thinning draws use blocks 0..512 (at most
-// 2048 photons per bunch), so the two streams never share a counter.
+// 2048 photons per bunch), so the streams never share a counter.
 inline constexpr std::uint32_t stream_wavelength = 1;
 inline constexpr std::uint32_t stream_thinning = 2;
+// Single scattering (scattering.hpp): deviates 0..N-1 place the scattering points, deviates
+// N.. are the aim-point offsets; one key per primary photon.
+inline constexpr std::uint32_t stream_scattering = 3;
 
 } // namespace dlufd
