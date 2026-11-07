@@ -10,6 +10,7 @@
 #include "dlufd/profile.hpp"
 #include "dlufd/refraction.hpp"
 #include "dlufd/timing.hpp"
+#include "extinction_bindings.hpp" // to_numpy
 
 #include <cstddef>
 #include <cstdint>
@@ -23,13 +24,6 @@ namespace nb = nanobind;
 namespace dlufd_bindings {
 
 using ConstArray = nb::ndarray<const double, nb::ndim<1>, nb::c_contig, nb::device::cpu>;
-
-// Moves a vector into a numpy array that owns it.
-template <class T> nb::ndarray<nb::numpy, T, nb::ndim<1>> to_numpy(std::vector<T> values) {
-  auto *storage = new std::vector<T>(std::move(values));
-  nb::capsule owner(storage, [](void *p) noexcept { delete static_cast<std::vector<T> *>(p); });
-  return nb::ndarray<nb::numpy, T, nb::ndim<1>>(storage->data(), {storage->size()}, owner);
-}
 
 inline std::vector<double> copy_values(const ConstArray &values) {
   std::vector<double> copy(values.shape(0));

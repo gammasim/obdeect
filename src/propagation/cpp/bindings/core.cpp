@@ -4,6 +4,7 @@
 #include <nanobind/stl/tuple.h>
 
 #include "dlufd/version.hpp"
+#include "extinction_bindings.hpp"
 #include "profile_bindings.hpp"
 
 #include <tuple>
@@ -15,5 +16,6 @@ NB_MODULE(_core, module) {
   module.def("core_version", [] {
     return std::make_tuple(dlufd::version_major, dlufd::version_minor, dlufd::version_patch);
   });
+  bind_extinction(module);
   bind_profile(module);
 }

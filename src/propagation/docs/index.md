@@ -8,5 +8,6 @@ Status: pre-alpha. Refraction and timing are implemented (see [refraction](refra
 :maxdepth: 1
 
 changelog
+extinction
 refraction
 ```
