@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 
 using namespace dlamb;
@@ -149,6 +150,16 @@ void angular_profiles() {
   const auto g = gaussian_angular_table(10.0 * pi / 180.0);
   CHECK_NEAR(g.at(1.0 - std::cos(10.0 * pi / 180.0)), std::exp(-0.5), 1e-3);
   CHECK_NEAR(g.at(0.0), 1.0, 1e-15);
+  // Widths whose square underflows (or are not finite) are rejected, not tabulated as NaN.
+  for (double sigma : {1e-200, 0.0, -1.0, std::numeric_limits<double>::infinity()}) {
+    bool rejected_width = false;
+    try {
+      (void)gaussian_angular_table(sigma);
+    } catch (const std::invalid_argument &) {
+      rejected_width = true;
+    }
+    CHECK(rejected_width);
+  }
 }
 
 } // namespace

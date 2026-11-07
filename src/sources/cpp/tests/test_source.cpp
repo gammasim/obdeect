@@ -302,6 +302,73 @@ void validation() {
   CHECK(rejects(bad));
 }
 
+template <class F> bool throws_invalid(F f) {
+  try {
+    f();
+  } catch (const std::invalid_argument &) {
+    return true;
+  }
+  return false;
+}
+
+void validation_bounds() {
+  // Photon counts: non-finite and beyond 2^53 (not exact as a count) are rejected.
+  CHECK(throws_invalid([] { validate(lamp_source(std::numeric_limits<double>::quiet_NaN())); }));
+  CHECK(throws_invalid([] { validate(lamp_source(inf)); }));
+  CHECK(throws_invalid([] { validate(lamp_source(1e17)); }));
+  CHECK(!throws_invalid([] { validate(lamp_source(9007199254740992.0)); }));
+  // A disc target at h = 1e-170 overflows the candidate count (h^2 underflows to zero):
+  // expected_count and photon_count throw instead of returning inf.
+  Source near = lamp_source(1.0);
+  near.geometry = Emitter{{0.0, 0.0, 1e-170}, {0.0, 0.0, -1.0}, Isotropic{}};
+  near.target = DiscTarget{{0.0, 0.0, 0.0}, {0.0, 0.0, 1.0}, 2.0};
+  CHECK(throws_invalid([&] { (void)expected_count(near); }));
+  CHECK(throws_invalid([&] { (void)photon_count(near, 1, 0, 0); }));
+  // A large but valid count is still accepted.
+  CHECK(!throws_invalid([] { (void)expected_count(lamp_source(1e15)); }));
+
+  // Frames: only sky, T and C are source frames (G and unknown codes are rejected).
+  Source frame = lamp_source(10.0);
+  frame.frame = static_cast<gstrickd::Frame>(7);
+  CHECK(throws_invalid([&] { validate(frame); }));
+  frame.frame = gstrickd::Frame::sky;
+  CHECK(!throws_invalid([&] { validate(frame); }));
+  frame.frame = gstrickd::Frame::telescope;
+  CHECK(!throws_invalid([&] { validate(frame); }));
+
+  // Complex pulse: every width must be finite (+inf used to pass the >= 0 test).
+  Source pulse = lamp_source(10.0);
+  pulse.pulse = ComplexPulse{inf, 0.5, 0.5, 0.0};
+  CHECK(throws_invalid([&] { validate(pulse); }));
+  pulse.pulse = ComplexPulse{1.0, inf, 0.5, 0.0};
+  CHECK(throws_invalid([&] { validate(pulse); }));
+  pulse.pulse = ComplexPulse{1.0, 0.5, inf, 0.0};
+  CHECK(throws_invalid([&] { validate(pulse); }));
+  pulse.pulse = ComplexPulse{1.0, 0.5, 0.5, inf};
+  CHECK(throws_invalid([&] { validate(pulse); }));
+  pulse.pulse = ComplexPulse{1.0, 0.5, 0.5, 0.0};
+  CHECK(!throws_invalid([&] { validate(pulse); }));
+
+  // Magnitudes: lengths, times and wavelengths stay within 1e30 (squares and float32
+  // columns finite); positive wavelengths are at least 1e-30 (inverses finite).
+  Source big = lamp_source(10.0);
+  big.geometry = Emitter{{1e31, 0.0, 0.0}, {0.0, 0.0, -1.0}, Isotropic{}};
+  CHECK(throws_invalid([&] { validate(big); }));
+  big = lamp_source(10.0);
+  big.pulse = Fixed{1e31};
+  CHECK(throws_invalid([&] { validate(big); }));
+  big = lamp_source(10.0);
+  big.spectrum = Fixed{1e-31};
+  CHECK(throws_invalid([&] { validate(big); }));
+  big = lamp_source(10.0);
+  big.spectrum = InverseSquare{1e-320, 600.0}; // 1 / low would overflow.
+  CHECK(throws_invalid([&] { validate(big); }));
+  big = star_source(1e200);
+  CHECK(throws_invalid([&] { validate(big); }));
+  big = star_source(inf); // A plane wave is not a length: accepted.
+  CHECK(!throws_invalid([&] { validate(big); }));
+}
+
 } // namespace
 
 int main() {
@@ -314,5 +381,6 @@ int main() {
     counts();
     sphere_target();
     validation();
+    validation_bounds();
   });
 }
