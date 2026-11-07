@@ -104,6 +104,7 @@ public:
       switch (block->type) {
       case iact::runh:
         close_run();
+        rune_seen_ = false;
         runh_ = decode_float_block(*block);
         blob(std::move(*block));
         break;
@@ -138,15 +139,17 @@ public:
         break;
       case iact::photons3d:
         throw std::runtime_error("3D photon bunches (1217) are not converted; use the 1205 format");
-      case iact::telarray_head:
+      case iact::telarray_head: // split-mode markers: kept as blobs, in input order
       case iact::telarray_end:
-        break; // split-mode markers: the photons are converted where they occur
+        blob(std::move(*block));
+        break;
       case iact::evte:
         blob(std::move(*block));
         close_event();
         break;
       case iact::rune:
         blob(std::move(*block));
+        rune_seen_ = true;
         close_run();
         break;
       default:
@@ -154,7 +157,7 @@ public:
         break;
       }
     }
-    close_run();
+    check_complete();
   }
 
 private:
@@ -280,6 +283,20 @@ private:
     }
   }
 
+  // EOF is valid only after the explicit end markers. An open event (no EVTE),
+  // an open run (no RUNE) or run blocks without a RUNE mean a truncated file.
+  void check_complete() const {
+    if (event_open_) {
+      throw std::runtime_error("CORSIKA input ends inside an event (no EVTE block)");
+    }
+    if (run_open_) {
+      throw std::runtime_error("CORSIKA input ends inside a run (no RUNE block)");
+    }
+    if (!pending_.empty() && !rune_seen_) {
+      throw std::runtime_error("CORSIKA input ends without a RUNE block");
+    }
+  }
+
   Metadata run_metadata(const std::vector<float> *evth) const {
     Metadata metadata;
     if (runh_) {
@@ -351,6 +368,9 @@ private:
 
   // One telescope of the current event: telescope record, photon chunks, end.
   void emit_photons(const TelPhotons &p) {
+    if (p.array < 0 || p.tel < 0) {
+      throw std::runtime_error("photon block with a negative array or telescope index");
+    }
     const auto telescope_id = static_cast<std::int64_t>(p.tel) + 1;
     Metadata tel_meta;
     tel_meta["telescope_id"] = telescope_id;
@@ -409,6 +429,7 @@ private:
   std::optional<TelPos> telpos_;
   bool run_open_{};
   bool event_open_{};
+  bool rune_seen_{}; // a RUNE block was read since the last RUNH
 };
 
 } // namespace detail
@@ -425,7 +446,11 @@ inline void corsika_to_records(std::istream &in, const std::function<void(const 
 // Writes records as an IACT EventIO stream for sim_telarray: blobs verbatim,
 // photon chunks of each telescope as one long-format 1205 block, one 1204
 // container per array reuse (normal mode). Photon chunks must be in the ground
-// frame; the stream units (m) are converted back to cm in double.
+// frame and in index order (first_index continues the previous chunk of the
+// same telescope); the stream units (m) are converted back to cm in double.
+//
+// Split-mode markers (1213, 1214) are dropped on purpose: the photons are
+// written in normal mode, which has no markers. They are blobs in the stream.
 class SimtelWriter {
 public:
   explicit SimtelWriter(std::ostream &out) : out_{out} {}
@@ -437,20 +462,25 @@ public:
         throw std::runtime_error("telescope record before telescope_end");
       }
       const auto array_key = record.metadata.find("array_index");
-      const auto array =
-          array_key == record.metadata.end()
-              ? 0
-              : static_cast<int>(detail::metadata_int(record.metadata, "array_index"));
+      const std::int64_t array64 = array_key == record.metadata.end()
+                                       ? 0
+                                       : detail::metadata_int(record.metadata, "array_index");
+      if (array64 < 0 || array64 > 32767) {
+        throw std::out_of_range("array_index must be 0..32767");
+      }
+      const auto array = static_cast<int>(array64);
       if (array != array_) {
         flush_array();
       }
       array_ = array;
-      telescope_id_ = static_cast<int>(detail::metadata_int(record.metadata, "telescope_id"));
-      if (telescope_id_ < 1) {
-        throw std::runtime_error("telescope_id must be 1 or larger (sim_telarray numbering)");
+      const std::int64_t id64 = detail::metadata_int(record.metadata, "telescope_id");
+      if (id64 < 1 || id64 > 32768) {
+        throw std::out_of_range("telescope_id must be 1..32768 (sim_telarray numbering)");
       }
+      telescope_id_ = static_cast<int>(id64);
       tel_open_ = true;
       bunches_.clear();
+      next_index_ = 0;
       return;
     }
     case RecordType::photons:
@@ -461,6 +491,13 @@ public:
       return;
     case RecordType::ledger:
       return; // efficiency ledger: not written to sim_telarray input
+    case RecordType::blob:
+      if (record.blob_eventio_type == iact::telarray_head ||
+          record.blob_eventio_type == iact::telarray_end) {
+        return; // split-mode marker, omitted in normal-mode output; keeps the container open
+      }
+      flush_array();
+      break;
     default:
       flush_array();
       break;
@@ -487,6 +524,11 @@ private:
       throw std::runtime_error("sim_telarray input needs ground-frame photons");
     }
     chunk.validate();
+    if (chunk.first_index != next_index_) {
+      throw std::runtime_error("photon chunk first_index " + std::to_string(chunk.first_index) +
+                               " where " + std::to_string(next_index_) +
+                               " is expected (gap, overlap or reordering)");
+    }
     const std::size_t n = chunk.rows();
     const auto &x = chunk[Column::x];
     const auto &y = chunk[Column::y];
@@ -511,11 +553,17 @@ private:
       b.lambda = lambda.empty() ? 0.0F : lambda[i];
       bunches_.push_back(b);
     }
+    next_index_ += n;
   }
 
   void finish_telescope(const Metadata &metadata) {
     if (!tel_open_) {
       throw std::runtime_error("telescope_end without telescope record");
+    }
+    const std::int64_t id = detail::metadata_int(metadata, "telescope_id");
+    if (id != telescope_id_) {
+      throw std::runtime_error("telescope_end for telescope " + std::to_string(id) +
+                               " while telescope " + std::to_string(telescope_id_) + " is open");
     }
     float photons = 0.0F;
     const auto it = metadata.find("photons");
@@ -539,6 +587,9 @@ private:
   }
 
   void flush_array() {
+    if (tel_open_) {
+      throw std::runtime_error("array closed while a telescope is open (no telescope_end)");
+    }
     if (children_.empty()) {
       return;
     }
@@ -552,6 +603,7 @@ private:
   int array_{};
   int telescope_id_{};
   bool tel_open_{};
+  std::uint64_t next_index_{}; // first_index the next chunk of the open telescope must have
   std::vector<Bunch> bunches_;
   std::vector<EventioBlock> children_;
 };

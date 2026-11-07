@@ -36,7 +36,9 @@ Nesting: `stream` (`run` (`ledger`* (`event` (`telescope` `photons`*
 records allowed anywhere between `run` and `run_end`. Blobs keep the order
 of the input (CORSIKA: RUNH and TELPOS after `run`, EVTH and TELOFF before
 the telescopes, EVTE after them, RUNE before `run_end`); writers of EventIO
-output emit them in that order.
+output emit them in that order. CORSIKA split-mode markers (1213, 1214) are
+blobs too, between the telescopes of an event. The sim_telarray writer omits
+them, since normal-mode output has no markers.
 A `ledger` record may also follow a `telescope` record and then applies to
 that telescope only.
 

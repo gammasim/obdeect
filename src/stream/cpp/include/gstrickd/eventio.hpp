@@ -556,8 +556,12 @@ inline TelPhotons decode_photons(const EventioBlock &block) {
 
 // Encode photon bunches as 1205. Long format: version 0. Compact format:
 // version 1000 with the quantisation of io_simtel.c; values that do not fit
-// throw std::out_of_range.
+// throw std::out_of_range. The array and telescope indices are int16 on disk
+// and must be 0..32767.
 inline EventioBlock make_photons_block(const TelPhotons &p, bool compact = false) {
+  if (p.array < 0 || p.array > 32767 || p.tel < 0 || p.tel > 32767) {
+    throw std::out_of_range("EventIO: photon block array and telescope index must be 0..32767");
+  }
   std::vector<std::uint8_t> body;
   ByteWriter out{body};
   out.i16(static_cast<std::int16_t>(p.array));
