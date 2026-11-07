@@ -8,12 +8,14 @@ else()
   set(DLUFD_BUILD_PYTHON_API_DEFAULT OFF)
 endif()
 option(DLUFD_BUILD_PYTHON_API "Build the Python extension" ${DLUFD_BUILD_PYTHON_API_DEFAULT})
+option(DLUFD_BUILD_TOOLS "Build the dlufd-propagate command-line tool" ON)
 
 include(FetchContent)
 FetchContent_Declare(gstrickd GIT_REPOSITORY https://github.com/GernotMaier/gstrickd.git
                      GIT_TAG fcffa70530510ad013edf644f700ed9989912682)
 set(GSTRICKD_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(GSTRICKD_BUILD_PYTHON_API OFF CACHE BOOL "" FORCE)
+set(GSTRICKD_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(gstrickd)
 
 # Header-only, standard-library-only core.
@@ -47,9 +49,19 @@ if(DLUFD_BUILD_PYTHON_API)
   install(TARGETS _core LIBRARY DESTINATION dlufd)
 endif()
 
+if(DLUFD_BUILD_TOOLS)
+  add_executable(dlufd-propagate cpp/tools/dlufd_propagate.cpp)
+  target_link_libraries(dlufd-propagate PRIVATE dlufd_core)
+  dlufd_enable_warnings(dlufd-propagate)
+  if(DEFINED SKBUILD_SCRIPTS_DIR)
+    install(TARGETS dlufd-propagate RUNTIME DESTINATION ${SKBUILD_SCRIPTS_DIR})
+  endif()
+endif()
+
 if(DLUFD_BUILD_TESTING)
   enable_testing()
-  foreach(test_name version transmission thinning pipeline)
+  foreach(test_name version transmission thinning pipeline profile refraction timing
+                    propagator)
     add_executable(test_${test_name} cpp/tests/test_${test_name}.cpp)
     target_link_libraries(test_${test_name} PRIVATE dlufd_core)
     # Reference data: cpp/tests/data (copied from sim_telarray, see test_transmission.cpp).
@@ -58,4 +70,21 @@ if(DLUFD_BUILD_TESTING)
     dlufd_enable_warnings(test_${test_name})
     add_test(NAME ${test_name} COMMAND test_${test_name})
   endforeach()
+
+  # Agreement with CORSIKA's atmo.c: DLUFD_CORSIKA_REFERENCE=<corsika7/bernlohr directory>.
+  option(DLUFD_CORSIKA_REFERENCE "Path to CORSIKA's corsika7/bernlohr directory (atmo.c)" OFF)
+  if(DLUFD_CORSIKA_REFERENCE)
+    enable_language(C)
+    add_library(corsika_atmo STATIC
+      ${DLUFD_CORSIKA_REFERENCE}/atmo.c
+      ${DLUFD_CORSIKA_REFERENCE}/fileopen.c
+      ${DLUFD_CORSIKA_REFERENCE}/straux.c)
+    target_include_directories(corsika_atmo PUBLIC ${DLUFD_CORSIKA_REFERENCE})
+    target_compile_options(corsika_atmo PRIVATE -w -ffp-contract=off)
+    add_executable(test_corsika_reference cpp/tests/test_corsika_reference.cpp)
+    target_link_libraries(test_corsika_reference PRIVATE dlufd_core corsika_atmo m)
+    target_compile_definitions(test_corsika_reference PRIVATE
+      DLUFD_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/cpp/tests/data")
+    add_test(NAME corsika_reference COMMAND test_corsika_reference)
+  endif()
 endif()
