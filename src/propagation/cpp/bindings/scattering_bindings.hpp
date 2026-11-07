@@ -79,22 +79,13 @@ inline void bind_scatter(nb::module_ &module) {
 
         // Input in slices of at most 2^16 rows; the photon index continues across slices and
         // the output of each slice is appended in order, so the result does not depend on it.
-        gstrickd::PhotonChunk input = chunk_from_columns(columns, first_index);
-        input.frame = gstrickd::Frame::sky; // primary photons of the sky frame
+        const InputColumns input = input_columns(columns);
         std::vector<std::vector<gstrickd::PhotonChunk>> lists(sphere.size());
-        for (std::size_t offset = 0; offset < input.rows(); offset += gstrickd::max_chunk_rows) {
+        for (std::size_t offset = 0; offset < input.rows; offset += gstrickd::max_chunk_rows) {
           const std::size_t rows =
-              std::min<std::size_t>(gstrickd::max_chunk_rows, input.rows() - offset);
-          gstrickd::PhotonChunk slice;
-          slice.frame = input.frame;
-          slice.first_index = first_index + offset;
-          slice.resize(rows, input.mask());
-          for (std::uint32_t c = 0; c < gstrickd::n_columns; ++c) {
-            if (input.has(static_cast<gstrickd::Column>(c))) {
-              const auto begin = input.columns[c].begin() + static_cast<std::ptrdiff_t>(offset);
-              std::copy(begin, begin + static_cast<std::ptrdiff_t>(rows), slice.columns[c].begin());
-            }
-          }
+              std::min<std::size_t>(gstrickd::max_chunk_rows, input.rows - offset);
+          gstrickd::PhotonChunk slice = slice_chunk(input, offset, rows, first_index + offset);
+          slice.frame = gstrickd::Frame::sky; // primary photons of the sky frame
           dlufd::scatter_chunk(config, table, transmission, sphere, slice, seed, event,
                                first_index + offset, lists);
         }

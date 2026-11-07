@@ -31,7 +31,8 @@ inline void bind_propagator(nb::module_ &module) {
          const std::optional<std::string> &profile_path,
          const std::vector<std::pair<std::string, std::string>> &envelope_paths,
          const std::optional<std::tuple<double, double>> &wavelength_range, std::uint64_t seed,
-         bool weighted, bool store_p) {
+         bool weighted, bool store_p, const std::optional<std::string> &scattering_path,
+         std::uint32_t scattering_points) {
         dlufd::PropagatorConfig config;
         config.transmission.emplace(
             dlufd::TransmissionTable::from_file(transmission_path, site_altitude_m));
@@ -51,6 +52,12 @@ inline void bind_propagator(nb::module_ &module) {
         config.seed = seed;
         config.mode = weighted ? dlufd::OutputMode::weighted : dlufd::OutputMode::thinned;
         config.store_p = store_p;
+        if (scattering_path) {
+          config.scattering.enabled = true;
+          config.scattering.points_per_photon = scattering_points;
+          config.scattering_table.emplace(dlufd::ScatteringTable::from_file(*scattering_path));
+          config.scattering_source = *scattering_path;
+        }
 
         std::ifstream in(input_path, std::ios::binary);
         if (!in) {
@@ -74,7 +81,9 @@ inline void bind_propagator(nb::module_ &module) {
       nb::arg("site_altitude_m"), nb::arg("profile_path") = nb::none(),
       nb::arg("envelope_paths") = std::vector<std::pair<std::string, std::string>>{},
       nb::arg("wavelength_range") = nb::none(), nb::arg("seed"), nb::arg("weighted") = false,
-      nb::arg("store_p") = false,
+      nb::arg("store_p") = false, nb::arg("scattering_path") = nb::none(),
+      nb::arg("scattering_points") = std::uint32_t{8},
       "Run the atmosphere stage on a photon stream file. envelope_paths: (name, file) pairs of "
-      "two-column text tables (nm, value).");
+      "two-column text tables (nm, value). scattering_path: optional scattering table (single "
+      "scattering of the primaries, off when None).");
 }

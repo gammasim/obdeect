@@ -314,3 +314,183 @@ def test_executable_matches_api(tmp_path, envelope_files):
     assert result.returncode == 0, result.stderr
     assert "photons in 10000" in result.stderr
     assert cli_out.read_bytes() == api_out.read_bytes()
+
+
+SCATTERING_TABLE = DATA / "scattering_exponential.dat"
+SCATTER_TELESCOPES = [(1, 3000.0, 0.0, 0.0, 12.0), (2, 0.0, -2500.0, 0.0, 12.0)]
+
+
+def beam_stream(n, chunk_rows=65536, radii=True):
+    """Vertical beam at x = 0, 15 km above the site (sky frame, 355 nm), telescope 1 only.
+
+    Telescope 1 is 3 km from the beam and telescope 2 (2.5 km south) has no input block.
+    """
+    run = {
+        "run_number": 1,
+        "observation_level_m": SITE_M,
+        "telescope_x_m": [3000.0, 0.0],
+        "telescope_y_m": [0.0, -2500.0],
+        "telescope_z_m": [0.0, 0.0],
+        "refraction_applied": 0,
+        "wavelength_min_nm": 250.0,
+        "wavelength_max_nm": 700.0,
+    }
+    if radii:
+        run["telescope_r_m"] = [12.0, 12.0]
+    writer = StreamWriter()
+    writer.metadata("run", run)
+    writer.metadata("event", {"event_number": 7})
+    writer.metadata("telescope", {"telescope_id": 1, "frame": 0})
+    for first in range(0, n, chunk_rows):
+        rows = min(chunk_rows, n - first)
+        i = np.arange(first, first + rows)
+        columns = {
+            "x": np.zeros(rows),
+            "y": np.zeros(rows),
+            "z": np.full(rows, 15000.0),
+            "cx": np.zeros(rows),
+            "cy": np.zeros(rows),
+            "cz": -np.ones(rows),
+            "t": np.zeros(rows),
+            "w": 1.0 + i % 3,
+            "wavelength": np.full(rows, 355.0),
+        }
+        writer.photons(1, 0, columns, first_index=first)
+    writer.metadata("telescope_end", {"telescope_id": 1, "photons": 0.0})
+    writer.metadata("event_end")
+    writer.metadata("run_end")
+    return writer.getvalue()
+
+
+@pytest.fixture
+def mirror_file(tmp_path):
+    mirror = tmp_path / "mirror.dat"
+    mirror.write_text("200 0.8\n800 0.8\n", encoding="utf-8")
+    return mirror
+
+
+def test_scattering_adds_kernel_weight_times_envelope(tmp_path, mirror_file):
+    n = 400
+    source = tmp_path / "beam.ps"
+    source.write_bytes(beam_stream(n))
+    options = {
+        "transmission": TABLE_PATH,
+        "site_altitude_m": SITE_M,
+        "seed": 1,
+        "envelope": {"mirror": mirror_file},
+        "mode": "weighted",
+    }
+    base = dlufd.propagate(source, tmp_path / "off.ps", **options)
+    on_out = tmp_path / "on.ps"
+    on = dlufd.propagate(
+        source, on_out, scattering=SCATTERING_TABLE, scattering_points=8, **options
+    )
+
+    # Primaries unchanged; the scattered weight is the kernel result (same seed and event, the
+    # primary index of the beam photons) times the envelope 0.8. It is not extinguished again.
+    i = np.arange(n)
+    columns = {
+        "x": np.zeros(n),
+        "y": np.zeros(n),
+        "z": np.full(n, 15000.0),
+        "cx": np.zeros(n),
+        "cy": np.zeros(n),
+        "t": np.zeros(n),
+        "w": 1.0 + i % 3,
+        "wavelength": np.full(n, 355.0),
+    }
+    kernel = dlufd.scatter(
+        columns,
+        dlufd.ScatteringTable(str(SCATTERING_TABLE)),
+        dlufd.TransmissionTable(str(TABLE_PATH), site_altitude_m=SITE_M),
+        telescopes=SCATTER_TELESCOPES,
+        seed=1,
+        event=7,
+        first_index=0,
+        n_points=8,
+    )
+    expected = 0.8 * sum(
+        float(np.sum(photons["w"], dtype=np.float64)) for photons in kernel.values()
+    )
+    assert on["weight_out"] - base["weight_out"] == pytest.approx(expected, rel=1e-5)
+    assert on["photons_out"] > base["photons_out"]
+
+    records = read_records(on_out.read_bytes())
+    assert any(r["type"] == "photons" and r["telescope_id"] == 2 for r in records)
+    ledger = _ledger(records)
+    assert ledger["factors"] == "atmosphere,wavelength,scattering,mirror"
+    assert ledger["scattering.state"] == "applied"
+    assert ledger["scattering.source"] == str(SCATTERING_TABLE)
+    assert ledger["scattering.points_per_photon"] == 8
+
+
+def test_scattering_chunk_sizes_agree(tmp_path, mirror_file):
+    results = []
+    for chunk_rows in (3000, 333):
+        source = tmp_path / f"beam_{chunk_rows}.ps"
+        source.write_bytes(beam_stream(3000, chunk_rows=chunk_rows))
+        results.append(
+            dlufd.propagate(
+                source,
+                tmp_path / f"out_{chunk_rows}.ps",
+                transmission=TABLE_PATH,
+                site_altitude_m=SITE_M,
+                seed=3,
+                envelope={"mirror": mirror_file},
+                scattering=SCATTERING_TABLE,
+            )
+        )
+    assert results[0]["photons_out"] == results[1]["photons_out"] > 0
+    assert results[0]["weight_out"] == pytest.approx(results[1]["weight_out"], rel=1e-12)
+
+
+def test_scattering_rejects_invalid_settings(tmp_path):
+    source = tmp_path / "beam.ps"
+    source.write_bytes(beam_stream(10, radii=False))
+    options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 1}
+    with pytest.raises(ValueError, match="telescope_r_m"):
+        dlufd.propagate(source, tmp_path / "out.ps", scattering=SCATTERING_TABLE, **options)
+    source.write_bytes(beam_stream(10))
+    with pytest.raises(ValueError):
+        dlufd.propagate(
+            source, tmp_path / "out.ps", scattering=SCATTERING_TABLE, scattering_points=0, **options
+        )
+
+
+def test_executable_matches_api_with_scattering(tmp_path):
+    exe = shutil.which("dlufd-propagate") or str(Path(sys.executable).with_name("dlufd-propagate"))
+    if not Path(exe).exists():
+        pytest.skip("dlufd-propagate not installed")
+    source = tmp_path / "beam.ps"
+    source.write_bytes(beam_stream(300))
+    api_out = tmp_path / "api.ps"
+    dlufd.propagate(
+        source,
+        api_out,
+        transmission=TABLE_PATH,
+        site_altitude_m=SITE_M,
+        seed=5,
+        scattering=SCATTERING_TABLE,
+        scattering_points=4,
+    )
+    cli_out = tmp_path / "cli.ps"
+    command = [
+        exe,
+        "--transmission",
+        str(TABLE_PATH),
+        "--site-altitude",
+        str(SITE_M),
+        "--seed",
+        "5",
+        "--scattering",
+        str(SCATTERING_TABLE),
+        "--scattering-points",
+        "4",
+        "-i",
+        str(source),
+        "-o",
+        str(cli_out),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert cli_out.read_bytes() == api_out.read_bytes()

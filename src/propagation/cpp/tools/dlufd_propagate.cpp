@@ -28,6 +28,7 @@ void usage() {
                "usage: dlufd-propagate --transmission FILE --site-altitude M [--profile FILE]\n"
                "                       [--envelope NAME=FILE]... [--wavelength-range LO HI]\n"
                "                       --seed N [--mode thinned|weighted] [--store-p]\n"
+               "                       [--scattering FILE] [--scattering-points N]\n"
                "                       [-i FILE|-] [-o FILE|-]\n");
 }
 
@@ -43,6 +44,16 @@ double parse_double(const std::string &text, const char *what) {
     throw UsageError(std::string("invalid number for ") + what + ": " + text);
   }
   return value;
+}
+
+std::uint32_t parse_points(const std::string &text) {
+  char *end = nullptr;
+  const long value = std::strtol(text.c_str(), &end, 10);
+  if (text.empty() || end != text.c_str() + text.size() || value < 1 ||
+      value > static_cast<long>(max_points_per_photon)) {
+    throw UsageError("--scattering-points needs an integer from 1 to 1024: " + text);
+  }
+  return static_cast<std::uint32_t>(value);
 }
 
 std::uint64_t parse_seed(const std::string &text) {
@@ -75,6 +86,8 @@ int main(int argc, char **argv) {
   std::vector<std::pair<std::string, std::string>> envelope_files;
   OutputMode mode = OutputMode::thinned;
   bool store_p = false;
+  std::optional<std::string> scattering;
+  std::optional<std::uint32_t> scattering_points;
   std::string input = "-";
   std::string output = "-";
 
@@ -120,6 +133,10 @@ int main(int argc, char **argv) {
         }
       } else if (arg == "--store-p") {
         store_p = true;
+      } else if (arg == "--scattering") {
+        scattering = value("--scattering");
+      } else if (arg == "--scattering-points") {
+        scattering_points = parse_points(value("--scattering-points"));
       } else if (arg == "-i") {
         input = value("-i");
       } else if (arg == "-o") {
@@ -133,6 +150,9 @@ int main(int argc, char **argv) {
     }
     if (!transmission || !site_altitude || !seed) {
       throw UsageError("--transmission, --site-altitude and --seed are required");
+    }
+    if (scattering_points && !scattering) {
+      throw UsageError("--scattering-points needs --scattering");
     }
 
     PropagatorConfig config;
@@ -150,6 +170,12 @@ int main(int argc, char **argv) {
     config.seed = *seed;
     config.mode = mode;
     config.store_p = store_p;
+    if (scattering) {
+      config.scattering.enabled = true;
+      config.scattering.points_per_photon = scattering_points.value_or(8);
+      config.scattering_table.emplace(ScatteringTable::from_file(*scattering));
+      config.scattering_source = *scattering;
+    }
 
     std::ifstream in_file;
     if (input != "-") {

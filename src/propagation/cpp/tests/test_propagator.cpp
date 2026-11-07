@@ -3,6 +3,7 @@
 #include "dlufd/profile.hpp"
 #include "dlufd/propagator.hpp"
 #include "dlufd/refraction.hpp"
+#include "dlufd/scattering.hpp"
 #include "dlufd/timing.hpp"
 #include "dlufd/transmission.hpp"
 
@@ -625,6 +626,242 @@ void test_rejects_invalid_input() {
   CHECK(throws_invalid([&] { propagate(unknown, config_for(zero_table())); }));
 }
 
+// ---- Single scattering -------------------------------------------------------------------
+
+constexpr std::uint64_t scatter_seed = 20261107;
+
+// Scattering table of the test data: 340 to 400 nm, exponential atmosphere (docs/scattering.md).
+dlufd::ScatteringTable scattering_table() {
+  return dlufd::ScatteringTable::from_file(std::string(DLUFD_TEST_DATA_DIR) +
+                                           "/scattering_exponential.dat");
+}
+
+// Telescope 1 at 3 km east of the beam, telescope 2 at 2.5 km south; spheres of 12 m radius.
+gstrickd::Metadata scatter_run_keys() {
+  gstrickd::Metadata m;
+  m["run_number"] = i64(1);
+  m["observation_level_m"] = site_m;
+  m["telescope_x_m"] = std::vector<double>{3000.0, 0.0};
+  m["telescope_y_m"] = std::vector<double>{0.0, -2500.0};
+  m["telescope_z_m"] = std::vector<double>{0.0, 0.0};
+  m["telescope_r_m"] = std::vector<double>{12.0, 12.0};
+  m["refraction_applied"] = i64(0);
+  m["wavelength_min_nm"] = 250.0;
+  m["wavelength_max_nm"] = 700.0;
+  return m;
+}
+
+// Vertical beam (cx = cy = 0) at x = offset_x, emitted 15 km above the observation level,
+// wavelength 355 nm, weights 1 to 3.
+gstrickd::PhotonChunk beam_chunk(std::uint32_t telescope, std::size_t first, std::size_t n,
+                                 double offset_x) {
+  gstrickd::PhotonChunk chunk;
+  chunk.telescope_id = telescope;
+  chunk.frame = Frame::sky;
+  chunk.first_index = first;
+  const std::uint32_t mask = gstrickd::column_bit(Column::x) | gstrickd::column_bit(Column::y) |
+                             gstrickd::column_bit(Column::z) | gstrickd::column_bit(Column::cx) |
+                             gstrickd::column_bit(Column::cy) | gstrickd::column_bit(Column::cz) |
+                             gstrickd::column_bit(Column::t) | gstrickd::column_bit(Column::w) |
+                             gstrickd::column_bit(Column::wavelength);
+  chunk.resize(n, mask);
+  for (std::size_t r = 0; r < n; ++r) {
+    const std::size_t i = first + r;
+    chunk[Column::x][r] = static_cast<float>(offset_x);
+    chunk[Column::y][r] = 0.0F;
+    chunk[Column::z][r] = 15000.0F;
+    chunk[Column::cx][r] = 0.0F;
+    chunk[Column::cy][r] = 0.0F;
+    chunk[Column::cz][r] = -1.0F;
+    chunk[Column::t][r] = 0.0F;
+    chunk[Column::w][r] = static_cast<float>(1 + i % 3);
+    chunk[Column::wavelength][r] = 355.0F;
+  }
+  return chunk;
+}
+
+// One event. With two_blocks, telescope 2 has its own beam (at x = 200 m) and primaries; else
+// telescope 2 has no block and receives its scattered photons in a block of its own.
+std::string beam_stream(std::size_t n, std::size_t chunk_rows, bool two_blocks,
+                        gstrickd::Metadata run = scatter_run_keys()) {
+  return make_stream([&](gstrickd::Writer &writer) {
+    writer.write_metadata(RecordType::run, run);
+    writer.write_metadata(RecordType::event, event_keys());
+    writer.write_metadata(RecordType::telescope, telescope_keys(1, Frame::sky));
+    for (std::size_t first = 0; first < n; first += chunk_rows) {
+      writer.write_chunk(beam_chunk(1, first, std::min(chunk_rows, n - first), 0.0));
+    }
+    writer.write_metadata(RecordType::telescope_end, telescope_end_keys(1));
+    if (two_blocks) {
+      writer.write_metadata(RecordType::telescope, telescope_keys(2, Frame::sky));
+      for (std::size_t first = 0; first < n; first += chunk_rows) {
+        writer.write_chunk(beam_chunk(2, first, std::min(chunk_rows, n - first), 200.0));
+      }
+      writer.write_metadata(RecordType::telescope_end, telescope_end_keys(2));
+    }
+    writer.write_metadata(RecordType::event_end, {});
+    writer.write_metadata(RecordType::run_end, {});
+  });
+}
+
+dlufd::PropagatorConfig scattering_config(const dlufd::TransmissionTable &table, bool weighted) {
+  auto config = config_for(table);
+  config.mode = weighted ? dlufd::OutputMode::weighted : dlufd::OutputMode::thinned;
+  config.envelope.push_back(constant_factor("qe", 0.5));
+  config.scattering.enabled = true;
+  config.scattering.points_per_photon = 8;
+  config.scattering_table.emplace(scattering_table());
+  config.scattering_source = "scattering_exponential.dat";
+  return config;
+}
+
+// Sum of the telescope_end photons (sum of w) of one telescope; 0 without a block.
+double telescope_photons(const std::vector<gstrickd::Record> &records, std::uint32_t telescope) {
+  double total = 0.0;
+  for (const auto &record : records) {
+    if (record.type == RecordType::telescope_end &&
+        std::get<std::int64_t>(record.metadata.at("telescope_id")) == telescope) {
+      total += std::get<double>(record.metadata.at("photons"));
+    }
+  }
+  return total;
+}
+
+// first_index of the photon chunks of one telescope counts its rows from 0 without gaps.
+bool contiguous_indices(const std::vector<gstrickd::Record> &records, std::uint32_t telescope) {
+  std::uint64_t next = 0;
+  for (const auto &record : records) {
+    if (record.type == RecordType::photons && record.chunk.telescope_id == telescope) {
+      if (record.chunk.first_index != next) {
+        return false;
+      }
+      next += record.chunk.rows();
+    }
+  }
+  return true;
+}
+
+// Scattered weight per telescope from scatter_chunk called directly on the n beam photons.
+std::vector<double> kernel_weights(const dlufd::TransmissionTable &table, std::size_t n) {
+  dlufd::ScatteringConfig config;
+  config.enabled = true;
+  config.points_per_photon = 8;
+  const std::vector<dlufd::ScatterTelescope> sphere = {{1, 3000.0, 0.0, 0.0, 12.0},
+                                                       {2, 0.0, -2500.0, 0.0, 12.0}};
+  std::vector<std::vector<gstrickd::PhotonChunk>> lists(sphere.size());
+  dlufd::scatter_chunk(config, scattering_table(), table, sphere, beam_chunk(1, 0, n, 0.0),
+                       scatter_seed, 7, 0, lists);
+  std::vector<double> sums(sphere.size(), 0.0);
+  for (std::size_t i = 0; i < sphere.size(); ++i) {
+    for (const auto &chunk : lists[i]) {
+      for (const float w : chunk[Column::w]) {
+        sums[i] += static_cast<double>(w);
+      }
+    }
+  }
+  return sums;
+}
+
+// Scattered photons equal the kernel result times the envelope (E = 0.5), added to the block of
+// their telescope; the primaries are unchanged; first_index stays contiguous.
+void test_scattering_weights() {
+  const auto table = real_table();
+  const std::size_t n = 400;
+  const std::string input = beam_stream(n, n, false);
+  auto off = scattering_config(table, true);
+  off.scattering = dlufd::ScatteringConfig{};
+  off.scattering_table.reset();
+  const auto without = records_of(propagate(input, off).bytes);
+  const auto with = records_of(propagate(input, scattering_config(table, true)).bytes);
+  const auto expected = kernel_weights(table, n);
+  CHECK(expected[0] > 0.0 && expected[1] > 0.0);
+  for (const std::uint32_t telescope : {1U, 2U}) {
+    const double added = telescope_photons(with, telescope) - telescope_photons(without, telescope);
+    CHECK_NEAR(added, 0.5 * expected[telescope - 1], 1e-5 * expected[telescope - 1]);
+    CHECK(contiguous_indices(with, telescope));
+  }
+  CHECK(photon_rows(with, 2) > 0); // block written for telescope 2 without input block
+  CHECK(photon_rows(without, 2) == 0);
+  CHECK(photon_column(with, 1, Column::x).size() > photon_column(without, 1, Column::x).size());
+}
+
+// Extinction disabled by an all-zero transmission table: the scattered weights are those of
+// the kernel with that table times the envelope. The path transmission T(P -> C) of the kernel
+// uses the same table (it is in w), so it is not compared with the real-table run.
+void test_scattering_not_attenuated_twice() {
+  const auto zero = zero_table();
+  const std::size_t n = 300;
+  const std::string input = beam_stream(n, n, false); // one block: the kernel reference is one beam
+  auto off = scattering_config(zero, true);
+  off.scattering = dlufd::ScatteringConfig{};
+  off.scattering_table.reset();
+  const auto without = records_of(propagate(input, off).bytes);
+  const auto with = records_of(propagate(input, scattering_config(zero, true)).bytes);
+  const auto expected = kernel_weights(zero, n);
+  for (const std::uint32_t telescope : {1U, 2U}) {
+    const double added = telescope_photons(with, telescope) - telescope_photons(without, telescope);
+    CHECK_NEAR(added, 0.5 * expected[telescope - 1], 1e-5 * expected[telescope - 1]);
+  }
+}
+
+void test_scattering_ledger() {
+  const auto table = real_table();
+  const std::string input = beam_stream(100, 100, false);
+  const auto on = records_of(propagate(input, scattering_config(table, false)).bytes);
+  const auto *ledger = first_ledger(on);
+  CHECK(ledger != nullptr);
+  CHECK(text_of(*ledger, "factors") == "atmosphere,wavelength,scattering,qe");
+  CHECK(text_of(*ledger, "scattering.state") == "applied");
+  CHECK(text_of(*ledger, "scattering.source") == "scattering_exponential.dat");
+  CHECK(std::get<std::int64_t>(ledger->at("scattering.points_per_photon")) == 8);
+
+  auto off = scattering_config(table, false);
+  off.scattering = dlufd::ScatteringConfig{};
+  off.scattering_table.reset();
+  const auto plain_records = records_of(propagate(input, off).bytes);
+  const auto *plain = first_ledger(plain_records);
+  CHECK(plain != nullptr);
+  CHECK(plain == nullptr || text_of(*plain, "factors") == "atmosphere,wavelength,qe");
+  CHECK(plain == nullptr || plain->count("scattering.state") == 0);
+  CHECK(plain == nullptr || plain->count("scattering.points_per_photon") == 0);
+}
+
+// Thinned and weighted output do not depend on how the input is split into chunks, with
+// primaries in two telescope blocks (the scatter index runs over both).
+void test_scattering_chunk_determinism() {
+  const auto table = real_table();
+  for (const bool weighted : {false, true}) {
+    const auto config = scattering_config(table, weighted);
+    const auto reference = records_of(propagate(beam_stream(3000, 3000, true), config).bytes);
+    CHECK(photon_rows(reference, 2) > 0);
+    for (const std::size_t chunk_rows : {std::size_t{1000}, std::size_t{333}}) {
+      const auto records = records_of(propagate(beam_stream(3000, chunk_rows, true), config).bytes);
+      for (const std::uint32_t telescope : {1U, 2U}) {
+        for (const Column c : {Column::x, Column::y, Column::t, Column::w, Column::zem}) {
+          CHECK(photon_column(records, telescope, c) == photon_column(reference, telescope, c));
+        }
+        CHECK(contiguous_indices(records, telescope));
+      }
+    }
+  }
+}
+
+void test_scattering_rejects() {
+  const auto table = real_table();
+  const std::string input = beam_stream(10, 10, false);
+  auto no_table = scattering_config(table, false);
+  no_table.scattering_table.reset();
+  CHECK(throws_invalid([&] { propagate(input, no_table); }));
+
+  gstrickd::Metadata no_radius = scatter_run_keys();
+  no_radius.erase("telescope_r_m");
+  CHECK(throws_invalid(
+      [&] { propagate(beam_stream(10, 10, false, no_radius), scattering_config(table, false)); }));
+
+  const std::string ground = ground_stream(100, 100);
+  CHECK(throws_invalid([&] { propagate(ground, scattering_config(table, false)); }));
+}
+
 } // namespace
 
 int main() {
@@ -637,5 +874,10 @@ int main() {
     test_sky_analytic();
     test_sky_refraction();
     test_rejects_invalid_input();
+    test_scattering_weights();
+    test_scattering_not_attenuated_twice();
+    test_scattering_ledger();
+    test_scattering_chunk_determinism();
+    test_scattering_rejects();
   });
 }

@@ -16,5 +16,8 @@ inline constexpr std::uint32_t stream_thinning = 2;
 // Single scattering (scattering.hpp): deviates 0..N-1 place the scattering points, deviates
 // N.. are the aim-point offsets; one key per primary photon.
 inline constexpr std::uint32_t stream_scattering = 3;
+// Thinning of scattered photons (envelope only; scattered photons carry their transmission in w).
+// Their keys use the index of the scattered photon in its telescope's list, not the primary index.
+inline constexpr std::uint32_t stream_scattered_thinning = 4;
 
 } // namespace dlufd
