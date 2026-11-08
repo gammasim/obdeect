@@ -16,7 +16,7 @@ CORSIKA output into this stream and the stream into sim_telarray and GrISU/GrOpt
 - Photon-stream format 1.0 (`docs/format.md`): run, event and telescope records; photons as
   float32 columns (position, direction, time, emission height, weight, wavelength) in chunks of
   at most 65536 rows; frames sky, ground, telescope and camera; MC truth of runs and events; an
-  efficiency ledger that records for each factor (atmosphere, QE, mirror reflectivity, ...)
+  efficiency status that records for each factor (atmosphere, QE, mirror reflectivity, ...)
   whether it is applied, pending or applied as an envelope. Readers reject unknown major
   versions.
 - Reader and writer in C++20 (header-only, standard library only, `gstrickd/stream.hpp`), in
@@ -31,7 +31,7 @@ CORSIKA output into this stream and the stream into sim_telarray and GrISU/GrOpt
   stream. The EventIO reader and writer are part of gstrickd.
 - `ps2simtel`: photon stream to sim_telarray input for ground-, camera- and telescope-frame
   photons, with a camera map per telescope and the required `Bypass_Optics` value reported.
-  It checks the efficiency ledger, so that no factor is applied twice or not at all
+  It checks the efficiency status, so that no factor is applied twice or not at all
   (`--allow-pending`; `--scaled-factor qe` when the QE is thinned before ray tracing), writes
   the run and event headers for streams from light sources, and an atmospheric profile with
   `--atmprof`. More than 1 GB/s through a pipe.

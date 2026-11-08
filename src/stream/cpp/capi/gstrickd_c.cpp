@@ -234,7 +234,7 @@ const char *gstrickd_record_type_name(int record_type) {
   case RecordType::event_end:
   case RecordType::run_end:
   case RecordType::blob:
-  case RecordType::ledger:
+  case RecordType::efficiency_status:
   case RecordType::stream_end:
     return gstrickd::record_name(static_cast<RecordType>(record_type));
   }

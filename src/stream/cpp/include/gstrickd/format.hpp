@@ -20,7 +20,7 @@ enum class RecordType : std::uint16_t {
   event_end = 7,
   run_end = 8,
   blob = 9,
-  ledger = 10,
+  efficiency_status = 10,
   stream_end = 15
 };
 

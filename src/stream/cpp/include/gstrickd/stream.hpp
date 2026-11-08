@@ -47,8 +47,8 @@ inline constexpr bool little_endian_host = std::endian::native == std::endian::l
     return "run_end";
   case RecordType::blob:
     return "blob";
-  case RecordType::ledger:
-    return "ledger";
+  case RecordType::efficiency_status:
+    return "efficiency_status";
   case RecordType::stream_end:
     return "stream_end";
   }
@@ -64,7 +64,7 @@ inline constexpr bool little_endian_host = std::endian::native == std::endian::l
   case RecordType::telescope_end:
   case RecordType::event_end:
   case RecordType::run_end:
-  case RecordType::ledger:
+  case RecordType::efficiency_status:
     return true;
   default:
     return false;
@@ -498,7 +498,7 @@ public:
       case RecordType::telescope_end:
       case RecordType::event_end:
       case RecordType::run_end:
-      case RecordType::ledger:
+      case RecordType::efficiency_status:
         decode_metadata_into(record.metadata, payload, size);
         record.type = static_cast<RecordType>(type);
         return true;

@@ -488,8 +488,8 @@ public:
     case RecordType::telescope_end:
       finish_telescope(record.metadata);
       return;
-    case RecordType::ledger:
-      return; // efficiency ledger: not written to sim_telarray input
+    case RecordType::efficiency_status:
+      return; // efficiency status: not written to sim_telarray input
     case RecordType::blob:
       if (record.blob_eventio_type == iact::telarray_head ||
           record.blob_eventio_type == iact::telarray_end) {

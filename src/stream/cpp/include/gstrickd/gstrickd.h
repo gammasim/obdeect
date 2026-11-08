@@ -62,7 +62,7 @@ enum {
   GSTRICKD_RECORD_EVENT_END = 7,
   GSTRICKD_RECORD_RUN_END = 8,
   GSTRICKD_RECORD_BLOB = 9,
-  GSTRICKD_RECORD_LEDGER = 10
+  GSTRICKD_RECORD_EFFICIENCY_STATUS = 10
 };
 
 /* Photon frames. */
@@ -137,7 +137,7 @@ GSTRICKD_C_API void gstrickd_reader_close(gstrickd_reader *reader);
 GSTRICKD_C_API int gstrickd_reader_next(gstrickd_reader *reader, int *record_type);
 
 /* Metadata of the current record (stream, run, event, telescope, telescope_end,
- * event_end, run_end, ledger); GSTRICKD_ERROR_STATE for other records. Keys are sorted
+ * event_end, run_end, efficiency_status); GSTRICKD_ERROR_STATE for other records. Keys are sorted
  * and unique. */
 GSTRICKD_C_API int gstrickd_reader_n_keys(const gstrickd_reader *reader, size_t *n);
 /* Key i (0 <= i < n) as a NUL-terminated UTF-8 string, or NULL if out of range. */
@@ -190,7 +190,7 @@ GSTRICKD_C_API int gstrickd_writer_set_array(gstrickd_writer *writer, const char
                                              const double *values, size_t n);
 
 /* Writes a metadata record (RUN, EVENT, TELESCOPE, TELESCOPE_END, EVENT_END, RUN_END or
- * LEDGER) with the pending metadata and clears it, also when the call fails. */
+ * EFFICIENCY_STATUS) with the pending metadata and clears it, also when the call fails. */
 GSTRICKD_C_API int gstrickd_writer_write_record(gstrickd_writer *writer, int record_type);
 
 /* Writes one photon chunk. columns points to GSTRICKD_N_COLUMNS pointers, each NULL

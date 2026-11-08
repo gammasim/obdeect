@@ -50,7 +50,7 @@ def stream_to_simtel(
     ground-frame telescopes (Bypass_Optics=0 in sim_telarray). A class 2 entry may also carry
     telescope-frame photons (Bypass_Optics=1, see docs/usage.md).
 
-    The efficiency ledger is checked per telescope against the frame of its photons
+    The efficiency status is checked per telescope against the frame of its photons
     (docs/format.md): a factor is valid as ``applied`` when sim_telarray does not apply it in
     that frame (e.g. ``atmosphere`` for camera-frame photons), and as ``pending`` when
     sim_telarray applies it (e.g. ``qe``). ``envelope`` is never valid for factors sim_telarray
@@ -87,7 +87,8 @@ def stream_to_grisu(
     stream telescope id. ``qe`` is written as the global QE factor (``R`` line) and not
     applied. Photon bunches with weight above 1 raise ``RuntimeError`` unless
     ``expand_bunches`` writes ``round(w)`` copies. The wavelength must be assigned and the
-    ledger factor ``atmosphere`` must be ``applied``; otherwise ``RuntimeError`` is raised.
+    efficiency status factor ``atmosphere`` must be ``applied``; otherwise ``RuntimeError``
+    is raised.
     ``event_details`` adds a ``C`` line after each ``S`` line.
     """
     text = _core.stream_to_grisu(

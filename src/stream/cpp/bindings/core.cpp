@@ -93,7 +93,7 @@ gstrickd::RecordType metadata_type_from_name(const std::string &name) {
   using gstrickd::RecordType;
   for (const auto type :
        {RecordType::run, RecordType::event, RecordType::telescope, RecordType::telescope_end,
-        RecordType::event_end, RecordType::run_end, RecordType::ledger}) {
+        RecordType::event_end, RecordType::run_end, RecordType::efficiency_status}) {
     if (name == gstrickd::record_name(type)) {
       return type;
     }

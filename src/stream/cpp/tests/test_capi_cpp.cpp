@@ -111,9 +111,10 @@ std::vector<Record> read_all(const std::string &path) {
 void check_conformance(const std::string &directory) {
   const auto records = read_all(directory + "/valid.ps");
   const RecordType types[] = {
-      RecordType::stream,        RecordType::run,       RecordType::ledger,  RecordType::event,
-      RecordType::telescope,     RecordType::photons,   RecordType::photons, RecordType::blob,
-      RecordType::telescope_end, RecordType::event_end, RecordType::run_end};
+      RecordType::stream,    RecordType::run,       RecordType::efficiency_status,
+      RecordType::event,     RecordType::telescope, RecordType::photons,
+      RecordType::photons,   RecordType::blob,      RecordType::telescope_end,
+      RecordType::event_end, RecordType::run_end};
   CHECK(records.size() == 11);
   for (std::size_t i = 0; i < records.size() && i < 11; ++i) {
     CHECK(records[i].type == types[i]);

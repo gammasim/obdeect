@@ -118,7 +118,8 @@ void stream_round_trip() {
   Metadata run{{"run_number", std::int64_t{7}}, {"telescope_x_m", std::vector<double>{1.0, 2.0}}};
   Metadata event{{"event_number", std::int64_t{1}}, {"energy_gev", 0.5}};
   Metadata telescope{{"telescope_id", std::int64_t{3}}, {"frame", std::int64_t{2}}};
-  Metadata ledger{{"factors", std::string("qe,mirror")}, {"qe.state", std::string("applied")}};
+  Metadata efficiency_status{{"factors", std::string("qe,mirror")},
+                             {"qe.state", std::string("applied")}};
   Metadata end{{"photons", 12.5}};
 
   const PhotonChunk first = make_chunk(3, Frame::ground, 0, 100, 0);
@@ -129,7 +130,7 @@ void stream_round_trip() {
   {
     Writer writer(out, "test");
     writer.write_metadata(RecordType::run, run);
-    writer.write_metadata(RecordType::ledger, ledger);
+    writer.write_metadata(RecordType::efficiency_status, efficiency_status);
     writer.write_blob(1204, 0, {1, 2, 3, 4, 5, 6, 7, 8, 9});
     writer.write_metadata(RecordType::event, event);
     writer.write_metadata(RecordType::telescope, telescope);
@@ -145,9 +146,10 @@ void stream_round_trip() {
   std::vector<PhotonChunk> chunks;
   const auto types = read_all(out.str(), &chunks);
   const std::vector<RecordType> expected = {
-      RecordType::stream,        RecordType::run,       RecordType::ledger,  RecordType::blob,
-      RecordType::event,         RecordType::telescope, RecordType::photons, RecordType::photons,
-      RecordType::telescope_end, RecordType::event_end, RecordType::run_end};
+      RecordType::stream,    RecordType::run,     RecordType::efficiency_status,
+      RecordType::blob,      RecordType::event,   RecordType::telescope,
+      RecordType::photons,   RecordType::photons, RecordType::telescope_end,
+      RecordType::event_end, RecordType::run_end};
   CHECK(types == expected);
   CHECK(chunks.size() == 2);
   if (chunks.size() == 2) {
@@ -172,7 +174,7 @@ void stream_round_trip() {
   CHECK(record.metadata.at("format_major") == Value{std::int64_t{format_major}});
   CHECK(record.metadata.at("producer") == Value{std::string("test")});
   CHECK(reader.next(record) && record.metadata == run);
-  CHECK(reader.next(record) && record.metadata == ledger);
+  CHECK(reader.next(record) && record.metadata == efficiency_status);
   CHECK(reader.next(record) && record.type == RecordType::blob);
   CHECK(record.blob_eventio_type == 1204 && record.blob_eventio_id == 0);
   CHECK(record.blob == (std::vector<std::uint8_t>{1, 2, 3, 4, 5, 6, 7, 8, 9}));
