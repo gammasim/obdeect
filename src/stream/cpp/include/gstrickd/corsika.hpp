@@ -479,7 +479,9 @@ public:
       }
       telescope_id_ = static_cast<int>(id64);
       tel_open_ = true;
-      bunches_.clear();
+      // The 1205 header (12 bytes) is filled in when the telescope ends.
+      bunch_bytes_.assign(photons_header_size, 0);
+      photon_sum_ = 0.0;
       next_index_ = 0;
       return;
     }
@@ -544,17 +546,21 @@ private:
     if (zem.empty()) {
       throw std::runtime_error("sim_telarray input needs the zem column");
     }
-    for (std::size_t i = 0; i < n; ++i) {
-      Bunch b;
-      b.x = corsika_m_to_cm(x[i]);
-      b.y = corsika_m_to_cm(y[i]);
-      b.cx = cx[i];
-      b.cy = cy[i];
-      b.ctime = t[i];
-      b.zem = corsika_m_to_cm(zem[i]);
-      b.photons = w[i];
-      b.lambda = lambda.empty() ? 0.0F : lambda[i];
-      bunches_.push_back(b);
+    // Each bunch is encoded in place as its 1205 record (io_simtel layout, 32 bytes):
+    // x y cx cy t zem photons lambda, float32 little-endian, cm and ns as CORSIKA.
+    const std::size_t at = bunch_bytes_.size();
+    bunch_bytes_.resize(at + n * photon_bunch_size);
+    std::uint8_t *dst = bunch_bytes_.data() + at;
+    for (std::size_t i = 0; i < n; ++i, dst += photon_bunch_size) {
+      detail::store_f32_le(dst, corsika_m_to_cm(x[i]));
+      detail::store_f32_le(dst + 4, corsika_m_to_cm(y[i]));
+      detail::store_f32_le(dst + 8, cx[i]);
+      detail::store_f32_le(dst + 12, cy[i]);
+      detail::store_f32_le(dst + 16, t[i]);
+      detail::store_f32_le(dst + 20, corsika_m_to_cm(zem[i]));
+      detail::store_f32_le(dst + 24, w[i]);
+      detail::store_f32_le(dst + 28, lambda.empty() ? 0.0F : lambda[i]);
+      photon_sum_ += w[i];
     }
     next_index_ += n;
   }
@@ -573,19 +579,28 @@ private:
     if (it != metadata.end()) {
       photons = static_cast<float>(std::get<double>(it->second));
     } else {
-      double sum = 0.0;
-      for (const Bunch &b : bunches_) {
-        sum += b.photons;
-      }
-      photons = static_cast<float>(sum);
+      photons = static_cast<float>(photon_sum_);
     }
-    TelPhotons p;
-    p.array = array_;
-    p.tel = telescope_id_ - 1;
-    p.photons = photons;
-    p.bunches = std::move(bunches_);
-    bunches_.clear();
-    children_.push_back(make_photons_block(p));
+    // Header of the 1205 block (make_photons_block layout): array and telescope as int16,
+    // photon sum as float32, bunch count as int32; the bunches follow.
+    const auto count =
+        static_cast<std::int32_t>((bunch_bytes_.size() - photons_header_size) / photon_bunch_size);
+    std::uint8_t *head = bunch_bytes_.data();
+    const auto array16 = static_cast<std::uint16_t>(array_);
+    const auto tel16 = static_cast<std::uint16_t>(telescope_id_ - 1);
+    const auto count32 = static_cast<std::uint32_t>(count);
+    for (std::size_t i = 0; i < 2; ++i) {
+      head[i] = static_cast<std::uint8_t>(array16 >> (8 * i));
+      head[2 + i] = static_cast<std::uint8_t>(tel16 >> (8 * i));
+    }
+    detail::store_f32_le(head + 4, photons);
+    for (std::size_t i = 0; i < 4; ++i) {
+      head[8 + i] = static_cast<std::uint8_t>(count32 >> (8 * i));
+    }
+    children_.push_back(make_block(iact::photons, 0,
+                                   static_cast<std::uint32_t>(1000 * array_ + telescope_id_ - 1),
+                                   std::move(bunch_bytes_)));
+    bunch_bytes_.clear();
     tel_open_ = false;
   }
 
@@ -596,18 +611,20 @@ private:
     if (children_.empty()) {
       return;
     }
-    const EventioBlock container =
-        make_container(iact::telarray, 0, static_cast<std::uint32_t>(array_), children_);
-    write_block(out_, container);
+    write_container(out_, iact::telarray, 0, static_cast<std::uint32_t>(array_), children_);
     children_.clear();
   }
+
+  static constexpr std::size_t photons_header_size = 12; // int16, int16, float32, int32
+  static constexpr std::size_t photon_bunch_size = 32;   // 8 float32 (long format)
 
   std::ostream &out_;
   int array_{};
   int telescope_id_{};
   bool tel_open_{};
   std::uint64_t next_index_{}; // first_index the next chunk of the open telescope must have
-  std::vector<Bunch> bunches_;
+  std::vector<std::uint8_t> bunch_bytes_; // 1205 block of the open telescope (header first)
+  double photon_sum_{};                   // sum of the weights of the open telescope
   std::vector<EventioBlock> children_;
 };
 

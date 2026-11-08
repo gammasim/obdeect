@@ -11,9 +11,11 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <istream>
 #include <ostream>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace gstrickd {
@@ -83,6 +85,7 @@ public:
   [[nodiscard]] std::int32_t i32() { return static_cast<std::int32_t>(take(4)); }
   [[nodiscard]] std::int16_t i16() { return static_cast<std::int16_t>(take(2)); }
   [[nodiscard]] float f32() { return std::bit_cast<float>(u32()); }
+  [[nodiscard]] double f64() { return std::bit_cast<double>(take(8)); }
   [[nodiscard]] std::size_t remaining() const { return size_ - pos_; }
 
 private:
@@ -95,19 +98,79 @@ class ByteWriter {
 public:
   explicit ByteWriter(std::vector<std::uint8_t> &out) : out_{out} {}
 
+  // Appends n little-endian bytes with one resize (no push_back per byte).
   void put(std::uint64_t value, std::size_t n) {
+    const std::size_t at = out_.size();
+    out_.resize(at + n);
+    std::uint8_t *dst = out_.data() + at;
     for (std::size_t i = 0; i < n; ++i) {
-      out_.push_back(static_cast<std::uint8_t>(value >> (8 * i)));
+      dst[i] = static_cast<std::uint8_t>(value >> (8 * i));
     }
   }
   void u32(std::uint32_t value) { put(value, 4); }
   void i32(std::int32_t value) { put(static_cast<std::uint32_t>(value), 4); }
   void i16(std::int16_t value) { put(static_cast<std::uint16_t>(value), 2); }
   void f32(float value) { u32(std::bit_cast<std::uint32_t>(value)); }
+  void f64(double value) { put(std::bit_cast<std::uint64_t>(value), 8); }
 
 private:
   std::vector<std::uint8_t> &out_;
 };
+
+// Variable-length counts of eventio.c (put_count32 and get_count32 for values below 2^32).
+// Big-endian: a lead byte with the high bits, then the remaining bytes.
+inline void put_count(ByteWriter &out, std::uint64_t n) {
+  if (n >= (std::uint64_t{1} << 32)) {
+    throw std::out_of_range("EventIO: count exceeds 32 bits");
+  }
+  if (n < (1U << 7)) {
+    out.put(static_cast<std::uint8_t>(n), 1);
+  } else if (n < (1U << 14)) {
+    out.put(static_cast<std::uint8_t>(0x80U | ((n >> 8) & 0x3FU)), 1);
+    out.put(static_cast<std::uint8_t>(n), 1);
+  } else if (n < (1U << 21)) {
+    out.put(static_cast<std::uint8_t>(0xC0U | ((n >> 16) & 0x1FU)), 1);
+    out.put(static_cast<std::uint8_t>(n >> 8), 1);
+    out.put(static_cast<std::uint8_t>(n), 1);
+  } else if (n < (1U << 28)) {
+    out.put(static_cast<std::uint8_t>(0xE0U | ((n >> 24) & 0x0FU)), 1);
+    out.put(static_cast<std::uint8_t>(n >> 16), 1);
+    out.put(static_cast<std::uint8_t>(n >> 8), 1);
+    out.put(static_cast<std::uint8_t>(n), 1);
+  } else {
+    out.put(0xF0U, 1);
+    out.put(static_cast<std::uint8_t>(n >> 24), 1);
+    out.put(static_cast<std::uint8_t>(n >> 16), 1);
+    out.put(static_cast<std::uint8_t>(n >> 8), 1);
+    out.put(static_cast<std::uint8_t>(n), 1);
+  }
+}
+
+inline std::uint64_t take_count(ByteReader &in) {
+  const std::uint64_t v0 = in.take(1);
+  if ((v0 & 0x80) == 0) {
+    return v0;
+  }
+  if ((v0 & 0xC0) == 0x80) {
+    return ((v0 & 0x3F) << 8) | in.take(1);
+  }
+  if ((v0 & 0xE0) == 0xC0) {
+    const std::uint64_t hi = in.take(1);
+    return ((v0 & 0x1F) << 16) | (hi << 8) | in.take(1);
+  }
+  if ((v0 & 0xF0) == 0xE0) {
+    const std::uint64_t b1 = in.take(1);
+    const std::uint64_t b2 = in.take(1);
+    return ((v0 & 0x0F) << 24) | (b1 << 16) | (b2 << 8) | in.take(1);
+  }
+  if ((v0 & 0xF8) == 0xF0 && (v0 & 0x07) == 0) {
+    const std::uint64_t b1 = in.take(1);
+    const std::uint64_t b2 = in.take(1);
+    const std::uint64_t b3 = in.take(1);
+    return (b1 << 24) | (b2 << 16) | (b3 << 8) | in.take(1);
+  }
+  throw std::runtime_error("EventIO: count too large or invalid");
+}
 
 namespace detail {
 
@@ -174,18 +237,21 @@ inline void copy_fields(EventioBlock &block, const ItemHeader &h) {
   block.only_subobjects = h.only_subobjects;
 }
 
-// Header bytes for a block, as eventio.c writes them. top_level adds the sync tag.
-inline std::vector<std::uint8_t> encode_header(const EventioBlock &block, bool top_level) {
-  if (block.type > 0xFFFFU) {
+// Header bytes for a block of `length` body bytes, as eventio.c writes them.
+// top_level adds the sync tag.
+inline std::vector<std::uint8_t> encode_header_fields(std::uint32_t type, std::uint32_t version,
+                                                      std::uint32_t ident, std::uint64_t length,
+                                                      bool user_flag, bool only_subobjects,
+                                                      bool top_level) {
+  if (type > 0xFFFFU) {
     throw std::invalid_argument("EventIO: type exceeds 16 bits");
   }
-  if (block.version > 0x7FFU) {
+  if (version > 0x7FFU) {
     throw std::invalid_argument("EventIO: version exceeds 11 bits");
   }
-  if (block.body.size() % 4 != 0) {
+  if (length % 4 != 0) {
     throw std::invalid_argument("EventIO: body is not padded to 4 bytes");
   }
-  const std::uint64_t length = block.body.size();
   if ((length >> 42) != 0) {
     throw std::invalid_argument("EventIO: body too long");
   }
@@ -195,17 +261,17 @@ inline std::vector<std::uint8_t> encode_header(const EventioBlock &block, bool t
   if (top_level) {
     w.u32(eventio_sync);
   }
-  std::uint32_t type_version = (block.type & 0xFFFFU) | (block.version << 20);
-  if (block.user_flag) {
+  std::uint32_t type_version = (type & 0xFFFFU) | (version << 20);
+  if (user_flag) {
     type_version |= 0x00010000U;
   }
   if (extended) {
     type_version |= 0x00020000U;
   }
   w.u32(type_version);
-  w.u32(block.ident);
+  w.u32(ident);
   std::uint32_t length_word = static_cast<std::uint32_t>(length & 0x3FFFFFFFU);
-  if (block.only_subobjects) {
+  if (only_subobjects) {
     length_word |= 0x40000000U;
   }
   if (extended) {
@@ -216,6 +282,24 @@ inline std::vector<std::uint8_t> encode_header(const EventioBlock &block, bool t
     w.u32(static_cast<std::uint32_t>(length >> 30));
   }
   return out;
+}
+
+// Header bytes for a block, as eventio.c writes them. top_level adds the sync tag.
+inline std::vector<std::uint8_t> encode_header(const EventioBlock &block, bool top_level) {
+  return encode_header_fields(block.type, block.version, block.ident, block.body.size(),
+                              block.user_flag, block.only_subobjects, top_level);
+}
+
+// Stores a float32 as four little-endian bytes at dst.
+inline void store_f32_le(std::uint8_t *dst, float value) {
+  if constexpr (std::endian::native == std::endian::little) {
+    std::memcpy(dst, &value, sizeof value);
+  } else {
+    const auto bits = std::bit_cast<std::uint32_t>(value);
+    for (std::size_t i = 0; i < 4; ++i) {
+      dst[i] = static_cast<std::uint8_t>(bits >> (8 * i));
+    }
+  }
 }
 
 } // namespace detail
@@ -342,6 +426,32 @@ inline EventioBlock make_container(std::uint32_t type, std::uint32_t version, st
     body.insert(body.end(), item.begin(), item.end());
   }
   return make_block(type, version, ident, std::move(body), true);
+}
+
+// Writes the bytes of make_container(type, version, ident, children) to `out`
+// without building the container body: header, then each child's header and body.
+inline void write_container(std::ostream &out, std::uint32_t type, std::uint32_t version,
+                            std::uint32_t ident, const std::vector<EventioBlock> &children) {
+  std::vector<std::vector<std::uint8_t>> child_headers;
+  child_headers.reserve(children.size());
+  std::uint64_t length = 0;
+  for (const EventioBlock &child : children) {
+    child_headers.push_back(detail::encode_header(child, false));
+    length += child_headers.back().size() + child.body.size();
+  }
+  const std::vector<std::uint8_t> header =
+      detail::encode_header_fields(type, version, ident, length, false, true, true);
+  out.write(reinterpret_cast<const char *>(header.data()),
+            static_cast<std::streamsize>(header.size()));
+  for (std::size_t i = 0; i < children.size(); ++i) {
+    out.write(reinterpret_cast<const char *>(child_headers[i].data()),
+              static_cast<std::streamsize>(child_headers[i].size()));
+    out.write(reinterpret_cast<const char *>(children[i].body.data()),
+              static_cast<std::streamsize>(children[i].body.size()));
+  }
+  if (!out) {
+    throw std::runtime_error("EventIO: write failed");
+  }
 }
 
 // Write a top-level block. The header is recomputed from the fields.
@@ -643,6 +753,78 @@ inline TelPhotons3d decode_photons3d(const EventioBlock &block) {
     b.lambda = in.f32();
   }
   return p;
+}
+
+// ---------------------------------------------------------------------------
+// Atmospheric profile, 1216 (write_atmprof, io_simtel.c:2878; version 1). Layout: var string
+// file name, double observation level [cm], count n, n times (altitude [km], density [g/cm^3],
+// thickness [g/cm^2], n-1), count of 5-layer parameters (0 here). The block ident is the
+// profile number that EVTH word 77 names (bits 10-19). Writing only; reading supports tables
+// without 5-layer parameters.
+
+struct AtmosphereTable {
+  std::uint32_t profile_id{};
+  std::string file_name;
+  double observation_level_cm{};
+  std::vector<double> alt_km, rho, thick, refidx_m1;
+};
+
+inline EventioBlock make_atmprof_block(const AtmosphereTable &table) {
+  const std::size_t n = table.alt_km.size();
+  if (table.rho.size() != n || table.thick.size() != n || table.refidx_m1.size() != n) {
+    throw std::invalid_argument("ATMPROF columns differ in length");
+  }
+  std::vector<std::uint8_t> body;
+  ByteWriter out{body};
+  put_count(out, table.file_name.size());
+  body.insert(body.end(), table.file_name.begin(), table.file_name.end());
+  out.f64(table.observation_level_cm);
+  put_count(out, n);
+  for (std::size_t i = 0; i < n; ++i) {
+    out.f64(table.alt_km[i]);
+    out.f64(table.rho[i]);
+    out.f64(table.thick[i]);
+    out.f64(table.refidx_m1[i]);
+  }
+  put_count(out, 0); // no 5-layer parameters
+  return make_block(iact::atmprof, 1, table.profile_id, std::move(body));
+}
+
+inline AtmosphereTable decode_atmprof(const EventioBlock &block) {
+  if (block.type != iact::atmprof) {
+    throw std::invalid_argument("EventIO: block is not an ATMPROF block");
+  }
+  if (block.version != 1) {
+    throw std::runtime_error("EventIO: unsupported ATMPROF version");
+  }
+  ByteReader in{block.body};
+  AtmosphereTable table;
+  table.profile_id = block.ident;
+  const std::uint64_t name_size = take_count(in);
+  if (name_size > in.remaining()) {
+    throw std::runtime_error("EventIO: ATMPROF file name exceeds its block");
+  }
+  for (std::uint64_t i = 0; i < name_size; ++i) {
+    table.file_name.push_back(static_cast<char>(in.take(1)));
+  }
+  table.observation_level_cm = in.f64();
+  const std::uint64_t n = take_count(in);
+  if (n * 32 > in.remaining()) {
+    throw std::runtime_error("EventIO: ATMPROF level count does not match its size");
+  }
+  for (std::uint64_t i = 0; i < n; ++i) {
+    table.alt_km.push_back(in.f64());
+    table.rho.push_back(in.f64());
+    table.thick.push_back(in.f64());
+    table.refidx_m1.push_back(in.f64());
+  }
+  if (take_count(in) != 0) {
+    throw std::runtime_error("EventIO: ATMPROF 5-layer parameters are not supported");
+  }
+  if (in.remaining() >= 4) {
+    throw std::runtime_error("EventIO: trailing bytes after ATMPROF");
+  }
+  return table;
 }
 
 } // namespace gstrickd

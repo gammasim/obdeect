@@ -67,6 +67,7 @@ $ ps-cat --summary all.ps                # records per type, photons and weight 
 $ ps-cat run.ps | ps-tee copy.ps > out.ps  # copy.ps and out.ps get the same records
 $ corsika2ps run.iact > run.ps           # CORSIKA IACT EventIO to a photon stream
 $ ps2simtel --camera-map cam.txt run.ps > sim.simtel   # stream to sim_telarray input
+$ ps2simtel --atmprof atmprof1.dat light.ps > sim.simtel  # table for streams without CORSIKA input
 $ corsika2ps < run.iact | ps2simtel > sim.simtel       # pipe; "-" reads stdin
 $ ps-cat --version                       # ps-cat <package version> (photon-stream format 1.0)
 ```
@@ -78,9 +79,41 @@ The camera map lists the camera-frame telescopes, one per line:
 2 1 0.0
 ```
 
+`--atmprof FILE` reads a CORSIKA/sim_telarray atmospheric table (altitude [km], density, thickness, n-1
+per line, `#` comments). It is written as ATMPROF (1216) before the first event, with the profile number
+that EVTH names (99 for synthesised headers). A stream with its own ATMPROF block rejects the option.
+
 Telescopes not listed are ground-frame (sim_telarray `Bypass_Optics=0`). Listed telescopes are
 converted to the bypass convention and need `Bypass_Optics=1` (class 1) or `2` (class 2) in
 sim_telarray; `ps2simtel` prints the value for each.
+
+### Efficiency ledger
+
+`ps2simtel` refuses a stream whose ledger says a factor is still to be applied and
+sim_telarray does not apply it in that frame. The error names the factor:
+
+```text
+ps2simtel: efficiency ledger of telescope 2 (camera frame): factor
+'telescope_transmission_constant' is pending, but sim_telarray does not apply it in this frame;
+apply it upstream (state applied); pass --allow-pending telescope_transmission_constant to accept it as it is
+```
+
+Use `--allow-pending FACTOR` (repeatable) only when the factor is applied elsewhere
+in the chain, for example by the camera module. Which factors sim_telarray applies in
+each frame is listed in docs/format.md ("Efficiency ledger").
+
+```console
+$ ps2simtel --camera-map cam.txt --allow-pending telescope_transmission_constant run.ps > sim.simtel
+```
+
+In Python: `gstrickd.stream_to_simtel(run.ps, sim.simtel, cam, allow_pending=["telescope_transmission_constant"])`.
+
+When the QE envelope was applied upstream (ledger state `envelope`) and the
+sim_telarray QE table is divided by that envelope, declare it:
+
+```console
+$ ps2simtel --camera-map cam.txt --scaled-factor qe run.ps > sim.simtel
+```
 
 ## CMake package
 

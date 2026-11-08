@@ -26,8 +26,25 @@
 // Streams without CORSIKA blobs (e.g. from light sources) get the sim_telarray
 // headers RUNH, TELPOS, EVTH, TELOFF, EVTE and RUNE synthesised from the run and
 // event metadata with the words simtools photon_bunch_file.py fills
-// (write_photon_bunches, :379-466; _EVENT_WORDS :49-98). ATMPROF is not written:
-// the stream does not carry an atmospheric profile.
+// (write_photon_bunches, :379-466; _EVENT_WORDS :49-98). Each synthesised header
+// is reported as a warning. ATMPROF (1216) is written only when a table is given
+// (ps2simtel --atmprof): before the first EVTH, with the profile number that EVTH
+// names (99 for synthesised headers). sim_telarray takes the table over the
+// profile number only when the block precedes the first event.
+//
+// Efficiency ledger (docs/format.md): run ledgers apply to every telescope, a
+// telescope ledger to its telescope and overrides the run ledgers per factor.
+// A factor is accepted when its state is `applied` and sim_telarray does not
+// apply it in the telescope's frame, or when its state is `pending` and
+// sim_telarray applies it in that frame. `envelope` is an error for factors
+// sim_telarray applies, because sim_telarray applies the full factor, not
+// f/f_env. With ground-frame photons `atmosphere` is accepted in any state:
+// sim_telarray applies its transmission table, which must then be all-zero when
+// the atmosphere was applied upstream. A factor listed in `scaled` must be in
+// state `envelope` and applied by sim_telarray: its sim_telarray table then
+// holds f/f_env (e.g. a QE table divided by the QE envelope). Any other factor is
+// an error, unless it is listed in `allow_pending`. Streams without a ledger are
+// converted as before.
 
 #include "gstrickd/corsika.hpp"
 #include "gstrickd/eventio.hpp"
@@ -35,6 +52,7 @@
 #include "gstrickd/photons.hpp"
 #include "gstrickd/stream.hpp"
 
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstddef>
@@ -43,7 +61,9 @@
 #include <limits>
 #include <map>
 #include <numbers>
+#include <optional>
 #include <ostream>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -138,6 +158,63 @@ inline CameraMap read_camera_map(std::istream &in) {
     }
   }
   return map;
+}
+
+// Profile number of the custom table (CORSIKA ATMOFILE, simtools _PROFILE_ID).
+inline constexpr std::uint32_t custom_profile_id = 99;
+
+// Parses an atmospheric table as CORSIKA and sim_telarray read it (dlufd profile.hpp):
+// '#' starts a comment, blank lines are skipped, and the first four columns are altitude
+// [km a.s.l.], density [g/cm^3], thickness [g/cm^2] and n-1. Further columns are ignored.
+// Altitudes must ascend; 2 to 120 levels (atmo.c MAX_PROFILE). The profile number is
+// custom_profile_id; the observation level is set by the caller. Throws
+// std::invalid_argument with the line number.
+inline AtmosphereTable read_atmprof_text(std::istream &in, const std::string &file_name) {
+  AtmosphereTable table;
+  table.profile_id = custom_profile_id;
+  table.file_name = file_name;
+  std::string line;
+  std::size_t number = 0;
+  const auto fail = [&number](const std::string &what) {
+    return std::invalid_argument("atmospheric table line " + std::to_string(number) + ": " + what);
+  };
+  while (std::getline(in, line)) {
+    ++number;
+    const auto first = line.find_first_not_of(" \t\r");
+    if (first == std::string::npos || line[first] == '#') {
+      continue;
+    }
+    std::istringstream fields(line);
+    std::array<std::string, 4> tokens;
+    for (std::string &token : tokens) {
+      if (!(fields >> token)) {
+        throw fail("expected 4 columns: altitude_km density thickness n_minus_1");
+      }
+    }
+    std::array<double, 4> v{};
+    for (std::size_t k = 0; k < v.size(); ++k) {
+      if (!simtel_detail::parse_real(tokens[k], v[k])) {
+        throw fail("not a finite number: " + tokens[k]);
+      }
+    }
+    if (v[1] < 0.0 || v[2] < 0.0) {
+      throw fail("density and thickness must not be negative");
+    }
+    if (!table.alt_km.empty() && !(v[0] > table.alt_km.back())) {
+      throw fail("altitudes must ascend");
+    }
+    table.alt_km.push_back(v[0]);
+    table.rho.push_back(v[1]);
+    table.thick.push_back(v[2]);
+    table.refidx_m1.push_back(v[3]);
+  }
+  if (table.alt_km.size() < 2) {
+    throw std::invalid_argument("atmospheric table needs at least 2 levels");
+  }
+  if (table.alt_km.size() > 120) {
+    throw std::invalid_argument("atmospheric table has more than 120 levels");
+  }
+  return table;
 }
 
 // Converts camera-frame positions and directions in place to the sim_telarray
@@ -298,14 +375,159 @@ inline TelPos telpos_from_metres(const std::vector<double> &x, const std::vector
   return pos;
 }
 
+// Efficiency ledger rules for ps2simtel (docs/usage.md, "Efficiency ledger").
+// sim_telarray applies these factors itself, by the frame of the telescope.
+// Camera frame: the camera efficiencies. Ground frame: also mirror reflectivity
+// and telescope transmission. Atmosphere is not in either list.
+inline bool sim_telarray_applies(const std::string &factor, bool camera_frame) {
+  static const std::set<std::string> camera_factors{"qe", "camera_transmission", "camera_filter"};
+  static const std::set<std::string> ground_factors{"qe", "camera_transmission", "camera_filter",
+                                                    "mirror_reflectivity",
+                                                    "telescope_transmission"};
+  return (camera_frame ? camera_factors : ground_factors).contains(factor);
+}
+
+// Factor names of the ledger vocabulary (docs/format.md). Any other name is unknown.
+inline bool known_factor(const std::string &factor) {
+  return sim_telarray_applies(factor, false) || factor == "atmosphere" ||
+         factor == "telescope_transmission_constant";
+}
+
+// Factor -> state of one ledger record.
+using LedgerStates = std::map<std::string, std::string>;
+
+inline LedgerStates ledger_states(const Metadata &ledger) {
+  const auto factors = ledger.find("factors");
+  if (factors == ledger.end()) {
+    throw std::runtime_error("efficiency ledger lacks 'factors'");
+  }
+  const auto *list = std::get_if<std::string>(&factors->second);
+  if (list == nullptr) {
+    throw std::runtime_error("efficiency ledger 'factors' is not a string");
+  }
+  LedgerStates states;
+  std::istringstream in(*list);
+  std::string name;
+  while (std::getline(in, name, ',')) {
+    const auto first = name.find_first_not_of(" \t");
+    if (first == std::string::npos) {
+      continue;
+    }
+    name = name.substr(first, name.find_last_not_of(" \t") - first + 1);
+    const auto state_it = ledger.find(name + ".state");
+    if (state_it == ledger.end()) {
+      throw std::runtime_error("efficiency ledger lacks '" + name + ".state'");
+    }
+    const auto *state = std::get_if<std::string>(&state_it->second);
+    if (state == nullptr || (*state != "applied" && *state != "envelope" && *state != "pending")) {
+      throw std::runtime_error("efficiency ledger factor '" + name +
+                               "' has an unknown state (applied, envelope or pending)");
+    }
+    if (!states.emplace(name, *state).second) {
+      throw std::runtime_error("efficiency ledger lists factor '" + name + "' twice");
+    }
+  }
+  return states;
+}
+
+// Checks the ledger of one telescope: run ledgers, then its telescope ledgers,
+// which override the run ledgers per factor. Throws std::runtime_error naming the
+// first factor that sim_telarray would apply twice, or would not apply at all.
+inline void check_ledger(const std::vector<Metadata> &run_ledgers,
+                         const std::vector<Metadata> &telescope_ledgers, std::uint32_t telescope_id,
+                         bool camera_frame, const std::set<std::string> &allow_pending,
+                         const std::set<std::string> &scaled = {}) {
+  LedgerStates states;
+  for (const Metadata &ledger : run_ledgers) {
+    for (const auto &[name, state] : ledger_states(ledger)) {
+      if (!states.emplace(name, state).second) {
+        throw std::runtime_error("efficiency ledger lists factor '" + name +
+                                 "' in more than one run ledger");
+      }
+    }
+  }
+  LedgerStates own;
+  for (const Metadata &ledger : telescope_ledgers) {
+    for (const auto &[name, state] : ledger_states(ledger)) {
+      if (!own.emplace(name, state).second) {
+        throw std::runtime_error("efficiency ledger lists factor '" + name +
+                                 "' twice for telescope " + std::to_string(telescope_id));
+      }
+      states[name] = state;
+    }
+  }
+  const std::string where = "telescope " + std::to_string(telescope_id) +
+                            (camera_frame ? " (camera frame)" : " (ground frame)");
+  for (const auto &[name, state] : states) {
+    // Scaled factors are checked first, so no shortcut below accepts them in another state.
+    if (scaled.contains(name)) {
+      if (!sim_telarray_applies(name, camera_frame) || state != "envelope") {
+        throw std::runtime_error("efficiency ledger of " + where + ": factor '" + name +
+                                 "' is given as scaled (sim_telarray applies f/f_env), so it "
+                                 "must be in state envelope and applied by sim_telarray in "
+                                 "this frame; it is " +
+                                 state);
+      }
+      continue;
+    }
+    if (allow_pending.contains(name) || (name == "atmosphere" && !camera_frame)) {
+      continue;
+    }
+    const std::string option = "; pass --allow-pending " + name + " to accept it as it is";
+    if (!known_factor(name)) {
+      throw std::runtime_error("efficiency ledger of " + where + ": unknown factor '" + name + "'" +
+                               option);
+    }
+    const bool sim_telarray = sim_telarray_applies(name, camera_frame);
+    if (state == "applied") {
+      if (sim_telarray) {
+        throw std::runtime_error("efficiency ledger of " + where + ": factor '" + name +
+                                 "' is already applied upstream, and sim_telarray applies it "
+                                 "again in this frame" +
+                                 option);
+      }
+      continue;
+    }
+    if (sim_telarray && state == "envelope") {
+      throw std::runtime_error("efficiency ledger of " + where + ": factor '" + name +
+                               "' has only its envelope applied, but sim_telarray applies the "
+                               "full factor, so the result would be too dim; pass "
+                               "--scaled-factor " +
+                               name + " if its sim_telarray table holds f/f_env" + option);
+    }
+    if (!sim_telarray) {
+      throw std::runtime_error("efficiency ledger of " + where + ": factor '" + name + "' is " +
+                               state +
+                               ", but sim_telarray does not apply it in this frame; "
+                               "apply it upstream (state applied)" +
+                               option);
+    }
+  }
+}
+
 } // namespace simtel_detail
+
+// Options of the photon stream to sim_telarray conversion.
+struct SimtelOptions {
+  CameraMap camera;                       // camera-frame telescopes
+  std::optional<AtmosphereTable> atmprof; // atmospheric table (ATMPROF block), see the file comment
+  std::ostream *warnings{nullptr};        // reports synthesised headers; null: silent
+  std::set<std::string> allow_pending;    // ledger factors accepted as they are
+  std::set<std::string> scaled;           // ledger factors whose camera table holds f/f_env
+};
 
 // Writes a photon stream as sim_telarray input (EventIO, normal mode: one 1204
 // container per array). Records are read in stream order; see the file comment
 // for the frame and header rules.
 class PsToSimtel {
 public:
-  PsToSimtel(std::ostream &out, CameraMap camera) : writer_{out}, camera_{std::move(camera)} {
+  PsToSimtel(std::ostream &out, CameraMap camera)
+      : PsToSimtel(out, SimtelOptions{std::move(camera), std::nullopt, nullptr, {}, {}}) {}
+
+  PsToSimtel(std::ostream &out, SimtelOptions options)
+      : writer_{out}, camera_{std::move(options.camera)}, atmprof_{std::move(options.atmprof)},
+        warnings_{options.warnings}, allow_pending_{std::move(options.allow_pending)},
+        scaled_{std::move(options.scaled)} {
     for (const auto &[id, telescope] : camera_) {
       if (id == 0) {
         throw std::invalid_argument("camera map telescope id must be at least 1");
@@ -321,8 +543,10 @@ public:
     switch (record.type) {
     case RecordType::stream:
     case RecordType::stream_end:
-    case RecordType::ledger:
       return; // not part of sim_telarray input
+    case RecordType::ledger:
+      ledger(record.metadata);
+      return;
     case RecordType::run:
       end_run();
       begin_run(record.metadata);
@@ -334,12 +558,17 @@ public:
     case RecordType::telescope:
       require_event("telescope record");
       ensure_event_headers();
+      begin_telescope(record.metadata);
       writer_.write(record);
       return;
     case RecordType::photons:
+      if (telescope_open_) {
+        telescope_photons_ = true;
+      }
       photons(record.chunk);
       return;
     case RecordType::telescope_end:
+      end_telescope();
       writer_.write(record);
       return;
     case RecordType::event_end:
@@ -413,8 +642,16 @@ private:
         return;
       }
       break;
+    case iact::atmprof:
+      if (atmprof_) {
+        throw std::runtime_error("the stream has its own ATMPROF block; drop --atmprof");
+      }
+      break;
     case iact::evth:
       have_evth_ = true;
+      if (atmprof_pending_) {
+        emit_atmprof(evth_profile(record.blob));
+      }
       break;
     case iact::teloff:
       have_teloff_ = true;
@@ -441,8 +678,58 @@ private:
     run_open_ = true;
     run_metadata_ = metadata;
     run_headers_done_ = false;
+    atmprof_pending_ = atmprof_.has_value();
     have_runh_ = have_telpos_ = have_rune_ = false;
     events_ = 0;
+    run_ledgers_.clear();
+    telescope_ledgers_.clear();
+    telescope_open_ = false;
+  }
+
+  // Ledger of the run (before the first event) or of the open telescope (before its photons).
+  void ledger(const Metadata &metadata) {
+    if (!run_open_) {
+      throw std::runtime_error("ledger record outside a run");
+    }
+    if (telescope_open_) {
+      if (telescope_photons_) {
+        throw std::runtime_error("efficiency ledger for telescope " +
+                                 std::to_string(telescope_id_) + " comes after its photons");
+      }
+      telescope_ledgers_.push_back(metadata);
+      return;
+    }
+    if (events_ > 0) {
+      throw std::runtime_error("run efficiency ledger comes after the first event");
+    }
+    run_ledgers_.push_back(metadata);
+  }
+
+  void begin_telescope(const Metadata &metadata) {
+    telescope_open_ = true;
+    telescope_photons_ = false;
+    telescope_ledgers_.clear();
+    const auto it = metadata.find("telescope_id");
+    telescope_id_known_ = it != metadata.end() && std::holds_alternative<std::int64_t>(it->second);
+    telescope_id_ =
+        telescope_id_known_ ? static_cast<std::uint32_t>(std::get<std::int64_t>(it->second)) : 0;
+  }
+
+  // Checks the efficiency ledger of the telescope that ends here (no-op without ledgers).
+  void end_telescope() {
+    if (!telescope_open_) {
+      return;
+    }
+    telescope_open_ = false;
+    if (run_ledgers_.empty() && telescope_ledgers_.empty()) {
+      return;
+    }
+    if (!telescope_id_known_ || telescope_id_ == 0) {
+      throw std::runtime_error("telescope record lacks telescope_id, needed for the efficiency "
+                               "ledger");
+    }
+    simtel_detail::check_ledger(run_ledgers_, telescope_ledgers_, telescope_id_,
+                                camera_.contains(telescope_id_), allow_pending_, scaled_);
   }
 
   void begin_event(const Metadata &metadata) {
@@ -463,9 +750,11 @@ private:
     }
     run_headers_done_ = true;
     if (!have_runh_) {
+      note_synthesised("RUNH");
       emit(run_header());
     }
     if (!have_telpos_) {
+      note_synthesised("TELPOS");
       emit(telescope_positions());
     }
   }
@@ -478,9 +767,16 @@ private:
     }
     event_headers_done_ = true;
     if (!have_evth_) {
+      // Without a table the EVTH profile is not in the stream: say so.
+      note_synthesised("EVTH");
+      if (!atmprof_) {
+        note_missing_atmprof();
+      }
+      emit_atmprof(custom_profile_id);
       emit(event_header());
     }
     if (!have_teloff_) {
+      note_synthesised("TELOFF");
       emit(array_offsets());
     }
   }
@@ -489,8 +785,10 @@ private:
     if (!event_open_) {
       return;
     }
+    end_telescope();
     ensure_event_headers();
     if (!have_evte_) {
+      note_synthesised("EVTE");
       emit(event_end_block());
     }
     event_open_ = false;
@@ -503,9 +801,51 @@ private:
     end_event();
     ensure_run_headers();
     if (!have_rune_) {
+      note_synthesised("RUNE");
       emit(run_end_block());
     }
     run_open_ = false;
+  }
+
+  void note_synthesised(const char *name) {
+    if (warnings_ == nullptr || !warned_.insert(name).second) {
+      return;
+    }
+    *warnings_ << "ps2simtel: warning: no CORSIKA " << name
+               << " block in the stream; synthesised it from the run metadata\n";
+  }
+
+  void note_missing_atmprof() {
+    if (warnings_ == nullptr || !warned_.insert("ATMPROF").second) {
+      return;
+    }
+    *warnings_ << "ps2simtel: warning: no atmospheric table; sim_telarray cannot find profile "
+               << custom_profile_id << " (use --atmprof FILE)\n";
+  }
+
+  // Profile number of an EVTH block (CORSIKA word 77, bits 10-19).
+  static std::uint32_t evth_profile(const std::vector<std::uint8_t> &raw) {
+    const std::vector<float> words = decode_float_block(simtel_detail::parse_block(raw));
+    if (words.size() < corsika_word::evth_flags + 1) {
+      throw std::runtime_error("EVTH block too short for its profile word");
+    }
+    const auto flags = static_cast<std::int64_t>(std::llround(words[corsika_word::evth_flags]));
+    return static_cast<std::uint32_t>((flags >> corsika_word::evth_flag_atmosphere_shift) &
+                                      corsika_word::evth_flag_atmosphere_mask);
+  }
+
+  // Writes the ATMPROF block once per run, when a table was given, with `profile`
+  // as its number and the run's observation level.
+  void emit_atmprof(std::uint32_t profile) {
+    if (!atmprof_pending_) {
+      return;
+    }
+    atmprof_pending_ = false;
+    AtmosphereTable table = *atmprof_;
+    table.profile_id = profile;
+    table.observation_level_cm =
+        100.0 * simtel_detail::number_field(run_metadata_, "observation_level_m");
+    emit(make_atmprof_block(table));
   }
 
   void emit(const EventioBlock &block) {
@@ -596,6 +936,10 @@ private:
 
   SimtelWriter writer_;
   CameraMap camera_;
+  std::optional<AtmosphereTable> atmprof_;
+  std::ostream *warnings_{};
+  std::set<std::string> warned_;
+  bool atmprof_pending_{};
   Metadata run_metadata_;
   std::int64_t event_number_{};
   std::uint64_t events_{};
@@ -609,6 +953,14 @@ private:
   bool have_evth_{};
   bool have_teloff_{};
   bool have_evte_{};
+  std::set<std::string> allow_pending_;
+  std::set<std::string> scaled_;
+  std::vector<Metadata> run_ledgers_;
+  std::vector<Metadata> telescope_ledgers_;
+  bool telescope_open_{};
+  bool telescope_photons_{};
+  bool telescope_id_known_{};
+  std::uint32_t telescope_id_{};
 };
 
 // CORSIKA IACT EventIO (long, compact or split photon blocks) to a photon stream
@@ -621,8 +973,8 @@ inline void corsika_to_stream(std::istream &in, std::ostream &out, const std::st
 
 // Photon stream from `in` to sim_telarray EventIO on `out`. Throws on a truncated
 // stream or on a record the adapter cannot convert.
-inline void stream_to_simtel(std::istream &in, std::ostream &out, CameraMap camera) {
-  PsToSimtel converter{out, std::move(camera)};
+inline void stream_to_simtel(std::istream &in, std::ostream &out, SimtelOptions options) {
+  PsToSimtel converter{out, std::move(options)};
   Reader reader{in};
   Record record;
   while (reader.next(record)) {
@@ -635,6 +987,10 @@ inline void stream_to_simtel(std::istream &in, std::ostream &out, CameraMap came
     throw std::runtime_error("gstrickd: data after stream_end");
   }
   converter.finish();
+}
+
+inline void stream_to_simtel(std::istream &in, std::ostream &out, CameraMap camera) {
+  stream_to_simtel(in, out, SimtelOptions{std::move(camera), std::nullopt, nullptr, {}, {}});
 }
 
 } // namespace gstrickd
