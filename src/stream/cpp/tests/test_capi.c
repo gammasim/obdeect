@@ -174,7 +174,7 @@ static void test_arguments(const char *directory) {
   gstrickd_reader_close(NULL);
   CHECK(gstrickd_writer_close(NULL) == GSTRICKD_OK);
 
-  snprintf(path, sizeof path, "%s/arguments.ps", directory);
+  snprintf(path, sizeof path, "%.500s/arguments.ps", directory);
   CHECK(gstrickd_writer_open(path, "t", &writer) == GSTRICKD_OK);
   CHECK(gstrickd_writer_write_record(writer, GSTRICKD_RECORD_PHOTONS) == GSTRICKD_ERROR_ARGUMENT);
   CHECK(gstrickd_writer_write_record(writer, GSTRICKD_RECORD_STREAM) == GSTRICKD_ERROR_ARGUMENT);
@@ -231,10 +231,10 @@ static void test_conformance(const char *directory) {
   char path[1024];
   int last = 0, i;
 
-  snprintf(path, sizeof path, "%s/valid.ps", directory);
+  snprintf(path, sizeof path, "%.500s/valid.ps", directory);
   CHECK(count_records(path, &last) == 11 && last == GSTRICKD_END);
   for (i = 0; i < 4; ++i) {
-    snprintf(path, sizeof path, "%s/%s", directory, invalid[i]);
+    snprintf(path, sizeof path, "%.500s/%.64s", directory, invalid[i]);
     count_records(path, &last);
     CHECK(last == codes[i]);
   }
@@ -243,7 +243,7 @@ static void test_conformance(const char *directory) {
 int main(int argc, char **argv) {
   gstrickd_writer *writer = NULL;
   gstrickd_reader *reader = NULL;
-  char directory[1024];
+  char directory[512];
   const char *slash;
 
   if (argc != 3) {
@@ -269,7 +269,7 @@ int main(int argc, char **argv) {
   { /* The same through file descriptors. */
     char path[1100];
     int fd;
-    snprintf(path, sizeof path, "%s.fd", argv[1]);
+    snprintf(path, sizeof path, "%.1000s.fd", argv[1]);
     fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     CHECK(fd >= 0);
     CHECK(gstrickd_writer_open_fd(fd, "test_capi", &writer) == GSTRICKD_OK);
