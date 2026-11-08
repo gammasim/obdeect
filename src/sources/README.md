@@ -9,8 +9,6 @@ Artificial light sources for Cherenkov-telescope simulations: flashers, illumina
 [gstrickd](https://github.com/gernotmaier/gstrickd) photon streams;
 [simtools](https://github.com/gernotmaier/simtools) configures and runs the chain.
 
-Status: pre-alpha, no functionality yet.
-
 ## User Installation
 
 ```sh

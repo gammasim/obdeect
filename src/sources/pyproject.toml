@@ -4,10 +4,10 @@ requires = [ "nanobind>=3.1", "scikit-build-core>=0.10", "setuptools-scm>=8" ]
 
 [project]
 name = "dlamb"
-description = "Artificial light sources for Cherenkov-telescope simulations"
+description = "Artificial light sources for Cherenkov telescopes"
 readme = "README.md"
 license = { file = "LICENSE" }
-authors = [ { name = "dlamb contributors" } ]
+authors = [ { name = "Gernot Maier (DESY)" } ]
 requires-python = ">=3.14"
 classifiers = [
   "Development Status :: 3 - Alpha",

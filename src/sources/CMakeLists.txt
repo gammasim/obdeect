@@ -17,9 +17,9 @@ include(FetchContent)
 #   3. FetchContent of a pinned commit (not with DLAMB_REQUIRE_INSTALLED_GSTRICKD=ON).
 option(DLAMB_REQUIRE_INSTALLED_GSTRICKD
        "Require an installed gstrickd package (no FetchContent fallback)" OFF)
-set(DLAMB_GSTRICKD_GIT_TAG 5af00790005283f81a46a4a49cfef97cd41556ff)
+set(DLAMB_GSTRICKD_GIT_TAG 7f4de4d4afccbb929a596d45a3365e5f9ed4e4e2)
 
-find_package(gstrickd 0.1 CONFIG QUIET)
+find_package(gstrickd 0.1.0 EXACT CONFIG QUIET)
 if(NOT gstrickd_FOUND AND NOT gstrickd_DIR)
   find_package(Python 3.14 COMPONENTS Interpreter QUIET)
   if(Python_EXECUTABLE)
@@ -31,7 +31,7 @@ if(NOT gstrickd_FOUND AND NOT gstrickd_DIR)
     if(dlamb_gstrickd_python_result EQUAL 0 AND
        EXISTS "${dlamb_gstrickd_python_dir}/gstrickd-config.cmake")
       set(gstrickd_DIR "${dlamb_gstrickd_python_dir}")
-      find_package(gstrickd 0.1 CONFIG QUIET)
+      find_package(gstrickd 0.1.0 EXACT CONFIG QUIET)
     endif()
   endif()
 endif()
