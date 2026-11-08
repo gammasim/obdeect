@@ -27,6 +27,7 @@ include(CMakePackageConfigHelpers)
 
 option(GSTRICKD_BUILD_TESTING "Build the C++ tests" ON)
 option(GSTRICKD_BUILD_TOOLS "Build the command-line tools (ps-cat, ps-tee, corsika2ps, ps2simtel)" ON)
+option(GSTRICKD_BUILD_CAPI "Build the C API shared library libgstrickd_c" ON)
 option(GSTRICKD_BUILD_BENCH "Build the photon-stream benchmark" OFF)
 if(DEFINED SKBUILD_PLATLIB_DIR)
   set(GSTRICKD_BUILD_PYTHON_API_DEFAULT ON)
@@ -39,9 +40,11 @@ option(GSTRICKD_BUILD_PYTHON_API "Build the Python extension" ${GSTRICKD_BUILD_P
 # package (python -m gstrickd --include-dir / --cmake-dir); otherwise they follow GNUInstallDirs.
 if(DEFINED SKBUILD_PLATLIB_DIR)
   set(GSTRICKD_INCLUDE_INSTALL_DIR gstrickd/include)
+  set(GSTRICKD_LIB_INSTALL_DIR gstrickd/lib)
   set(GSTRICKD_CMAKE_INSTALL_DIR gstrickd/cmake)
 else()
   set(GSTRICKD_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR})
+  set(GSTRICKD_LIB_INSTALL_DIR ${CMAKE_INSTALL_LIBDIR})
   set(GSTRICKD_CMAKE_INSTALL_DIR ${CMAKE_INSTALL_LIBDIR}/cmake/gstrickd)
 endif()
 
@@ -78,6 +81,29 @@ install(DIRECTORY cpp/include/gstrickd DESTINATION ${GSTRICKD_INCLUDE_INSTALL_DI
 install(FILES ${GSTRICKD_GENERATED_DIR}/gstrickd/version.hpp
         DESTINATION ${GSTRICKD_INCLUDE_INSTALL_DIR}/gstrickd)
 install(TARGETS gstrickd_core EXPORT gstrickd-targets)
+
+# C API: stable ABI for non-C++ programs (cpp/include/gstrickd/gstrickd.h), exported as
+# gstrickd::gstrickd_c.
+if(GSTRICKD_BUILD_CAPI)
+  add_library(gstrickd_c SHARED cpp/capi/gstrickd_c.cpp)
+  add_library(gstrickd::gstrickd_c ALIAS gstrickd_c)
+  target_link_libraries(gstrickd_c PRIVATE gstrickd_core)
+  target_include_directories(gstrickd_c PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/cpp/include>
+    $<INSTALL_INTERFACE:${GSTRICKD_INCLUDE_INSTALL_DIR}>)
+  target_compile_definitions(gstrickd_c PRIVATE GSTRICKD_C_BUILDING
+                             "GSTRICKD_PACKAGE_VERSION=\"${GSTRICKD_PACKAGE_VERSION}\"")
+  set_target_properties(gstrickd_c PROPERTIES CXX_VISIBILITY_PRESET hidden
+                                              VISIBILITY_INLINES_HIDDEN ON)
+  if(NOT DEFINED SKBUILD_PLATLIB_DIR) # wheels cannot hold the symlinks
+    set_target_properties(gstrickd_c PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION 1)
+  endif()
+  gstrickd_enable_warnings(gstrickd_c)
+  install(TARGETS gstrickd_c EXPORT gstrickd-targets
+          LIBRARY DESTINATION ${GSTRICKD_LIB_INSTALL_DIR}
+          RUNTIME DESTINATION ${GSTRICKD_LIB_INSTALL_DIR}
+          ARCHIVE DESTINATION ${GSTRICKD_LIB_INSTALL_DIR})
+endif()
 install(EXPORT gstrickd-targets NAMESPACE gstrickd:: DESTINATION ${GSTRICKD_CMAKE_INSTALL_DIR})
 configure_package_config_file(${CMAKE_CURRENT_SOURCE_DIR}/cmake/gstrickd-config.cmake.in
                               ${CMAKE_CURRENT_BINARY_DIR}/gstrickd-config.cmake
@@ -130,6 +156,27 @@ if(GSTRICKD_BUILD_TESTING)
   if(GSTRICKD_BUILD_BENCH)
     add_test(NAME bench_stream_partial_chunk COMMAND bench_stream 65537
              ${CMAKE_CURRENT_BINARY_DIR}/bench_stream_test.ps)
+  endif()
+  if(GSTRICKD_BUILD_CAPI)
+    enable_language(C)
+    set(CMAKE_C_STANDARD 11)
+    set(CMAKE_C_STANDARD_REQUIRED ON)
+    set(CMAKE_C_EXTENSIONS OFF)
+    add_executable(test_capi cpp/tests/test_capi.c)
+    target_link_libraries(test_capi PRIVATE gstrickd_c)
+    if(NOT MSVC)
+      target_compile_options(test_capi PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    set(GSTRICKD_CONFORMANCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/cpp/tests/data/conformance)
+    add_test(NAME capi COMMAND test_capi ${CMAKE_CURRENT_BINARY_DIR}/capi_roundtrip.ps
+             ${GSTRICKD_CONFORMANCE_DIR})
+    set_tests_properties(capi PROPERTIES FIXTURES_SETUP capi_stream)
+    add_executable(test_capi_cpp cpp/tests/test_capi_cpp.cpp)
+    target_link_libraries(test_capi_cpp PRIVATE gstrickd_c gstrickd_core)
+    gstrickd_enable_warnings(test_capi_cpp)
+    add_test(NAME capi_cpp COMMAND test_capi_cpp ${CMAKE_CURRENT_BINARY_DIR}/capi_roundtrip.ps
+             ${GSTRICKD_CONFORMANCE_DIR})
+    set_tests_properties(capi_cpp PROPERTIES FIXTURES_REQUIRED capi_stream)
   endif()
   foreach(test_name version format stream eventio corsika simtel stages)
     add_executable(test_${test_name} cpp/tests/test_${test_name}.cpp)
