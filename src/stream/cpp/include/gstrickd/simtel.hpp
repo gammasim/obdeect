@@ -294,8 +294,9 @@ inline void telescope_to_bypass_convention(PhotonChunk &chunk, double observatio
     const double cyi = cy[i];
     const double czi = has_cz ? static_cast<double>(chunk[Column::cz][i])
                               : -std::sqrt(std::max(0.0, 1.0 - cxi * cxi - cyi * cyi));
-    if (!std::isfinite(czi) || czi == 0.0 || !std::isfinite(x[i]) || !std::isfinite(y[i]) ||
-        !std::isfinite(z[i]) || !std::isfinite(t[i])) {
+    if (!std::isfinite(cxi) || !std::isfinite(cyi) || !std::isfinite(czi) || czi == 0.0 ||
+        !std::isfinite(x[i]) || !std::isfinite(y[i]) || !std::isfinite(z[i]) ||
+        !std::isfinite(t[i])) {
       throw std::invalid_argument(
           "telescope-frame photon with a non-finite value or parallel to the plane z = 0");
     }

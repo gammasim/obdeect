@@ -552,6 +552,14 @@ void test_telescope_frame_rejected() {
   PhotonChunk no_z = tframe;
   no_z[Column::z].clear();
   CHECK(throws_error([&] { telescope_to_bypass_convention(no_z, 2200.0); }));
+  for (const float bad : {std::nanf(""), INFINITY}) {
+    PhotonChunk bad_direction = tframe; // with an explicit cz column
+    bad_direction[Column::cx][0] = bad;
+    CHECK(throws_error([&] { telescope_to_bypass_convention(bad_direction, 2200.0); }));
+    PhotonChunk bad_cy = tframe;
+    bad_cy[Column::cy][0] = bad;
+    CHECK(throws_error([&] { telescope_to_bypass_convention(bad_cy, 2200.0); }));
+  }
   PhotonChunk bad_level = tframe;
   CHECK(throws_error([&] { telescope_to_bypass_convention(bad_level, std::nan("")); }));
 
