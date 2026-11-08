@@ -31,10 +31,6 @@
 #include <utility>
 #include <variant>
 #include <vector>
-#ifdef _WIN32
-#include <fcntl.h>
-#include <io.h>
-#endif
 
 namespace dlamb::programs {
 
@@ -457,9 +453,6 @@ inline void write_stream(std::ostream &out, const RunSetup &run, const std::vect
 // Calls fn(std::ostream&) on stdout (empty path or "-") or on a binary file.
 template <class Fn> void write_output(const std::string &path, Fn &&fn) {
   if (path.empty() || path == "-") {
-#ifdef _WIN32
-    _setmode(_fileno(stdout), _O_BINARY);
-#endif
     fn(std::cout);
     std::cout.flush();
     if (!std::cout) {
