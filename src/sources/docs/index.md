@@ -15,6 +15,7 @@ build; a source distribution does not contain gstrickd.
 :maxdepth: 1
 
 sources
+sim_telarray
 changelog
 ```
 

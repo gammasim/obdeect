@@ -28,6 +28,7 @@ Options that belong to one type are rejected with the other type, e.g.
 | `--seed N` | both | `1` | new | Philox seed |
 | `-o FILE` | both | stdout | `ff-1m.cc:162-163`, `ff-gct.cc:155-156` | output file |
 | `--events N[,...]` | dish | `1` | `ff-1m.cc:196-200` | events per photon level; a short list repeats its last value |
+| `--frame sky\|camera` | dish | `sky` | new | `camera`: photons on the camera plane z = 0, see below |
 | `--xy X,Y` (`--flasher-xy X,Y`) | dish | `0,0` | `ff-1m.cc:170-179` | flasher offset from the axis [cm] |
 | `--distance D` (`-z D`) | dish | `1600` | `ff-1m.cc:180-181` | flasher distance above the telescope centre [cm] |
 | `--camera-radius R` (`-r R`) | dish | `120` | `ff-1m.cc:182-183` | fiducial camera radius [cm] |
@@ -59,6 +60,12 @@ Options that belong to one type are rejected with the other type, e.g.
   telescope); the atmosphere stage (G, refraction) then an optics stage with no mirror.
   secondary is meant for `Bypass_Optics=1` (primary bypassed, secondary kept); the photons
   must still hit the secondary, so the optics stage applies its reflection.
+
+`--frame camera` (dish): frame C. The photons run in a straight line from the flasher to the
+plane z = 0 of the camera, without atmosphere. Time is emission time plus path / c. Count and
+directions equal the sky-frame output for the same seed; positions lie in a disc of radius
+`R / sqrt(1 - (R / d)^2)`. A photon that does not travel towards the plane is an error.
+Pipeline: see [](../sim_telarray.md).
 
 ## Differences to the originals
 

@@ -56,6 +56,8 @@ inline void require_type(Type type, Type owner, const std::string &option) {
 // values in the code; --help of the originals differs for --altitude.
 struct Options {
   Type type{Type::dish};
+  // dish only: sky (emission points) or camera (photons on the camera plane, no atmosphere).
+  gstrickd::Frame frame{gstrickd::Frame::sky};
   // Both types.
   std::vector<double> photons{2.5e6}; // --photons [4 pi per flasher], ff-1m.cc:166, ff-gct.cc:159
   double bunch_size{1.0};             // --bunchsize [photons], ff-1m.cc:168, ff-gct.cc:161
@@ -115,6 +117,12 @@ inline void validate(const Options &o) {
   if (!std::isfinite(o.bunch_size)) {
     bad("flasher: --bunchsize must be finite");
   }
+  if (o.frame != gstrickd::Frame::sky && o.frame != gstrickd::Frame::camera) {
+    bad("flasher: --frame must be sky or camera");
+  }
+  if (o.type == Type::secondary && o.frame != gstrickd::Frame::sky) {
+    bad("flasher: --frame applies only to --type dish");
+  }
   if (o.type == Type::dish) {
     if (!(o.distance_cm > 0.0) || !(o.camera_radius_cm > 0.0)) {
       bad("flasher: --distance and --camera-radius must be > 0 (--type dish)");
@@ -134,7 +142,8 @@ inline void validate(const Options &o) {
 }
 
 // Dish placement (ff-1m.cc). Event i fires one flasher emission per photon level, for
-// events[k] events at photon level k.
+// events[k] events at photon level k. With frame camera the photons are propagated in a
+// straight line to the camera plane z = 0 and the time includes path / c.
 inline std::vector<Event> dish_sources(const Options &o) {
   // LightSource::Emit uses at least one photon per bunch (IactLightEmission.cc:1514-1515).
   const double bunch = o.bunch_size < 1.0 ? 1.0 : o.bunch_size;
@@ -149,7 +158,7 @@ inline std::vector<Event> dish_sources(const Options &o) {
     const int events = o.events[std::min(level, o.events.size() - 1)];
     for (int i = 0; i < events; ++i) {
       Source source;
-      source.frame = gstrickd::Frame::sky;
+      source.frame = o.frame;
       source.geometry = Emitter{position, Vec3{0.0, 0.0, -1.0}, angular};
       source.spectrum = parse_spectrum(o.spectrum);
       source.pulse = parse_pulse(o.lightpulse);
@@ -157,7 +166,8 @@ inline std::vector<Event> dish_sources(const Options &o) {
       source.target = target;
       Event event;
       event.number = static_cast<std::uint32_t>(result.size() + 1);
-      event.emissions.push_back({source, derive_seed(o.seed, emission++), bunch, 0.0});
+      event.emissions.push_back({source, derive_seed(o.seed, emission++), bunch, 0.0,
+                                 o.frame == gstrickd::Frame::camera});
       result.push_back(std::move(event));
     }
   }
@@ -252,7 +262,7 @@ inline RunSetup run_setup(const Options &o) {
   run.atmosphere = o.atmosphere;
   if (o.type == Type::dish) {
     run.telescope_radius_m = 0.01 * o.camera_radius_cm;
-    run.frame = gstrickd::Frame::sky;
+    run.frame = o.frame;
   } else {
     run.telescope_radius_m = 0.01 * secondary_fiducial_cm;
     run.frame = gstrickd::Frame::telescope;
