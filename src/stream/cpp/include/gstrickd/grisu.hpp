@@ -247,6 +247,10 @@ private:
       throw std::runtime_error("ps2grisu: ledger record outside a run");
     }
     if (telescope_open_) {
+      if (ledger_checked_) {
+        throw std::runtime_error("ps2grisu: efficiency ledger for telescope " +
+                                 std::to_string(telescope_id_) + " comes after its photons");
+      }
       telescope_ledgers_.push_back(metadata);
     } else {
       run_ledgers_.push_back(metadata);
@@ -327,8 +331,12 @@ private:
     telescope_ledgers_.clear();
     ledger_checked_ = false;
     mapped_ = false;
-    const double id = number(metadata, "telescope_id", "telescope id");
-    telescope_id_ = static_cast<std::uint32_t>(id);
+    const auto id_it = metadata.find("telescope_id");
+    const auto *id = id_it == metadata.end() ? nullptr : std::get_if<std::int64_t>(&id_it->second);
+    if (id == nullptr || *id < 1 || *id > 0xFFFFFFFFLL) {
+      throw std::runtime_error("ps2grisu: telescope record needs an integer telescope_id >= 1");
+    }
+    telescope_id_ = static_cast<std::uint32_t>(*id);
     // Position in the CORSIKA ground frame [m].
     double x = 0.0;
     double y = 0.0;
@@ -456,11 +464,14 @@ private:
     std::string text;
     char buffer[256];
     for (std::size_t i = 0; i < chunk.rows(); ++i) {
-      if (!(lambda[i] >= 0.5F)) {
+      if (!(lambda[i] >= 0.5F) || !std::isfinite(lambda[i])) {
         throw std::runtime_error("ps2grisu: wavelength is not assigned (value " +
                                  std::to_string(lambda[i]) + " nm)");
       }
       long long copies = 1;
+      if (!std::isfinite(w[i])) {
+        throw std::runtime_error("ps2grisu: photon weight is not finite");
+      }
       if (!(std::abs(w[i] - 1.0F) <= grisu_detail::unit_weight_tolerance)) {
         if (!(w[i] > 1.0F)) {
           throw std::runtime_error("ps2grisu: photon weight " + std::to_string(w[i]) +
@@ -469,6 +480,10 @@ private:
         if (!options_.expand_bunches) {
           throw std::runtime_error("ps2grisu: photon weight " + std::to_string(w[i]) +
                                    " is above 1; use --expand-bunches to write copies");
+        }
+        if (w[i] > 1e6F) {
+          throw std::runtime_error("ps2grisu: photon weight " + std::to_string(w[i]) +
+                                   " is too large to expand");
         }
         copies = std::llround(static_cast<double>(w[i]));
       }

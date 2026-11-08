@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <random>
 #include <sstream>
 #include <string>
@@ -277,6 +278,25 @@ void error_cases() {
     bad.qe = std::nan("");
     convert({}, bad);
   }));
+  const float infinity = std::numeric_limits<float>::infinity();
+  CHECK(throws_error([&] { convert(stream_records(1.0F, "applied", infinity), options); }));
+  options.expand_bunches = true;
+  CHECK(throws_error([&] { convert(stream_records(infinity), options); }));
+  CHECK(throws_error([&] { convert(stream_records(1e9F), options); }));
+  options.expand_bunches = false;
+  // Telescope ids must be integers >= 1.
+  for (const std::int64_t bad : {std::int64_t{0}, std::int64_t{-1}, std::int64_t{1} << 33}) {
+    std::vector<Record> bad_id = stream_records();
+    bad_id[4].metadata["telescope_id"] = bad;
+    CHECK(throws_error([&] { convert(bad_id, options); }));
+  }
+  std::vector<Record> real_id = stream_records();
+  real_id[4].metadata["telescope_id"] = 1.5;
+  CHECK(throws_error([&] { convert(real_id, options); }));
+  // A telescope ledger after the photons is rejected.
+  std::vector<Record> late = stream_records();
+  late.insert(late.begin() + 6, ledger_of("pending"));
+  CHECK(throws_error([&] { convert(late, options); }));
   // A telescope ledger overrides the run ledger.
   std::vector<Record> override_records = stream_records();
   override_records.insert(override_records.begin() + 5, ledger_of("pending"));
