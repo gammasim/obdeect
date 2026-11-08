@@ -19,10 +19,28 @@ jobs:
         with:
           fetch-depth: 0
       - uses: actions/setup-python@v7
+        id: setup-python
         with:
           python-version: '3.14'
       - name: Install linters
-        run: python -m pip install --upgrade pip pre-commit clang-format
+        run: python -m pip install --retries 5 --upgrade pip pre-commit clang-format
+      # Hook environments are built once per .pre-commit-config.yaml; some hooks
+      # download binaries at install time, so a fresh build on every run fails often.
+      - name: Cache hook environments
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}
+      - name: Install hook environments
+        run: |
+          for attempt in 1 2 3; do
+            pre-commit install-hooks && exit 0
+            if [ "${attempt}" -lt 3 ]; then
+              echo "pre-commit install-hooks failed (attempt ${attempt}); retrying in 60 s"
+              sleep 60
+            fi
+          done
+          exit 1
       - name: Run repository hooks
         run: pre-commit run --all-files
       - name: Check C++ formatting
