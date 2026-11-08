@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <span>
 #include <stdexcept>
 #include <vector>
 
@@ -26,7 +27,7 @@ template <class T> [[nodiscard]] T airmass(T cx, T cy) {
 // p[row] = atmospheric transmission of every row; 0 for wavelengths at or above max_lambda.
 template <class T>
 void atmospheric_acceptance(const gstrickd::PhotonChunk &chunk, const TransmissionTable &table,
-                            const TelescopeDepths &depths, std::vector<double> &p) {
+                            const TelescopeDepths &depths, std::span<T> p) {
   using gstrickd::Column;
   const std::size_t rows = chunk.rows();
   if (p.size() != rows) {
@@ -40,14 +41,14 @@ void atmospheric_acceptance(const gstrickd::PhotonChunk &chunk, const Transmissi
     check_wavelength(static_cast<double>(wavelength[row]));
     const int iwl = table_wavelength(static_cast<double>(wavelength[row]));
     if (iwl < 0) {
-      p[row] = 0.0;
+      p[row] = T(0);
       continue;
     }
     const auto index = static_cast<std::size_t>(iwl);
-    p[row] = static_cast<double>(table.transmission2<T>(
-        static_cast<T>(wavelength[row]), static_cast<T>(zem[row]),
-        airmass<T>(static_cast<T>(cx[row]), static_cast<T>(cy[row])),
-        static_cast<T>(depths.od_tel[index]), static_cast<T>(depths.od_focus[index])));
+    p[row] = table.transmission2<T>(static_cast<T>(wavelength[row]), static_cast<T>(zem[row]),
+                                    airmass<T>(static_cast<T>(cx[row]), static_cast<T>(cy[row])),
+                                    static_cast<T>(depths.od_tel[index]),
+                                    static_cast<T>(depths.od_focus[index]));
   }
 }
 

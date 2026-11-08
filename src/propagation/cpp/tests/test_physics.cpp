@@ -280,10 +280,15 @@ bool throws_invalid(const std::function<void()> &action) {
 }
 
 void test_overflow_and_reflection() {
-  // An altitude that overflows in cm is rejected, not converted to a cell count.
+  // Absurd altitudes are rejected, not converted to a cell count.
   CHECK(throws_invalid([] {
     dlufd::AtmosphereProfile("0 1e-3 100 2e-4\n1e304 9e-4 90 2e-4\n1e305 8e-4 80 2e-4\n"
                              "1e306 7e-4 70 2e-4\n1e307 6e-4 60 2e-4\n");
+  }));
+  // Altitudes beyond 1000 km would make the fine grid unbounded.
+  CHECK(throws_invalid([] {
+    dlufd::AtmosphereProfile("0 1e-3 100 2e-4\n1 9e-4 90 2e-4\n2 8e-4 80 2e-4\n"
+                             "3 7e-4 70 2e-4\n2000 6e-4 60 2e-4\n");
   }));
   // n-1 rising with height (valid table, unphysical): a ray from the layer above the denser
   // ground would need sin(theta_obs) > 1 and is not bent.

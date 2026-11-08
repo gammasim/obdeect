@@ -85,6 +85,7 @@ public:
   static constexpr std::size_t max_levels = 120;
   static constexpr int max_moment = 6; // highest power of n-1 for index_moment_cm
   static constexpr double cell_cm = 300.;
+  static constexpr double max_altitude_km = 1000.; // bounds the size of the fine grid
 
   explicit AtmosphereProfile(const std::string &text) {
     std::istringstream stream(text);
@@ -106,11 +107,11 @@ public:
         }
         value[column] = detail::parse_profile_number(token, line_number);
       }
-      const double altitude_cm = value[0] * 1e5;
-      if (!std::isfinite(altitude_cm)) {
+      if (std::fabs(value[0]) > max_altitude_km) {
         throw std::invalid_argument("atmospheric profile line " + std::to_string(line_number) +
-                                    ": altitude is too large");
+                                    ": altitude beyond +-1000 km");
       }
+      const double altitude_cm = value[0] * 1e5;
       z_.push_back(altitude_cm);
       rho_.push_back(value[1]);
       thick_.push_back(value[2]);

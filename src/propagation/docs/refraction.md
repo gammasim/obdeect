@@ -16,7 +16,7 @@ Lines starting with `#` and blank lines are skipped. The first four columns are 
 
 Rules (violations raise `ValueError`):
 
-- 5 to 120 levels, altitudes strictly ascending.
+- 5 to 120 levels, altitudes strictly ascending and within +-1000 km.
 - density and n-1 positive; density and thickness strictly decreasing with height.
 - top thickness may be zero; the top density must be positive.
 - the thickness column must agree with the integral of the density over the table to 5 %.
