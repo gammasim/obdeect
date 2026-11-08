@@ -21,17 +21,6 @@ void usage() {
                        "[input|-]\n");
 }
 
-// Prints the sim_telarray Bypass_Optics value for each converted telescope.
-void report_bypass(const gstrickd::CameraMap &camera) {
-  for (const auto &[id, telescope] : camera) {
-    std::fprintf(stderr,
-                 "ps2simtel: telescope %u: camera frame, mirror class %d, Bypass_Optics=%d, "
-                 "camera rotation %g deg\n",
-                 id, telescope.mirror_class, gstrickd::bypass_optics_level(telescope.mirror_class),
-                 telescope.rotation_deg);
-  }
-}
-
 } // namespace
 
 int main(int argc, char **argv) {
@@ -98,7 +87,6 @@ int main(int argc, char **argv) {
         throw std::runtime_error("cannot open camera map " + camera_path);
       }
       options.camera = gstrickd::read_camera_map(map_file);
-      report_bypass(options.camera);
     }
     if (!atmprof_path.empty()) {
       std::ifstream table_file(atmprof_path);
