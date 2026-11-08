@@ -762,3 +762,223 @@ def test_executable_rejects_invalid_pathlen(args):
     ]
     result = subprocess.run(command, capture_output=True, text=True, input="", check=False)
     assert result.returncode == 2, result.stderr
+
+
+PROFILE_PATH = DATA / "atmprof_ecmwf_north_winter_fixed.dat"
+
+
+def sky_stream(n, seed):
+    """Sky-frame photons with random positions and downward directions, telescope 1 and 2."""
+    rng = np.random.default_rng(seed)
+    writer = StreamWriter()
+    writer.metadata(
+        "run",
+        {
+            "run_number": 1,
+            "observation_level_m": SITE_M,
+            "telescope_x_m": [100.0, -50.0],
+            "telescope_y_m": [0.0, 300.0],
+            "telescope_z_m": [0.0, 0.0],
+            "refraction_applied": 0,
+            "wavelength_min_nm": 250.0,
+            "wavelength_max_nm": 700.0,
+        },
+    )
+    writer.metadata("event", {"event_number": 5})
+    for telescope in (1, 2):
+        writer.metadata("telescope", {"telescope_id": telescope, "frame": 0})
+        cx = rng.uniform(-0.3, 0.3, n)
+        cy = rng.uniform(-0.3, 0.3, n)
+        columns = {
+            "x": rng.uniform(-3000, 3000, n),
+            "y": rng.uniform(-3000, 3000, n),
+            "z": rng.uniform(3000, 15000, n),
+            "cx": cx,
+            "cy": cy,
+            "cz": -np.sqrt(1.0 - cx**2 - cy**2),
+            "t": rng.uniform(0, 10, n),
+            "w": rng.integers(1, 5, n).astype(float),
+        }
+        writer.photons(telescope, 0, columns)
+        writer.metadata("telescope_end", {"telescope_id": telescope, "photons": 0.0})
+    writer.metadata("event_end")
+    writer.metadata("run_end")
+    return writer.getvalue()
+
+
+def _geometry_options(**extra):
+    # 400 to 700 nm: the extinction is far from zero, so the normal run drops no row.
+    return {
+        "site_altitude_m": SITE_M,
+        "seed": 3,
+        "profile": PROFILE_PATH,
+        "wavelength_range": (400.0, 700.0),
+        **extra,
+    }
+
+
+def test_geometry_only_matches_geometry_of_normal_run(tmp_path):
+    source = tmp_path / "in.ps"
+    source.write_bytes(sky_stream(3000, seed=8))
+    normal_out = tmp_path / "normal.ps"
+    geometry_out = tmp_path / "geometry.ps"
+    dlufd.propagate(
+        source,
+        normal_out,
+        transmission=TABLE_PATH,
+        mode="weighted",
+        store_p=True,
+        **_geometry_options(),
+    )
+    summary = dlufd.propagate(source, geometry_out, extinction=False, **_geometry_options())
+    normal = read_records(normal_out.read_bytes())
+    geometry = read_records(geometry_out.read_bytes())
+
+    for telescope in (1, 2):
+        assert _photon_block(normal, telescope, "p").min() > 0.0
+        for name in ("x", "y", "cx", "cy", "t", "wavelength"):
+            np.testing.assert_array_equal(
+                _photon_block(geometry, telescope, name), _photon_block(normal, telescope, name)
+            )
+        # Weights are the input weights (integers 1 to 4), not multiplied by p.
+        w = _photon_block(geometry, telescope, "w")
+        assert np.all(w == np.round(w)) and w.min() >= 1.0
+        assert w.sum() > _photon_block(normal, telescope, "w").sum()
+    assert "p" not in next(r for r in geometry if r["type"] == "photons")["columns"]
+    assert summary["photons_out"] == summary["photons_in"] - summary["dropped"]
+    assert summary["weight_out"] == pytest.approx(
+        sum(_photon_block(geometry, t, "w").sum() for t in (1, 2))
+    )
+
+
+def test_geometry_only_ledger_is_pending(tmp_path):
+    source = tmp_path / "in.ps"
+    source.write_bytes(sky_stream(500, seed=9))
+    out = tmp_path / "out.ps"
+    dlufd.propagate(source, out, extinction=False, **_geometry_options())
+    ledger = _ledger(read_records(out.read_bytes()))
+    assert ledger["factors"] == "atmosphere,wavelength"
+    assert ledger["atmosphere.state"] == "pending"
+    assert "atmosphere.source" not in ledger
+    assert ledger["wavelength.state"] == "applied"
+
+
+def test_geometry_only_on_ground_stream_keeps_every_photon(tmp_path):
+    source = tmp_path / "in.ps"
+    source.write_bytes(ground_stream(1000, seed=2))
+    out = tmp_path / "out.ps"
+    summary = dlufd.propagate(
+        source, out, extinction=False, site_altitude_m=SITE_M, seed=1, mode="weighted"
+    )
+    assert summary["photons_out"] == summary["photons_in"] == 2000
+    records = read_records(out.read_bytes())
+    assert _photon_block(records, 1, "wavelength").min() >= 250.0
+    original = read_records(source.read_bytes())
+    for name in ("x", "y", "cx", "cy", "t", "zem", "w"):
+        np.testing.assert_array_equal(
+            _photon_block(records, 2, name), _photon_block(original, 2, name)
+        )
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        ({"transmission": TABLE_PATH}, "transmission"),
+        ({"envelope": {"qe": "qe.dat"}}, "envelope"),
+        ({"mode": "thinned"}, "thinned"),
+        ({"scattering": "table.dat"}, "scattering"),
+        ({"store_p": True}, "store_p"),
+        ({"pathlen_m": 1.0}, "pathlen_m"),
+        ({"telescope_pathlen_m": {1: 1.0}}, "telescope_pathlen_m"),
+    ],
+)
+def test_geometry_only_rejects_extinction_options(tmp_path, options, message):
+    source = tmp_path / "in.ps"
+    source.write_bytes(ground_stream(10, seed=1))
+    with pytest.raises(ValueError, match=message):
+        dlufd.propagate(
+            source,
+            tmp_path / "out.ps",
+            extinction=False,
+            site_altitude_m=SITE_M,
+            seed=1,
+            **options,
+        )
+
+
+def test_transmission_is_required_with_extinction(tmp_path):
+    source = tmp_path / "in.ps"
+    source.write_bytes(ground_stream(10, seed=1))
+    with pytest.raises(ValueError, match="transmission is required"):
+        dlufd.propagate(source, tmp_path / "out.ps", site_altitude_m=SITE_M, seed=1)
+
+
+def test_executable_geometry_only_matches_api(tmp_path):
+    exe = _executable()
+    source = tmp_path / "in.ps"
+    source.write_bytes(sky_stream(2000, seed=4))
+    api_out = tmp_path / "api.ps"
+    dlufd.propagate(source, api_out, extinction=False, **_geometry_options())
+    cli_out = tmp_path / "cli.ps"
+    command = [
+        exe,
+        "--no-extinction",
+        "--site-altitude",
+        str(SITE_M),
+        "--seed",
+        "3",
+        "--profile",
+        str(PROFILE_PATH),
+        "--wavelength-range",
+        "400",
+        "700",
+        "-i",
+        str(source),
+        "-o",
+        str(cli_out),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert cli_out.read_bytes() == api_out.read_bytes()
+    assert _ledger(read_records(cli_out.read_bytes()))["atmosphere.state"] == "pending"
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--transmission", str(TABLE_PATH)],
+        ["--envelope", "qe=qe.dat"],
+        ["--mode", "thinned"],
+        ["--scattering", "table.dat"],
+        ["--store-p"],
+        ["--pathlen", "1"],
+        ["--telescope-pathlen", "1=1"],
+    ],
+)
+def test_executable_geometry_only_rejects_extinction_options(args):
+    exe = _executable()
+    command = [exe, "--no-extinction", "--site-altitude", str(SITE_M), "--seed", "1", *args]
+    result = subprocess.run(command, capture_output=True, text=True, input="", check=False)
+    assert result.returncode == 2, result.stderr
+    assert "--no-extinction" in result.stderr
+
+
+def test_executable_geometry_only_accepts_weighted_mode(tmp_path):
+    exe = _executable()
+    source = tmp_path / "in.ps"
+    source.write_bytes(ground_stream(100, seed=1))
+    command = [
+        exe,
+        "--no-extinction",
+        "--mode",
+        "weighted",
+        "--site-altitude",
+        str(SITE_M),
+        "--seed",
+        "1",
+        "-i",
+        str(source),
+        "-o",
+        str(tmp_path / "out.ps"),
+    ]
+    assert subprocess.run(command, capture_output=True, check=False).returncode == 0
