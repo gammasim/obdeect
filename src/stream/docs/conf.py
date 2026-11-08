@@ -35,7 +35,7 @@ html_theme_options = {
     "icon_links": [
         {
             "name": "GitHub",
-            "url": "https://github.com/gammasim/gstrickd",
+            "url": "https://github.com/GernotMaier/gstrickd",
             "icon": "fa-brands fa-github",
         },
     ],
