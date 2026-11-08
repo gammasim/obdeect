@@ -22,12 +22,17 @@ $$
 X = \frac{1}{|c_z|}, \qquad c_z = -\sqrt{1 - c_x^2 - c_y^2}, \qquad X = 10^{10} \text{ if } c_z = 0.
 $$
 
-Optical depth at height h (metres a.s.l.) and integer wavelength lambda (nm), linear in
-log10 of the height in cm and clamped to the table edges:
+Optical depth at height h (metres a.s.l.) and integer wavelength lambda (nm): the table
+gives $\tau_i(\lambda)$ at heights $h_i$ above the observation level H2, where $\tau = 0$. Between
+the points $\tau$ is linear in $\log_{10} h$; it is 0 at and below H2 and constant above the
+last height:
 
 $$
-\tau(\lambda, h) = \operatorname{rpol}\left(\log_{10} h_{\text{cm}},\; \tau_i(\lambda)\right).
+\tau(\lambda, h) = \tau_i + \frac{\log_{10} h - \log_{10} h_i}{\log_{10} h_{i+1} - \log_{10} h_i}\,(\tau_{i+1} - \tau_i).
 $$
+
+Wavelengths are truncated to integer nm and clamped to the first and last table row. The
+table rows are consecutive integer wavelengths below 1000 nm; the heights must rise above H2.
 
 Telescope optical depths, with h_T the telescope altitude and l the path inside the
 telescope:
