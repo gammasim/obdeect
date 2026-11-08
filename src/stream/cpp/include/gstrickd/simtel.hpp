@@ -397,6 +397,17 @@ inline void check_ledger(const std::vector<Metadata> &run_ledgers,
   const std::string where = "telescope " + std::to_string(telescope_id) +
                             (camera_frame ? " (camera frame)" : " (ground frame)");
   for (const auto &[name, state] : states) {
+    // Scaled factors are checked first, so no shortcut below accepts them in another state.
+    if (scaled.contains(name)) {
+      if (!sim_telarray_applies(name, camera_frame) || state != "envelope") {
+        throw std::runtime_error("efficiency ledger of " + where + ": factor '" + name +
+                                 "' is given as scaled (sim_telarray applies f/f_env), so it "
+                                 "must be in state envelope and applied by sim_telarray in "
+                                 "this frame; it is " +
+                                 state);
+      }
+      continue;
+    }
     if (allow_pending.contains(name) || (name == "atmosphere" && !camera_frame)) {
       continue;
     }
@@ -406,16 +417,6 @@ inline void check_ledger(const std::vector<Metadata> &run_ledgers,
                                option);
     }
     const bool sim_telarray = sim_telarray_applies(name, camera_frame);
-    if (scaled.contains(name)) {
-      if (!sim_telarray || state != "envelope") {
-        throw std::runtime_error("efficiency ledger of " + where + ": factor '" + name +
-                                 "' is given as scaled (sim_telarray applies f/f_env), so it "
-                                 "must be in state envelope and applied by sim_telarray in "
-                                 "this frame; it is " +
-                                 state);
-      }
-      continue;
-    }
     if (state == "applied") {
       if (sim_telarray) {
         throw std::runtime_error("efficiency ledger of " + where + ": factor '" + name +

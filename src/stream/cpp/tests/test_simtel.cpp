@@ -557,6 +557,14 @@ void test_ledger_rules() {
     run_adapter(ledger_run(Frame::camera, {ledger_of("mirror_reflectivity", "envelope")}, {}),
                 camera, {}, {"mirror_reflectivity"});
   }));
+  // Ground frame: the atmosphere cannot be a scaled factor, in any state, although the
+  // unscaled atmosphere is accepted in any state.
+  for (const char *state : {"applied", "pending", "envelope"}) {
+    CHECK(throws_error([&] {
+      run_adapter(ledger_run(Frame::ground, {ledger_of("atmosphere", state)}, {}), {}, {},
+                  {"atmosphere"});
+    }));
+  }
 
   // Malformed ledgers: no factors list, no state, unknown state.
   CHECK(throws_error([&] {
