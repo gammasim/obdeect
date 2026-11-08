@@ -10,11 +10,19 @@ endif()
 option(DLUFD_BUILD_PYTHON_API "Build the Python extension" ${DLUFD_BUILD_PYTHON_API_DEFAULT})
 option(DLUFD_BUILD_TOOLS "Build the dlufd-propagate command-line tool" ON)
 
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml" dlufd_gstrickd_version_line
+     REGEX "^gstrickd-version = ")
+if(NOT dlufd_gstrickd_version_line MATCHES "^gstrickd-version = \"([^\"]+)\"$")
+  message(FATAL_ERROR "pyproject.toml must define [tool.dlufd] gstrickd-version")
+endif()
+set(DLUFD_GSTRICKD_VERSION "${CMAKE_MATCH_1}")
+set(DLUFD_GSTRICKD_GIT_TAG "v${DLUFD_GSTRICKD_VERSION}")
+
 # gstrickd: an installed package first (find_package, then the gstrickd of the Python
 # environment that runs CMake), FetchContent at a pinned tag only as a fallback.
 option(DLUFD_REQUIRE_INSTALLED_GSTRICKD
        "Require an installed gstrickd package and never fetch it (offline and sdist builds)" OFF)
-find_package(gstrickd 0.1 CONFIG QUIET)
+find_package(gstrickd ${DLUFD_GSTRICKD_VERSION} EXACT CONFIG QUIET)
 if(NOT gstrickd_FOUND AND NOT gstrickd_DIR)
   find_package(Python 3.14 COMPONENTS Interpreter)
   if(Python_Interpreter_FOUND)
@@ -23,7 +31,7 @@ if(NOT gstrickd_FOUND AND NOT gstrickd_DIR)
                     ERROR_QUIET RESULT_VARIABLE dlufd_gstrickd_probe)
     if(dlufd_gstrickd_probe EQUAL 0 AND EXISTS "${dlufd_gstrickd_cmake_dir}/gstrickd-config.cmake")
       set(gstrickd_DIR "${dlufd_gstrickd_cmake_dir}")
-      find_package(gstrickd 0.1 CONFIG QUIET)
+      find_package(gstrickd ${DLUFD_GSTRICKD_VERSION} EXACT CONFIG QUIET)
     endif()
   endif()
 endif()
@@ -35,12 +43,13 @@ else()
     message(FATAL_ERROR "dlufd: no installed gstrickd package. Set -Dgstrickd_DIR=<directory of "
                         "gstrickd-config.cmake> (python -m gstrickd --cmake-dir) or pip install gstrickd.")
   endif()
-  message(STATUS "dlufd: no installed gstrickd package, fetching gstrickd 73f3447 (FetchContent)")
+  message(STATUS "dlufd: no installed gstrickd ${DLUFD_GSTRICKD_VERSION} package, fetching "
+                 "${DLUFD_GSTRICKD_GIT_TAG} (FetchContent)")
   include(FetchContent)
   # Headers only, fetched directly and not added as a subdirectory: gstrickd's install
   # rules, tests and tools then stay out of dlufd's build, wheel and installs.
   FetchContent_Populate(gstrickd GIT_REPOSITORY https://github.com/GernotMaier/gstrickd.git
-                        GIT_TAG 73f34474ab5a9174ead729de07d62527b9d8d60c)
+                        GIT_TAG ${DLUFD_GSTRICKD_GIT_TAG})
   add_library(gstrickd_fetched INTERFACE)
   target_include_directories(gstrickd_fetched INTERFACE "${gstrickd_SOURCE_DIR}/cpp/include")
   target_compile_features(gstrickd_fetched INTERFACE cxx_std_20)
