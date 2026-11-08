@@ -156,10 +156,10 @@ inline CameraMap read_camera_map(std::istream &in) {
 // Profile number of the custom table (CORSIKA ATMOFILE).
 inline constexpr std::uint32_t custom_profile_id = 99;
 
-// Parses an atmospheric table as CORSIKA and sim_telarray read it (dlufd profile.hpp):
+// Parses an atmospheric table as CORSIKA and sim_telarray read it:
 // '#' starts a comment, blank lines are skipped, and the first four columns are altitude
 // [km a.s.l.], density [g/cm^3], thickness [g/cm^2] and n-1. Further columns are ignored.
-// Altitudes must ascend; 2 to 120 levels (atmo.c MAX_PROFILE). The profile number is
+// Altitudes must ascend; 2 to 120 levels. The profile number is
 // custom_profile_id; the observation level is set by the caller. Throws
 // std::invalid_argument with the line number.
 inline AtmosphereTable read_atmprof_text(std::istream &in, const std::string &file_name) {
