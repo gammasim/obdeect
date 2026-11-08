@@ -24,7 +24,7 @@
     }
    },
    {
-    "type": "ledger",
+    "type": "efficiency_status",
     "metadata": {
      "factors": "qe",
      "qe.state": "applied",

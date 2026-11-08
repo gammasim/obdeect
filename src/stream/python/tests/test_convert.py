@@ -36,10 +36,13 @@ def _photons(rows, telescope_offset=0.0):
     }
 
 
-def _write_light_source_stream(path, rows=50, run_ledger=None, telescope_ledger=None):
+def _write_light_source_stream(
+    path, rows=50, run_efficiency_status=None, telescope_efficiency_status=None
+):
     """A stream without CORSIKA blobs: telescope 1 ground frame, telescope 2 camera frame.
 
-    ``run_ledger`` is written before the event, ``telescope_ledger`` after telescope 2's record.
+    ``run_efficiency_status`` is written before the event; ``telescope_efficiency_status``
+    follows telescope 2's record.
     """
     with gstrickd.Writer(str(path), "pytest") as writer:
         writer.write(
@@ -53,15 +56,15 @@ def _write_light_source_stream(path, rows=50, run_ledger=None, telescope_ledger=
                 "telescope_r_m": np.array([12.0, 12.0]),
             },
         )
-        if run_ledger is not None:
-            writer.write("ledger", run_ledger)
+        if run_efficiency_status is not None:
+            writer.write("efficiency_status", run_efficiency_status)
         writer.write("event", {"event_number": 1})
         writer.write("telescope", {"telescope_id": 1, "frame": "ground", "array_index": 0})
         writer.write_photons(1, "ground", 0, _photons(rows))
         writer.write("telescope_end", {"telescope_id": 1, "photons": float(rows)})
         writer.write("telescope", {"telescope_id": 2, "frame": "camera", "array_index": 0})
-        if telescope_ledger is not None:
-            writer.write("ledger", telescope_ledger)
+        if telescope_efficiency_status is not None:
+            writer.write("efficiency_status", telescope_efficiency_status)
         writer.write_photons(2, "camera", 0, _photons(rows, telescope_offset=1.0))
         writer.write("telescope_end", {"telescope_id": 2, "photons": float(rows)})
         writer.write("event_end", {})
@@ -215,47 +218,47 @@ def test_rejects_invalid_mirror_class(tmp_path):
         gstrickd.stream_to_simtel(stream, tmp_path / "bad.simtel", {2: (3, 0.0)})
 
 
-def _ledger(factor, state):
+def _efficiency_status(factor, state):
     return {"factors": factor, f"{factor}.state": state}
 
 
-# Efficiency ledger of a camera-frame telescope (docs/usage.md): accepted and rejected factors.
-ACCEPTED_LEDGERS = [
-    _ledger("qe", "pending"),
-    _ledger("atmosphere", "applied"),
-    _ledger("telescope_transmission_constant", "applied"),
+# Efficiency status of a camera-frame telescope (docs/usage.md): accepted and rejected factors.
+ACCEPTED_EFFICIENCY_STATUSES = [
+    _efficiency_status("qe", "pending"),
+    _efficiency_status("atmosphere", "applied"),
+    _efficiency_status("telescope_transmission_constant", "applied"),
 ]
-REJECTED_LEDGERS = [
-    _ledger("telescope_transmission_constant", "pending"),
-    _ledger("atmosphere", "pending"),
-    _ledger("qe", "applied"),
-    _ledger("qe", "envelope"),
-    _ledger("made_up", "applied"),
+REJECTED_EFFICIENCY_STATUSES = [
+    _efficiency_status("telescope_transmission_constant", "pending"),
+    _efficiency_status("atmosphere", "pending"),
+    _efficiency_status("qe", "applied"),
+    _efficiency_status("qe", "envelope"),
+    _efficiency_status("made_up", "applied"),
 ]
 
 
-@pytest.mark.parametrize("ledger", ACCEPTED_LEDGERS)
-def test_ledger_accepted_in_camera_frame(tmp_path, ledger):
+@pytest.mark.parametrize("efficiency_status", ACCEPTED_EFFICIENCY_STATUSES)
+def test_efficiency_status_accepted_in_camera_frame(tmp_path, efficiency_status):
     stream = tmp_path / "light.ps"
     simtel = tmp_path / "light.simtel"
-    _write_light_source_stream(stream, telescope_ledger=ledger)
+    _write_light_source_stream(stream, telescope_efficiency_status=efficiency_status)
     gstrickd.stream_to_simtel(stream, simtel, {2: (1, 0.0)})
     assert simtel.stat().st_size > 0
 
 
-@pytest.mark.parametrize("ledger", REJECTED_LEDGERS)
-def test_ledger_rejected_in_camera_frame(tmp_path, ledger):
+@pytest.mark.parametrize("efficiency_status", REJECTED_EFFICIENCY_STATUSES)
+def test_efficiency_status_rejected_in_camera_frame(tmp_path, efficiency_status):
     stream = tmp_path / "light.ps"
-    _write_light_source_stream(stream, telescope_ledger=ledger)
-    with pytest.raises(RuntimeError, match=ledger["factors"]):
+    _write_light_source_stream(stream, telescope_efficiency_status=efficiency_status)
+    with pytest.raises(RuntimeError, match=efficiency_status["factors"]):
         gstrickd.stream_to_simtel(stream, tmp_path / "bad.simtel", {2: (1, 0.0)})
 
 
-def test_ledger_pending_accepted_with_allow_pending(tmp_path):
+def test_efficiency_status_pending_accepted_with_allow_pending(tmp_path):
     stream = tmp_path / "light.ps"
     simtel = tmp_path / "light.simtel"
-    constant = _ledger("telescope_transmission_constant", "pending")
-    _write_light_source_stream(stream, telescope_ledger=constant)
+    constant = _efficiency_status("telescope_transmission_constant", "pending")
+    _write_light_source_stream(stream, telescope_efficiency_status=constant)
     gstrickd.stream_to_simtel(
         stream, simtel, {2: (1, 0.0)}, allow_pending=["telescope_transmission_constant"]
     )
@@ -264,11 +267,15 @@ def test_ledger_pending_accepted_with_allow_pending(tmp_path):
         gstrickd.stream_to_simtel(stream, simtel, {2: (1, 0.0)}, allow_pending="qe")
 
 
-def test_ledger_scaled_factor_accepts_envelope(tmp_path):
+def test_efficiency_status_scaled_factor_accepts_envelope(tmp_path):
     # A QE table divided by the QE envelope: sim_telarray applies f/f_env.
     stream = tmp_path / "light.ps"
     simtel = tmp_path / "light.simtel"
-    _write_light_source_stream(stream, telescope_ledger=_ledger("qe", "envelope"))
+    _write_light_source_stream(
+        stream,
+        run_efficiency_status=_efficiency_status("qe", "envelope"),
+        telescope_efficiency_status=_efficiency_status("qe", "envelope"),
+    )
     with pytest.raises(RuntimeError, match="--scaled-factor qe"):
         gstrickd.stream_to_simtel(stream, tmp_path / "bad.simtel", {2: (1, 0.0)})
     gstrickd.stream_to_simtel(stream, simtel, {2: (1, 0.0)}, scaled_factors=["qe"])
@@ -278,23 +285,36 @@ def test_ledger_scaled_factor_accepts_envelope(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "ledger", [_ledger("qe", "pending"), _ledger("qe", "applied"), _ledger("atmosphere", "applied")]
+    "efficiency_status",
+    [
+        _efficiency_status("qe", "pending"),
+        _efficiency_status("qe", "applied"),
+        _efficiency_status("atmosphere", "applied"),
+    ],
 )
-def test_ledger_scaled_factor_needs_envelope_applied_by_sim_telarray(tmp_path, ledger):
+def test_efficiency_status_scaled_factor_needs_envelope_applied_by_sim_telarray(
+    tmp_path, efficiency_status
+):
     stream = tmp_path / "light.ps"
-    _write_light_source_stream(stream, telescope_ledger=ledger)
-    name = ledger["factors"]
+    _write_light_source_stream(
+        stream,
+        run_efficiency_status=_efficiency_status(efficiency_status["factors"], "envelope"),
+        telescope_efficiency_status=efficiency_status,
+    )
+    name = efficiency_status["factors"]
     with pytest.raises(RuntimeError, match="given as scaled"):
         gstrickd.stream_to_simtel(
             stream, tmp_path / "bad.simtel", {2: (1, 0.0)}, scaled_factors=[name]
         )
 
 
-def test_run_ledger_applies_to_camera_telescope(tmp_path):
+def test_run_efficiency_status_applies_to_camera_telescope(tmp_path):
     # A run-level factor applies to every telescope; mirror reflectivity is applied by
     # sim_telarray in ground frame only, so the camera telescope must reject it.
     stream = tmp_path / "light.ps"
-    _write_light_source_stream(stream, run_ledger=_ledger("mirror_reflectivity", "pending"))
+    _write_light_source_stream(
+        stream, run_efficiency_status=_efficiency_status("mirror_reflectivity", "pending")
+    )
     with pytest.raises(RuntimeError, match="mirror_reflectivity"):
         gstrickd.stream_to_simtel(stream, tmp_path / "bad.simtel", {2: (1, 0.0)})
 
@@ -347,8 +367,8 @@ def test_cli_allow_pending_option(tmp_path):
     stream = tmp_path / "light.ps"
     camera = tmp_path / "camera.txt"
     camera.write_text("2 1 0.0\n")
-    constant = _ledger("telescope_transmission_constant", "pending")
-    _write_light_source_stream(stream, telescope_ledger=constant)
+    constant = _efficiency_status("telescope_transmission_constant", "pending")
+    _write_light_source_stream(stream, telescope_efficiency_status=constant)
     base = [_executable("ps2simtel"), "--camera-map", str(camera), "-o", str(tmp_path / "x")]
     failed = subprocess.run([*base, str(stream)], capture_output=True)
     assert failed.returncode != 0
@@ -429,7 +449,11 @@ def test_cli_scaled_factor_option(tmp_path):
     stream = tmp_path / "light.ps"
     camera = tmp_path / "camera.txt"
     camera.write_text("2 1 0.0\n")
-    _write_light_source_stream(stream, telescope_ledger=_ledger("qe", "envelope"))
+    _write_light_source_stream(
+        stream,
+        run_efficiency_status=_efficiency_status("qe", "envelope"),
+        telescope_efficiency_status=_efficiency_status("qe", "envelope"),
+    )
     out = tmp_path / "ok.simtel"
     base = [_executable("ps2simtel"), "--camera-map", str(camera), "-o", str(out)]
     failed = subprocess.run([*base, str(stream)], capture_output=True)

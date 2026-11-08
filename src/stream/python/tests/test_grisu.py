@@ -16,7 +16,7 @@ def _executable(name):
 
 
 def _write_stream(path, weight=1.0, atmosphere="applied", wavelength=400.0):
-    ledger = {
+    efficiency_status = {
         "factors": "atmosphere",
         "atmosphere.state": atmosphere,
         "atmosphere.source": "pytest",
@@ -41,7 +41,7 @@ def _write_stream(path, weight=1.0, atmosphere="applied", wavelength=400.0):
                 "telescope_y_m": np.array([20.0]),
             },
         )
-        writer.write("ledger", ledger)
+        writer.write("efficiency_status", efficiency_status)
         writer.write(
             "event",
             {

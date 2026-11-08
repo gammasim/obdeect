@@ -488,8 +488,8 @@ public:
     case RecordType::telescope_end:
       finish_telescope(record.metadata);
       return;
-    case RecordType::ledger:
-      return; // efficiency ledger: not written to sim_telarray input
+    case RecordType::efficiency_status:
+      return; // efficiency status: not written to sim_telarray input
     case RecordType::blob:
       if (record.blob_eventio_type == iact::telarray_head ||
           record.blob_eventio_type == iact::telarray_end) {
@@ -540,7 +540,7 @@ private:
     const auto &zem = chunk[Column::zem];
     const auto &w = chunk[Column::w];
     const auto &lambda = chunk[Column::wavelength];
-    if (zem.empty()) {
+    if (n > 0 && zem.empty()) {
       throw std::runtime_error("sim_telarray input needs the zem column");
     }
     // Each bunch is encoded in place as its 1205 record (32 bytes):

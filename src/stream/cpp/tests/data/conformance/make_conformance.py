@@ -20,7 +20,7 @@ TYPES = {
     "event_end": 7,
     "run_end": 8,
     "blob": 9,
-    "ledger": 10,
+    "efficiency_status": 10,
     "stream_end": 15,
 }
 COLUMNS = ["x", "y", "z", "cx", "cy", "cz", "t", "zem", "w", "wavelength", "p"]
@@ -56,7 +56,7 @@ def photons(telescope, frame, first, columns):
 
 STREAM = {"format_major": 1, "format_minor": 0, "producer": "conformance"}
 RUN = {"run_number": 7, "energy_min_gev": 0.25, "name": "site", "telescope_x_m": [0.0, 10.5]}
-LEDGER = {"factors": "qe", "qe.state": "applied", "qe.source": "test"}
+EFFICIENCY_STATUS = {"factors": "qe", "qe.state": "applied", "qe.source": "test"}
 EVENT = {"event_number": 3}
 TELESCOPE = {"telescope_id": 2, "frame": 1}
 CHUNK = {
@@ -74,7 +74,7 @@ BLOB = bytes([1, 2, 3, 255])
 valid = b"".join([
     record("stream", metadata(STREAM)),
     record("run", metadata(RUN)),
-    record("ledger", metadata(LEDGER)),
+    record("efficiency_status", metadata(EFFICIENCY_STATUS)),
     record("event", metadata(EVENT)),
     record("telescope", metadata(TELESCOPE)),
     photons(2, 1, 0, CHUNK),
@@ -116,7 +116,7 @@ expected = {
         "records": [
             {"type": "stream", "metadata": STREAM},
             {"type": "run", "metadata": RUN},
-            {"type": "ledger", "metadata": LEDGER},
+            {"type": "efficiency_status", "metadata": EFFICIENCY_STATUS},
             {"type": "event", "metadata": EVENT},
             {"type": "telescope", "metadata": TELESCOPE},
             {"type": "photons", "telescope_id": 2, "frame": 1, "first_index": 0, "columns": CHUNK},

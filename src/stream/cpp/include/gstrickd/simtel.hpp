@@ -35,18 +35,17 @@
 // (ps2simtel --atmprof): before the first EVTH, with the profile number that EVTH
 // names (99 for synthesised headers).
 //
-// Efficiency ledger (docs/format.md): run ledgers apply to every telescope, a
-// telescope ledger to its telescope and overrides the run ledgers per factor.
-// A factor is accepted when its state is `applied` and sim_telarray does not
-// apply it in the telescope's frame, or when its state is `pending` and
-// sim_telarray applies it in that frame. `envelope` is an error for factors
-// sim_telarray applies, because sim_telarray applies the full factor, not
-// f/f_env. With ground-frame photons `atmosphere` is accepted in any state:
+// Efficiency status (docs/format.md): run efficiency status records apply to every telescope, a
+// telescope efficiency status to its telescope and overrides the run efficiency status records per
+// factor. A factor is accepted when its state is `applied` and sim_telarray does not apply it in
+// the telescope's frame, or when its state is `pending` and sim_telarray applies it in that frame.
+// `envelope` is an error for factors sim_telarray applies, because sim_telarray applies the full
+// factor, not f/f_env. With ground-frame photons `atmosphere` is accepted in any state:
 // sim_telarray applies its transmission table, which must then be all-zero when
 // the atmosphere was applied upstream. A factor listed in `scaled` must be in
 // state `envelope` and applied by sim_telarray: its sim_telarray table then
 // holds f/f_env (e.g. a QE table divided by the QE envelope). Any other factor is
-// an error, unless it is listed in `allow_pending`. Streams without a ledger are
+// an error, unless it is listed in `allow_pending`. Streams without an efficiency status are
 // converted as before.
 
 #include "gstrickd/corsika.hpp"
@@ -443,7 +442,7 @@ inline TelPos telpos_from_metres(const std::vector<double> &x, const std::vector
   return pos;
 }
 
-// Efficiency ledger rules for ps2simtel (docs/usage.md, "Efficiency ledger").
+// Efficiency status rules for ps2simtel (docs/usage.md, "Efficiency status").
 // sim_telarray applies these factors itself, by the frame of the telescope.
 // Camera frame: the camera efficiencies. Ground frame: also mirror reflectivity
 // and telescope transmission. Atmosphere is not in either list.
@@ -455,25 +454,34 @@ inline bool sim_telarray_applies(const std::string &factor, bool camera_frame) {
   return (camera_frame ? camera_factors : ground_factors).contains(factor);
 }
 
-// Factor names of the ledger vocabulary (docs/format.md). Any other name is unknown.
+// Factor names of the efficiency status vocabulary (docs/format.md). Any other name is unknown.
 inline bool known_factor(const std::string &factor) {
   return sim_telarray_applies(factor, false) || factor == "atmosphere" ||
-         factor == "telescope_transmission_constant";
+         factor == "telescope_transmission_constant" || factor == "wavelength" ||
+         factor == "scattering";
 }
 
-// Factor -> state of one ledger record.
-using LedgerStates = std::map<std::string, std::string>;
+// Factor -> state of one efficiency status record.
+using EfficiencyStates = std::map<std::string, std::string>;
 
-inline LedgerStates ledger_states(const Metadata &ledger) {
-  const auto factors = ledger.find("factors");
-  if (factors == ledger.end()) {
-    throw std::runtime_error("efficiency ledger lacks 'factors'");
+inline int efficiency_state_rank(const std::string &state) {
+  if (state == "pending")
+    return 0;
+  if (state == "envelope")
+    return 1;
+  return 2; // applied; callers validate the state before ranking it.
+}
+
+inline EfficiencyStates efficiency_status_states(const Metadata &efficiency_status) {
+  const auto factors = efficiency_status.find("factors");
+  if (factors == efficiency_status.end()) {
+    throw std::runtime_error("efficiency status lacks 'factors'");
   }
   const auto *list = std::get_if<std::string>(&factors->second);
   if (list == nullptr) {
-    throw std::runtime_error("efficiency ledger 'factors' is not a string");
+    throw std::runtime_error("efficiency status 'factors' is not a string");
   }
-  LedgerStates states;
+  EfficiencyStates states;
   std::istringstream in(*list);
   std::string name;
   while (std::getline(in, name, ',')) {
@@ -482,47 +490,59 @@ inline LedgerStates ledger_states(const Metadata &ledger) {
       continue;
     }
     name = name.substr(first, name.find_last_not_of(" \t") - first + 1);
-    const auto state_it = ledger.find(name + ".state");
-    if (state_it == ledger.end()) {
-      throw std::runtime_error("efficiency ledger lacks '" + name + ".state'");
+    const auto state_it = efficiency_status.find(name + ".state");
+    if (state_it == efficiency_status.end()) {
+      throw std::runtime_error("efficiency status lacks '" + name + ".state'");
     }
     const auto *state = std::get_if<std::string>(&state_it->second);
     if (state == nullptr || (*state != "applied" && *state != "envelope" && *state != "pending")) {
-      throw std::runtime_error("efficiency ledger factor '" + name +
+      throw std::runtime_error("efficiency status factor '" + name +
                                "' has an unknown state (applied, envelope or pending)");
     }
     if (!states.emplace(name, *state).second) {
-      throw std::runtime_error("efficiency ledger lists factor '" + name + "' twice");
+      throw std::runtime_error("efficiency status lists factor '" + name + "' twice");
     }
   }
   return states;
 }
 
-// Checks the ledger of one telescope: run ledgers, then its telescope ledgers,
-// which override the run ledgers per factor. Throws std::runtime_error naming the
-// first factor that sim_telarray would apply twice, or would not apply at all.
-inline void check_ledger(const std::vector<Metadata> &run_ledgers,
-                         const std::vector<Metadata> &telescope_ledgers, std::uint32_t telescope_id,
-                         bool camera_frame, const std::set<std::string> &allow_pending,
-                         const std::set<std::string> &scaled = {}) {
-  LedgerStates states;
-  for (const Metadata &ledger : run_ledgers) {
-    for (const auto &[name, state] : ledger_states(ledger)) {
-      if (!states.emplace(name, state).second) {
-        throw std::runtime_error("efficiency ledger lists factor '" + name +
-                                 "' in more than one run ledger");
-      }
+inline void apply_efficiency_status_update(EfficiencyStates &states, const Metadata &metadata,
+                                           const std::string &scope) {
+  for (const auto &[name, state] : efficiency_status_states(metadata)) {
+    const auto previous = states.find(name);
+    if (previous == states.end()) {
+      states.emplace(name, state);
+      continue;
     }
+    if (efficiency_state_rank(state) <= efficiency_state_rank(previous->second)) {
+      throw std::runtime_error("efficiency status factor '" + name + "' in " + scope +
+                               " has an invalid transition from " + previous->second + " to " +
+                               state);
+    }
+    previous->second = state;
   }
-  LedgerStates own;
-  for (const Metadata &ledger : telescope_ledgers) {
-    for (const auto &[name, state] : ledger_states(ledger)) {
-      if (!own.emplace(name, state).second) {
-        throw std::runtime_error("efficiency ledger lists factor '" + name +
-                                 "' twice for telescope " + std::to_string(telescope_id));
-      }
-      states[name] = state;
-    }
+}
+
+// Checks the efficiency status of one telescope: run efficiency status records, then its telescope
+// efficiency status records, which override the run efficiency status records per factor. Throws
+// std::runtime_error naming the first factor that sim_telarray would apply twice, or would not
+// apply at all.
+inline void check_efficiency_status(const std::vector<Metadata> &run_efficiency_statuses,
+                                    const std::vector<Metadata> &telescope_efficiency_statuses,
+                                    std::uint32_t telescope_id, bool camera_frame,
+                                    const std::set<std::string> &allow_pending,
+                                    const std::set<std::string> &scaled = {}) {
+  EfficiencyStates states;
+  for (const Metadata &efficiency_status : run_efficiency_statuses) {
+    apply_efficiency_status_update(states, efficiency_status, "run status records");
+  }
+  EfficiencyStates own;
+  for (const Metadata &efficiency_status : telescope_efficiency_statuses) {
+    apply_efficiency_status_update(own, efficiency_status,
+                                   "telescope " + std::to_string(telescope_id) + " status records");
+  }
+  for (const auto &[name, state] : own) {
+    states[name] = state;
   }
   const std::string where = "telescope " + std::to_string(telescope_id) +
                             (camera_frame ? " (camera frame)" : " (ground frame)");
@@ -530,7 +550,7 @@ inline void check_ledger(const std::vector<Metadata> &run_ledgers,
     // Scaled factors are checked first, so no shortcut below accepts them in another state.
     if (scaled.contains(name)) {
       if (!sim_telarray_applies(name, camera_frame) || state != "envelope") {
-        throw std::runtime_error("efficiency ledger of " + where + ": factor '" + name +
+        throw std::runtime_error("efficiency status of " + where + ": factor '" + name +
                                  "' is given as scaled (sim_telarray applies f/f_env), so it "
                                  "must be in state envelope and applied by sim_telarray in "
                                  "this frame; it is " +
@@ -543,13 +563,13 @@ inline void check_ledger(const std::vector<Metadata> &run_ledgers,
     }
     const std::string option = "; pass --allow-pending " + name + " to accept it as it is";
     if (!known_factor(name)) {
-      throw std::runtime_error("efficiency ledger of " + where + ": unknown factor '" + name + "'" +
+      throw std::runtime_error("efficiency status of " + where + ": unknown factor '" + name + "'" +
                                option);
     }
     const bool sim_telarray = sim_telarray_applies(name, camera_frame);
     if (state == "applied") {
       if (sim_telarray) {
-        throw std::runtime_error("efficiency ledger of " + where + ": factor '" + name +
+        throw std::runtime_error("efficiency status of " + where + ": factor '" + name +
                                  "' is already applied upstream, and sim_telarray applies it "
                                  "again in this frame" +
                                  option);
@@ -557,18 +577,24 @@ inline void check_ledger(const std::vector<Metadata> &run_ledgers,
       continue;
     }
     if (sim_telarray && state == "envelope") {
-      throw std::runtime_error("efficiency ledger of " + where + ": factor '" + name +
+      throw std::runtime_error("efficiency status of " + where + ": factor '" + name +
                                "' has only its envelope applied, but sim_telarray applies the "
                                "full factor, so the result would be too dim; pass "
                                "--scaled-factor " +
                                name + " if its sim_telarray table holds f/f_env" + option);
     }
     if (!sim_telarray) {
-      throw std::runtime_error("efficiency ledger of " + where + ": factor '" + name + "' is " +
+      throw std::runtime_error("efficiency status of " + where + ": factor '" + name + "' is " +
                                state +
                                ", but sim_telarray does not apply it in this frame; "
                                "apply it upstream (state applied)" +
                                option);
+    }
+  }
+  for (const std::string &name : scaled) {
+    if (!states.contains(name)) {
+      throw std::runtime_error("efficiency status of " + where + ": scaled factor '" + name +
+                               "' has no efficiency status (expected state envelope)");
     }
   }
 }
@@ -580,8 +606,8 @@ struct SimtelOptions {
   CameraMap camera;                       // camera-frame telescopes
   std::optional<AtmosphereTable> atmprof; // atmospheric table (ATMPROF block), see the file comment
   std::ostream *warnings{nullptr};        // reports synthesised headers; null: silent
-  std::set<std::string> allow_pending;    // ledger factors accepted as they are
-  std::set<std::string> scaled;           // ledger factors whose camera table holds f/f_env
+  std::set<std::string> allow_pending;    // efficiency_status factors accepted as they are
+  std::set<std::string> scaled; // efficiency_status factors whose camera table holds f/f_env
 };
 
 // Writes a photon stream as sim_telarray input (EventIO, normal mode: one 1204
@@ -612,8 +638,8 @@ public:
     case RecordType::stream:
     case RecordType::stream_end:
       return; // not part of sim_telarray input
-    case RecordType::ledger:
-      ledger(record.metadata);
+    case RecordType::efficiency_status:
+      efficiency_status(record.metadata);
       return;
     case RecordType::run:
       end_run();
@@ -796,56 +822,60 @@ private:
     atmprof_pending_ = atmprof_.has_value();
     have_runh_ = have_telpos_ = have_rune_ = have_inputcfg_ = false;
     events_ = 0;
-    run_ledgers_.clear();
-    telescope_ledgers_.clear();
+    run_efficiency_statuses_.clear();
+    telescope_efficiency_statuses_.clear();
     telescope_open_ = false;
     frames_.clear();
   }
 
-  // Ledger of the run (before the first event) or of the open telescope (before its photons).
-  void ledger(const Metadata &metadata) {
+  // Efficiency status of the run (before the first event) or of the open telescope (before its
+  // photons).
+  void efficiency_status(const Metadata &metadata) {
     if (!run_open_) {
-      throw std::runtime_error("ledger record outside a run");
+      throw std::runtime_error("efficiency status record outside a run");
     }
     if (telescope_open_) {
       if (telescope_photons_) {
-        throw std::runtime_error("efficiency ledger for telescope " +
+        throw std::runtime_error("efficiency status for telescope " +
                                  std::to_string(telescope_id_) + " comes after its photons");
       }
-      telescope_ledgers_.push_back(metadata);
+      telescope_efficiency_statuses_.push_back(metadata);
       return;
     }
     if (events_ > 0) {
-      throw std::runtime_error("run efficiency ledger comes after the first event");
+      throw std::runtime_error("run efficiency status comes after the first event");
     }
-    run_ledgers_.push_back(metadata);
+    run_efficiency_statuses_.push_back(metadata);
   }
 
   void begin_telescope(const Metadata &metadata) {
     telescope_open_ = true;
     telescope_photons_ = false;
-    telescope_ledgers_.clear();
+    telescope_efficiency_statuses_.clear();
     const auto it = metadata.find("telescope_id");
     telescope_id_known_ = it != metadata.end() && std::holds_alternative<std::int64_t>(it->second);
     telescope_id_ =
         telescope_id_known_ ? static_cast<std::uint32_t>(std::get<std::int64_t>(it->second)) : 0;
   }
 
-  // Checks the efficiency ledger of the telescope that ends here (no-op without ledgers).
+  // Checks the efficiency status of the telescope that ends here (no-op without efficiency status
+  // records).
   void end_telescope() {
     if (!telescope_open_) {
       return;
     }
     telescope_open_ = false;
-    if (run_ledgers_.empty() && telescope_ledgers_.empty()) {
+    if (run_efficiency_statuses_.empty() && telescope_efficiency_statuses_.empty() &&
+        scaled_.empty()) {
       return;
     }
     if (!telescope_id_known_ || telescope_id_ == 0) {
       throw std::runtime_error("telescope record lacks telescope_id, needed for the efficiency "
-                               "ledger");
+                               "status");
     }
-    simtel_detail::check_ledger(run_ledgers_, telescope_ledgers_, telescope_id_,
-                                camera_.contains(telescope_id_), allow_pending_, scaled_);
+    simtel_detail::check_efficiency_status(run_efficiency_statuses_, telescope_efficiency_statuses_,
+                                           telescope_id_, camera_.contains(telescope_id_),
+                                           allow_pending_, scaled_);
   }
 
   void begin_event(const Metadata &metadata) {
@@ -1090,8 +1120,8 @@ private:
   bool have_evte_{};
   std::set<std::string> allow_pending_;
   std::set<std::string> scaled_;
-  std::vector<Metadata> run_ledgers_;
-  std::vector<Metadata> telescope_ledgers_;
+  std::vector<Metadata> run_efficiency_statuses_;
+  std::vector<Metadata> telescope_efficiency_statuses_;
   bool telescope_open_{};
   bool telescope_photons_{};
   bool telescope_id_known_{};

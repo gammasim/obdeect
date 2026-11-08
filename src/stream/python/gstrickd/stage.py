@@ -15,32 +15,41 @@ import numpy as np
 import gstrickd
 from gstrickd.stream import METADATA_RECORDS, Reader, Writer, _frame
 
-LEDGER_STATES = ("applied", "envelope", "pending")
-_LEDGER_FIELDS = ("state", "source", "wavelength_nm", "value")
+EFFICIENCY_STATUS_STATES = ("applied", "envelope", "pending")
+_EFFICIENCY_STATUS_FIELDS = ("state", "source", "wavelength_nm", "value")
 
 
-def ledger_record(ledger: Mapping[str, Mapping[str, object]]) -> dict[str, object]:
-    """Metadata of a ``ledger`` record from ``{factor: {state, source, wavelength_nm, value}}``.
+def efficiency_status_record(
+    efficiency_status: Mapping[str, Mapping[str, object]],
+) -> dict[str, object]:
+    """Build an ``efficiency_status`` record from a mapping of factor names to fields.
 
     ``state`` is ``applied``, ``envelope`` or ``pending``; ``source`` is the provenance string;
     ``wavelength_nm`` and ``value`` (equal-length float arrays) are optional.
     """
-    metadata: dict[str, object] = {"factors": ",".join(ledger)}
-    for name, entry in ledger.items():
+    metadata: dict[str, object] = {"factors": ",".join(efficiency_status)}
+    for name, entry in efficiency_status.items():
         if not name or "," in name or "." in name:
-            raise ValueError(f"invalid ledger factor name {name!r}")
-        unknown = set(entry) - set(_LEDGER_FIELDS)
+            raise ValueError(f"invalid efficiency status factor name {name!r}")
+        unknown = set(entry) - set(_EFFICIENCY_STATUS_FIELDS)
         if unknown:
-            raise ValueError(f"ledger factor '{name}': unknown fields {sorted(unknown)}")
-        if entry.get("state") not in LEDGER_STATES:
-            raise ValueError(f"ledger factor '{name}': state must be one of {LEDGER_STATES}")
+            raise ValueError(f"efficiency status factor '{name}': unknown fields {sorted(unknown)}")
+        if entry.get("state") not in EFFICIENCY_STATUS_STATES:
+            raise ValueError(
+                f"efficiency status factor '{name}': "
+                f"state must be one of {EFFICIENCY_STATUS_STATES}"
+            )
         if not isinstance(entry.get("source"), str):
-            raise ValueError(f"ledger factor '{name}': source must be a string")
+            raise ValueError(f"efficiency status factor '{name}': source must be a string")
         if ("wavelength_nm" in entry) != ("value" in entry):
-            raise ValueError(f"ledger factor '{name}': wavelength_nm and value go together")
+            raise ValueError(
+                f"efficiency status factor '{name}': wavelength_nm and value go together"
+            )
         if "value" in entry and np.size(entry["value"]) != np.size(entry["wavelength_nm"]):
-            raise ValueError(f"ledger factor '{name}': wavelength_nm and value differ in length")
-        for field in _LEDGER_FIELDS:
+            raise ValueError(
+                f"efficiency status factor '{name}': wavelength_nm and value differ in length"
+            )
+        for field in _EFFICIENCY_STATUS_FIELDS:
             if field in entry:
                 metadata[f"{name}.{field}"] = entry[field]
     return metadata
@@ -58,7 +67,7 @@ def transform(
     *,
     stage_id: int,
     frame_out: int | str,
-    ledger: Mapping[str, Mapping[str, object]] | None = None,
+    efficiency_status: Mapping[str, Mapping[str, object]] | None = None,
 ) -> None:
     """Copy a stream, replacing the columns of every photon chunk with ``func``'s result.
 
@@ -67,13 +76,14 @@ def transform(
     equal length (at most ``gstrickd.max_chunk_rows``, may differ from the input; ``{}`` writes
     an empty chunk). ``metadata`` is a dict with the latest ``run``, ``event`` and ``telescope``
     record metadata (empty dicts before the first), the chunk's ``frame`` and ``first_index``,
-    and ``stage_id``. The output chunk keeps ``first_index`` and gets ``frame_out``.
+    and ``stage_id``. Output indices are contiguous and the output uses ``frame_out``.
+    ``telescope_end.photons`` is updated to the sum of output weights.
 
     All other records known to the reader are copied unchanged (records of unknown type are
     dropped, as the reader skips them), except that the ``frame`` of ``telescope`` records
-    becomes ``frame_out``. ``ledger`` (see ``ledger_record``) is written as one ``ledger``
-    record per run, after the ledger records already there and before the first event. A
-    factor ``applied`` in any input ledger, also one that follows a ``telescope`` record,
+    becomes ``frame_out``. ``efficiency_status`` (see ``efficiency_status_record``) is written
+    as one record per run, after existing efficiency status records and before the first event.
+    A factor ``applied`` in any input record, including one after a ``telescope`` record,
     cannot be applied again (ValueError). The writer's
     ``producer`` is ``"gstrickd.stage 0x<stage_id>"``.
     """
@@ -82,26 +92,33 @@ def transform(
     frame_code = _frame(frame_out)
     if frame_code not in gstrickd.FRAMES.values():
         raise ValueError(f"unknown frame {frame_out!r}")
-    entry = ledger_record(ledger) if ledger else None
+    entry = efficiency_status_record(efficiency_status) if efficiency_status else None
     context: dict[str, dict[str, object]] = {"run": {}, "event": {}, "telescope": {}}
     entry_applied = _applied(entry) if entry else set()
-    ledger_pending = False
+    efficiency_status_pending = False
+    output_index = 0
+    output_weight = 0.0
 
     with Writer(os.fspath(output), f"gstrickd.stage {stage_id:#x}") as writer:
         for record in Reader(os.fspath(input)):
             kind = record["type"]
             if kind == "stream":
                 continue
-            if ledger_pending and kind in ("event", "run_end"):
-                writer.write("ledger", entry)
-                ledger_pending = False
+            if efficiency_status_pending and kind in ("event", "run_end"):
+                writer.write("efficiency_status", entry)
+                efficiency_status_pending = False
             if kind in METADATA_RECORDS:
                 metadata = dict(record["metadata"])
                 if kind in context:
                     context[kind] = metadata
+                if kind == "telescope":
+                    output_index = 0
+                    output_weight = 0.0
+                elif kind == "telescope_end":
+                    metadata["photons"] = output_weight
                 if kind == "run":
-                    ledger_pending = entry is not None
-                elif kind == "ledger":
+                    efficiency_status_pending = entry is not None
+                elif kind == "efficiency_status":
                     repeated = entry_applied & _applied(metadata)
                     if repeated:
                         raise ValueError(f"factor(s) already applied upstream: {sorted(repeated)}")
@@ -118,6 +135,6 @@ def transform(
                     "stage_id": stage_id,
                 }
                 result = func(record["telescope_id"], record["columns"], info)
-                writer.write_photons(
-                    record["telescope_id"], frame_code, record["first_index"], result
-                )
+                writer.write_photons(record["telescope_id"], frame_code, output_index, result)
+                output_index += len(result.get("x", ()))
+                output_weight += float(np.sum(result.get("w", ()), dtype=np.float64))

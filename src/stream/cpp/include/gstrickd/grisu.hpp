@@ -4,7 +4,7 @@
 // standard library only.
 //
 // Input: ground-frame photons (frame G, CORSIKA axes: x north, y west) with
-// the zem and wavelength columns, atmosphere applied upstream (ledger factor
+// the zem and wavelength columns, atmosphere applied upstream (efficiency status factor
 // `atmosphere` in state `applied`). Output: a header block, then per event
 // `S` lines and per photon `P` lines (docs/usage.md, "ps2grisu").
 //
@@ -168,8 +168,8 @@ public:
       run_metadata_ = record.metadata;
       run_open_ = true;
       return;
-    case RecordType::ledger:
-      ledger(record.metadata);
+    case RecordType::efficiency_status:
+      efficiency_status(record.metadata);
       return;
     case RecordType::event:
       begin_event(record.metadata);
@@ -242,18 +242,18 @@ private:
     out_.write(buffer, n);
   }
 
-  void ledger(const Metadata &metadata) {
+  void efficiency_status(const Metadata &metadata) {
     if (!run_open_) {
-      throw std::runtime_error("ps2grisu: ledger record outside a run");
+      throw std::runtime_error("ps2grisu: efficiency status record outside a run");
     }
     if (telescope_open_) {
-      if (ledger_checked_) {
-        throw std::runtime_error("ps2grisu: efficiency ledger for telescope " +
+      if (efficiency_status_checked_) {
+        throw std::runtime_error("ps2grisu: efficiency status for telescope " +
                                  std::to_string(telescope_id_) + " comes after its photons");
       }
-      telescope_ledgers_.push_back(metadata);
+      telescope_efficiency_statuses_.push_back(metadata);
     } else {
-      run_ledgers_.push_back(metadata);
+      run_efficiency_statuses_.push_back(metadata);
     }
   }
 
@@ -328,8 +328,8 @@ private:
       throw std::runtime_error("ps2grisu: telescope record outside an event");
     }
     telescope_open_ = true;
-    telescope_ledgers_.clear();
-    ledger_checked_ = false;
+    telescope_efficiency_statuses_.clear();
+    efficiency_status_checked_ = false;
     mapped_ = false;
     const auto id_it = metadata.find("telescope_id");
     const auto *id = id_it == metadata.end() ? nullptr : std::get_if<std::int64_t>(&id_it->second);
@@ -412,21 +412,27 @@ private:
     }
   }
 
-  // The atmosphere must be applied upstream: state of the factor from the run ledgers,
-  // overridden per factor by the ledgers of the telescope.
+  // The atmosphere must be applied upstream: state of the factor from the run efficiency status
+  // records, overridden per factor by the efficiency status records of the telescope.
   void check_atmosphere() {
-    std::string state;
-    for (const auto *ledgers : {&run_ledgers_, &telescope_ledgers_}) {
-      for (const Metadata &ledger : *ledgers) {
-        const auto states = simtel_detail::ledger_states(ledger);
-        if (const auto it = states.find("atmosphere"); it != states.end()) {
-          state = it->second;
-        }
-      }
+    simtel_detail::EfficiencyStates run_states;
+    for (const Metadata &status : run_efficiency_statuses_) {
+      simtel_detail::apply_efficiency_status_update(run_states, status, "run status records");
     }
+    simtel_detail::EfficiencyStates telescope_states;
+    for (const Metadata &status : telescope_efficiency_statuses_) {
+      simtel_detail::apply_efficiency_status_update(telescope_states, status,
+                                                    "telescope " + std::to_string(telescope_id_) +
+                                                        " status records");
+    }
+    const auto telescope_state = telescope_states.find("atmosphere");
+    const auto run_state = run_states.find("atmosphere");
+    const std::string state = telescope_state != telescope_states.end()
+                                  ? telescope_state->second
+                                  : (run_state != run_states.end() ? run_state->second : "");
     if (state != "applied") {
       throw std::runtime_error(
-          "ps2grisu: efficiency ledger of telescope " + std::to_string(telescope_id_) +
+          "ps2grisu: efficiency status of telescope " + std::to_string(telescope_id_) +
           (state.empty() ? " lacks the factor 'atmosphere'" : ": factor 'atmosphere' is " + state) +
           "; the atmosphere must be applied upstream (state applied)");
     }
@@ -436,9 +442,9 @@ private:
     if (!telescope_open_) {
       throw std::runtime_error("ps2grisu: photons outside a telescope record");
     }
-    if (!ledger_checked_) {
+    if (!efficiency_status_checked_) {
       check_atmosphere();
-      ledger_checked_ = true;
+      efficiency_status_checked_ = true;
     }
     if (!mapped_ || chunk.rows() == 0) {
       return;
@@ -512,7 +518,7 @@ private:
     write_header(nullptr);
     run_open_ = false;
     header_done_ = false;
-    run_ledgers_.clear();
+    run_efficiency_statuses_.clear();
     run_metadata_.clear();
   }
 
@@ -521,14 +527,14 @@ private:
   std::string stream_producer_;
   Metadata run_metadata_;
   Metadata event_;
-  std::vector<Metadata> run_ledgers_;
-  std::vector<Metadata> telescope_ledgers_;
+  std::vector<Metadata> run_efficiency_statuses_;
+  std::vector<Metadata> telescope_efficiency_statuses_;
   std::set<std::uint32_t> skipped_;
   bool run_open_{};
   bool header_done_{};
   bool event_open_{};
   bool telescope_open_{};
-  bool ledger_checked_{};
+  bool efficiency_status_checked_{};
   bool mapped_{};
   std::int64_t last_array_{-1};
   std::int64_t event_number_{};

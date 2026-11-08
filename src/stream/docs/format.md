@@ -28,10 +28,10 @@ record and ends with `stream_end`.
 | 7 | `event_end` | metadata (optional keys) |
 | 8 | `run_end` | metadata (optional keys) |
 | 9 | `blob` | u32 `eventio_type`, u32 `eventio_id`, then the raw EventIO block (header + body) |
-| 10 | `ledger` | metadata: efficiency ledger (below) |
+| 10 | `efficiency_status` | metadata: efficiency status (below) |
 | 15 | `stream_end` | empty |
 
-Nesting: `stream` (`run` (`ledger`* (`event` (`telescope` `photons`*
+Nesting: `stream` (`run` (`efficiency_status`* (`event` (`telescope` `photons`*
 `telescope_end`)* `event_end`)* `run_end`)*) `stream_end`, with `blob`
 records allowed anywhere between `run` and `run_end`. Blobs keep the order
 of the input (CORSIKA: RUNH and TELPOS after `run`, EVTH and TELOFF before
@@ -39,7 +39,7 @@ the telescopes, EVTE after them, RUNE before `run_end`); writers of EventIO
 output emit them in that order. CORSIKA split-mode markers (1213, 1214) are
 blobs too, between the telescopes of an event. `ps2simtel` does not write
 them.
-A `ledger` record may also follow a `telescope` record and then applies to
+An `efficiency_status` record may also follow a `telescope` record and then applies to
 that telescope only.
 
 Readers reject a stream whose `format_major` differs from theirs and accept
@@ -108,9 +108,9 @@ Frames:
 - C: camera-neutral focal-plane frame (x, y on the camera entrance, telescope
   axes, z = 0); conversion to sim_telarray conventions only in `ps2simtel`.
 
-## Efficiency ledger
+## Efficiency status
 
-Metadata of a `ledger` record:
+Metadata of a `efficiency_status` record:
 
 - `factors` (string): comma-separated factor names, e.g.
   `atmosphere,qe,mirror_reflectivity,telescope_transmission`.
@@ -120,15 +120,18 @@ Metadata of a `ledger` record:
 - per factor with a λ table: `<name>.wavelength_nm` and `<name>.value`
   (float arrays) of the applied (envelope) values.
 
-A module applying factor k with an envelope in the ledger applies
+A module applying factor k with an envelope in the efficiency status applies
 f_k / f_k^env and sets `<name>.state` to `applied`. A module never applies a
 factor whose state is `applied`.
 
-Run ledgers (before the first event) apply to all telescopes; a telescope
-ledger (after its `telescope` record, before its photons) applies to that
-telescope and overrides the run ledger per factor.
+Run efficiency status records (before the first event) apply to all telescopes; a telescope
+efficiency status (after its `telescope` record, before its photons) applies to that
+telescope and overrides the run efficiency status per factor.
+Within either scope, repeated status records may advance a factor only from `pending` to
+`envelope` to `applied`; a repeated or backward state is invalid. Telescope updates are checked
+separately from run updates before the telescope status overrides the run status.
 
-`ps2simtel` checks the ledger of each telescope against the frame of its
+`ps2simtel` checks the efficiency status of each telescope against the frame of its
 photons. It accepts a factor that is `applied` upstream unless sim_telarray
 applies it again in that frame. It accepts `pending` only for factors that
 sim_telarray applies in that frame. `envelope` is always an error for those
@@ -139,6 +142,7 @@ factors: sim_telarray applies the full factor, not f/f_env.
 | `qe`, `camera_transmission`, `camera_filter` | sim_telarray applies: pending ok | sim_telarray applies: pending ok |
 | `mirror_reflectivity`, `telescope_transmission` | not applied by sim_telarray: error | sim_telarray applies: pending ok |
 | `atmosphere` | must be applied upstream | any state; with `applied` sim_telarray needs an all-zero optical-depth table |
+| `wavelength`, `scattering` | must be applied upstream | must be applied upstream |
 | `telescope_transmission_constant` | not applied by sim_telarray: error | not applied by sim_telarray: error |
 | any other name | error | error |
 
@@ -148,7 +152,8 @@ given to `ps2simtel --allow-pending FACTOR` or `allow_pending=` in Python.
 `envelope` for a factor that sim_telarray applies is valid only with
 `ps2simtel --scaled-factor FACTOR` (`scaled_factors=` in Python): the sim_telarray
 table of the factor then holds f/f_env, e.g. the QE table divided by the QE envelope
-applied upstream. A scaled factor in any other state is an error.
+applied upstream. Every `--scaled-factor` must have a matching efficiency status in state
+`envelope`; a missing status or a scaled factor in any other state is an error.
 Usage: docs/usage.md.
 
 ## Random numbers

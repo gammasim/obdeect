@@ -13,7 +13,15 @@ Reader = _core.Reader
 FRAMES = dict(_core.frame_ids)
 COLUMNS = tuple(_core.column_names())
 REQUIRED_COLUMNS = ("x", "y", "cx", "cy", "t", "w")
-METADATA_RECORDS = ("run", "event", "telescope", "telescope_end", "event_end", "run_end", "ledger")
+METADATA_RECORDS = (
+    "run",
+    "event",
+    "telescope",
+    "telescope_end",
+    "event_end",
+    "run_end",
+    "efficiency_status",
+)
 
 
 def _frame(frame: int | str) -> int:

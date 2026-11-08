@@ -30,12 +30,20 @@ Record record_of(RecordType type, Metadata metadata = {}) {
   return record;
 }
 
-Record ledger_of(const std::string &state) {
-  return record_of(RecordType::ledger, Metadata{{"factors", std::string("atmosphere,qe")},
-                                                {"atmosphere.state", state},
-                                                {"atmosphere.source", std::string("test")},
-                                                {"qe.state", std::string("envelope")},
-                                                {"qe.source", std::string("test")}});
+Record efficiency_status_of(const std::string &state) {
+  return record_of(RecordType::efficiency_status,
+                   Metadata{{"factors", std::string("atmosphere,qe")},
+                            {"atmosphere.state", state},
+                            {"atmosphere.source", std::string("test")},
+                            {"qe.state", std::string("envelope")},
+                            {"qe.source", std::string("test")}});
+}
+
+Record atmosphere_status_of(const std::string &state) {
+  return record_of(RecordType::efficiency_status,
+                   Metadata{{"factors", std::string("atmosphere")},
+                            {"atmosphere.state", state},
+                            {"atmosphere.source", std::string("test")}});
 }
 
 struct Photon {
@@ -97,7 +105,7 @@ std::vector<Record> stream_records(float weight2 = 1.0F, const std::string &atmo
   records.push_back(record_of(RecordType::stream, Metadata{{"producer", std::string("test")}}));
   records.push_back(record_of(RecordType::run, run_metadata()));
   if (!atmosphere.empty()) {
-    records.push_back(ledger_of(atmosphere));
+    records.push_back(efficiency_status_of(atmosphere));
   }
   records.push_back(record_of(RecordType::event, event_metadata()));
   records.push_back(telescope_of(1));
@@ -293,14 +301,26 @@ void error_cases() {
   std::vector<Record> real_id = stream_records();
   real_id[4].metadata["telescope_id"] = 1.5;
   CHECK(throws_error([&] { convert(real_id, options); }));
-  // A telescope ledger after the photons is rejected.
+  // A telescope efficiency status after the photons is rejected.
   std::vector<Record> late = stream_records();
-  late.insert(late.begin() + 6, ledger_of("pending"));
+  late.insert(late.begin() + 6, efficiency_status_of("pending"));
   CHECK(throws_error([&] { convert(late, options); }));
-  // A telescope ledger overrides the run ledger.
+  // A telescope efficiency status overrides the run efficiency status.
   std::vector<Record> override_records = stream_records();
-  override_records.insert(override_records.begin() + 5, ledger_of("pending"));
+  override_records.insert(override_records.begin() + 5, efficiency_status_of("pending"));
   CHECK(throws_error([&] { convert(override_records, options); }));
+
+  // Validate run and telescope transitions independently before applying the override.
+  std::vector<Record> forward = stream_records(1.0F, "");
+  forward.insert(forward.begin() + 2, atmosphere_status_of("applied"));
+  forward.insert(forward.begin() + 2, atmosphere_status_of("envelope"));
+  forward.insert(forward.begin() + 2, atmosphere_status_of("pending"));
+  CHECK(!throws_error([&] { convert(forward, options); }));
+  std::vector<Record> backward = stream_records(1.0F, "");
+  backward.insert(backward.begin() + 2, atmosphere_status_of("pending"));
+  backward.insert(backward.begin() + 2, atmosphere_status_of("envelope"));
+  backward.insert(backward.begin() + 2, atmosphere_status_of("applied"));
+  CHECK(throws_error([&] { convert(backward, options); }));
 }
 
 } // namespace

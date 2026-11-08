@@ -126,7 +126,7 @@ ps2simtel: telescope 1: telescope frame, mirror class 2, Bypass_Optics=1
 
 Errors: T photons for a telescope without map entry or with `mirror_class` 1, a photon with
 cz = 0, and camera-frame and T photons for the same telescope in one run.
-The efficiency ledger of such a telescope is checked as for camera frame.
+The efficiency status of such a telescope is checked as for camera frame.
 
 ### GrISU photon input
 
@@ -186,20 +186,20 @@ their number is reported on stderr. Without the file, `tel` is the stream telesc
 
 In Python: `gstrickd.stream_to_grisu(run.ps, run.grisu, telescope_config="TLLOC.dat")`.
 
-### Efficiency ledger
+### Efficiency status
 
-`ps2simtel` refuses a stream whose ledger says a factor is still to be applied and
+`ps2simtel` refuses a stream whose efficiency status says a factor is still to be applied and
 sim_telarray does not apply it in that frame. The error names the factor:
 
 ```text
-ps2simtel: efficiency ledger of telescope 2 (camera frame): factor
+ps2simtel: efficiency status of telescope 2 (camera frame): factor
 'telescope_transmission_constant' is pending, but sim_telarray does not apply it in this frame;
 apply it upstream (state applied); pass --allow-pending telescope_transmission_constant to accept it as it is
 ```
 
 Use `--allow-pending FACTOR` (repeatable) only when the factor is applied elsewhere
 in the chain, for example by the camera module. Which factors sim_telarray applies in
-each frame is listed in docs/format.md ("Efficiency ledger").
+each frame is listed in docs/format.md ("Efficiency status").
 
 ```console
 $ ps2simtel --camera-map cam.txt --allow-pending telescope_transmission_constant run.ps > sim.simtel
@@ -207,7 +207,7 @@ $ ps2simtel --camera-map cam.txt --allow-pending telescope_transmission_constant
 
 In Python: `gstrickd.stream_to_simtel(run.ps, sim.simtel, cam, allow_pending=["telescope_transmission_constant"])`.
 
-When the QE envelope was applied upstream (ledger state `envelope`) and the
+When the QE envelope was applied upstream (efficiency status state `envelope`) and the
 sim_telarray QE table is divided by that envelope, declare it:
 
 ```console
@@ -272,12 +272,12 @@ def trace(telescope_id, columns, metadata):
     return out                                   # float32 arrays of equal length
 
 transform("ground.ps", "camera.ps", trace, stage_id=0x444C0010, frame_out="camera",
-          ledger={"mirror": {"state": "applied", "source": "my-model-v1"}})
+          efficiency_status={"mirror": {"state": "applied", "source": "my-model-v1"}})
 ```
 
 `transform` copies all other records unchanged (records of unknown type are dropped), sets the frame of the output chunks and
-telescope records, and appends one `ledger` record per run (it refuses a factor that is
-`applied` in any input ledger).
+telescope records, and appends one `efficiency_status` record per run (it refuses a factor that is
+`applied` in any input efficiency status).
 
 The same in C (error handling shortened):
 

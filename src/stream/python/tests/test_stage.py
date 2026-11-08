@@ -7,7 +7,7 @@ from pathlib import Path
 import gstrickd
 import numpy as np
 import pytest
-from gstrickd.stage import ledger_record, transform
+from gstrickd.stage import efficiency_status_record, transform
 
 CONFORMANCE = Path(__file__).resolve().parents[2] / "cpp" / "tests" / "data" / "conformance"
 REQUIRED = ("x", "y", "cx", "cy", "t", "w")
@@ -20,11 +20,11 @@ def _chunk(rows, offset=0.0):
     }
 
 
-def _write(path, *, ledger=None):
+def _write(path, *, efficiency_status=None):
     with gstrickd.Writer(str(path), "pytest") as writer:
         writer.write("run", {"run_number": 5})
-        if ledger:
-            writer.write("ledger", ledger)
+        if efficiency_status:
+            writer.write("efficiency_status", efficiency_status)
         writer.write("event", {"event_number": 1})
         writer.write("telescope", {"telescope_id": 4, "frame": "ground"})
         writer.write_photons(4, "ground", 0, _chunk(6))
@@ -50,7 +50,7 @@ def test_transform(tmp_path):
         func,
         stage_id=0x444C0001,
         frame_out="camera",
-        ledger={
+        efficiency_status={
             "qe": {
                 "state": "applied",
                 "source": "test",
@@ -61,7 +61,7 @@ def test_transform(tmp_path):
     )
     records = list(gstrickd.Reader(str(tmp_path / "out.ps")))
     assert [r["type"] for r in records] == [
-        "stream", "run", "ledger", "event", "telescope", "photons", "photons", "blob",
+        "stream", "run", "efficiency_status", "event", "telescope", "photons", "photons", "blob",
         "telescope_end", "event_end", "run_end",
     ]  # fmt: skip
     assert records[0]["metadata"]["producer"] == "gstrickd.stage 0x444c0001"
@@ -70,8 +70,8 @@ def test_transform(tmp_path):
     np.testing.assert_array_equal(records[2]["metadata"]["qe.value"], [0.1, 0.2])
     assert records[4]["metadata"]["frame"] == gstrickd.FRAMES["camera"]
     assert records[7]["data"] == b"\x01\x02"
-    assert records[8]["metadata"] == {"photons": 8.0}
-    for record, first, rows in ((records[5], 0, 3), (records[6], 6, 1)):
+    assert records[8]["metadata"] == {"photons": 52.0}
+    for record, first, rows in ((records[5], 0, 3), (records[6], 3, 1)):
         assert record["frame"] == gstrickd.FRAMES["camera"]
         assert record["first_index"] == first
         assert len(record["columns"]["x"]) == rows
@@ -85,22 +85,27 @@ def test_transform(tmp_path):
     assert info["stage_id"] == 0x444C0001
 
 
-def test_transform_keeps_existing_ledger_first(tmp_path):
-    _write(tmp_path / "in.ps", ledger={"factors": "atmosphere", "atmosphere.state": "applied"})
+def test_transform_keeps_existing_efficiency_status_first(tmp_path):
+    _write(
+        tmp_path / "in.ps",
+        efficiency_status={"factors": "atmosphere", "atmosphere.state": "applied"},
+    )
     transform(
         tmp_path / "in.ps",
         tmp_path / "out.ps",
         lambda t, c, m: c,
         stage_id=1,
         frame_out=2,
-        ledger={"qe": {"state": "pending", "source": "x"}},
+        efficiency_status={"qe": {"state": "pending", "source": "x"}},
     )
-    ledgers = [r for r in gstrickd.Reader(str(tmp_path / "out.ps")) if r["type"] == "ledger"]
-    assert [r["metadata"]["factors"] for r in ledgers] == ["atmosphere", "qe"]
+    efficiency_statuses = [
+        r for r in gstrickd.Reader(str(tmp_path / "out.ps")) if r["type"] == "efficiency_status"
+    ]
+    assert [r["metadata"]["factors"] for r in efficiency_statuses] == ["atmosphere", "qe"]
 
 
 def test_transform_rejects_reapplied_factor(tmp_path):
-    _write(tmp_path / "in.ps", ledger={"factors": "qe", "qe.state": "applied"})
+    _write(tmp_path / "in.ps", efficiency_status={"factors": "qe", "qe.state": "applied"})
     with pytest.raises(ValueError, match="already applied"):
         transform(
             tmp_path / "in.ps",
@@ -108,7 +113,7 @@ def test_transform_rejects_reapplied_factor(tmp_path):
             lambda t, c, m: c,
             stage_id=1,
             frame_out="camera",
-            ledger={"qe": {"state": "applied", "source": "x"}},
+            efficiency_status={"qe": {"state": "applied", "source": "x"}},
         )
 
 
@@ -131,17 +136,17 @@ def test_transform_rejects_bad_arguments(tmp_path):
         )
 
 
-def test_ledger_record_validation():
+def test_efficiency_status_record_validation():
     with pytest.raises(ValueError, match="state"):
-        ledger_record({"qe": {"state": "maybe", "source": "x"}})
+        efficiency_status_record({"qe": {"state": "maybe", "source": "x"}})
     with pytest.raises(ValueError, match="together"):
-        ledger_record({"qe": {"state": "applied", "source": "x", "value": [1.0]}})
+        efficiency_status_record({"qe": {"state": "applied", "source": "x", "value": [1.0]}})
     with pytest.raises(ValueError, match="length"):
-        ledger_record({
+        efficiency_status_record({
             "qe": {"state": "applied", "source": "x", "wavelength_nm": [1.0, 2.0], "value": [1.0]}
         })
     with pytest.raises(ValueError, match="unknown"):
-        ledger_record({"qe": {"state": "applied", "source": "x", "colour": 1}})
+        efficiency_status_record({"qe": {"state": "applied", "source": "x", "colour": 1}})
 
 
 def test_conformance_streams():
@@ -171,12 +176,12 @@ def test_conformance_streams():
             list(gstrickd.Reader(str(CONFORMANCE / name)))
 
 
-def test_transform_rejects_reapplied_factor_in_telescope_ledger(tmp_path):
+def test_transform_rejects_reapplied_factor_in_telescope_efficiency_status(tmp_path):
     with gstrickd.Writer(str(tmp_path / "in.ps"), "pytest") as writer:
         writer.write("run", {})
         writer.write("event", {})
         writer.write("telescope", {"telescope_id": 1, "frame": 1})
-        writer.write("ledger", {"factors": "qe", "qe.state": "applied"})
+        writer.write("efficiency_status", {"factors": "qe", "qe.state": "applied"})
         writer.write("telescope_end", {})
         writer.write("event_end", {})
         writer.write("run_end", {})
@@ -187,5 +192,5 @@ def test_transform_rejects_reapplied_factor_in_telescope_ledger(tmp_path):
             lambda t, c, m: c,
             stage_id=1,
             frame_out="camera",
-            ledger={"qe": {"state": "applied", "source": "x"}},
+            efficiency_status={"qe": {"state": "applied", "source": "x"}},
         )

@@ -9,8 +9,6 @@ A versioned, columnar photon-stream format with a standard-library-only C++20 re
 [gstrickd](https://github.com/gammasim/gstrickd) photon streams;
 [simtools](https://github.com/gammasim/simtools) configures and runs the chain.
 
-Status: pre-alpha, no functionality yet.
-
 ## User Installation
 
 ```sh

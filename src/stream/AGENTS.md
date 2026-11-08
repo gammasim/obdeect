@@ -4,7 +4,7 @@
 
 `gstrickd` defines the photon stream exchanged between the modules of the simulation
 chain (light sources, atmosphere, optics, camera): run, event and telescope records
-with float32 photon columns, frames, MC truth and an efficiency ledger. It also holds
+with float32 photon columns, frames, MC truth and an efficiency status. It also holds
 the only EventIO code of the chain: `corsika2ps` (CORSIKA IACT output to stream) and
 `ps2simtel` (stream to sim_telarray input), plus `ps-cat` and `ps-tee`. Physics
 (atmosphere, optics, light sources, camera) is out of scope.
