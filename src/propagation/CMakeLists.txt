@@ -54,16 +54,10 @@ target_compile_features(dlufd_core INTERFACE cxx_std_20)
 target_link_libraries(dlufd_core INTERFACE gstrickd::gstrickd_core)
 # Identical floating-point results for any thread count and chunk size on one
 # platform: no implicit fused multiply-add contraction.
-if(NOT MSVC)
-  target_compile_options(dlufd_core INTERFACE -ffp-contract=off)
-endif()
+target_compile_options(dlufd_core INTERFACE -ffp-contract=off)
 
 function(dlufd_enable_warnings target)
-  if(MSVC)
-    target_compile_options(${target} PRIVATE /W4 /WX)
-  else()
-    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror)
-  endif()
+  target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endfunction()
 
 if(DLUFD_BUILD_PYTHON_API)
