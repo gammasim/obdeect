@@ -351,18 +351,16 @@ class _Tracer:
     def _ledger(self, metadata: Mapping[str, Any]) -> None:
         if self.telescope is None:
             self.run_factors = {**self.run_factors, **_ledger_factors(metadata)}
-            self.writer.write(
-                "efficiency_status", _ledger_with_applied(metadata, self.model, self.transmission)
-            )
-            return
-        telescope = self.telescope
-        if telescope.photons_seen:
-            raise ModelError(f"telescope {telescope.telescope_id}: ledger after its photons")
-        if telescope.kept:
+        else:
+            telescope = self.telescope
+            if telescope.photons_seen:
+                raise ModelError(f"telescope {telescope.telescope_id}: ledger after its photons")
+            if not telescope.kept:
+                return
             telescope.factors = {**telescope.factors, **_ledger_factors(metadata)}
-            self.writer.write(
-                "efficiency_status", _ledger_with_applied(metadata, self.model, self.transmission)
-            )
+        self.writer.write(
+            "efficiency_status", _ledger_with_applied(metadata, self.model, self.transmission)
+        )
 
     def _event(self, metadata: Mapping[str, Any]) -> None:
         _int_key(metadata, "event_number", "event")
