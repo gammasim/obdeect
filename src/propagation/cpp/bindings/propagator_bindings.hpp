@@ -4,6 +4,7 @@
 // the C++ core's). Included by core.cpp after the nanobind headers.
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
@@ -14,6 +15,7 @@
 
 #include <cstdint>
 #include <fstream>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -32,8 +34,16 @@ inline void bind_propagator(nb::module_ &module) {
          const std::vector<std::pair<std::string, std::string>> &envelope_paths,
          const std::optional<std::tuple<double, double>> &wavelength_range, std::uint64_t seed,
          bool weighted, bool store_p, const std::optional<std::string> &scattering_path,
-         std::uint32_t scattering_points) {
+         std::uint32_t scattering_points, double pathlen_m,
+         const std::map<std::int64_t, double> &telescope_pathlen_m) {
         dlufd::PropagatorConfig config;
+        config.default_pathlen_m = pathlen_m;
+        for (const auto &[id, metres] : telescope_pathlen_m) {
+          if (id < 1 || id > static_cast<std::int64_t>(gstrickd::max_telescope)) {
+            throw std::invalid_argument("telescope_pathlen_m: telescope ids are 1-based");
+          }
+          config.telescope_pathlen_m[static_cast<std::uint32_t>(id)] = metres;
+        }
         config.transmission.emplace(
             dlufd::TransmissionTable::from_file(transmission_path, site_altitude_m));
         config.transmission_source = transmission_path;
@@ -85,8 +95,10 @@ inline void bind_propagator(nb::module_ &module) {
       nb::arg("envelope_paths") = std::vector<std::pair<std::string, std::string>>{},
       nb::arg("wavelength_range") = nb::none(), nb::arg("seed"), nb::arg("weighted") = false,
       nb::arg("store_p") = false, nb::arg("scattering_path") = nb::none(),
-      nb::arg("scattering_points") = std::uint32_t{8},
+      nb::arg("scattering_points") = std::uint32_t{8}, nb::arg("pathlen_m") = 0.0,
+      nb::arg("telescope_pathlen_m") = std::map<std::int64_t, double>{},
       "Run the atmosphere stage on a photon stream file. envelope_paths: (name, file) pairs of "
       "two-column text tables (nm, value). scattering_path: optional scattering table (single "
-      "scattering of the primaries, off when None).");
+      "scattering of the primaries, off when None). pathlen_m: path inside each telescope [m]; "
+      "telescope_pathlen_m: {telescope_id (1-based): metres} overrides.");
 }

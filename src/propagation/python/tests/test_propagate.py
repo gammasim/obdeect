@@ -584,3 +584,181 @@ def test_executable_rejects_identical_paths(tmp_path):
     assert result.returncode == 2, result.stderr
     assert "same file" in result.stderr
     assert source.read_bytes() == original
+
+
+def _executable():
+    exe = shutil.which("dlufd-propagate") or str(Path(sys.executable).with_name("dlufd-propagate"))
+    if not Path(exe).exists():
+        pytest.skip("dlufd-propagate not installed")
+    return exe
+
+
+def _photon_block(records, telescope, name):
+    return np.concatenate([
+        r["columns"][name]
+        for r in records
+        if r["type"] == "photons" and r["telescope_id"] == telescope
+    ]).astype(float)
+
+
+def test_pathlen_default_and_override(tmp_path):
+    source = tmp_path / "in.ps"
+    source.write_bytes(ground_stream(4000, seed=3))
+    out = tmp_path / "out.ps"
+    dlufd.propagate(
+        source,
+        out,
+        transmission=TABLE_PATH,
+        site_altitude_m=SITE_M,
+        seed=4,
+        mode="weighted",
+        store_p=True,
+        pathlen_m=28.0,
+        telescope_pathlen_m={2: 0.0},
+    )
+    records = read_records(out.read_bytes())
+    assert _ledger(records)["atmosphere.pathlen_m"] == [28.0, 0.0]
+
+    # Acceptance of each row against sim_telarray's formula with od2focus = tau(h + l) - tau(h).
+    table = dlufd.TransmissionTable(str(TABLE_PATH), SITE_M)
+    for telescope, pathlen in ((1, 28.0), (2, 0.0)):
+        lam = _photon_block(records, telescope, "wavelength")
+        zem = _photon_block(records, telescope, "zem")
+        cx = _photon_block(records, telescope, "cx")
+        cy = _photon_block(records, telescope, "cy")
+        p = _photon_block(records, telescope, "p")
+        assert p.size > 0
+        od_tel = table.optical_depth(lam, SITE_M)
+        od_focus = table.optical_depth(lam, SITE_M + pathlen) - od_tel
+        airmass = 1.0 / np.sqrt(1.0 - cx**2 - cy**2)
+        expected = table.transmission2(lam, zem, airmass, od_tel, od_focus)
+        assert np.abs(p - expected).max() <= 1e-6
+
+
+def test_pathlen_changes_acceptance(tmp_path):
+    source = tmp_path / "in.ps"
+    source.write_bytes(ground_stream(4000, seed=3))
+    with_path = tmp_path / "with.ps"
+    without = tmp_path / "without.ps"
+    base = {
+        "transmission": TABLE_PATH,
+        "site_altitude_m": SITE_M,
+        "seed": 4,
+        "mode": "weighted",
+        "store_p": True,
+    }
+    dlufd.propagate(source, with_path, pathlen_m=28.0, **base)
+    dlufd.propagate(source, without, **base)
+    p_with = _photon_block(read_records(with_path.read_bytes()), 1, "p")
+    p_without = _photon_block(read_records(without.read_bytes()), 1, "p")
+    assert p_with.shape == p_without.shape
+    assert np.abs(p_with - p_without).max() > 1e-5
+    assert _ledger(read_records(without.read_bytes()))["atmosphere.pathlen_m"] == [0.0, 0.0]
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"pathlen_m": -1.0},
+        {"pathlen_m": float("nan")},
+        {"pathlen_m": float("inf")},
+        {"telescope_pathlen_m": {1: -0.5}},
+        {"telescope_pathlen_m": {1: float("nan")}},
+        {"telescope_pathlen_m": {0: 1.0}},
+        {"telescope_pathlen_m": {3: 1.0}},
+    ],
+)
+def test_pathlen_rejects_invalid(tmp_path, options):
+    source = tmp_path / "in.ps"
+    source.write_bytes(ground_stream(100, seed=5))
+    with pytest.raises(ValueError):
+        dlufd.propagate(
+            source,
+            tmp_path / "out.ps",
+            transmission=TABLE_PATH,
+            site_altitude_m=SITE_M,
+            seed=1,
+            **options,
+        )
+
+
+def test_pathlen_ids_must_be_integers(tmp_path):
+    source = tmp_path / "in.ps"
+    source.write_bytes(ground_stream(100, seed=5))
+    with pytest.raises(TypeError):
+        dlufd.propagate(
+            source,
+            tmp_path / "out.ps",
+            transmission=TABLE_PATH,
+            site_altitude_m=SITE_M,
+            seed=1,
+            telescope_pathlen_m={1.5: 1.0},
+        )
+
+
+def test_executable_pathlen_matches_api(tmp_path):
+    exe = _executable()
+    source = tmp_path / "in.ps"
+    source.write_bytes(ground_stream(5000, seed=6, chunk_rows=2048))
+    api_out = tmp_path / "api.ps"
+    dlufd.propagate(
+        source,
+        api_out,
+        transmission=TABLE_PATH,
+        site_altitude_m=SITE_M,
+        seed=7,
+        pathlen_m=28.0,
+        telescope_pathlen_m={2: 0.0},
+    )
+    cli_out = tmp_path / "cli.ps"
+    command = [
+        exe,
+        "--transmission",
+        str(TABLE_PATH),
+        "--site-altitude",
+        str(SITE_M),
+        "--seed",
+        "7",
+        "--pathlen",
+        "28",
+        "--telescope-pathlen",
+        "2=0",
+        "-i",
+        str(source),
+        "-o",
+        str(cli_out),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert cli_out.read_bytes() == api_out.read_bytes()
+    assert _ledger(read_records(cli_out.read_bytes()))["atmosphere.pathlen_m"] == [28.0, 0.0]
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--pathlen", "-1"],
+        ["--pathlen", "nan"],
+        ["--pathlen", "inf"],
+        ["--telescope-pathlen", "1"],
+        ["--telescope-pathlen", "0=1"],
+        ["--telescope-pathlen", "x=1"],
+        ["--telescope-pathlen", "1=-1"],
+        ["--telescope-pathlen", "1=nan"],
+        ["--telescope-pathlen", "1=2", "--telescope-pathlen", "1=3"],
+    ],
+)
+def test_executable_rejects_invalid_pathlen(args):
+    exe = _executable()
+    command = [
+        exe,
+        "--transmission",
+        str(TABLE_PATH),
+        "--site-altitude",
+        str(SITE_M),
+        "--seed",
+        "1",
+        *args,
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, input="", check=False)
+    assert result.returncode == 2, result.stderr

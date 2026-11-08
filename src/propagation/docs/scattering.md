@@ -108,7 +108,8 @@ t_in = 0 ns, emission -> point 15000 m  =>  t = 15000 / c = 50034.6 ns
 Attention:
 
 - Run this step on primary photons before the extinction step. The factor T is in w, so the
-  scattered photons must not go through the atmospheric acceptance (extinction) again.
+  scattered photons must not go through the atmospheric acceptance (extinction) again. The
+  in-telescope part exp(-od_focus) is applied to them (see [](propagation.md)).
 - Scattered photons need wavelengths; assign them before this step.
 - The primary photon is not changed; its extinction is applied by the extinction step.
 
