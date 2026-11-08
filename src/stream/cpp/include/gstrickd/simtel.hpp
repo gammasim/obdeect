@@ -13,15 +13,24 @@
 // The bypass value is an option of the sim_telarray run and is printed by
 // ps2simtel for each converted telescope.
 //
+// Telescope-frame (T) photons are for dual-mirror telescopes only (camera map
+// mirror_class 2), e.g. flashers at the camera firing onto the secondary mirror. Each photon
+// is written as a bunch at the plane z = 0 of the T frame (through its origin): the
+// crossing point of the photon's line with that plane (x, y), the direction (cx, cy), the
+// arrival time t + |s| / c with s the path from the emission point to the plane, and the
+// emission altitude zem = observation_level_m + z. The sign of cz is not written. The
+// sim_telarray run needs Bypass_Optics=1. The camera rotation is not used.
+//
 // Telescopes with C photons get z = 0 in TELPOS (1201). sim_telarray moves each
 // bunch from the observation level to the telescope by ztel * airmass along its
 // direction (sim_telarray.c:2740-2790), which applies to ground-frame bunches
 // only. Camera-frame bunches are already at the camera, so the shift must be
 // zero (simtools shower_route._zero_traced_telescope_heights, :594).
 //
-// A telescope is either camera-frame (listed in the camera map) or ground-frame
-// (not listed). Mixing the two for one telescope is rejected, because the TELPOS
-// height is per telescope for the whole run.
+// A telescope is either listed in the camera map (camera-frame or telescope-frame
+// photons) or ground-frame (not listed). Mixing ground frame with the others, or camera
+// with telescope frame, for one telescope is rejected, because the TELPOS height and the
+// Bypass_Optics value are per telescope for the whole run.
 //
 // Streams without CORSIKA blobs (e.g. from light sources) get the sim_telarray
 // headers RUNH, TELPOS, EVTH, TELOFF, EVTE and RUNE synthesised from the run and
@@ -52,6 +61,7 @@
 #include "gstrickd/photons.hpp"
 #include "gstrickd/stream.hpp"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
@@ -253,6 +263,70 @@ inline void camera_to_bypass_convention(PhotonChunk &chunk, const CameraTelescop
     cx[i] = static_cast<float>(cxi * c + cyi * s);
     cy[i] = static_cast<float>(cyi * c - cxi * s);
   }
+}
+
+// Converts telescope-frame (T) emission points and directions in place to bunches at the
+// plane z = 0 (see the file comment): position (x, y) of the crossing, direction (cx, cy),
+// time t + |s| / c and emission altitude zem = observation_level_m + z, all in metres and
+// ns as in the stream. Without a cz column cz = -sqrt(1 - cx^2 - cy^2). Arithmetic in
+// double, rounded to float once. Throws std::invalid_argument, leaving the chunk unchanged,
+// for a photon with a non-finite value or result, with a direction that is not a unit vector,
+// or parallel to the plane.
+inline void telescope_to_bypass_convention(PhotonChunk &chunk, double observation_level_m) {
+  if (!(chunk.has(Column::x) && chunk.has(Column::y) && chunk.has(Column::z) &&
+        chunk.has(Column::cx) && chunk.has(Column::cy) && chunk.has(Column::t))) {
+    throw std::invalid_argument("telescope-frame chunk lacks x, y, z, cx, cy or t");
+  }
+  if (!std::isfinite(observation_level_m)) {
+    throw std::invalid_argument("observation level must be finite");
+  }
+  constexpr double speed_of_light_m_per_ns = 0.299792458;
+  const std::size_t n = chunk.rows();
+  const std::vector<float> &x = chunk[Column::x];
+  const std::vector<float> &y = chunk[Column::y];
+  const std::vector<float> &t = chunk[Column::t];
+  const std::vector<float> &z = chunk[Column::z];
+  const std::vector<float> &cx = chunk[Column::cx];
+  const std::vector<float> &cy = chunk[Column::cy];
+  const bool has_cz = chunk.has(Column::cz);
+  // Direction cosines are unit vectors to within the float32 rounding of the stream.
+  constexpr double unit_tolerance = 1e-4;
+  // The results are collected first, so a rejected chunk is left unchanged.
+  std::vector<float> new_x(n);
+  std::vector<float> new_y(n);
+  std::vector<float> new_t(n);
+  std::vector<float> zem(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    const double cxi = cx[i];
+    const double cyi = cy[i];
+    const double norm2 = cxi * cxi + cyi * cyi;
+    const double czi =
+        has_cz ? static_cast<double>(chunk[Column::cz][i]) : -std::sqrt(std::max(0.0, 1.0 - norm2));
+    if (!std::isfinite(cxi) || !std::isfinite(cyi) || !std::isfinite(czi) || !std::isfinite(x[i]) ||
+        !std::isfinite(y[i]) || !std::isfinite(z[i]) || !std::isfinite(t[i])) {
+      throw std::invalid_argument("telescope-frame photon with a non-finite value");
+    }
+    if (std::abs(norm2 + czi * czi - 1.0) > unit_tolerance) {
+      throw std::invalid_argument("telescope-frame photon direction (cx, cy, cz) is not a unit "
+                                  "vector");
+    }
+    if (czi == 0.0) {
+      throw std::invalid_argument("telescope-frame photon parallel to the plane z = 0");
+    }
+    const double path = -static_cast<double>(z[i]) / czi;
+    new_x[i] = static_cast<float>(x[i] + path * cxi);
+    new_y[i] = static_cast<float>(y[i] + path * cyi);
+    new_t[i] = static_cast<float>(t[i] + std::abs(path) / speed_of_light_m_per_ns);
+    zem[i] = static_cast<float>(observation_level_m + z[i]);
+    if (!std::isfinite(new_x[i]) || !std::isfinite(new_y[i]) || !std::isfinite(new_t[i]) ||
+        !std::isfinite(zem[i])) {
+      throw std::invalid_argument("telescope-frame photon converts to a value out of range");
+    }
+  }
+  chunk[Column::x] = std::move(new_x);
+  chunk[Column::y] = std::move(new_y);
+  chunk[Column::t] = std::move(new_t);
+  chunk[Column::zem] = std::move(zem);
 }
 
 namespace simtel_detail {
@@ -593,10 +667,9 @@ private:
   void photons(const PhotonChunk &chunk) {
     switch (chunk.frame) {
     case Frame::sky:
-    case Frame::telescope:
       throw std::runtime_error(
-          "photons in the sky or telescope frame cannot go to sim_telarray: convert them to "
-          "the ground or camera frame first");
+          "photons in the sky frame cannot go to sim_telarray: convert them to the ground, "
+          "telescope or camera frame first");
     case Frame::ground:
       if (camera_.contains(chunk.telescope_id)) {
         throw std::runtime_error("telescope " + std::to_string(chunk.telescope_id) +
@@ -604,18 +677,63 @@ private:
       }
       writer_.write_chunk(chunk);
       return;
+    case Frame::telescope: {
+      const auto it = camera_.find(chunk.telescope_id);
+      if (it == camera_.end()) {
+        throw std::runtime_error("telescope " + std::to_string(chunk.telescope_id) +
+                                 " has telescope-frame photons but no camera map entry");
+      }
+      if (it->second.mirror_class != 2) {
+        throw std::runtime_error("telescope " + std::to_string(chunk.telescope_id) +
+                                 " has telescope-frame photons but is not a dual-mirror "
+                                 "telescope (mirror_class 2 in the camera map)");
+      }
+      note_frame(chunk, it->second);
+      PhotonChunk converted = chunk;
+      telescope_to_bypass_convention(
+          converted, simtel_detail::number_field(run_metadata_, "observation_level_m"));
+      converted.frame = Frame::ground;
+      writer_.write_chunk(converted);
+      return;
+    }
     case Frame::camera: {
       const auto it = camera_.find(chunk.telescope_id);
       if (it == camera_.end()) {
         throw std::runtime_error("telescope " + std::to_string(chunk.telescope_id) +
                                  " has camera-frame photons but no camera map entry");
       }
+      note_frame(chunk, it->second);
       PhotonChunk converted = chunk;
       camera_to_bypass_convention(converted, it->second);
       converted.frame = Frame::ground; // sim_telarray input is written as ground-frame bunches
       writer_.write_chunk(converted);
       return;
     }
+    }
+  }
+
+  // Remembers the frame of a camera-map telescope, rejects a second frame, and reports the
+  // Bypass_Optics value the first time.
+  void note_frame(const PhotonChunk &chunk, const CameraTelescope &camera) {
+    const auto [it, inserted] = frames_.emplace(chunk.telescope_id, chunk.frame);
+    if (!inserted) {
+      if (it->second != chunk.frame) {
+        throw std::runtime_error("telescope " + std::to_string(chunk.telescope_id) +
+                                 " has photons in the camera and the telescope frame");
+      }
+      return;
+    }
+    if (warnings_ == nullptr) {
+      return;
+    }
+    if (chunk.frame == Frame::telescope) {
+      *warnings_ << "ps2simtel: telescope " << chunk.telescope_id
+                 << ": telescope frame, mirror class 2, Bypass_Optics=1\n";
+    } else {
+      *warnings_ << "ps2simtel: telescope " << chunk.telescope_id << ": camera frame, mirror class "
+                 << camera.mirror_class
+                 << ", Bypass_Optics=" << bypass_optics_level(camera.mirror_class)
+                 << ", camera rotation " << camera.rotation_deg << " deg\n";
     }
   }
 
@@ -684,6 +802,7 @@ private:
     run_ledgers_.clear();
     telescope_ledgers_.clear();
     telescope_open_ = false;
+    frames_.clear();
   }
 
   // Ledger of the run (before the first event) or of the open telescope (before its photons).
@@ -936,6 +1055,7 @@ private:
 
   SimtelWriter writer_;
   CameraMap camera_;
+  std::map<std::uint32_t, Frame> frames_; // frame of each camera-map telescope, per run
   std::optional<AtmosphereTable> atmprof_;
   std::ostream *warnings_{};
   std::set<std::string> warned_;
