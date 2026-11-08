@@ -269,8 +269,9 @@ inline void camera_to_bypass_convention(PhotonChunk &chunk, const CameraTelescop
 // plane z = 0 (see the file comment): position (x, y) of the crossing, direction (cx, cy),
 // time t + |s| / c and emission altitude zem = observation_level_m + z, all in metres and
 // ns as in the stream. Without a cz column cz = -sqrt(1 - cx^2 - cy^2). Arithmetic in
-// double, rounded to float once. Throws std::invalid_argument for a photon parallel to the
-// plane or with a non-finite value.
+// double, rounded to float once. Throws std::invalid_argument, leaving the chunk unchanged,
+// for a photon parallel to the plane, with a non-finite value or result, or with a direction
+// that is not a unit vector.
 inline void telescope_to_bypass_convention(PhotonChunk &chunk, double observation_level_m) {
   if (!(chunk.has(Column::x) && chunk.has(Column::y) && chunk.has(Column::z) &&
         chunk.has(Column::cx) && chunk.has(Column::cy) && chunk.has(Column::t))) {
@@ -281,31 +282,49 @@ inline void telescope_to_bypass_convention(PhotonChunk &chunk, double observatio
   }
   constexpr double speed_of_light_m_per_ns = 0.299792458;
   const std::size_t n = chunk.rows();
-  std::vector<float> &x = chunk[Column::x];
-  std::vector<float> &y = chunk[Column::y];
-  std::vector<float> &t = chunk[Column::t];
+  const std::vector<float> &x = chunk[Column::x];
+  const std::vector<float> &y = chunk[Column::y];
+  const std::vector<float> &t = chunk[Column::t];
   const std::vector<float> &z = chunk[Column::z];
   const std::vector<float> &cx = chunk[Column::cx];
   const std::vector<float> &cy = chunk[Column::cy];
   const bool has_cz = chunk.has(Column::cz);
+  // Direction cosines are unit vectors to within the float32 rounding of the stream.
+  constexpr double unit_tolerance = 1e-4;
+  // The results are collected first, so a rejected chunk is left unchanged.
+  std::vector<float> new_x(n);
+  std::vector<float> new_y(n);
+  std::vector<float> new_t(n);
   std::vector<float> zem(n);
   for (std::size_t i = 0; i < n; ++i) {
     const double cxi = cx[i];
     const double cyi = cy[i];
-    const double czi = has_cz ? static_cast<double>(chunk[Column::cz][i])
-                              : -std::sqrt(std::max(0.0, 1.0 - cxi * cxi - cyi * cyi));
+    const double norm2 = cxi * cxi + cyi * cyi;
+    const double czi =
+        has_cz ? static_cast<double>(chunk[Column::cz][i]) : -std::sqrt(std::max(0.0, 1.0 - norm2));
     if (!std::isfinite(cxi) || !std::isfinite(cyi) || !std::isfinite(czi) || czi == 0.0 ||
         !std::isfinite(x[i]) || !std::isfinite(y[i]) || !std::isfinite(z[i]) ||
         !std::isfinite(t[i])) {
       throw std::invalid_argument(
           "telescope-frame photon with a non-finite value or parallel to the plane z = 0");
     }
+    if (std::abs(norm2 + czi * czi - 1.0) > unit_tolerance) {
+      throw std::invalid_argument("telescope-frame photon direction (cx, cy, cz) is not a unit "
+                                  "vector");
+    }
     const double path = -static_cast<double>(z[i]) / czi;
-    x[i] = static_cast<float>(x[i] + path * cxi);
-    y[i] = static_cast<float>(y[i] + path * cyi);
-    t[i] = static_cast<float>(t[i] + std::abs(path) / speed_of_light_m_per_ns);
+    new_x[i] = static_cast<float>(x[i] + path * cxi);
+    new_y[i] = static_cast<float>(y[i] + path * cyi);
+    new_t[i] = static_cast<float>(t[i] + std::abs(path) / speed_of_light_m_per_ns);
     zem[i] = static_cast<float>(observation_level_m + z[i]);
+    if (!std::isfinite(new_x[i]) || !std::isfinite(new_y[i]) || !std::isfinite(new_t[i]) ||
+        !std::isfinite(zem[i])) {
+      throw std::invalid_argument("telescope-frame photon converts to a value out of range");
+    }
   }
+  chunk[Column::x] = std::move(new_x);
+  chunk[Column::y] = std::move(new_y);
+  chunk[Column::t] = std::move(new_t);
   chunk[Column::zem] = std::move(zem);
 }
 

@@ -560,6 +560,18 @@ void test_telescope_frame_rejected() {
     bad_cy[Column::cy][0] = bad;
     CHECK(throws_error([&] { telescope_to_bypass_convention(bad_cy, 2200.0); }));
   }
+  // A direction that is not a unit vector, and results out of float range, are errors; the
+  // chunk is left unchanged.
+  PhotonChunk not_unit = tframe;
+  not_unit[Column::cx][0] = 0.0F;
+  not_unit[Column::cz][0] = -2.0F;
+  CHECK(throws_error([&] { telescope_to_bypass_convention(not_unit, 2200.0); }));
+  CHECK_NEAR(not_unit[Column::x][0], 0.1, 1e-6);
+  PhotonChunk implied_not_unit = telescope_chunk(1, {0.1}, {0.2}, {0.5}, {0.9}, {0.9}, {}, {3.0});
+  CHECK(throws_error([&] { telescope_to_bypass_convention(implied_not_unit, 2200.0); }));
+  PhotonChunk tiny_cz = telescope_chunk(1, {0.1}, {0.2}, {0.5}, {1.0}, {0.0}, {-1e-30}, {3.0});
+  CHECK(throws_error([&] { telescope_to_bypass_convention(tiny_cz, 2200.0); }));
+  CHECK_NEAR(tiny_cz[Column::t][0], 3.0, 1e-6);
   PhotonChunk bad_level = tframe;
   CHECK(throws_error([&] { telescope_to_bypass_convention(bad_level, std::nan("")); }));
 
