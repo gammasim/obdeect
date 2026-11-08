@@ -3,6 +3,7 @@
 
 #include "dlamb/programs/flasher.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -313,6 +314,99 @@ void non_finite_inputs_rejected() {
   }
 }
 
+void dish_camera_frame() {
+  // Flasher at (0.5, -0.3, 10) m with a 4 ns pulse. The camera-frame output has the photons of
+  // the sky-frame output (same seed) moved along their directions to the plane z = 0.
+  flasher::Options sky;
+  sky.x_cm = 50.0;
+  sky.y_cm = -30.0;
+  sky.distance_cm = 1000.0;
+  sky.photons = {2e5};
+  sky.lightpulse = "Simple:4";
+  flasher::Options camera = sky;
+  camera.frame = gstrickd::Frame::camera;
+  const auto a = read_stream(stream_bytes(sky));
+  const auto b = read_stream(stream_bytes(camera));
+  CHECK(a.rows.size() > 0);
+  CHECK(b.rows.size() == a.rows.size());
+
+  // Run and telescope records: frame C, same fiducial radius.
+  for (const auto &[type, meta] : b.metadata) {
+    if (type == gstrickd::RecordType::telescope) {
+      CHECK(std::get<std::int64_t>(meta.at("frame")) == 3);
+      CHECK_NEAR(std::get<double>(meta.at("r_m")), 1.2, 1e-9);
+    }
+  }
+
+  const double speed = 0.299792458; // m/ns
+  for (std::size_t i = 0; i < a.rows.size(); ++i) {
+    const Row &s = a.rows[i];
+    const Row &c = b.rows[i];
+    CHECK(c.frame == 3);
+    CHECK(!c.has_zem);
+    CHECK(c.z == 0.0F);
+    CHECK(c.cz < 0.0F);
+    CHECK(c.cx == s.cx && c.cy == s.cy && c.cz == s.cz && c.w == s.w);
+    CHECK(c.wavelength == s.wavelength);
+    // Straight line from the flasher: path = z / -cz.
+    const double path = s.z / -static_cast<double>(s.cz);
+    CHECK_NEAR(c.x, s.x + path * s.cx, 1e-4);
+    CHECK_NEAR(c.y, s.y + path * s.cy, 1e-4);
+    CHECK_NEAR(c.t, s.t + path / speed, 1e-3);
+    CHECK(c.t - s.t >= 10.0 / speed - 1e-3);
+    // Direction points from the flasher through the photon position.
+    const double dx = c.x - 0.5;
+    const double dy = c.y + 0.3;
+    CHECK_NEAR(dx, path * s.cx, 1e-4);
+    CHECK_NEAR(dy, path * s.cy, 1e-4);
+  }
+
+  // Flasher on the axis at 10 m: the fiducial cone has sin(theta) = R / d, so the photons
+  // fill a disc of radius d tan(theta) = R / sqrt(1 - (R / d)^2) on the plane.
+  flasher::Options axis;
+  axis.distance_cm = 1000.0;
+  axis.photons = {2e5};
+  axis.frame = gstrickd::Frame::camera;
+  const double edge = 1.2 / std::sqrt(1.0 - 0.12 * 0.12);
+  double max_axis = 0.0;
+  for (const Row &r : read_stream(stream_bytes(axis)).rows) {
+    max_axis = std::max(max_axis, std::hypot(static_cast<double>(r.x), static_cast<double>(r.y)));
+  }
+  CHECK(max_axis <= edge + 1e-4);
+  CHECK(max_axis > 0.99 * edge);
+}
+
+void camera_frame_rules() {
+  // --frame is for the dish type only, and only sky or camera exist.
+  flasher::Options secondary;
+  secondary.type = flasher::Type::secondary;
+  secondary.frame = gstrickd::Frame::camera;
+  flasher::Options ground;
+  ground.frame = gstrickd::Frame::telescope;
+  for (const auto &o : {secondary, ground}) {
+    bool threw = false;
+    try {
+      (void)flasher::build_sources(o);
+    } catch (const std::invalid_argument &) {
+      threw = true;
+    }
+    CHECK(threw);
+  }
+
+  // A profile that emits away from the plane cannot be placed on it.
+  flasher::Options up;
+  up.frame = gstrickd::Frame::camera;
+  up.distance_cm = 100.0; // inside the fiducial sphere: 4 pi emission
+  up.photons = {1000};
+  bool threw = false;
+  try {
+    (void)stream_bytes(up);
+  } catch (const std::invalid_argument &) {
+    threw = true;
+  }
+  CHECK(threw);
+}
+
 } // namespace
 
 int main() {
@@ -320,6 +414,8 @@ int main() {
     dish_default_options();
     dish_non_default_options();
     dish_event_numbering_and_repeat();
+    dish_camera_frame();
+    camera_frame_rules();
     secondary_geometry_and_counts();
     secondary_delays_and_fire_pattern();
     type_rules();
