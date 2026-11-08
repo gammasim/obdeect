@@ -40,8 +40,12 @@ editable.rebuild = true
 editable.verbose = false
 
 [tool.cibuildwheel]
+# The plot tests need matplotlib, which has no musllinux wheels (a source build
+# needs network downloads); they are skipped there.
+test-requires = [ "matplotlib", "pytest" ]
 # Oldest macOS release supported by the binary wheels.
 macos.environment = { MACOSX_DEPLOYMENT_TARGET = "13.3" }
+overrides = [ { select = "*-musllinux_*", test-requires = [ "pytest" ] } ]
 
 [tool.ruff]
 target-version = "py314"
