@@ -1,125 +1,123 @@
 #pragma once
 
-// An LED in front of selected camera pixels, to test trigger definitions. Replaces the
-// earlier pixled program; options keep their names.
-//
-// Geometry: LED at the pixel centre (x, y) of the camera definition, z = 0 (camera plane),
-// pointing down (parallel to -z). The photons are already on the camera plane, so they are
-// written in the camera frame C, in the pixel-file coordinates (no y flip; the adapter
-// to the simulation applies it).
+// LED in front of selected camera pixels, camera frame (docs/spec/tool-led.md).
 
 #include "dlamb/programs/stream_output.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
-#include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <istream>
 #include <map>
+#include <optional>
+#include <ostream>
+#include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace dlamb::programs::led {
 
-// Pixel centre in the camera frame [cm].
-struct PixelPosition {
+struct Pixel {
+  int id{};
   double x_cm{};
   double y_cm{};
 };
 
 struct Camera {
-  // Keyed by pixel ID as cam[id]; the file order does not matter.
-  std::map<int, PixelPosition> pixels;
-  std::vector<std::string> triggers; // cleaned trigger-group pixel lists
+  std::map<int, Pixel> pixels;
+  std::vector<std::string> triggers; // pixel-list text of each trigger group
 };
 
-// One pixel of a pixel list: '+' marks a required pixel, [..] lists pre-sum slaves.
-struct Use {
+struct Options {
+  Camera camera;
+  std::string use;
+  int trigger_random{0};
+  bool trigger_all{false};
+  int require{0}; // pixels per event, 0 = all of the list
+  bool random{false};
+  bool slaves{false};
+  int events{1};
+  double photons{500.0};
+  double bunch_size{1.0};
+  double camera_radius_cm{123.0};
+  std::string spectrum{"400"};
+  std::string lightpulse{"Simple:0"};
+  std::string angular{"parallel"};
+  std::int64_t run_number{1};
+  double altitude_m{2150.0};
+  std::int64_t atmosphere{1};
+  std::uint64_t seed{1};
+};
+
+// One pixel of a list: its id, whether it is required, and its pre-sum slaves.
+struct ListItem {
   int id{};
   bool required{};
   std::vector<int> slaves;
 };
 
-// Option names as in the earlier pixled program.
-struct Options {
-  Camera camera;                      // read from --camera-file
-  bool slaves{false};                 // --slaves
-  std::string use;                    // --use pixel-list
-  int trigger_random{0};              // --use-trg-rand n (0 = off)
-  bool trigger_all{false};            // --use-trg-all
-  int require{0};                     // --require n (0 = all pixels)
-  bool random{false};                 // --random n (uses --require n)
-  int events{1};                      // --events
-  double photons{500.0};              // --photons [per pixel]
-  double bunch_size{1.0};             // --bunchsize
-  double camera_radius_cm{123.0};     // --camera-radius [cm]
-  std::string spectrum{"400"};        // --spectrum
-  std::string lightpulse{"Simple:0"}; // --lightpulse
-  std::string angular{"parallel"};    // fixed to Parallel
-  int run_number{1};                  // --run
-  double altitude_m{2150.0};          // --altitude [m]
-  int atmosphere{1};                  // --atmosphere (numbers only)
-  std::uint64_t seed{1};              // new: Philox seed (random numbers are counter-based)
-};
+namespace detail {
 
-// Reads the Pixel and Trigger lines of a camera definition.
-inline Camera read_camera(std::istream &in, bool keep_slaves);
+inline bool is_blank(char c) { return c == ' ' || c == '\t'; }
 
-// Trigger or pixel list without the "...of N:" prefix and, unless keep_slaves, without
-// the [..] slave lists.
-inline std::string clean_trigger_list(const std::string &text, bool keep_slaves) {
-  const std::string line = text.substr(0, text.find('\n'));
-  std::size_t start = 0;
-  const auto of = line.find("of");
+} // namespace detail
+
+// Pixel-list text of a trigger line: the text after the first "of", with [..] groups removed
+// unless slaves are kept.
+inline std::string clean_trigger_list(const std::string &line, bool keep_slaves) {
+  std::string text = line.substr(0, line.find('\n'));
+  const std::size_t of = text.find("of");
   if (of != std::string::npos) {
-    start = of + 2;
-    while (start < line.size() && (line[start] == ' ' || line[start] == '\t')) {
+    std::size_t start = of + 2;
+    while (start < text.size() && detail::is_blank(text[start]))
       ++start;
-    }
+    text = text.substr(start);
   }
+  if (keep_slaves)
+    return text;
   std::string out;
-  for (std::size_t i = start; i < line.size(); ++i) {
-    if (line[i] == '[' && !keep_slaves) {
-      while (i < line.size() && line[i] != ']') {
-        ++i;
-      }
-      continue;
-    }
-    out.push_back(line[i]);
+  bool inside = false;
+  for (const char c : text) {
+    if (c == '[')
+      inside = true;
+    else if (c == ']' && inside)
+      inside = false;
+    else if (!inside)
+      out.push_back(c);
   }
   return out;
 }
 
+// Reads the pixel and trigger definitions of a camera file.
 inline Camera read_camera(std::istream &in, bool keep_slaves) {
   Camera camera;
   std::string line;
   while (std::getline(in, line)) {
-    const auto first = line.find_first_not_of(" \t");
-    if (first == std::string::npos || line[first] == '#') {
+    std::size_t start = 0;
+    while (start < line.size() && detail::is_blank(line[start]))
+      ++start;
+    line = line.substr(start);
+    if (line.empty() || line[0] == '#')
       continue;
-    }
-    const std::string body = line.substr(first);
-    const std::string key = lower(body.substr(0, 8));
-    if (starts_with(key, "pixel") && body.size() > 5 && (body[5] == ' ' || body[5] == '\t')) {
-      std::istringstream fields(body.substr(5));
-      int id = 0;
-      int type = 0;
-      double x = 0.0;
-      double y = 0.0;
-      if (!(fields >> id >> type >> x >> y)) {
-        std::cerr << "led: problem with pixel definition: " << line << "\n";
+    std::istringstream words(line);
+    std::string first;
+    words >> first;
+    const std::string keyword = cli::lower_case(first);
+    if (keyword == "pixel") {
+      int id = 0, type = 0;
+      double x = 0.0, y = 0.0;
+      if (!(words >> id >> type >> x >> y)) {
+        std::cerr << "led: problem with pixel definition: " << line << '\n';
         continue;
       }
-      if (id < 0) {
-        bad("led: negative pixel ID in camera definition: " + line);
-      }
-      if (!camera.pixels.emplace(id, PixelPosition{x, y}).second) {
-        bad("led: duplicate pixel ID " + std::to_string(id) + " in camera definition");
-      }
-    } else if (starts_with(key, "rotate") || starts_with(key, "pixtype")) {
+      if (id < 0)
+        throw std::invalid_argument("negative pixel id " + std::to_string(id));
+      if (!camera.pixels.emplace(id, Pixel{id, x, y}).second)
+        throw std::invalid_argument("duplicate pixel id " + std::to_string(id));
+    } else if (keyword == "rotate" || keyword == "pixtype") {
       continue;
     } else if (line.find("Trigger") != std::string::npos) {
       camera.triggers.push_back(clean_trigger_list(line, keep_slaves));
@@ -128,261 +126,259 @@ inline Camera read_camera(std::istream &in, bool keep_slaves) {
   return camera;
 }
 
-namespace detail {
-
-inline int read_int(const std::string &text, std::size_t &i) {
-  int value = 0;
-  while (i < text.size() && std::isdigit(static_cast<unsigned char>(text[i]))) {
-    value = value * 10 + (text[i] - '0');
-    ++i;
+// Parses a pixel list: [+]id [[a,b,..]] separated by blanks; '%' or a newline ends it.
+inline std::vector<ListItem> parse_pixel_list(const std::string &text) {
+  std::vector<ListItem> items;
+  std::set<int> seen;
+  std::size_t i = 0;
+  const auto skip_blanks = [&] {
+    while (i < text.size() && detail::is_blank(text[i]))
+      ++i;
+  };
+  const auto read_id = [&](int &id) {
+    if (i >= text.size() || !std::isdigit(static_cast<unsigned char>(text[i])))
+      return false;
+    long long v = 0;
+    while (i < text.size() && std::isdigit(static_cast<unsigned char>(text[i]))) {
+      v = v * 10 + (text[i] - '0');
+      if (v > 1000000000LL)
+        return false;
+      ++i;
+    }
+    id = static_cast<int>(v);
+    return true;
+  };
+  while (true) {
+    skip_blanks();
+    if (i >= text.size() || text[i] == '%' || text[i] == '\n')
+      break;
+    ListItem item;
+    if (text[i] == '+') {
+      item.required = true;
+      ++i;
+    }
+    if (!read_id(item.id))
+      throw std::invalid_argument("invalid in list of pixels to use: '" + text.substr(i) + "'");
+    skip_blanks();
+    if (i < text.size() && text[i] == '[') {
+      ++i;
+      while (true) {
+        while (i < text.size() && (detail::is_blank(text[i]) || text[i] == ','))
+          ++i;
+        if (i >= text.size())
+          throw std::invalid_argument("pre-sum pixel group not terminated in '" + text + "'");
+        if (text[i] == ']') {
+          ++i;
+          break;
+        }
+        int slave = 0;
+        if (!read_id(slave))
+          throw std::invalid_argument("invalid in list of pixels to use: '" + text.substr(i) + "'");
+        item.slaves.push_back(slave);
+      }
+    }
+    if (!seen.insert(item.id).second) {
+      std::cerr << "duplicated pixel " << item.id << " in use list, used only once\n";
+      continue;
+    }
+    items.push_back(std::move(item));
   }
-  return value;
+  return items;
 }
 
-inline bool is_digit_at(const std::string &text, std::size_t i) {
-  return i < text.size() && std::isdigit(static_cast<unsigned char>(text[i])) != 0;
+namespace detail {
+
+inline void check_options(const Options &o) {
+  if (o.camera.pixels.empty())
+    throw std::invalid_argument("the camera definition has no pixels");
+  if (o.events < 0)
+    throw std::invalid_argument("--events must be >= 0");
+  if (o.require < 0)
+    throw std::invalid_argument("--require must be >= 0");
+  if (!std::isfinite(o.photons) || o.photons < 0.0)
+    throw std::invalid_argument("--photons must be finite and >= 0");
+  if (!std::isfinite(o.bunch_size) || !(o.bunch_size > 0.0))
+    throw std::invalid_argument("--bunchsize must be finite and > 0");
+  if (!std::isfinite(o.camera_radius_cm) || !(o.camera_radius_cm > 0.0))
+    throw std::invalid_argument("--camera-radius must be finite and > 0");
+  const int modes =
+      (!o.use.empty() ? 1 : 0) + (o.trigger_random > 0 ? 1 : 0) + (o.trigger_all ? 1 : 0);
+  if (modes != 1)
+    throw std::invalid_argument("give exactly one of --use, --use-trg-rand, --use-trg-all");
 }
 
 } // namespace detail
 
-// Pixel list such as "3 +5 7[8,9]": pixel ids separated by blanks, '+' for required
-// pixels, [..] for pre-sum slaves, '%' starts a comment. Duplicate ids are skipped with a warning.
-inline std::vector<Use> parse_pixel_list(const std::string &text) {
-  std::vector<Use> result;
-  std::size_t i = 0;
-  const auto skip_blanks = [&] {
-    while (i < text.size() && (text[i] == ' ' || text[i] == '\t')) {
-      ++i;
-    }
-  };
-  for (;;) {
-    skip_blanks();
-    if (i >= text.size() || text[i] == '%' || text[i] == '\n') {
-      break;
-    }
-    Use use;
-    if (text[i] == '+') {
-      use.required = true;
-      ++i;
-    }
-    if (!detail::is_digit_at(text, i)) {
-      bad("led: invalid in list of pixels to use: '" + text.substr(i) + "'");
-    }
-    use.id = detail::read_int(text, i);
-    skip_blanks();
-    if (i < text.size() && text[i] == '[') {
-      ++i;
-      for (;;) {
-        skip_blanks();
-        while (i < text.size() && text[i] == ',') {
-          ++i;
-          skip_blanks();
-        }
-        if (i < text.size() && text[i] == ']') {
-          ++i;
-          break;
-        }
-        if (!detail::is_digit_at(text, i)) {
-          bad("led: pre-sum pixel group not terminated in '" + text + "'");
-        }
-        use.slaves.push_back(detail::read_int(text, i));
-      }
-    }
-    const bool duplicate =
-        std::any_of(result.begin(), result.end(), [&](const Use &u) { return u.id == use.id; });
-    if (duplicate) {
-      std::cerr << "led: duplicated pixel " << use.id << " in use list, used only once\n";
-      continue;
-    }
-    result.push_back(use);
-  }
-  return result;
-}
-
-inline void validate(const Options &o) {
-  const int modes =
-      (o.use.empty() ? 0 : 1) + (o.trigger_random > 0 ? 1 : 0) + (o.trigger_all ? 1 : 0);
-  if (modes != 1) {
-    bad("led: give exactly one of --use, --use-trg-rand n, --use-trg-all");
-  }
-  if (o.camera.pixels.empty()) {
-    bad("led: no pixels available in the camera definition");
-  }
-  if (o.events < 0 || o.require < 0) {
-    bad("led: --events and --require must be >= 0");
-  }
-  if (!(o.photons >= 0.0) || !(o.bunch_size > 0.0) || !(o.camera_radius_cm > 0.0)) {
-    bad("led: photons >= 0, bunch size > 0 and camera radius > 0 required");
-  }
-}
-
-// Recursive selection of pixel combinations: the required pixels plus
-// the next combination of available ones, in increasing order.
-template <class Callback>
-void for_each_combination(const std::vector<std::size_t> &selected,
-                          const std::vector<std::size_t> &available, std::size_t nreq,
-                          Callback &callback) {
-  if (selected.size() >= nreq) {
-    callback(selected);
-    return;
-  }
-  for (std::size_t k = 0; k < available.size(); ++k) {
-    auto next = selected;
-    next.push_back(available[k]);
-    const std::vector<std::size_t> rest(available.begin() + static_cast<std::ptrdiff_t>(k) + 1,
-                                        available.end());
-    for_each_combination(next, rest, nreq, callback);
-  }
-}
-
-// Sources of all events. Pixel lists come from --use, or from trigger
-// groups of the camera file (--use-trg-all, --use-trg-rand n). Per list and per event:
-// all pixels (--require 0), or --random n distinct random pixels, or every combination of
-// --require n pixels as one event each. Each lit pixel is one emission from its centre.
+// All events of a run. Throws std::invalid_argument for invalid options.
 inline std::vector<Event> build_sources(const Options &o) {
-  validate(o);
-  const double bunch = o.bunch_size < 1.0 ? 1.0 : o.bunch_size;
-  const double radius_m = 0.01 * o.camera_radius_cm;
+  detail::check_options(o);
+  const double bunch = std::max(1.0, o.bunch_size);
+  const double radius = o.camera_radius_cm / 100.0;
   const Angular angular = parse_angular(o.angular);
-  const Spectrum spectrum = parse_spectrum(o.spectrum);
-  const Pulse pulse = parse_pulse(o.lightpulse);
+  Source base;
+  base.frame = gstrickd::Frame::camera;
+  base.spectrum = parse_spectrum(o.spectrum);
+  base.pulse = parse_pulse(o.lightpulse);
+  base.photons = o.photons / bunch;
 
-  std::vector<std::vector<Use>> lists;
+  // Pixel lists.
+  std::vector<std::vector<ListItem>> lists;
   if (o.trigger_all) {
-    if (o.camera.triggers.empty()) {
-      bad("led: the camera definition has no trigger groups");
-    }
-    for (const auto &group : o.camera.triggers) {
-      lists.push_back(parse_pixel_list(group));
-    }
+    if (o.camera.triggers.empty())
+      throw std::invalid_argument("the camera definition has no trigger groups");
+    for (const auto &text : o.camera.triggers)
+      lists.push_back(parse_pixel_list(text));
   } else if (o.trigger_random > 0) {
-    if (o.camera.triggers.empty()) {
-      bad("led: the camera definition has no trigger groups");
-    }
+    if (o.camera.triggers.empty())
+      throw std::invalid_argument("the camera definition has no trigger groups");
     const auto groups = o.camera.triggers.size();
-    std::uint64_t draw = 0;
-    for (int k = 0; k < o.trigger_random; ++k) {
-      std::size_t j = groups;
-      while (j >= groups) {
+    std::uint64_t draw_index = 0;
+    for (int n = 0; n < o.trigger_random; ++n) {
+      std::size_t j;
+      do {
         j = static_cast<std::size_t>(
-            std::floor(static_cast<double>(groups) * program_uniform(o.seed, 0, draw++)));
-      }
+            std::floor(static_cast<double>(groups) * program_uniform(o.seed, 0, draw_index++)));
+      } while (j >= groups);
       lists.push_back(parse_pixel_list(o.camera.triggers[j]));
     }
   } else {
     lists.push_back(parse_pixel_list(clean_trigger_list(o.use, o.slaves)));
   }
 
-  std::vector<Event> result;
-  std::uint64_t emission = 0;
-  const auto add_pixel = [&](Event &event, int id, bool label) {
-    const auto found = o.camera.pixels.find(id);
-    if (found == o.camera.pixels.end()) {
-      bad("led: pixel ID " + std::to_string(id) + " is not defined in the camera file");
+  std::vector<Event> events;
+  std::uint64_t emission_index = 0;
+  const auto add_event = [&](const std::vector<const ListItem *> &lit) {
+    Event event;
+    event.event_number = static_cast<std::int64_t>(events.size()) + 1;
+    const auto emit_pixel = [&](int id) {
+      const Pixel &pixel = o.camera.pixels.at(id);
+      Source s = base;
+      const Vec3 position{pixel.x_cm / 100.0, pixel.y_cm / 100.0, 0.0};
+      s.geometry = Emitter{position, {0.0, 0.0, -1.0}, angular};
+      s.target = fiducial_target(position, radius, angular);
+      validate(s);
+      Emission e;
+      e.source = s;
+      e.seed = derive_seed(o.seed, emission_index++);
+      e.telescope = 1;
+      e.bunch_size = bunch;
+      event.emissions.push_back(std::move(e));
+    };
+    for (const ListItem *item : lit) {
+      emit_pixel(item->id);
+      event.labels.push_back(item->id);
+      if (o.slaves)
+        for (const int slave : item->slaves)
+          emit_pixel(slave);
     }
-    const auto &pixel = found->second;
-    const Vec3 position{0.01 * pixel.x_cm, 0.01 * pixel.y_cm, 0.0};
-    Source source;
-    source.frame = gstrickd::Frame::camera;
-    source.geometry = Emitter{position, Vec3{0.0, 0.0, -1.0}, angular};
-    source.spectrum = spectrum;
-    source.pulse = pulse;
-    source.photons = o.photons / bunch;
-    source.target = fiducial_target(position, radius_m, angular);
-    event.emissions.push_back({source, derive_seed(o.seed, emission++), bunch, 0.0});
-    if (label) {
-      event.labels.push_back(id);
-    }
-  };
-  const auto add_use = [&](Event &event, const Use &use) {
-    add_pixel(event, use.id, true);
-    if (o.slaves) {
-      for (const int slave : use.slaves) {
-        add_pixel(event, slave, false);
-      }
-    }
+    events.push_back(std::move(event));
   };
 
   for (const auto &list : lists) {
-    if (list.empty()) {
-      bad("led: failed to obtain a pixel list");
+    if (list.empty())
+      throw std::invalid_argument("failed to obtain a pixel list");
+    for (const auto &item : list) {
+      if (!o.camera.pixels.count(item.id))
+        throw std::invalid_argument("pixel ID " + std::to_string(item.id) +
+                                    " is not defined in the camera file");
+      if (o.slaves)
+        for (const int slave : item.slaves)
+          if (!o.camera.pixels.count(slave))
+            throw std::invalid_argument("pixel ID " + std::to_string(slave) +
+                                        " is not defined in the camera file");
     }
-    std::size_t nreq = o.require == 0 ? list.size() : static_cast<std::size_t>(o.require);
-    if (nreq > list.size()) {
-      std::cerr << "led: required " << nreq << " pixels but the list has " << list.size()
+    const std::size_t size = list.size();
+    const std::size_t nreq = o.require == 0 ? size : static_cast<std::size_t>(o.require);
+    if (nreq > size) {
+      std::cerr << "led: required " << nreq << " pixels but the list has " << size
                 << "; list skipped\n";
       continue;
     }
-    for (int iev = 0; iev < o.events; ++iev) {
-      Event event;
-      event.number = static_cast<std::uint32_t>(result.size() + 1);
-      if (nreq == list.size()) {
-        for (const auto &use : list) {
-          add_use(event, use);
-        }
-        result.push_back(std::move(event));
+    std::vector<const ListItem *> all;
+    for (const auto &item : list)
+      all.push_back(&item);
+    for (int repeat = 0; repeat < o.events; ++repeat) {
+      if (nreq == size) {
+        add_event(all);
       } else if (o.random) {
-        std::uint64_t draw = 0;
-        std::vector<int> fired;
-        while (fired.size() < nreq) {
+        const auto event_number = static_cast<std::uint32_t>(events.size() + 1);
+        std::vector<bool> used(size, false);
+        std::vector<const ListItem *> order; // fired in draw order
+        std::uint64_t draw_index = 0;
+        while (order.size() < nreq) {
           const auto p = static_cast<std::size_t>(std::floor(
-              static_cast<double>(list.size()) * program_uniform(o.seed, event.number, draw++)));
-          if (p >= list.size()) {
+              static_cast<double>(size) * program_uniform(o.seed, event_number, draw_index++)));
+          if (p >= size || used[p])
             continue;
-          }
-          const bool used = std::find(fired.begin(), fired.end(), list[p].id) != fired.end();
-          if (used) {
-            continue;
-          }
-          fired.push_back(list[p].id);
-          add_use(event, list[p]);
+          used[p] = true;
+          order.push_back(&list[p]);
         }
-        result.push_back(std::move(event));
+        add_event(order);
       } else {
-        std::vector<std::size_t> selected;
-        std::vector<std::size_t> available;
-        for (std::size_t j = 0; j < list.size(); ++j) {
-          (list[j].required ? selected : available).push_back(j);
-        }
-        const auto emit_combination = [&](const std::vector<std::size_t> &combination) {
-          Event combo;
-          combo.number = static_cast<std::uint32_t>(result.size() + 1);
-          for (const std::size_t p : combination) {
-            add_use(combo, list[p]);
-          }
-          result.push_back(std::move(combo));
+        std::vector<std::size_t> required, optional;
+        for (std::size_t k = 0; k < size; ++k)
+          (list[k].required ? required : optional).push_back(k);
+        const auto emit_combination = [&](const std::vector<std::size_t> &positions) {
+          std::vector<std::size_t> sorted = positions;
+          std::sort(sorted.begin(), sorted.end());
+          std::vector<const ListItem *> lit;
+          for (const std::size_t k : sorted)
+            lit.push_back(&list[k]);
+          add_event(lit);
         };
-        for_each_combination(selected, available, nreq, emit_combination);
+        if (required.size() >= nreq) {
+          emit_combination(required);
+        } else {
+          const std::size_t extra = nreq - required.size();
+          std::vector<std::size_t> pick(extra);
+          for (std::size_t k = 0; k < extra; ++k)
+            pick[k] = k;
+          while (true) {
+            std::vector<std::size_t> positions = required;
+            for (const std::size_t k : pick)
+              positions.push_back(optional[k]);
+            emit_combination(positions);
+            // Next combination of `extra` of optional.size() in lexicographic order.
+            std::size_t k = extra;
+            while (k > 0 && pick[k - 1] == optional.size() - extra + k - 1)
+              --k;
+            if (k == 0)
+              break;
+            ++pick[k - 1];
+            for (std::size_t m = k; m < extra; ++m)
+              pick[m] = pick[m - 1] + 1;
+          }
+        }
       }
     }
   }
-  return result;
-}
-
-inline RunSetup run_setup(const Options &o) {
-  RunSetup run;
-  run.producer = "dlamb-led";
-  run.run_number = o.run_number;
-  run.observation_level_m = o.altitude_m;
-  run.atmosphere = o.atmosphere;
-  run.telescope_radius_m = 0.01 * o.camera_radius_cm;
-  run.frame = gstrickd::Frame::camera;
-  return run;
-}
-
-// Pixel labels of an event in the --list-only format `(@) id id ...`.
-inline void print_labels(std::ostream &out, const Event &event) {
-  auto sorted = event.labels;
-  std::sort(sorted.begin(), sorted.end());
-  out << "(@) ";
-  for (const int id : sorted) {
-    out << ' ' << id;
-  }
-  out << '\n';
+  return events;
 }
 
 inline void write_stream(std::ostream &out, const Options &o) {
-  dlamb::programs::write_stream(out, run_setup(o), build_sources(o));
+  const auto events = build_sources(o);
+  RunSetup setup;
+  setup.producer = "dlamb-led";
+  setup.run_number = o.run_number;
+  setup.observation_level_m = o.altitude_m;
+  setup.atmosphere = o.atmosphere;
+  setup.telescope_radius_m = o.camera_radius_cm / 100.0;
+  setup.frame = gstrickd::Frame::camera;
+  programs::write_stream(out, setup, events);
+}
+
+// The `--list-only` text: one line per event with the sorted pixel labels.
+inline std::string label_lines(const std::vector<Event> &events) {
+  std::string text;
+  for (const auto &event : events) {
+    std::vector<int> labels = event.labels;
+    std::sort(labels.begin(), labels.end());
+    text += "(@) ";
+    for (const int label : labels)
+      text += " " + std::to_string(label);
+    text += "\n";
+  }
+  return text;
 }
 
 } // namespace dlamb::programs::led

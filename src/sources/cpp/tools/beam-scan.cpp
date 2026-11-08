@@ -1,78 +1,52 @@
-// dlamb-beam-scan: parallel light beam scanned along two lines. Writes a
-// gstrickd photon stream (sky frame) to stdout or -o FILE.
+// dlamb-beam-scan: parallel downward beam scanned over the camera area (sky frame).
 
 #include "dlamb/programs/beam-scan.hpp"
 
-#include "sky_args.hpp"
+#include "tool_args.hpp"
 
-#include <cstdio>
-#include <fstream>
 #include <iostream>
-#include <string>
 
 namespace {
 
-const char *usage_text =
-    "Usage: dlamb-beam-scan [options]\n"
-    "Parallel downward light beam scanned along x and y; photon stream on stdout.\n"
-    "Options (option, unit, default; defaults from r = 123 cm):\n"
-    "  -r rcam     camera fiducial radius [cm] (123)\n"
-    "  -x xpos     start of the scan [cm] (0.3 x 123)\n"
-    "  -y ypos     start of the scan [cm] (0.2 x 123)\n"
-    "  -h height   source height above the observation level [cm] (0.05 x 123)\n"
-    "  -o fname    output file (stdout)\n"
-    "  --seed n    random seed (1, new option)\n"
-    "  --help      this text\n";
-
-int run(int argc, char **argv) {
-  dlamb::programs::XylsOptions o;
-  std::string output;
-  for (int i = 1; i < argc; ++i) {
-    const std::string arg = argv[i];
-    const auto next = [&]() -> std::string {
-      if (i + 1 >= argc)
-        throw std::invalid_argument(arg + ": missing value");
-      return argv[++i];
-    };
-    if (arg == "--help") {
-      std::fputs(usage_text, stdout);
-      return 0;
-    } else if (arg == "-r") {
-      o.radius_cm = dlamb::cli::to_double(next(), arg);
-    } else if (arg == "-x") {
-      o.x_cm = dlamb::cli::to_double(next(), arg);
-    } else if (arg == "-y") {
-      o.y_cm = dlamb::cli::to_double(next(), arg);
-    } else if (arg == "-h") {
-      o.height_cm = dlamb::cli::to_double(next(), arg);
-    } else if (arg == "--seed") {
-      o.seed = static_cast<std::uint64_t>(dlamb::cli::to_int(next(), arg));
-    } else if (arg == "-o") {
-      output = next();
-    } else {
-      throw std::invalid_argument("unknown option " + arg + " (see --help)");
-    }
-  }
-  if (output.empty()) {
-    std::ios::sync_with_stdio(false);
-    dlamb::programs::write_beam_scan(std::cout, o);
-    std::cout.flush();
-  } else {
-    std::ofstream file(output, std::ios::binary);
-    if (!file)
-      throw std::invalid_argument("cannot write " + output);
-    dlamb::programs::write_beam_scan(file, o);
-  }
-  return 0;
-}
+const char *usage = R"(usage: dlamb-beam-scan [options] [-o FILE]
+  -r rcam    camera radius [cm] (123)
+  -x xpos    scan start x [cm] (0.3 * 123)    -y ypos  scan start y [cm] (0.2 * 123)
+  -h height  source height [cm] (0.05 * 123)
+  --seed n   -o FILE   --help
+)";
 
 } // namespace
 
 int main(int argc, char **argv) {
-  try {
-    return run(argc, argv);
-  } catch (const std::exception &error) {
-    std::fprintf(stderr, "dlamb-beam-scan: %s\n", error.what());
-    return 1;
-  }
+  using namespace dlamb;
+  return cli::run_tool("dlamb-beam-scan", [&] {
+    cli::ArgCursor cursor(argc, argv);
+    programs::XylsOptions o;
+    std::string output, arg;
+    while (cursor.next(arg)) {
+      if (arg == "--help") {
+        std::cout << usage;
+        return 0;
+      }
+      const auto value = [&] { return cursor.value(arg); };
+      if (arg == "-r")
+        o.radius_cm = cli::to_double(value(), arg);
+      else if (arg == "-x")
+        o.x_cm = cli::to_double(value(), arg);
+      else if (arg == "-y")
+        o.y_cm = cli::to_double(value(), arg);
+      else if (arg == "-h")
+        o.height_cm = cli::to_double(value(), arg);
+      else if (arg == "--seed")
+        o.seed = cli::parse_seed(value(), arg);
+      else if (arg == "-o")
+        output = value();
+      else
+        throw std::invalid_argument("unknown option " + arg + " (see --help)");
+    }
+    cli::Output out(output);
+    programs::write_beam_scan(out.stream(), o);
+    out.close();
+    return 0;
+  });
 }

@@ -1,178 +1,130 @@
-// dlamb-flasher: flasher photon stream, --type dish (default) or --type secondary. Writes a
-// gstrickd stream to stdout or -o FILE.
+// dlamb-flasher: flasher photon stream, dish or secondary type.
 
 #include "dlamb/programs/flasher.hpp"
 
-#include <cstdint>
-#include <exception>
-#include <iostream>
-#include <string>
-#include <utility>
-#include <vector>
+#include "tool_args.hpp"
 
-using namespace dlamb::programs;
+#include <iostream>
+#include <utility>
 
 namespace {
 
-void usage(std::ostream &out, const char *name) {
-  out << "usage: " << name << " [--type dish|secondary] [options]\n"
-      << "Options (default in braces; per type):\n"
-      << "  --type dish|secondary     dish: flasher above the dish centre lighting the camera;\n"
-      << "                            secondary: four camera-corner flashers onto the secondary "
-         "{dish}\n"
-      << "All types:\n"
-      << "  --photons N[,...]         photons emitted into 4 pi per flasher {2.5e6}\n"
-      << "  --bunchsize F             photons per bunch (at least 1) {1}\n"
-      << "  --spectrum WLEN|Cherenkov:A:B  wavelength [nm] {400}\n"
-      << "  --lightpulse SPEC         Simple:W[,D], Gauss:S, Gauss-fwhm:F, Exp:T, Complex:A,B,C[,D]"
-         " {Simple:0}\n"
-      << "  --angular-distribution SPEC  isotropic, Parallel, Cone:DEG, FilledCone:DEG, "
-         "Gauss:DEG, Gauss-fwhm:DEG, Rayleigh {isotropic}\n"
-      << "  --run N                   run number {1}\n"
-      << "  --altitude M              observation level [m] {2150 dish, 2100 secondary}\n"
-      << "  --atmosphere N            atmospheric profile number {1}\n"
-      << "  --seed N                  random seed (new) {1}\n"
-      << "  -o FILE                   output file {stdout}\n"
-      << "  -h, --help                this text\n"
-      << "--type dish only:\n"
-      << "  --frame sky|camera        sky: emission points; camera: photons on the camera plane\n"
-      << "                            (straight line from the flasher, no atmosphere) {sky}\n"
-      << "  --events N[,...]          events per photon level {1}; a short list repeats its last "
-         "value\n"
-      << "  --xy X,Y (--flasher-xy X,Y)  flasher offset from the axis [cm] {0,0}\n"
-      << "  --distance D (-z D)       flasher distance above the telescope centre [cm] {1600}\n"
-      << "  --camera-radius R (-r R)  fiducial camera radius [cm] {120}\n"
-      << "--type secondary only:\n"
-      << "  --events N                events {1}\n"
-      << "  --flasher-xy X (--xy X)   flasher offset on the diagonal [cm] {14.62}\n"
-      << "  --flasher-depth D (-z D, --z D)  flasher depth behind the camera front [cm] {2.46}\n"
-      << "  --flasher-inclination A (--inclination A)  outward inclination [deg] {0}\n"
-      << "  --mirror-camera-distance D (--mirror-distance D)  focal front to secondary [cm] "
-         "{51.06949}\n"
-      << "  --delays T1,T2,T3,T4[,T5] delays of the flashers and of the common flash [ns] "
-         "{0,0,0,0,0}\n"
-      << "  --fire all|alternate|demo|1..4  flashers to fire {all}\n";
-}
+const char *usage = R"(usage: dlamb-flasher [--type dish|secondary] [options] [-o FILE]
+  both:      --photons N[,..]  --bunchsize F (--bs, -b)  --spectrum W|Cherenkov:A:B
+             --lightpulse S (--pulse)  --angular-distribution S (--angular)  --run N
+             --altitude M (-a)  --atmosphere N (-A)  --seed N  --events N[,..]  -o FILE
+  dish:      --frame sky|camera  --xy X,Y  --distance D (-z)  --camera-radius R (-r)
+  secondary: --flasher-xy X (--xy)  --flasher-depth D (-z, --z)  --flasher-inclination A
+             --mirror-camera-distance D  --delays T1,..,T4[,T5]  --fire all|alternate|demo|1..4
+)";
 
 } // namespace
 
 int main(int argc, char **argv) {
-  std::string output;
-  try {
-    // Collect name and value pairs first: the type decides how --xy, -z and the others apply.
-    std::vector<std::pair<std::string, std::string>> items;
+  using namespace dlamb;
+  using programs::flasher::Type;
+  const std::string prefix = argc > 0 ? argv[0] : "dlamb-flasher";
+  return cli::run_tool(prefix, [&] {
+    std::vector<std::pair<std::string, std::string>> pairs;
     for (int i = 1; i < argc; ++i) {
       const std::string arg = argv[i];
       if (arg == "-h" || arg == "--help") {
-        usage(std::cout, argv[0]);
+        std::cout << usage;
         return 0;
       }
-      items.emplace_back(arg, option_value(argc, argv, i));
+      if (i + 1 >= argc)
+        throw std::invalid_argument("option " + arg + " needs a value");
+      pairs.emplace_back(arg, argv[++i]);
     }
-
-    flasher::Type type = flasher::Type::dish;
-    for (const auto &[arg, value] : items) {
-      if (arg == "--type") {
-        type = flasher::parse_type(value);
-      }
-    }
-
-    flasher::Options options;
-    options.type = type;
-    const auto dish_only = [&](const std::string &arg) {
-      flasher::require_type(type, flasher::Type::dish, arg);
+    programs::flasher::Options o;
+    for (const auto &[name, text] : pairs)
+      if (name == "--type")
+        o.type = programs::flasher::parse_type(text);
+    const bool dish = o.type == Type::dish;
+    const auto only = [&](const std::string &name, Type type) {
+      programs::flasher::require_type(o.type, type, name);
     };
-    const auto secondary_only = [&](const std::string &arg) {
-      flasher::require_type(type, flasher::Type::secondary, arg);
-    };
-
-    for (const auto &[arg, value] : items) {
-      if (arg == "--type") {
-        continue;
-      } else if (arg == "--events") {
-        options.events = parse_integer_list(value, arg);
-      } else if (arg == "--photons") {
-        options.photons = parse_real_list(value, arg);
-      } else if (arg == "--bunchsize" || arg == "--bs" || arg == "-b") {
-        options.bunch_size = parse_real(value, arg);
-      } else if (arg == "--xy" || arg == "--flasher-xy") {
-        if (type == flasher::Type::dish) {
-          const auto xy = parse_real_list(value, arg);
-          if (xy.size() != 2) {
-            bad(arg + " needs x,y with --type dish");
-          }
-          options.x_cm = xy[0];
-          options.y_cm = xy[1];
+    std::string output;
+    for (const auto &[name, text] : pairs) {
+      if (name == "--type") {
+      } else if (name == "--photons") {
+        o.photons = programs::parse_real_list(text, name);
+      } else if (name == "--bunchsize" || name == "--bs" || name == "-b") {
+        o.bunch_size = programs::parse_real(text, name);
+      } else if (name == "--spectrum") {
+        o.spectrum = text;
+      } else if (name == "--lightpulse" || name == "--pulse") {
+        o.lightpulse = text;
+      } else if (name == "--angular-distribution" || name == "--angular") {
+        o.angular = text;
+      } else if (name == "--run") {
+        o.run_number = programs::parse_integer_value(text, name);
+      } else if (name == "--altitude" || name == "-a") {
+        o.altitude_m = programs::parse_real(text, name);
+      } else if (name == "--atmosphere" || name == "-A") {
+        o.atmosphere = programs::parse_integer_value(text, name);
+      } else if (name == "--seed") {
+        o.seed = cli::parse_seed(text, name);
+      } else if (name == "-o") {
+        output = text;
+      } else if (name == "--events") {
+        o.events.clear();
+        for (const auto &item : cli::split_items(text, name))
+          o.events.push_back(static_cast<int>(programs::parse_integer_value(item, name)));
+      } else if (name == "--frame") {
+        only(name, Type::dish);
+        if (text == "sky")
+          o.frame = gstrickd::Frame::sky;
+        else if (text == "camera")
+          o.frame = gstrickd::Frame::camera;
+        else
+          throw std::invalid_argument("--frame must be sky or camera");
+      } else if (name == "--xy" || name == "--flasher-xy") {
+        const auto values = programs::parse_real_list(text, name);
+        if (dish) {
+          if (values.size() != 2)
+            throw std::invalid_argument(name + " needs x,y with --type dish");
+          o.x_cm = values[0];
+          o.y_cm = values[1];
         } else {
-          options.flasher_xy_cm = parse_real(value, arg);
+          if (values.size() != 1)
+            throw std::invalid_argument(name + " needs one value with --type secondary");
+          o.flasher_xy_cm = values[0];
         }
-      } else if (arg == "--frame") {
-        dish_only(arg);
-        if (value == "sky") {
-          options.frame = gstrickd::Frame::sky;
-        } else if (value == "camera") {
-          options.frame = gstrickd::Frame::camera;
-        } else {
-          bad("--frame must be sky or camera");
-        }
-      } else if (arg == "--distance") {
-        dish_only(arg);
-        options.distance_cm = parse_real(value, arg);
-      } else if (arg == "-z") {
-        if (type == flasher::Type::dish) {
-          options.distance_cm = parse_real(value, arg);
-        } else {
-          options.flasher_depth_cm = parse_real(value, arg);
-        }
-      } else if (arg == "--camera-radius" || arg == "-r") {
-        dish_only(arg);
-        options.camera_radius_cm = parse_real(value, arg);
-      } else if (arg == "--flasher-depth" || arg == "--z") {
-        secondary_only(arg);
-        options.flasher_depth_cm = parse_real(value, arg);
-      } else if (arg == "--inclination" || arg == "--flasher-inclination") {
-        secondary_only(arg);
-        options.inclination_deg = parse_real(value, arg);
-      } else if (arg == "--mirror-distance" || arg == "--mirror-camera-distance") {
-        secondary_only(arg);
-        options.mirror_camera_distance_cm = parse_real(value, arg);
-      } else if (arg == "--delays") {
-        secondary_only(arg);
-        const auto delays = parse_real_list(value, arg);
-        if (delays.size() < 4 || delays.size() > 5) {
-          bad("--delays needs 4 or 5 values");
-        }
-        options.delays = {0.0, 0.0, 0.0, 0.0, 0.0};
-        for (std::size_t k = 0; k < delays.size(); ++k) {
-          options.delays[k] = delays[k];
-        }
-      } else if (arg == "--fire") {
-        secondary_only(arg);
-        options.fire = value;
-      } else if (arg == "--spectrum") {
-        options.spectrum = value;
-      } else if (arg == "--lightpulse" || arg == "--pulse") {
-        options.lightpulse = value;
-      } else if (arg == "--angular-distribution" || arg == "--angular") {
-        options.angular = value;
-      } else if (arg == "--run") {
-        options.run_number = static_cast<int>(parse_integer(value, arg));
-      } else if (arg == "--altitude" || arg == "-a") {
-        options.altitude_m = parse_real(value, arg);
-      } else if (arg == "--atmosphere" || arg == "-A") {
-        options.atmosphere = static_cast<int>(parse_integer(value, arg));
-      } else if (arg == "--seed") {
-        options.seed = static_cast<std::uint64_t>(parse_integer(value, arg));
-      } else if (arg == "-o") {
-        output = value;
+      } else if (name == "--distance") {
+        only(name, Type::dish);
+        o.distance_cm = programs::parse_real(text, name);
+      } else if (name == "-z") {
+        (dish ? o.distance_cm : o.flasher_depth_cm) = programs::parse_real(text, name);
+      } else if (name == "--camera-radius" || name == "-r") {
+        only(name, Type::dish);
+        o.camera_radius_cm = programs::parse_real(text, name);
+      } else if (name == "--flasher-depth" || name == "--z") {
+        only(name, Type::secondary);
+        o.flasher_depth_cm = programs::parse_real(text, name);
+      } else if (name == "--flasher-inclination" || name == "--inclination") {
+        only(name, Type::secondary);
+        o.inclination_deg = programs::parse_real(text, name);
+      } else if (name == "--mirror-camera-distance" || name == "--mirror-distance") {
+        only(name, Type::secondary);
+        o.mirror_camera_distance_cm = programs::parse_real(text, name);
+      } else if (name == "--delays") {
+        only(name, Type::secondary);
+        const auto values = programs::parse_real_list(text, name);
+        if (values.size() != 4 && values.size() != 5)
+          throw std::invalid_argument("--delays needs 4 or 5 values");
+        o.delays = {values[0], values[1], values[2], values[3],
+                    values.size() == 5 ? values[4] : 0.0};
+      } else if (name == "--fire") {
+        only(name, Type::secondary);
+        o.fire = text;
       } else {
-        bad("unknown option " + arg);
+        throw std::invalid_argument("unknown option " + name);
       }
     }
-    write_output(output, [&](std::ostream &out) { flasher::write_stream(out, options); });
-  } catch (const std::exception &error) {
-    std::cerr << argv[0] << ": " << error.what() << "\n";
-    return 1;
-  }
-  return 0;
+    cli::Output out(output);
+    programs::flasher::write_stream(out.stream(), o);
+    out.close();
+    return 0;
+  });
 }

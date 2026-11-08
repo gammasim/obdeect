@@ -52,6 +52,23 @@ the option table with units as stated; `XyzlsOptions`: `run_number`, `events`,
 `wavelength_min_nm`, `wavelength_max_nm`, `charge`, `beta`, `momentum_gev` (optional),
 `mass_gev`, `primary_id`, `multiple_scattering`).
 
+## Names and defaults the tests need beyond the table
+
+Found while implementing from this specification; the implementation follows them.
+
+- `Basis{e1, e2}` is the result type of `orthonormal_basis`; `normalised` also accepts a braced
+  vector (`normalised({0, 0, 1})`).
+- `programs::Emission{source, seed, telescope, bunch_size, time_offset_ns, to_camera_plane}` and
+  `programs::Event{event_number, emissions, labels}`; `led::Camera{pixels, triggers}`
+  (`triggers` holds the cleaned pixel-list text of each trigger group).
+- `NsbOptions::spectrum` defaults to `Fixed{400}` (the tool, not the library, supplies the
+  default table file); `XyzlsOptions::pulse` defaults to `GaussianShape{0, 0}`;
+  `muon_track::parse_command_line` returns `{options, output, help}`.
+- Library error messages carry no tool prefix; each tool prints `<prefix>: <message>`
+  (see [cli-conventions](cli-conventions.md)).
+- `gaussian_angular_table` evaluates `u` as `2 sin^2(theta/2)` so that nodes at tiny widths stay
+  strictly increasing.
+
 ## C++ tests
 
 | Test | What it checks |

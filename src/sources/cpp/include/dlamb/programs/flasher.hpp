@@ -1,30 +1,17 @@
 #pragma once
 
-// Flasher photon streams of two types, selected by Type. Replace the earlier ff-1m (dish)
-// and ff-gct (secondary) programs; options keep their names.
-//
-// dish: flat-fielding flasher on the axis of a single-reflector telescope, in
-// front of the camera. The flasher sits at (x, y, distance) above the telescope centre, the
-// origin at observation level. Photons are written in the sky frame at their emission
-// points (or, with frame camera, on the camera plane); the atmosphere stage moves the sky
-// frame photons to the ground.
-//
-// secondary: four flashers at the corners of the camera of a dual-mirror
-// telescope (GCT/CHEC), firing down onto the secondary mirror. Origin at the secondary
-// centre, z along the optical axis towards the sky. The flashers sit at
-// (+-xy, +-xy, mirror_camera_distance + depth) and point downwards (-90 deg + inclination,
-// radially outwards). Their light must reach the secondary, so the photons are written in
-// the telescope frame T at their emission points.
+// Flasher programs: a dish flasher in front of a single-reflector camera, or four flashers of a
+// dual-mirror telescope (docs/spec/tool-flasher.md).
 
 #include "dlamb/programs/stream_output.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <ostream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -32,243 +19,217 @@ namespace dlamb::programs::flasher {
 
 enum class Type { dish, secondary };
 
-// --type dish|secondary.
 inline Type parse_type(const std::string &text) {
-  if (text == "dish") {
+  if (text == "dish")
     return Type::dish;
-  }
-  if (text == "secondary") {
+  if (text == "secondary")
     return Type::secondary;
-  }
-  bad("flasher: --type must be dish or secondary, not '" + text + "'");
+  throw std::invalid_argument("--type must be dish or secondary, not '" + text + "'");
 }
 
-// Rejects an option of `owner` used with the other type.
-inline void require_type(Type type, Type owner, const std::string &option) {
-  if (type != owner) {
-    bad(option + " applies only to --type " + (owner == Type::dish ? "dish" : "secondary"));
-  }
+// Rejects an option of one type used with the other.
+inline void require_type(Type actual, Type required, const std::string &option) {
+  if (actual != required)
+    throw std::invalid_argument(option + " applies only to --type " +
+                                (required == Type::dish ? "dish" : "secondary"));
 }
 
-// Option names as in the earlier ff-1m (dish) and ff-gct (secondary) programs.
 struct Options {
   Type type{Type::dish};
-  // dish only: sky (emission points) or camera (photons on the camera plane, no atmosphere).
   gstrickd::Frame frame{gstrickd::Frame::sky};
-  // Both types.
-  std::vector<double> photons{2.5e6}; // --photons [4 pi per flasher]
-  double bunch_size{1.0};             // --bunchsize [photons]
-  std::string spectrum{"400"};        // --spectrum [nm]
-  std::string lightpulse{"Simple:0"}; // --lightpulse
-  std::string angular{"isotropic"};   // --angular-distribution
-  int run_number{1};                  // --run
-  std::optional<double> altitude_m;   // --altitude [m]: 2150 (dish), 2100 (secondary)
-  int atmosphere{1};                  // --atmosphere (numbers only)
-  std::uint64_t seed{1};              // new: Philox seed (counter-based random numbers)
-  // dish: per photon level (a short list repeats its last value).
-  // secondary: one value.
-  std::vector<int> events{1}; // --events
-  // dish only.
-  double x_cm{0.0};               // --xy x,y (first value) [cm]
-  double y_cm{0.0};               // --xy x,y (second value) [cm]
-  double distance_cm{1600.0};     // --distance [cm]
-  double camera_radius_cm{120.0}; // --camera-radius [cm]
-  // secondary only.
-  double flasher_xy_cm{14.62};                            // --flasher-xy [cm]
-  double flasher_depth_cm{2.46};                          // --flasher-depth [cm]
-  double inclination_deg{0.0};                            // --flasher-inclination [deg]
-  double mirror_camera_distance_cm{356.1075 - 305.03801}; // [cm]
-  std::array<double, 5> delays{};                         // --delays [ns]
-  std::string fire{"all"};                                // --fire all|alternate|demo|1..4
+  std::vector<double> photons{2.5e6}; // into 4 pi per flasher, one entry per level
+  double bunch_size{1.0};
+  std::string spectrum{"400"};
+  std::string lightpulse{"Simple:0"};
+  std::string angular{"isotropic"};
+  std::int64_t run_number{1};
+  std::optional<double> altitude_m;
+  std::int64_t atmosphere{1};
+  std::uint64_t seed{1};
+  std::vector<int> events{1};
+  // dish
+  double x_cm{0.0};
+  double y_cm{0.0};
+  double distance_cm{1600.0};
+  double camera_radius_cm{120.0};
+  // secondary
+  double flasher_xy_cm{14.62};
+  double flasher_depth_cm{2.46};
+  double inclination_deg{0.0};
+  double mirror_camera_distance_cm{356.1075 - 305.03801};
+  std::array<double, 5> delays{0.0, 0.0, 0.0, 0.0, 0.0};
+  std::string fire{"all"};
 };
 
-// Secondary fiducial radius [cm] (not an option).
-inline constexpr double secondary_fiducial_cm = 120.0;
+// Radius of the secondary telescope's fiducial sphere [m].
+inline constexpr double secondary_radius_m = 1.2;
 
 inline double observation_level_m(const Options &o) {
-  if (o.altitude_m) {
-    return *o.altitude_m;
-  }
-  return o.type == Type::dish ? 2150.0 : 2100.0;
+  return o.altitude_m ? *o.altitude_m : (o.type == Type::dish ? 2150.0 : 2100.0);
 }
 
-inline void validate(const Options &o) {
-  if (o.events.empty()) {
-    bad("flasher: --events needs at least one value");
-  }
-  for (const int n : o.events) {
-    if (n < 0) {
-      bad("flasher: --events must be >= 0");
-    }
-  }
-  if (o.photons.empty()) {
-    bad("flasher: --photons needs at least one value");
-  }
-  for (const double p : o.photons) {
-    if (!(p >= 0.0) || !std::isfinite(p)) {
-      bad("flasher: --photons must be finite and >= 0");
-    }
-  }
-  // Bunch sizes below 1 are raised to 1 when the sources are built.
-  if (!std::isfinite(o.bunch_size)) {
-    bad("flasher: --bunchsize must be finite");
-  }
-  if (o.frame != gstrickd::Frame::sky && o.frame != gstrickd::Frame::camera) {
-    bad("flasher: --frame must be sky or camera");
-  }
-  if (o.type == Type::secondary && o.frame != gstrickd::Frame::sky) {
-    bad("flasher: --frame applies only to --type dish");
-  }
-  if (o.type == Type::dish) {
-    if (!(o.distance_cm > 0.0) || !(o.camera_radius_cm > 0.0)) {
-      bad("flasher: --distance and --camera-radius must be > 0 (--type dish)");
-    }
-  } else {
-    if (o.events.size() != 1) {
-      bad("flasher: --events takes one value with --type secondary");
-    }
-    if (!(o.flasher_xy_cm >= 0.0) || !(o.mirror_camera_distance_cm > 0.0)) {
-      bad("flasher: positions must be >= 0 (xy) and > 0 (mirror distance) (--type secondary)");
-    }
-    if (o.fire != "all" && o.fire != "alternate" && o.fire != "demo" &&
-        !(o.fire.size() == 1 && o.fire[0] >= '1' && o.fire[0] <= '4')) {
-      bad("flasher: --fire must be all, alternate, demo or 1..4");
-    }
-  }
+namespace detail {
+
+inline Emission make_emission(const Options &o, const Source &source, std::uint64_t index,
+                              double bunch, double offset_ns, bool camera_plane) {
+  Emission e;
+  e.source = source;
+  e.seed = derive_seed(o.seed, index);
+  e.telescope = 1;
+  e.bunch_size = bunch;
+  e.time_offset_ns = offset_ns;
+  e.to_camera_plane = camera_plane;
+  return e;
 }
 
-// Dish placement. Event i fires one flasher emission per photon level, for
-// events[k] events at photon level k. With frame camera the photons are propagated in a
-// straight line to the camera plane z = 0 and the time includes path / c.
-inline std::vector<Event> dish_sources(const Options &o) {
-  // At least one photon per bunch.
-  const double bunch = o.bunch_size < 1.0 ? 1.0 : o.bunch_size;
-  const Vec3 position{0.01 * o.x_cm, 0.01 * o.y_cm, 0.01 * o.distance_cm};
-  const double radius_m = 0.01 * o.camera_radius_cm;
+inline std::vector<Event> build_dish(const Options &o, double bunch) {
+  if (!(o.distance_cm > 0.0) || !std::isfinite(o.distance_cm))
+    throw std::invalid_argument("--distance must be finite and > 0");
+  if (!(o.camera_radius_cm > 0.0) || !std::isfinite(o.camera_radius_cm))
+    throw std::invalid_argument("--camera-radius must be finite and > 0");
+  if (!std::isfinite(o.x_cm) || !std::isfinite(o.y_cm))
+    throw std::invalid_argument("--xy must be finite");
+  if (o.frame != gstrickd::Frame::sky && o.frame != gstrickd::Frame::camera)
+    throw std::invalid_argument("--frame must be sky or camera");
+  if (o.events.empty())
+    throw std::invalid_argument("--events needs at least one value");
+  for (const int e : o.events)
+    if (e < 0)
+      throw std::invalid_argument("--events must be >= 0");
+  const double radius = o.camera_radius_cm / 100.0;
+  const Vec3 position{o.x_cm / 100.0, o.y_cm / 100.0, o.distance_cm / 100.0};
   const Angular angular = parse_angular(o.angular);
-  const Target target = fiducial_target(position, radius_m, angular);
+  Source source;
+  source.frame = o.frame;
+  source.geometry = Emitter{position, {0.0, 0.0, -1.0}, angular};
+  source.spectrum = parse_spectrum(o.spectrum);
+  source.pulse = parse_pulse(o.lightpulse);
+  source.target = fiducial_target(position, radius, angular);
 
-  std::vector<Event> result;
-  std::uint64_t emission = 0;
+  std::vector<Event> events;
+  std::uint64_t emission_index = 0;
   for (std::size_t level = 0; level < o.photons.size(); ++level) {
-    const int events = o.events[std::min(level, o.events.size() - 1)];
-    for (int i = 0; i < events; ++i) {
-      Source source;
-      source.frame = o.frame;
-      source.geometry = Emitter{position, Vec3{0.0, 0.0, -1.0}, angular};
-      source.spectrum = parse_spectrum(o.spectrum);
-      source.pulse = parse_pulse(o.lightpulse);
-      source.photons = o.photons[level] / bunch;
-      source.target = target;
+    source.photons = o.photons[level] / bunch;
+    validate(source);
+    const int count = o.events[std::min(level, o.events.size() - 1)];
+    for (int k = 0; k < count; ++k) {
       Event event;
-      event.number = static_cast<std::uint32_t>(result.size() + 1);
-      event.emissions.push_back({source, derive_seed(o.seed, emission++), bunch, 0.0,
-                                 o.frame == gstrickd::Frame::camera});
-      result.push_back(std::move(event));
+      event.event_number = static_cast<std::int64_t>(events.size()) + 1;
+      event.emissions.push_back(make_emission(o, source, emission_index++, bunch, 0.0,
+                                              o.frame == gstrickd::Frame::camera));
+      events.push_back(std::move(event));
     }
   }
-  return result;
+  return events;
 }
 
-// Flasher i (1..4) in the T frame, in metres.
-inline Emitter secondary_emitter(const Options &o, int i) {
-  const double sx = i < 2 ? 1.0 : -1.0;        // ls1, ls2 at +x; ls3, ls4 at -x
-  const double sy = (i % 2 == 0) ? 1.0 : -1.0; // ls1, ls3 at +y; ls2, ls4 at -y
-  const double xy = o.flasher_xy_cm;
-  const double x = sx * xy;
-  const double y = sy * xy;
-  const double z = o.mirror_camera_distance_cm + o.flasher_depth_cm;
-  // Pointing: alt = -90 deg + inclination, az = atan2(y, x).
-  constexpr double deg = 3.141592653589793238462643383279502884 / 180.0;
-  const double alt = (-90.0 + o.inclination_deg) * deg;
-  const double az = std::atan2(y, x);
-  const Vec3 pointing{std::cos(alt) * std::cos(az), std::cos(alt) * std::sin(az), std::sin(alt)};
-  return Emitter{Vec3{0.01 * x, 0.01 * y, 0.01 * z}, pointing, parse_angular(o.angular)};
-}
+inline std::vector<Event> build_secondary(const Options &o, double bunch) {
+  if (o.frame != gstrickd::Frame::sky)
+    throw std::invalid_argument("--frame applies only to --type dish");
+  if (o.events.size() != 1)
+    throw std::invalid_argument("--events takes one value with --type secondary");
+  if (o.events[0] < 0)
+    throw std::invalid_argument("--events must be >= 0");
+  if (!(o.flasher_xy_cm >= 0.0) || !std::isfinite(o.flasher_xy_cm) ||
+      !std::isfinite(o.flasher_depth_cm) || !std::isfinite(o.inclination_deg))
+    throw std::invalid_argument(
+        "flasher offset, depth and inclination must be finite, offset >= 0");
+  if (!(o.mirror_camera_distance_cm > 0.0) || !std::isfinite(o.mirror_camera_distance_cm))
+    throw std::invalid_argument("--mirror-camera-distance must be finite and > 0");
+  std::array<double, 5> delays = o.delays;
+  for (const double d : delays)
+    if (!std::isfinite(d))
+      throw std::invalid_argument("--delays must be finite");
+  const bool demo = o.fire == "demo";
+  if (demo && std::all_of(delays.begin(), delays.end(), [](double d) { return d == 0.0; }))
+    delays = {0.0, 10.0, 20.0, 30.0, 50.0};
+  int single = -1;
+  if (o.fire.size() == 1 && o.fire[0] >= '1' && o.fire[0] <= '4')
+    single = o.fire[0] - '1';
+  else if (o.fire != "all" && o.fire != "alternate" && !demo)
+    throw std::invalid_argument("--fire must be all, alternate, demo or 1..4");
 
-// Secondary placement. Each emission is one flasher firing with time
-// offset delays[k] (time offset of the emission).
-inline std::vector<Event> secondary_sources(const Options &o) {
-  const double bunch = o.bunch_size < 1.0 ? 1.0 : o.bunch_size;
-  const double radius_m = 0.01 * secondary_fiducial_cm;
-  const Angular angular = parse_angular(o.angular);
+  std::array<Source, 4> sources;
+  const double alt = (-90.0 + o.inclination_deg) * pi / 180.0;
   const Spectrum spectrum = parse_spectrum(o.spectrum);
   const Pulse pulse = parse_pulse(o.lightpulse);
-  const int events = o.events.front();
-
-  // "demo" without delays uses the decent demo values.
-  std::array<double, 5> delays = o.delays;
-  if (o.fire == "demo" &&
-      std::all_of(delays.begin(), delays.end(), [](double d) { return d == 0.0; })) {
-    delays = {0.0, 10.0, 20.0, 30.0, 50.0};
+  const Angular angular = parse_angular(o.angular);
+  for (int i = 0; i < 4; ++i) {
+    const double sx = i < 2 ? 1.0 : -1.0, sy = i % 2 == 0 ? 1.0 : -1.0;
+    const double x = sx * o.flasher_xy_cm, y = sy * o.flasher_xy_cm;
+    const Vec3 position{x / 100.0, y / 100.0,
+                        (o.mirror_camera_distance_cm + o.flasher_depth_cm) / 100.0};
+    const double az = std::atan2(y, x);
+    const Vec3 pointing{std::cos(alt) * std::cos(az), std::cos(alt) * std::sin(az), std::sin(alt)};
+    sources[i].frame = gstrickd::Frame::telescope;
+    sources[i].geometry = Emitter{position, pointing, angular};
+    sources[i].spectrum = spectrum;
+    sources[i].pulse = pulse;
+    sources[i].target = fiducial_target(position, secondary_radius_m, angular);
   }
 
-  std::vector<Event> result;
+  std::vector<Event> events;
   std::uint64_t emission_index = 0;
-  for (const auto &photons : o.photons) {
-    auto emit_flasher = [&](Event &event, int i, double delay) {
-      const Emitter emitter = secondary_emitter(o, i);
-      Source source;
-      source.frame = gstrickd::Frame::telescope;
-      source.geometry = emitter;
-      source.spectrum = spectrum;
-      source.pulse = pulse;
-      source.photons = photons / bunch;
-      source.target = fiducial_target(emitter.position, radius_m, angular);
-      event.emissions.push_back({source, derive_seed(o.seed, emission_index++), bunch, delay});
-    };
-    for (int iev = 0; iev < events; ++iev) {
+  for (const double level_photons : o.photons) {
+    for (auto &s : sources) {
+      s.photons = level_photons / bunch;
+      validate(s);
+    }
+    for (int iev = 0; iev < o.events[0]; ++iev) {
       Event event;
-      event.number = static_cast<std::uint32_t>(result.size() + 1);
-      if (o.fire == "all") {
-        for (int i = 0; i < 4; ++i) {
-          emit_flasher(event, i, delays[static_cast<std::size_t>(i)]);
-        }
+      event.event_number = static_cast<std::int64_t>(events.size()) + 1;
+      const auto fire = [&](int flasher, double offset) {
+        event.emissions.push_back(
+            make_emission(o, sources[flasher], emission_index++, bunch, offset, false));
+        event.labels.push_back(flasher + 1);
+      };
+      if (single >= 0) {
+        fire(single, delays[single]);
       } else if (o.fire == "alternate") {
-        const int i = iev % 4;
-        emit_flasher(event, i, delays[static_cast<std::size_t>(i)]);
-      } else if (o.fire == "demo") {
-        for (int i = 0; i < 4; ++i) {
-          emit_flasher(event, i, delays[static_cast<std::size_t>(i)]);
-        }
-        for (int i = 0; i < 4; ++i) {
-          emit_flasher(event, i, delays[4]);
-        }
+        fire(iev % 4, delays[iev % 4]);
       } else {
-        const int i = o.fire[0] - '1';
-        emit_flasher(event, i, delays[static_cast<std::size_t>(i)]);
+        for (int i = 0; i < 4; ++i)
+          fire(i, delays[i]);
+        if (demo)
+          for (int i = 0; i < 4; ++i)
+            fire(i, delays[4]);
       }
-      result.push_back(std::move(event));
+      events.push_back(std::move(event));
     }
   }
-  return result;
+  return events;
 }
 
-// Sources of all events of the selected type.
+} // namespace detail
+
+// All events of a run. Throws std::invalid_argument for invalid options.
 inline std::vector<Event> build_sources(const Options &o) {
-  validate(o);
-  return o.type == Type::dish ? dish_sources(o) : secondary_sources(o);
+  if (o.photons.empty())
+    throw std::invalid_argument("--photons needs at least one value");
+  for (const double p : o.photons)
+    if (!std::isfinite(p) || p < 0.0)
+      throw std::invalid_argument("--photons must be finite and >= 0");
+  if (!std::isfinite(o.bunch_size))
+    throw std::invalid_argument("--bunchsize must be finite");
+  const double bunch = std::max(1.0, o.bunch_size);
+  return o.type == Type::dish ? detail::build_dish(o, bunch) : detail::build_secondary(o, bunch);
 }
 
-inline RunSetup run_setup(const Options &o) {
-  RunSetup run;
-  run.producer = "dlamb-flasher";
-  run.run_number = o.run_number;
-  run.observation_level_m = observation_level_m(o);
-  run.atmosphere = o.atmosphere;
-  if (o.type == Type::dish) {
-    run.telescope_radius_m = 0.01 * o.camera_radius_cm;
-    run.frame = o.frame;
-  } else {
-    run.telescope_radius_m = 0.01 * secondary_fiducial_cm;
-    run.frame = gstrickd::Frame::telescope;
-  }
-  return run;
-}
-
-// Writes the complete gstrickd stream for the options.
 inline void write_stream(std::ostream &out, const Options &o) {
-  dlamb::programs::write_stream(out, run_setup(o), build_sources(o));
+  const auto events = build_sources(o);
+  RunSetup setup;
+  setup.producer = "dlamb-flasher";
+  setup.run_number = o.run_number;
+  setup.observation_level_m = observation_level_m(o);
+  setup.atmosphere = o.atmosphere;
+  if (o.type == Type::dish) {
+    setup.telescope_radius_m = o.camera_radius_cm / 100.0;
+    setup.frame = o.frame;
+  } else {
+    setup.telescope_radius_m = secondary_radius_m;
+    setup.frame = gstrickd::Frame::telescope;
+  }
+  programs::write_stream(out, setup, events);
 }
 
 } // namespace dlamb::programs::flasher

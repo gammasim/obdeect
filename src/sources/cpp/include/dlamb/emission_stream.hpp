@@ -1,8 +1,12 @@
 #pragma once
 
+// Run writer for sources that push photons one by one (muon track): gstrickd records with
+// buffered chunks (docs/spec/stream-writer.md, writer C).
+
 #include "dlamb/source.hpp"
 #include "dlamb/vec3.hpp"
 
+#include "gstrickd/photons.hpp"
 #include "gstrickd/stream.hpp"
 
 #include <cstddef>
@@ -10,12 +14,19 @@
 #include <ostream>
 #include <stdexcept>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace dlamb {
 
-// Telescope (fiducial sphere) of a run. Positions are relative to the observation level.
+// Seed of emission i of a base seed (splitmix64 of base + golden * (i + 1)).
+inline std::uint64_t source_seed(std::uint64_t base, std::uint64_t i) {
+  std::uint64_t z = base + 0x9E3779B97F4A7C15ULL * (i + 1);
+  z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+  z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+  return z ^ (z >> 31);
+}
+
+// Sphere around a telescope: the region photons are generated for.
 struct TelescopeSphere {
   std::uint32_t id{1};
   Vec3 centre{};
@@ -23,52 +34,38 @@ struct TelescopeSphere {
 };
 
 struct RunInfo {
-  int run_number{1};
-  double observation_level_m{};
+  std::int64_t run_number{1};
+  double observation_level_m{2150.0};
   double wavelength_min_nm{};
   double wavelength_max_nm{};
-  std::vector<TelescopeSphere> telescopes{};
+  std::vector<TelescopeSphere> telescopes;
 };
 
 struct EventInfo {
-  std::uint32_t event_number{1};
-  int primary_id{};
+  std::int64_t event_number{1};
+  std::int64_t primary_id{};
   double energy_gev{};
   double core_x_m{};
   double core_y_m{};
 };
 
-// Totals of a written stream, for diagnostics.
 struct StreamSummary {
-  std::uint64_t photons{}; // Rows written.
-  double weight{};         // Sum of photon weights.
-  double expected{};       // Expected sum of weights from the program's own formula.
+  std::uint64_t photons{}; // rows written
+  double weight{};         // sum of the weights
+  double expected{};       // expected sum of weights (set by the caller)
 };
 
-// Seed of source `index` of a run with `seed` (splitmix64 mix): every source gets its own
-// Philox key, so two sources never share draws.
-[[nodiscard]] inline std::uint64_t source_seed(std::uint64_t seed, std::uint64_t index) {
-  std::uint64_t z = seed + 0x9E3779B97F4A7C15ULL * (index + 1);
-  z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
-  z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
-  return z ^ (z >> 31);
-}
-
-// Writes one run of photons in the sky frame: stream and run records, then per event the
-// event record, one block per telescope (telescope record, photon chunks, telescope_end)
-// and event_end. Photons are buffered and written in chunks of at most 2^16 rows, with
-// first_index counting the photons of each telescope and event.
 class RunWriter {
 public:
   RunWriter(std::ostream &out, const std::string &producer, const RunInfo &run)
       : writer_(out, producer), observation_level_m_(run.observation_level_m) {
-    gstrickd::Metadata meta;
-    meta["run_number"] = static_cast<std::int64_t>(run.run_number);
-    meta["observation_level_m"] = run.observation_level_m;
-    meta["wavelength_min_nm"] = run.wavelength_min_nm;
-    meta["wavelength_max_nm"] = run.wavelength_max_nm;
-    meta["refraction_applied"] = std::int64_t{0};
-    meta["n_telescopes"] = static_cast<std::int64_t>(run.telescopes.size());
+    gstrickd::Metadata m;
+    m["run_number"] = run.run_number;
+    m["observation_level_m"] = run.observation_level_m;
+    m["wavelength_min_nm"] = run.wavelength_min_nm;
+    m["wavelength_max_nm"] = run.wavelength_max_nm;
+    m["refraction_applied"] = std::int64_t{0};
+    m["n_telescopes"] = static_cast<std::int64_t>(run.telescopes.size());
     std::vector<double> x, y, z, r;
     for (const auto &t : run.telescopes) {
       x.push_back(t.centre.x);
@@ -76,119 +73,120 @@ public:
       z.push_back(t.centre.z);
       r.push_back(t.radius_m);
     }
-    meta["telescope_x_m"] = x;
-    meta["telescope_y_m"] = y;
-    meta["telescope_z_m"] = z;
-    meta["telescope_r_m"] = r;
-    writer_.write_metadata(gstrickd::RecordType::run, meta);
+    m["telescope_x_m"] = x;
+    m["telescope_y_m"] = y;
+    m["telescope_z_m"] = z;
+    m["telescope_r_m"] = r;
+    writer_.write_metadata(gstrickd::RecordType::run, m);
   }
 
   void begin_event(const EventInfo &event) {
-    gstrickd::Metadata meta;
-    meta["event_number"] = static_cast<std::int64_t>(event.event_number);
-    meta["primary_id"] = static_cast<std::int64_t>(event.primary_id);
-    meta["energy_gev"] = event.energy_gev;
-    meta["core_x_m"] = std::vector<double>{event.core_x_m};
-    meta["core_y_m"] = std::vector<double>{event.core_y_m};
-    writer_.write_metadata(gstrickd::RecordType::event, meta);
+    if (in_event_)
+      throw std::logic_error("RunWriter: nested event");
+    gstrickd::Metadata m;
+    m["event_number"] = event.event_number;
+    m["primary_id"] = event.primary_id;
+    m["energy_gev"] = event.energy_gev;
+    m["core_x_m"] = std::vector<double>{event.core_x_m};
+    m["core_y_m"] = std::vector<double>{event.core_y_m};
+    writer_.write_metadata(gstrickd::RecordType::event, m);
+    in_event_ = true;
   }
 
-  void begin_telescope(const TelescopeSphere &telescope, gstrickd::Frame frame) {
-    if (in_telescope_)
-      throw std::logic_error("RunWriter: telescope block already open");
+  void begin_telescope(const TelescopeSphere &t) {
+    if (!in_event_ || in_telescope_)
+      throw std::logic_error("RunWriter: telescope block outside an event or nested");
+    gstrickd::Metadata m;
+    m["telescope_id"] = static_cast<std::int64_t>(t.id);
+    m["frame"] = static_cast<std::int64_t>(gstrickd::Frame::sky);
+    m["x_m"] = t.centre.x;
+    m["y_m"] = t.centre.y;
+    m["z_m"] = t.centre.z;
+    m["r_m"] = t.radius_m;
+    writer_.write_metadata(gstrickd::RecordType::telescope, m);
+    telescope_id_ = t.id;
     in_telescope_ = true;
-    telescope_id_ = telescope.id;
-    frame_ = frame;
-    next_index_ = 0;
-    weight_sum_ = 0.0;
-    pending_.clear();
-    gstrickd::Metadata meta;
-    meta["telescope_id"] = static_cast<std::int64_t>(telescope.id);
-    meta["frame"] = static_cast<std::int64_t>(frame);
-    meta["x_m"] = telescope.centre.x;
-    meta["y_m"] = telescope.centre.y;
-    meta["z_m"] = telescope.centre.z;
-    meta["r_m"] = telescope.radius_m;
-    writer_.write_metadata(gstrickd::RecordType::telescope, meta);
+    flushed_ = 0;
+    block_weight_ = 0.0;
+    buffer_.clear();
   }
 
-  // Buffers one photon of the open telescope block.
-  void push(const Photon &photon) {
+  void push(const Photon &p) {
     if (!in_telescope_)
-      throw std::logic_error("RunWriter: push outside a telescope block");
-    pending_.push_back(photon);
-    weight_sum_ += photon.weight;
-    weight_total_ += photon.weight;
-    ++photons_;
-    if (pending_.size() == gstrickd::max_chunk_rows)
+      throw std::logic_error("RunWriter: photon outside a telescope block");
+    buffer_.push_back(p);
+    block_weight_ += p.weight;
+    ++summary_.photons;
+    summary_.weight += p.weight;
+    if (buffer_.size() == gstrickd::max_chunk_rows)
       flush();
   }
 
   void end_telescope() {
     if (!in_telescope_)
-      throw std::logic_error("RunWriter: no telescope block open");
+      throw std::logic_error("RunWriter: no telescope block to end");
     flush();
-    gstrickd::Metadata meta;
-    meta["telescope_id"] = static_cast<std::int64_t>(telescope_id_);
-    meta["photons"] = weight_sum_;
-    writer_.write_metadata(gstrickd::RecordType::telescope_end, meta);
+    gstrickd::Metadata m;
+    m["telescope_id"] = static_cast<std::int64_t>(telescope_id_);
+    m["photons"] = block_weight_;
+    writer_.write_metadata(gstrickd::RecordType::telescope_end, m);
     in_telescope_ = false;
   }
 
-  void end_event() { writer_.write_metadata(gstrickd::RecordType::event_end, {}); }
+  void end_event() {
+    if (!in_event_ || in_telescope_)
+      throw std::logic_error("RunWriter: no event to end or telescope block still open");
+    writer_.write_metadata(gstrickd::RecordType::event_end, {});
+    in_event_ = false;
+  }
 
-  // Writes run_end and stream_end.
   void finish() {
+    if (in_event_)
+      throw std::logic_error("RunWriter: event still open");
     writer_.write_metadata(gstrickd::RecordType::run_end, {});
     writer_.finish();
   }
 
-  [[nodiscard]] std::uint64_t photons() const { return photons_; }
-  [[nodiscard]] double weight() const { return weight_total_; }
+  [[nodiscard]] const StreamSummary &summary() const { return summary_; }
 
 private:
   void flush() {
-    if (pending_.empty())
+    if (buffer_.empty())
       return;
-    gstrickd::PhotonChunk chunk;
-    chunk.telescope_id = telescope_id_;
-    chunk.frame = frame_;
-    chunk.first_index = next_index_;
-    chunk.resize(pending_.size(), source_columns | gstrickd::column_bit(gstrickd::Column::zem));
-    auto &x = chunk[gstrickd::Column::x], &y = chunk[gstrickd::Column::y],
-         &z = chunk[gstrickd::Column::z], &cx = chunk[gstrickd::Column::cx],
-         &cy = chunk[gstrickd::Column::cy], &cz = chunk[gstrickd::Column::cz],
-         &t = chunk[gstrickd::Column::t], &w = chunk[gstrickd::Column::w],
-         &wl = chunk[gstrickd::Column::wavelength], &zem = chunk[gstrickd::Column::zem];
-    for (std::size_t i = 0; i < pending_.size(); ++i) {
-      const Photon &p = pending_[i];
-      x[i] = static_cast<float>(p.position.x);
-      y[i] = static_cast<float>(p.position.y);
-      z[i] = static_cast<float>(p.position.z);
-      // Emission altitude a.s.l. (format.md, zem), as sky_sources.hpp.
-      zem[i] = static_cast<float>(observation_level_m_ + p.position.z);
-      cx[i] = static_cast<float>(p.direction.x);
-      cy[i] = static_cast<float>(p.direction.y);
-      cz[i] = static_cast<float>(p.direction.z);
-      t[i] = static_cast<float>(p.time_ns);
-      w[i] = static_cast<float>(p.weight);
-      wl[i] = static_cast<float>(p.wavelength_nm);
+    using gstrickd::Column;
+    const std::size_t n = buffer_.size();
+    chunk_.resize(n, source_columns | gstrickd::column_bit(Column::zem));
+    chunk_.telescope_id = telescope_id_;
+    chunk_.frame = gstrickd::Frame::sky;
+    chunk_.first_index = flushed_;
+    for (std::size_t i = 0; i < n; ++i) {
+      const Photon &p = buffer_[i];
+      chunk_[Column::x][i] = static_cast<float>(p.position.x);
+      chunk_[Column::y][i] = static_cast<float>(p.position.y);
+      chunk_[Column::z][i] = static_cast<float>(p.position.z);
+      chunk_[Column::cx][i] = static_cast<float>(p.direction.x);
+      chunk_[Column::cy][i] = static_cast<float>(p.direction.y);
+      chunk_[Column::cz][i] = static_cast<float>(p.direction.z);
+      chunk_[Column::t][i] = static_cast<float>(p.time_ns);
+      chunk_[Column::w][i] = static_cast<float>(p.weight);
+      chunk_[Column::wavelength][i] = static_cast<float>(p.wavelength_nm);
+      chunk_[Column::zem][i] =
+          static_cast<float>(observation_level_m_ + static_cast<double>(chunk_[Column::z][i]));
     }
-    writer_.write_chunk(chunk);
-    next_index_ += pending_.size();
-    pending_.clear();
+    writer_.write_chunk(chunk_);
+    flushed_ += n;
+    buffer_.clear();
   }
 
   gstrickd::Writer writer_;
-  double observation_level_m_{};
-  std::vector<Photon> pending_;
+  double observation_level_m_;
+  bool in_event_{false}, in_telescope_{false};
   std::uint32_t telescope_id_{};
-  gstrickd::Frame frame_{gstrickd::Frame::sky};
-  std::uint64_t next_index_{};
-  std::uint64_t photons_{};
-  double weight_sum_{};
-  double weight_total_{};
-  bool in_telescope_{false};
+  std::uint64_t flushed_{};
+  double block_weight_{};
+  std::vector<Photon> buffer_;
+  gstrickd::PhotonChunk chunk_;
+  StreamSummary summary_;
 };
 
 } // namespace dlamb

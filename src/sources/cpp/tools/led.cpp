@@ -1,123 +1,139 @@
-// dlamb-led: LED photon stream for selected camera pixels.
-// Writes a gstrickd stream to stdout or to -o FILE; --list-only prints the pixel combinations
-// instead.
+// dlamb-led: LED in front of selected camera pixels (camera frame).
 
 #include "dlamb/programs/led.hpp"
 
-#include <cstdint>
-#include <exception>
+#include "tool_args.hpp"
+
 #include <fstream>
 #include <iostream>
-#include <string>
-
-using namespace dlamb::programs;
+#include <utility>
 
 namespace {
 
-void usage(std::ostream &out, const char *name) {
-  out << "usage: " << name << " --camera-file FILE (--use LIST | --use-trg-rand N | "
-      << "--use-trg-all) [options]\n"
-      << "Options (default in braces; names as in led):\n"
-      << "  --camera-file FILE        camera definition (required)\n"
-      << "  --use LIST                pixels, '+' required, [a,b] pre-sum slaves\n"
-      << "  --use-trg-rand N          N random trigger groups of the camera file\n"
-      << "  --use-trg-all             all trigger groups of the camera file\n"
-      << "  --require N               pixels to fire per event; 0 = all {0}\n"
-      << "  --random N                N random distinct pixels per event (uses --require)\n"
-      << "  --slaves                  also fire the pre-sum slaves\n"
-      << "  --events N                events per pixel combination {1}\n"
-      << "  --photons N               photons per pixel {500}\n"
-      << "  --bunchsize F             photons per bunch (at least 1) {1}\n"
-      << "  --camera-radius R         fiducial camera radius [cm] {123}\n"
-      << "  --spectrum WLEN|Cherenkov:A:B  wavelength [nm] {400}\n"
-      << "  --lightpulse SPEC         pulse, as in flasher {Simple:0}\n"
-      << "  --run N                   run number {1}\n"
-      << "  --altitude M              observation level [m] {2150}\n"
-      << "  --atmosphere N            atmospheric profile number {1}\n"
-      << "  --seed N                  random seed (new) {1}\n"
-      << "  --list-only, -L           print the pixel combinations, no photons\n"
-      << "  --quiet, -q               accepted; this program prints nothing else\n"
-      << "  -o FILE                   output file {stdout}\n"
-      << "  -h, --help                this text\n";
-}
+const char *usage =
+    R"(usage: dlamb-led --camera-file FILE (--use LIST | --use-trg-rand N | --use-trg-all) [options]
+  --camera-file, -c FILE   camera definition (Pixel and Trigger lines)
+  --use, -u LIST           pixels: ids, + required, [a,b] slaves, % comment
+  --use-trg-rand N         N random trigger groups      --use-trg-all  all trigger groups
+  --require, --required N  pixels per event (0 = all)   --random N     N random pixels per event
+  --slaves                 also fire pre-sum slaves     --events N      events per combination
+  --photons N  --bunchsize, -b F  --camera-radius, -r R [cm]
+  --spectrum W  --lightpulse, --pulse S  --run, -R N  --altitude, -a M  --atmosphere, -A N
+  --seed N  --list-only, -L  --quiet, -q  -o FILE  -h, --help
+)";
 
 } // namespace
 
 int main(int argc, char **argv) {
-  led::Options options;
-  std::string camera_file;
-  std::string output;
-  bool list_only = false;
-  try {
+  using namespace dlamb;
+  const std::string prefix = argc > 0 ? argv[0] : "dlamb-led";
+  return cli::run_tool(prefix, [&] {
+    programs::led::Options o;
+    std::string camera_file, output;
+    bool list_only = false;
     for (int i = 1; i < argc; ++i) {
-      const std::string arg = argv[i];
-      if (arg == "-h" || arg == "--help") {
-        usage(std::cout, argv[0]);
+      const std::string name = argv[i];
+      if (name == "-h" || name == "--help") {
+        std::cout << usage;
         return 0;
-      } else if (arg == "--camera-file" || arg == "-c") {
-        camera_file = option_value(argc, argv, i);
-      } else if (arg == "--use" || arg == "-u") {
-        options.use = option_value(argc, argv, i);
-      } else if (arg == "--use-trg-rand") {
-        options.trigger_random = static_cast<int>(parse_integer(option_value(argc, argv, i), arg));
-      } else if (arg == "--use-trg-all") {
-        options.trigger_all = true;
-      } else if (arg == "--require" || arg == "--required") {
-        options.require = static_cast<int>(parse_integer(option_value(argc, argv, i), arg));
-      } else if (arg == "--random") {
-        options.random = true;
-        options.require = static_cast<int>(parse_integer(option_value(argc, argv, i), arg));
-      } else if (arg == "--slaves") {
-        options.slaves = true;
-      } else if (arg == "--events") {
-        options.events = static_cast<int>(parse_integer(option_value(argc, argv, i), arg));
-      } else if (arg == "--photons") {
-        options.photons = parse_real(option_value(argc, argv, i), arg);
-      } else if (arg == "--bunchsize" || arg == "-b") {
-        options.bunch_size = parse_real(option_value(argc, argv, i), arg);
-      } else if (arg == "--camera-radius" || arg == "-r") {
-        options.camera_radius_cm = parse_real(option_value(argc, argv, i), arg);
-      } else if (arg == "--spectrum") {
-        options.spectrum = option_value(argc, argv, i);
-      } else if (arg == "--lightpulse" || arg == "--pulse") {
-        options.lightpulse = option_value(argc, argv, i);
-      } else if (arg == "--run" || arg == "-R") {
-        options.run_number = static_cast<int>(parse_integer(option_value(argc, argv, i), arg));
-      } else if (arg == "--altitude" || arg == "-a") {
-        options.altitude_m = parse_real(option_value(argc, argv, i), arg);
-      } else if (arg == "--atmosphere" || arg == "-A") {
-        options.atmosphere = static_cast<int>(parse_integer(option_value(argc, argv, i), arg));
-      } else if (arg == "--seed") {
-        options.seed = static_cast<std::uint64_t>(parse_integer(option_value(argc, argv, i), arg));
-      } else if (arg == "--list-only" || arg == "-L") {
-        list_only = true;
-      } else if (arg == "--quiet" || arg == "-q") {
+      }
+      if (name == "--slaves") {
+        o.slaves = true;
         continue;
-      } else if (arg == "-o") {
-        output = option_value(argc, argv, i);
-      } else {
-        bad("unknown option " + arg);
       }
+      if (name == "--use-trg-all") {
+        o.trigger_all = true;
+        continue;
+      }
+      if (name == "--list-only" || name == "-L") {
+        list_only = true;
+        continue;
+      }
+      if (name == "--quiet" || name == "-q")
+        continue;
+      static const char *const with_value[] = {"--camera-file",
+                                               "-c",
+                                               "--use",
+                                               "-u",
+                                               "--use-trg-rand",
+                                               "--require",
+                                               "--required",
+                                               "--random",
+                                               "--events",
+                                               "--photons",
+                                               "--bunchsize",
+                                               "-b",
+                                               "--camera-radius",
+                                               "-r",
+                                               "--spectrum",
+                                               "--lightpulse",
+                                               "--pulse",
+                                               "--run",
+                                               "-R",
+                                               "--altitude",
+                                               "-a",
+                                               "--atmosphere",
+                                               "-A",
+                                               "--seed",
+                                               "-o"};
+      bool known = false;
+      for (const char *w : with_value)
+        known = known || name == w;
+      if (!known)
+        throw std::invalid_argument("unknown option " + name);
+      if (i + 1 >= argc)
+        throw std::invalid_argument("option " + name + " needs a value");
+      const std::string text = argv[++i];
+      const auto integer = [&] {
+        return static_cast<int>(programs::parse_integer_value(text, name));
+      };
+      if (name == "--camera-file" || name == "-c")
+        camera_file = text;
+      else if (name == "--use" || name == "-u")
+        o.use = text;
+      else if (name == "--use-trg-rand")
+        o.trigger_random = integer();
+      else if (name == "--require" || name == "--required")
+        o.require = integer();
+      else if (name == "--random") {
+        o.random = true;
+        o.require = integer();
+      } else if (name == "--events")
+        o.events = integer();
+      else if (name == "--photons")
+        o.photons = programs::parse_real(text, name);
+      else if (name == "--bunchsize" || name == "-b")
+        o.bunch_size = programs::parse_real(text, name);
+      else if (name == "--camera-radius" || name == "-r")
+        o.camera_radius_cm = programs::parse_real(text, name);
+      else if (name == "--spectrum")
+        o.spectrum = text;
+      else if (name == "--lightpulse" || name == "--pulse")
+        o.lightpulse = text;
+      else if (name == "--run" || name == "-R")
+        o.run_number = programs::parse_integer_value(text, name);
+      else if (name == "--altitude" || name == "-a")
+        o.altitude_m = programs::parse_real(text, name);
+      else if (name == "--atmosphere" || name == "-A")
+        o.atmosphere = programs::parse_integer_value(text, name);
+      else if (name == "--seed")
+        o.seed = cli::parse_seed(text, name);
+      else if (name == "-o")
+        output = text;
     }
-    if (camera_file.empty()) {
-      bad("no camera definition file defined (--camera-file)");
-    }
-    std::ifstream camera(camera_file);
-    if (!camera) {
-      bad("cannot open camera configuration file " + camera_file);
-    }
-    options.camera = led::read_camera(camera, options.slaves);
-
+    if (camera_file.empty())
+      throw std::invalid_argument("no camera definition file defined (--camera-file)");
+    std::ifstream file(camera_file);
+    if (!file)
+      throw std::invalid_argument("cannot open camera configuration file " + camera_file);
+    o.camera = programs::led::read_camera(file, o.slaves);
     if (list_only) {
-      for (const auto &event : led::build_sources(options)) {
-        led::print_labels(std::cout, event);
-      }
-    } else {
-      write_output(output, [&](std::ostream &out) { led::write_stream(out, options); });
+      std::cout << programs::led::label_lines(programs::led::build_sources(o));
+      return 0;
     }
-  } catch (const std::exception &error) {
-    std::cerr << argv[0] << ": " << error.what() << "\n";
-    return 1;
-  }
-  return 0;
+    cli::Output out(output);
+    programs::led::write_stream(out.stream(), o);
+    out.close();
+    return 0;
+  });
 }

@@ -1,5 +1,8 @@
 #pragma once
 
+// Light sources: emitters and stars with angular, spectral and pulse profiles, optional
+// targets, photon counts and per-photon emission (docs/spec/source-core.md).
+
 #include "dlamb/density.hpp"
 #include "dlamb/streams.hpp"
 #include "dlamb/vec3.hpp"
@@ -8,30 +11,44 @@
 #include "gstrickd/photons.hpp"
 #include "gstrickd/random.hpp"
 
-#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
-#include <type_traits>
+#include <string>
+#include <utility>
 #include <variant>
 
 namespace dlamb {
 
-inline constexpr double speed_of_light_m_per_ns = 0.299792458;
+inline constexpr double max_magnitude = 1e30;
+inline constexpr double max_photon_count = 9007199254740992.0; // 2^53
+inline constexpr double min_positive = 1e-30;
 
-// A point emitter (as obdeect Emitter). Directions follow the
-// angular profile about `pointing`; positions and directions are in the source frame.
+// Columns written for the photons of a source (no zem; the stream writer adds it).
+inline constexpr std::uint32_t source_columns =
+    gstrickd::column_bit(gstrickd::Column::x) | gstrickd::column_bit(gstrickd::Column::y) |
+    gstrickd::column_bit(gstrickd::Column::z) | gstrickd::column_bit(gstrickd::Column::cx) |
+    gstrickd::column_bit(gstrickd::Column::cy) | gstrickd::column_bit(gstrickd::Column::cz) |
+    gstrickd::column_bit(gstrickd::Column::t) | gstrickd::column_bit(gstrickd::Column::w) |
+    gstrickd::column_bit(gstrickd::Column::wavelength);
+
+struct Photon {
+  Vec3 position{};
+  Vec3 direction{};
+  double time_ns{};
+  double weight{1.0};
+  double wavelength_nm{};
+};
+
 struct Emitter {
   Vec3 position{};
   Vec3 pointing{0.0, 0.0, 1.0};
   Angular angular{Isotropic{}};
 };
 
-// Parallel beam from a star (distance infinite) or a point source at a finite distance
-// (obdeect PointSource). Photons land uniformly on a disc of radius disk_radius_m at
-// height disk_z_m; each ray starts where it crosses the plane start_z_m.
+// Parallel beam (infinite distance) or point source at a finite distance, seen through a disc.
 struct Star {
   Vec3 towards_source{0.0, 0.0, 1.0};
   double distance_m{std::numeric_limits<double>::infinity()};
@@ -40,24 +57,19 @@ struct Star {
   double start_z_m{};
 };
 
-// Importance targets: only emitted photons that reach the target are generated.
-// DiscTarget keeps every candidate with a weight equal to its probability of reaching
-// the disc (obdeect Emitter); it works with any density-based angular profile.
-// SphereTarget samples directions in the cone that contains the sphere;
-// it is exact for isotropic emitters only.
 struct DiscTarget {
   Vec3 centre{};
   Vec3 normal{0.0, 0.0, 1.0};
   double radius_m{};
 };
+
 struct SphereTarget {
   Vec3 centre{};
   double radius_m{};
 };
+
 using Target = std::variant<std::monostate, DiscTarget, SphereTarget>;
 
-// One light source. `photons` is the mean number of photons emitted into 4 pi for an
-// emitter (before any target) or the mean number of photons on the disc of a star.
 struct Source {
   gstrickd::Frame frame{gstrickd::Frame::sky};
   std::variant<Emitter, Star> geometry{Emitter{}};
@@ -67,337 +79,275 @@ struct Source {
   Target target{};
 };
 
-// One emitted photon before it is stored as float32.
-struct Photon {
-  Vec3 position{};
-  Vec3 direction{};
-  double time_ns{};
-  double weight{1.0};
-  double wavelength_nm{};
-};
-
-inline constexpr std::uint32_t source_columns =
-    gstrickd::column_bit(gstrickd::Column::x) | gstrickd::column_bit(gstrickd::Column::y) |
-    gstrickd::column_bit(gstrickd::Column::z) | gstrickd::column_bit(gstrickd::Column::cx) |
-    gstrickd::column_bit(gstrickd::Column::cy) | gstrickd::column_bit(gstrickd::Column::cz) |
-    gstrickd::column_bit(gstrickd::Column::t) | gstrickd::column_bit(gstrickd::Column::w) |
-    gstrickd::column_bit(gstrickd::Column::wavelength);
-
-// Largest magnitude of a length, time or wavelength. Squares of lengths and the float32
-// photon columns then stay finite, and positive values are at least its inverse, so
-// their inverses stay finite too.
-inline constexpr double max_magnitude = 1e30;
-
-// Largest photon count that is exact in a double (2^53). Larger means cannot be rounded
-// to an integer count without loss.
-inline constexpr double max_photon_count = 9007199254740992.0;
-
-[[nodiscard]] inline bool magnitude_ok(double x) {
-  return std::isfinite(x) && std::abs(x) <= max_magnitude;
-}
-[[nodiscard]] inline bool magnitude_ok(Vec3 a) {
-  return magnitude_ok(a.x) && magnitude_ok(a.y) && magnitude_ok(a.z);
-}
-[[nodiscard]] inline bool positive_magnitude_ok(double x) {
-  return magnitude_ok(x) && x >= 1.0 / max_magnitude;
+// Draws of one photon for one stream.
+inline Uniforms philox_draw(std::uint64_t seed, std::uint32_t event, std::uint32_t telescope,
+                            std::uint64_t index, Stream stream) {
+  return gstrickd::uniform4(
+      {seed, stage_sources, event, telescope, index, static_cast<std::uint32_t>(stream)});
 }
 
-// Throws std::invalid_argument for an inconsistent source.
-inline void validate(const Source &source) {
-  const auto fail = [](const char *message) { throw std::invalid_argument(message); };
-  if (!(source.photons >= 0.0) || source.photons > max_photon_count)
-    fail("photons must be finite, >= 0 and at most 2^53");
-  if (source.frame != gstrickd::Frame::sky && source.frame != gstrickd::Frame::telescope &&
-      source.frame != gstrickd::Frame::camera)
-    fail("frame must be sky, T or C");
-  std::visit(
-      [&](const auto &s) {
-        using S = std::decay_t<decltype(s)>;
-        if constexpr (std::is_same_v<S, Fixed>) {
-          if (!positive_magnitude_ok(s.value))
-            fail("a fixed wavelength must be in [1e-30, 1e30] nm");
-        } else if constexpr (std::is_same_v<S, UniformRange>) {
-          if (!positive_magnitude_ok(s.low) || !positive_magnitude_ok(s.high) || !(s.high >= s.low))
-            fail("a uniform wavelength range needs 0 < low <= high, within [1e-30, 1e30] nm");
-        } else if constexpr (std::is_same_v<S, InverseSquare>) {
-          if (!positive_magnitude_ok(s.low) || !positive_magnitude_ok(s.high) || !(s.high > s.low))
-            fail(
-                "an inverse-square wavelength range needs 0 < low < high, within [1e-30, 1e30] nm");
-        } else if constexpr (std::is_same_v<S, Tabulated>) {
-          if (s.density.empty() || !positive_magnitude_ok(s.density.lower()) ||
-              !magnitude_ok(s.density.upper()))
-            fail("a tabulated wavelength density needs nodes in [1e-30, 1e30] nm");
-        }
-      },
-      source.spectrum);
-  std::visit(
-      [&](const auto &s) {
-        using S = std::decay_t<decltype(s)>;
-        if constexpr (std::is_same_v<S, Fixed>) {
-          if (!magnitude_ok(s.value))
-            fail("a fixed time must be finite and within 1e30 ns");
-        } else if constexpr (std::is_same_v<S, UniformRange>) {
-          if (!magnitude_ok(s.low) || !magnitude_ok(s.high) || s.high < s.low)
-            fail("a uniform pulse needs low <= high, within 1e30 ns");
-        } else if constexpr (std::is_same_v<S, GaussianShape>) {
-          if (!magnitude_ok(s.mean_value) || !(s.sigma >= 0.0) || !magnitude_ok(s.sigma))
-            fail("a Gaussian pulse needs a mean and sigma >= 0, finite and within 1e30 ns");
-        } else if constexpr (std::is_same_v<S, Exponential>) {
-          if (!magnitude_ok(s.mean_value) || !(s.tau >= 0.0) || !magnitude_ok(s.tau))
-            fail("an exponential pulse needs a mean and tau >= 0, finite and within 1e30 ns");
-        } else if constexpr (std::is_same_v<S, ComplexPulse>) {
-          if (!(s.flat_width >= 0.0) || !(s.gauss_rms >= 0.0) || !(s.decay >= 0.0) ||
-              !magnitude_ok(s.flat_width) || !magnitude_ok(s.gauss_rms) || !magnitude_ok(s.decay) ||
-              !magnitude_ok(s.delay))
-            fail("a complex pulse needs widths >= 0 and a delay, all finite and within 1e30 ns");
-        } else if constexpr (std::is_same_v<S, Tabulated>) {
-          if (s.density.empty() || !magnitude_ok(s.density.lower()) ||
-              !magnitude_ok(s.density.upper()))
-            fail("a tabulated pulse needs nodes within 1e30 ns");
-        }
-      },
-      source.pulse);
-
-  if (const auto *star = std::get_if<Star>(&source.geometry)) {
-    if (!std::holds_alternative<std::monostate>(source.target))
-      fail("a star takes no target (its disc is the target)");
-    const double unit = norm(star->towards_source);
-    if (!is_finite(star->towards_source) || std::abs(unit - 1.0) > 1e-9 ||
-        star->towards_source.z <= 0.0)
-      fail("towards_source must be a finite unit vector pointing upwards");
-    // Infinite distance is a plane wave; a finite distance must be a valid length.
-    const bool plane_wave = std::isinf(star->distance_m) && star->distance_m > 0.0;
-    if (!plane_wave && !positive_magnitude_ok(star->distance_m))
-      fail("star distance must be positive and finite (or +inf for a plane wave)");
-    if (!positive_magnitude_ok(star->disk_radius_m) || !magnitude_ok(star->disk_z_m) ||
-        !magnitude_ok(star->start_z_m))
-      fail("star disc radius must be positive; heights finite and within 1e30 m");
-    return;
-  }
-
-  const auto &emitter = std::get<Emitter>(source.geometry);
-  if (!magnitude_ok(emitter.position) || !is_finite(emitter.pointing) ||
-      std::abs(norm(emitter.pointing) - 1.0) > 1e-9)
-    fail("an emitter needs a position within 1e30 m and a unit pointing vector");
-  std::visit(
-      [&](const auto &a) {
-        using A = std::decay_t<decltype(a)>;
-        if constexpr (std::is_same_v<A, FixedAngle>) {
-          if (!(a.u0 >= 0.0 && a.u0 <= 2.0))
-            fail("a fixed angle must lie in [0, 180] deg");
-        } else if constexpr (std::is_same_v<A, FilledCone>) {
-          if (!(a.u0 > 0.0 && a.u0 <= 2.0))
-            fail("a filled cone needs a half angle in (0, 180] deg");
-        } else if constexpr (std::is_same_v<A, TabulatedAngular>) {
-          if (a.density.empty() || !(a.density.lower() >= 0.0) || a.density.upper() > 2.0 + 1e-12)
-            fail("a tabulated angular profile needs nodes with 0 <= 1 - cos(theta) <= 2");
-        }
-      },
-      emitter.angular);
-  if (const auto *disc = std::get_if<DiscTarget>(&source.target)) {
-    if (!magnitude_ok(disc->centre) || !is_finite(disc->normal) ||
-        std::abs(norm(disc->normal) - 1.0) > 1e-9 || !positive_magnitude_ok(disc->radius_m))
-      fail("a disc target needs a centre within 1e30 m, a unit normal and a positive radius");
-    if (std::holds_alternative<FixedAngle>(emitter.angular))
-      fail("a fixed-angle emitter cannot target a disc (it has no density)");
-    if (std::abs(dot(disc->centre - emitter.position, disc->normal)) <= 0.0)
-      fail("the emitter must not lie in the plane of the disc");
-  }
-  if (const auto *sphere = std::get_if<SphereTarget>(&source.target)) {
-    if (!magnitude_ok(sphere->centre) || !positive_magnitude_ok(sphere->radius_m))
-      fail("a sphere target needs a centre within 1e30 m and a positive radius");
-    if (!std::holds_alternative<Isotropic>(emitter.angular))
-      fail("a sphere target needs an isotropic emitter");
-    if (!(norm(sphere->centre - emitter.position) > sphere->radius_m))
-      fail("the emitter must lie outside the sphere");
-  }
+// Magnitude limits (finite, |x| <= 1e30; positive values also >= 1e-30).
+inline bool within_limits(double x) { return std::isfinite(x) && std::abs(x) <= max_magnitude; }
+inline bool within_limits(const Vec3 &v) {
+  return within_limits(v.x) && within_limits(v.y) && within_limits(v.z);
 }
-
-// Mean candidate count per emitted photon of a disc target: the expected number of
-// photons reaching the disc is photons * candidates_per_photon * mean weight. Equals
-// obdeect Emitter::candidates_per_photon.
-[[nodiscard]] inline double disc_candidates_per_photon(const Emitter &emitter,
-                                                       const DiscTarget &disc) {
-  const double h = std::abs(dot(disc.centre - emitter.position, disc.normal));
-  const double per_steradian =
-      intensity_maximum(emitter.angular) / (two_pi * integral(emitter.angular));
-  return per_steradian * pi * disc.radius_m * disc.radius_m / (h * h);
+inline bool positive_within_limits(double x) {
+  return std::isfinite(x) && x >= min_positive && x <= max_magnitude;
 }
-
-// Cosine of the half angle of the cone that contains a sphere target.
-[[nodiscard]] inline double sphere_cos_max(const Emitter &emitter, const SphereTarget &sphere) {
-  const double ratio = sphere.radius_m / norm(sphere.centre - emitter.position);
-  return std::sqrt(1.0 - ratio * ratio);
-}
+inline bool is_unit(const Vec3 &v) { return is_finite(v) && std::abs(norm(v) - 1.0) <= 1e-9; }
 
 namespace detail {
 
-inline double unchecked_expected_count(const Source &source) {
-  if (std::holds_alternative<Star>(source.geometry))
-    return source.photons;
-  const auto &emitter = std::get<Emitter>(source.geometry);
-  if (const auto *disc = std::get_if<DiscTarget>(&source.target))
-    return source.photons * disc_candidates_per_photon(emitter, *disc);
-  if (const auto *sphere = std::get_if<SphereTarget>(&source.target))
-    return source.photons * 0.5 * (1.0 - sphere_cos_max(emitter, *sphere));
-  return source.photons;
+[[noreturn]] inline void reject(const std::string &what) { throw std::invalid_argument(what); }
+
+inline void require(bool ok, const char *what) {
+  if (!ok)
+    reject(what);
 }
 
 } // namespace detail
 
-// Mean number of generated photons (candidates for a disc target). Throws when it is not
-// finite or exceeds 2^53 (a near-degenerate disc target can overflow it).
-[[nodiscard]] inline double expected_count(const Source &source) {
-  validate(source);
-  const double mean = detail::unchecked_expected_count(source);
-  if (!(mean >= 0.0) || mean > max_photon_count)
-    throw std::invalid_argument("the expected photon count must be finite and at most 2^53");
+// Smallest and largest wavelength a spectrum can produce.
+inline std::pair<double, double> spectrum_range(const Spectrum &spectrum) {
+  if (const auto *f = std::get_if<Fixed>(&spectrum))
+    return {f->value, f->value};
+  if (const auto *r = std::get_if<UniformRange>(&spectrum))
+    return {r->low, r->high};
+  if (const auto *i = std::get_if<InverseSquare>(&spectrum))
+    return {i->low, i->high};
+  const auto &t = std::get<Tabulated>(spectrum);
+  return {t.density.lower(), t.density.upper()};
+}
+
+// Rules for the spectrum of a source.
+inline void validate_spectrum(const Spectrum &spectrum) {
+  using detail::require;
+  if (const auto *f = std::get_if<Fixed>(&spectrum)) {
+    require(positive_within_limits(f->value), "spectrum: wavelength out of range");
+  } else if (const auto *r = std::get_if<UniformRange>(&spectrum)) {
+    require(positive_within_limits(r->low) && positive_within_limits(r->high) && r->low <= r->high,
+            "spectrum: need 0 < low <= high within limits");
+  } else if (const auto *i = std::get_if<InverseSquare>(&spectrum)) {
+    require(positive_within_limits(i->low) && positive_within_limits(i->high) && i->low < i->high,
+            "spectrum: need 0 < low < high within limits");
+  } else if (const auto *t = std::get_if<Tabulated>(&spectrum)) {
+    require(!t->density.empty() && positive_within_limits(t->density.lower()) &&
+                within_limits(t->density.upper()),
+            "spectrum: table is empty or out of range");
+  }
+}
+
+inline void validate_pulse(const Pulse &pulse) {
+  using detail::require;
+  if (const auto *f = std::get_if<Fixed>(&pulse)) {
+    require(within_limits(f->value), "pulse: time out of range");
+  } else if (const auto *r = std::get_if<UniformRange>(&pulse)) {
+    require(within_limits(r->low) && within_limits(r->high) && r->low <= r->high,
+            "pulse: need low <= high within limits");
+  } else if (const auto *g = std::get_if<GaussianShape>(&pulse)) {
+    require(within_limits(g->mean_value) && within_limits(g->sigma) && g->sigma >= 0.0,
+            "pulse: Gaussian mean or sigma out of range");
+  } else if (const auto *e = std::get_if<Exponential>(&pulse)) {
+    require(within_limits(e->mean_value) && within_limits(e->tau) && e->tau >= 0.0,
+            "pulse: exponential mean or decay out of range");
+  } else if (const auto *c = std::get_if<ComplexPulse>(&pulse)) {
+    require(within_limits(c->flat_width) && c->flat_width >= 0.0 && within_limits(c->gauss_rms) &&
+                c->gauss_rms >= 0.0 && within_limits(c->decay) && c->decay >= 0.0 &&
+                within_limits(c->delay),
+            "pulse: complex pulse widths must be finite and >= 0, delay finite");
+  } else if (const auto *t = std::get_if<Tabulated>(&pulse)) {
+    require(!t->density.empty() && within_limits(t->density.lower()) &&
+                within_limits(t->density.upper()),
+            "pulse: table is empty or out of range");
+  }
+}
+
+// Throws std::invalid_argument for any invalid source.
+inline void validate(const Source &s) {
+  using detail::require;
+  require(std::isfinite(s.photons) && s.photons >= 0.0 && s.photons <= max_photon_count,
+          "photons must be finite, >= 0 and at most 2^53");
+  require(s.frame == gstrickd::Frame::sky || s.frame == gstrickd::Frame::telescope ||
+              s.frame == gstrickd::Frame::camera,
+          "a source frame must be sky, telescope or camera");
+  validate_spectrum(s.spectrum);
+  validate_pulse(s.pulse);
+
+  if (const auto *star = std::get_if<Star>(&s.geometry)) {
+    require(std::holds_alternative<std::monostate>(s.target), "a star takes no target");
+    require(is_unit(star->towards_source) && star->towards_source.z > 0.0,
+            "star: towards_source must be a unit vector with z > 0");
+    require(star->distance_m == std::numeric_limits<double>::infinity() ||
+                positive_within_limits(star->distance_m),
+            "star: distance must be infinite or positive within limits");
+    require(positive_within_limits(star->disk_radius_m), "star: disk radius out of range");
+    require(within_limits(star->disk_z_m) && within_limits(star->start_z_m),
+            "star: disk or start height out of range");
+    return;
+  }
+
+  const auto &e = std::get<Emitter>(s.geometry);
+  require(within_limits(e.position), "emitter: position out of range");
+  require(is_unit(e.pointing), "emitter: pointing must be a unit vector");
+  if (const auto *a = std::get_if<FixedAngle>(&e.angular)) {
+    require(a->u0 >= 0.0 && a->u0 <= 2.0, "emitter: fixed angle u0 must lie in [0, 2]");
+  } else if (const auto *c = std::get_if<FilledCone>(&e.angular)) {
+    require(c->u0 > 0.0 && c->u0 <= 2.0, "emitter: filled cone u0 must lie in (0, 2]");
+  } else if (const auto *t = std::get_if<TabulatedAngular>(&e.angular)) {
+    require(!t->density.empty() && t->density.lower() >= 0.0 && t->density.upper() <= 2.0 + 1e-12,
+            "emitter: angular table must be non-empty and lie in u = [0, 2]");
+  }
+  if (const auto *disc = std::get_if<DiscTarget>(&s.target)) {
+    require(within_limits(disc->centre) && is_unit(disc->normal) &&
+                positive_within_limits(disc->radius_m),
+            "disc target: centre, normal or radius out of range");
+    require(!std::holds_alternative<FixedAngle>(e.angular),
+            "a disc target needs a density: fixed-angle emission is not supported");
+    require(std::abs(dot(disc->centre - e.position, disc->normal)) > 0.0,
+            "disc target: the emitter lies in the plane of the disc");
+  } else if (const auto *sphere = std::get_if<SphereTarget>(&s.target)) {
+    require(within_limits(sphere->centre) && positive_within_limits(sphere->radius_m),
+            "sphere target: centre or radius out of range");
+    require(std::holds_alternative<Isotropic>(e.angular),
+            "a sphere target needs an isotropic emitter");
+    require(norm(sphere->centre - e.position) > sphere->radius_m,
+            "sphere target: the emitter lies inside the sphere");
+  }
+}
+
+// Mean number of generated photons (candidates for a disc target).
+inline double expected_count(const Source &s) {
+  validate(s);
+  double mean = s.photons;
+  if (const auto *e = std::get_if<Emitter>(&s.geometry)) {
+    if (const auto *disc = std::get_if<DiscTarget>(&s.target)) {
+      const double h = std::abs(dot(disc->centre - e->position, disc->normal));
+      const double per_photon = intensity_maximum(e->angular) / (two_pi * integral(e->angular)) *
+                                pi * (disc->radius_m / h) * (disc->radius_m / h);
+      mean = s.photons * per_photon;
+    } else if (const auto *sphere = std::get_if<SphereTarget>(&s.target)) {
+      const double ratio = sphere->radius_m / norm(sphere->centre - e->position);
+      mean = s.photons * (1.0 - std::sqrt(1.0 - ratio * ratio)) / 2.0;
+    }
+  }
+  if (!std::isfinite(mean) || mean > max_photon_count)
+    throw std::invalid_argument("the expected photon count is not finite or exceeds 2^53");
   return mean;
 }
 
-// Number of photons of one source in one (event, telescope): the expected count rounded
-// up with probability equal to its fractional part.
-[[nodiscard]] inline std::uint64_t photon_count(const Source &source, std::uint64_t seed,
-                                                std::uint32_t event, std::uint32_t telescope) {
-  const double mean = expected_count(source);
+// Rounds a mean to a count: floor plus one with the probability of the fraction.
+inline std::uint64_t round_count(double mean, std::uint64_t seed, std::uint32_t event,
+                                 std::uint32_t telescope) {
   const double whole = std::floor(mean);
-  const auto u = gstrickd::uniform4(
-      {seed, stage_sources, event, telescope, 0, static_cast<std::uint32_t>(Stream::count)});
-  return static_cast<std::uint64_t>(whole) + (u[0] < mean - whole ? 1U : 0U);
+  const double u = philox_draw(seed, event, telescope, 0, Stream::count)[0];
+  return static_cast<std::uint64_t>(whole) + (u < mean - whole ? 1U : 0U);
+}
+
+inline std::uint64_t photon_count(const Source &s, std::uint64_t seed, std::uint32_t event,
+                                  std::uint32_t telescope) {
+  return round_count(expected_count(s), seed, event, telescope);
 }
 
 namespace detail {
 
-// Emission angle of an emitter, u = 1 - cos(theta), restricted to u <= umax. The
-// emitted fraction below umax maps the uniform deviate onto the profile.
-[[nodiscard]] inline double angle_u(const Angular &angular, double deviate, double umax) {
-  const double fraction = std::visit([umax](const auto &a) { return a.cdf(umax); }, angular);
-  return angle_quantile(angular, deviate * fraction);
-}
-
-// Unit vector at polar angle cos_theta (u = 1 - cos_theta) and azimuth phi around axis.
-[[nodiscard]] inline Vec3 around_axis(Vec3 axis, double cos_theta, double phi) {
-  const Basis b = orthonormal_basis(axis);
-  const double sin_theta = std::sqrt(std::max(0.0, 1.0 - cos_theta * cos_theta));
-  return axis * cos_theta + (b.e1 * std::cos(phi) + b.e2 * std::sin(phi)) * sin_theta;
-}
-
-inline void star_photon(const Star &star, const Uniforms &u, Photon &photon) {
-  const double r = star.disk_radius_m * std::sqrt(u[0]);
-  const double phi = two_pi * u[1];
-  const Vec3 centre{0.0, 0.0, star.disk_z_m};
-  const Vec3 target{r * std::cos(phi), r * std::sin(phi), star.disk_z_m};
-  if (std::isinf(star.distance_m)) {
-    // Plane wave: the wavefront through the disc centre is at t = 0.
-    const Vec3 direction = -star.towards_source;
-    const Vec3 start = target + direction * ((star.start_z_m - target.z) / direction.z);
-    photon.position = start;
-    photon.direction = direction;
-    photon.time_ns += dot(start - centre, direction) / speed_of_light_m_per_ns;
-    return;
-  }
-  // Point source: emits from its own position if that is below the start plane.
-  const Vec3 position = centre + star.towards_source * star.distance_m;
-  const Vec3 direction = normalised(target - position);
-  const Vec3 start = position.z <= star.start_z_m
-                         ? position
-                         : target + direction * ((star.start_z_m - target.z) / direction.z);
-  photon.position = start;
-  photon.direction = direction;
-  photon.time_ns += (norm(start - position) - star.distance_m) / speed_of_light_m_per_ns;
-}
-
-inline void emitter_photon(const Emitter &emitter, const Target &target,
-                           const Uniforms &direction_u, const Uniforms &target_u, Photon &photon) {
-  photon.position = emitter.position;
-  if (const auto *disc = std::get_if<DiscTarget>(&target)) {
-    // Uniform point on the disc; the photon weight is I(theta) / I_max (h / r)^3, the
-    // probability that the emitted photon reaches the disc (obdeect Emitter).
-    const Basis b = orthonormal_basis(disc->normal);
-    const double r = disc->radius_m * std::sqrt(target_u[0]);
-    const double phi = two_pi * target_u[1];
-    const Vec3 point = disc->centre + b.e1 * (r * std::cos(phi)) + b.e2 * (r * std::sin(phi));
-    const Vec3 offset = point - emitter.position;
-    const double distance = norm(offset);
-    const Vec3 direction = offset * (1.0 / distance);
-    const double cosine = std::clamp(dot(direction, emitter.pointing), -1.0, 1.0);
-    const double h = std::abs(dot(disc->centre - emitter.position, disc->normal));
-    const double ratio = h / distance;
-    const double intensity =
-        std::visit([u = 1.0 - cosine](const auto &a) { return a.intensity(u); }, emitter.angular);
-    photon.weight = intensity / intensity_maximum(emitter.angular) * ratio * ratio * ratio;
-    photon.direction = direction;
-    return;
-  }
-  if (const auto *sphere = std::get_if<SphereTarget>(&target)) {
-    // Isotropic emission restricted to the cone that contains the sphere.
-    const Vec3 offset = sphere->centre - emitter.position;
-    const double cos_max = sphere_cos_max(emitter, *sphere);
-    const double cos_theta = 1.0 - direction_u[0] * (1.0 - cos_max);
-    photon.direction = around_axis(normalised(offset), cos_theta, two_pi * direction_u[1]);
-    photon.weight = 1.0;
-    return;
-  }
-  const double u_angle = angle_u(emitter.angular, direction_u[0], 2.0);
-  photon.direction = around_axis(emitter.pointing, 1.0 - u_angle, two_pi * direction_u[1]);
-  photon.weight = 1.0;
+inline Vec3 cone_direction(const Vec3 &axis, double cos_theta, double azimuth) {
+  const Basis basis = orthonormal_basis(axis);
+  const double sin_theta = std::sqrt(std::max(0.0, (1.0 - cos_theta) * (1.0 + cos_theta)));
+  return direction_about(axis, basis, cos_theta, sin_theta, azimuth);
 }
 
 } // namespace detail
 
-// Photon number `photon_index` of one source in one (event, telescope). Depends only on
-// the keys, so chunks may be generated in any order.
-[[nodiscard]] inline Photon sample_photon(const Source &source, std::uint64_t seed,
-                                          std::uint32_t event, std::uint32_t telescope,
-                                          std::uint64_t photon_index) {
-  const auto key = [&](Stream stream) {
-    return gstrickd::DrawKey{seed,      stage_sources, event,
-                             telescope, photon_index,  static_cast<std::uint32_t>(stream)};
-  };
-  Photon photon;
-  const Uniforms pulse_u = gstrickd::uniform4(key(Stream::pulse));
-  photon.time_ns = std::visit([&](const auto &p) { return p.sample(pulse_u); }, source.pulse);
-  const Uniforms wavelength_u = gstrickd::uniform4(key(Stream::wavelength));
-  photon.wavelength_nm =
-      std::visit([&](const auto &s) { return s.sample(wavelength_u); }, source.spectrum);
-  if (const auto *star = std::get_if<Star>(&source.geometry)) {
-    detail::star_photon(*star, gstrickd::uniform4(key(Stream::target)), photon);
-  } else {
-    detail::emitter_photon(std::get<Emitter>(source.geometry), source.target,
-                           gstrickd::uniform4(key(Stream::direction)),
-                           gstrickd::uniform4(key(Stream::target)), photon);
+// Photon `index` of a source (no validation: use emit() or validate() first).
+inline Photon sample_photon(const Source &s, std::uint64_t seed, std::uint32_t event,
+                            std::uint32_t telescope, std::uint64_t index) {
+  Photon p;
+  const double pulse_time =
+      sample(s.pulse, philox_draw(seed, event, telescope, index, Stream::pulse));
+  p.wavelength_nm =
+      sample(s.spectrum, philox_draw(seed, event, telescope, index, Stream::wavelength));
+  p.time_ns = pulse_time;
+  p.weight = 1.0;
+
+  if (const auto *star = std::get_if<Star>(&s.geometry)) {
+    const Uniforms ut = philox_draw(seed, event, telescope, index, Stream::target);
+    const double r = star->disk_radius_m * std::sqrt(ut[0]);
+    const double phi = two_pi * ut[1];
+    const Vec3 target{r * std::cos(phi), r * std::sin(phi), star->disk_z_m};
+    const Vec3 centre{0.0, 0.0, star->disk_z_m};
+    p.direction = -star->towards_source;
+    if (std::isinf(star->distance_m)) {
+      const double along = (star->start_z_m - target.z) / p.direction.z;
+      p.position = target + p.direction * along;
+      p.time_ns += dot(p.position - centre, p.direction) / speed_of_light_m_per_ns;
+    } else {
+      const Vec3 source = centre + star->towards_source * star->distance_m;
+      p.direction = normalised(target - source);
+      if (source.z <= star->start_z_m) {
+        p.position = source;
+      } else {
+        const double along = (star->start_z_m - target.z) / p.direction.z;
+        p.position = target + p.direction * along;
+      }
+      p.time_ns += (norm(p.position - source) - star->distance_m) / speed_of_light_m_per_ns;
+    }
+    return p;
   }
-  return photon;
+
+  const auto &e = std::get<Emitter>(s.geometry);
+  p.position = e.position;
+  const Uniforms ud = philox_draw(seed, event, telescope, index, Stream::direction);
+  if (const auto *disc = std::get_if<DiscTarget>(&s.target)) {
+    const Uniforms ut = philox_draw(seed, event, telescope, index, Stream::target);
+    const Basis basis = orthonormal_basis(disc->normal);
+    const double r = disc->radius_m * std::sqrt(ut[0]);
+    const double phi = two_pi * ut[1];
+    const Vec3 point =
+        disc->centre + basis.e1 * (r * std::cos(phi)) + basis.e2 * (r * std::sin(phi));
+    const Vec3 to_point = point - e.position;
+    const double distance = norm(to_point);
+    p.direction = to_point * (1.0 / distance);
+    const double h = std::abs(dot(disc->centre - e.position, disc->normal));
+    const double cosine = std::clamp(dot(p.direction, e.pointing), -1.0, 1.0);
+    const double ratio = h / distance;
+    p.weight = std::visit([&](const auto &a) { return a.intensity(1.0 - cosine); }, e.angular) /
+               intensity_maximum(e.angular) * ratio * ratio * ratio;
+  } else if (const auto *sphere = std::get_if<SphereTarget>(&s.target)) {
+    const Vec3 to_centre = sphere->centre - e.position;
+    const double d = norm(to_centre);
+    const Vec3 axis = to_centre * (1.0 / d);
+    const double ratio = sphere->radius_m / d;
+    const double cos_max = std::sqrt(1.0 - ratio * ratio);
+    p.direction = detail::cone_direction(axis, 1.0 - ud[0] * (1.0 - cos_max), two_pi * ud[1]);
+  } else {
+    const double u = angle_quantile(e.angular, ud[0]);
+    p.direction = detail::cone_direction(e.pointing, 1.0 - u, two_pi * ud[1]);
+  }
+  return p;
 }
 
-// Photons first_index .. first_index + rows - 1 of one source, in the source frame, with
-// columns x y z cx cy cz t w wavelength. Directions are unit vectors; cz < 0 is
-// downward (propagation direction, as obdeect). Weights are 1 except for disc targets.
-inline void emit(const Source &source, std::uint64_t seed, std::uint32_t event,
-                 std::uint32_t telescope, std::uint64_t first_index, std::size_t rows,
-                 gstrickd::PhotonChunk &out) {
-  validate(source);
+// Photons first_index .. first_index + rows - 1 as float32 columns (source_columns).
+inline void emit(const Source &s, std::uint64_t seed, std::uint32_t event, std::uint32_t telescope,
+                 std::uint64_t first_index, std::size_t rows, gstrickd::PhotonChunk &chunk) {
+  validate(s);
   if (rows > gstrickd::max_chunk_rows)
-    throw std::invalid_argument("a chunk holds at most 2^16 photons");
-  out.telescope_id = telescope;
-  out.frame = source.frame;
-  out.first_index = first_index;
-  out.resize(rows, source_columns);
-  auto &x = out[gstrickd::Column::x], &y = out[gstrickd::Column::y], &z = out[gstrickd::Column::z],
-       &cx = out[gstrickd::Column::cx], &cy = out[gstrickd::Column::cy],
-       &cz = out[gstrickd::Column::cz], &t = out[gstrickd::Column::t],
-       &w = out[gstrickd::Column::w], &wl = out[gstrickd::Column::wavelength];
+    throw std::invalid_argument("a chunk holds at most 65536 rows");
+  chunk.resize(rows, source_columns);
+  chunk.telescope_id = telescope;
+  chunk.frame = s.frame;
+  chunk.first_index = first_index;
+  using gstrickd::Column;
   for (std::size_t i = 0; i < rows; ++i) {
-    const Photon p = sample_photon(source, seed, event, telescope, first_index + i);
-    x[i] = static_cast<float>(p.position.x);
-    y[i] = static_cast<float>(p.position.y);
-    z[i] = static_cast<float>(p.position.z);
-    cx[i] = static_cast<float>(p.direction.x);
-    cy[i] = static_cast<float>(p.direction.y);
-    cz[i] = static_cast<float>(p.direction.z);
-    t[i] = static_cast<float>(p.time_ns);
-    w[i] = static_cast<float>(p.weight);
-    wl[i] = static_cast<float>(p.wavelength_nm);
+    const Photon p = sample_photon(s, seed, event, telescope, first_index + i);
+    chunk[Column::x][i] = static_cast<float>(p.position.x);
+    chunk[Column::y][i] = static_cast<float>(p.position.y);
+    chunk[Column::z][i] = static_cast<float>(p.position.z);
+    chunk[Column::cx][i] = static_cast<float>(p.direction.x);
+    chunk[Column::cy][i] = static_cast<float>(p.direction.y);
+    chunk[Column::cz][i] = static_cast<float>(p.direction.z);
+    chunk[Column::t][i] = static_cast<float>(p.time_ns);
+    chunk[Column::w][i] = static_cast<float>(p.weight);
+    chunk[Column::wavelength][i] = static_cast<float>(p.wavelength_nm);
   }
 }
 

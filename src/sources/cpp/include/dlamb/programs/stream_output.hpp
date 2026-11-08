@@ -1,15 +1,14 @@
 #pragma once
 
-// Shared pieces of the light-source programs: option syntax, the fiducial-sphere rule and
-// the gstrickd stream writer.
-// Header-only, standard library only (plus the dlamb and gstrickd headers).
+// Shared parts of the flasher and led programs: option-text parsers, the fiducial-sphere rule,
+// and the program stream writer (docs/spec/stream-writer.md, writer A).
 
+#include "dlamb/cli.hpp"
 #include "dlamb/density.hpp"
+#include "dlamb/emission_stream.hpp"
 #include "dlamb/source.hpp"
-#include "dlamb/streams.hpp"
 #include "dlamb/vec3.hpp"
 
-#include "gstrickd/format.hpp"
 #include "gstrickd/photons.hpp"
 #include "gstrickd/random.hpp"
 #include "gstrickd/stages.hpp"
@@ -20,455 +19,304 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
-#include <fstream>
-#include <iostream>
-#include <limits>
 #include <ostream>
 #include <stdexcept>
 #include <string>
-#include <type_traits>
-#include <utility>
-#include <variant>
 #include <vector>
 
 namespace dlamb::programs {
 
-// Stage id of the program-level random choices (pixel selection). Alias of
-// gstrickd::stage_programs; sources use dlamb::stage_sources.
+// Philox stage of program-level choices (gstrickd::stage_programs).
 inline constexpr std::uint32_t stage_programs = gstrickd::stage_programs;
 
-// Emission is restricted to the fiducial sphere only when the source is farther than 1.02
-// times the sphere radius.
-inline constexpr double fiducial_margin = 1.02;
+// Seed of emission i of a program (same function as dlamb::source_seed).
+inline std::uint64_t derive_seed(std::uint64_t base, std::uint64_t i) {
+  return source_seed(base, i);
+}
 
-// FWHM to sigma.
-inline constexpr double sigma_per_fwhm = 2.35482004503095;
+// Uniform deviate of a program-level choice.
+inline double program_uniform(std::uint64_t seed, std::uint32_t event, std::uint64_t draw_index) {
+  return gstrickd::uniform4({seed, stage_programs, event, 0, draw_index, 1})[0];
+}
 
-// One emission: a source with its own seed. The bunch size multiplies the photon weights
-// and time_offset_ns is added to the emission times.
+// One source emitted with a bunch size and a time offset; to_camera_plane moves the photons in a
+// straight line to the plane z = 0.
 struct Emission {
   Source source;
-  std::uint64_t seed{};
+  std::uint64_t seed{1};
+  std::uint32_t telescope{1};
   double bunch_size{1.0};
   double time_offset_ns{};
-  // Camera frame only: move each photon along its direction to the plane z = 0 and add the
-  // travel time (path / c) to its time. Photons not travelling towards the plane are an error.
-  bool to_camera_plane{false};
+  bool to_camera_plane{};
 };
 
-// One IACT event (one telescope). labels: pixel ids fired (led only).
 struct Event {
-  std::uint32_t number{};
+  std::int64_t event_number{1};
   std::vector<Emission> emissions;
-  std::vector<int> labels;
+  std::vector<int> labels; // pixels or flashers that fire (informational)
 };
 
-// Run and telescope metadata written with every stream.
 struct RunSetup {
   std::string producer;
-  int run_number{1};
-  double observation_level_m{};
-  int atmosphere{1};
+  std::int64_t run_number{1};
+  double observation_level_m{2150.0};
+  std::int64_t atmosphere{1};
   std::uint32_t telescope_id{1};
-  Vec3 telescope_position{};   // metres, in the photon frame
-  double telescope_radius_m{}; // fiducial sphere radius
+  Vec3 telescope_position{};
+  double telescope_radius_m{};
   gstrickd::Frame frame{gstrickd::Frame::sky};
 };
 
-[[noreturn]] inline void bad(const std::string &message) { throw std::invalid_argument(message); }
+// Parsers of option text (messages are `<option>: ...`).
 
-inline std::string lower(std::string text) {
-  for (char &c : text) {
-    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  }
-  return text;
-}
-
-inline bool starts_with(const std::string &text, const std::string &prefix) {
-  return text.size() >= prefix.size() && text.compare(0, prefix.size(), prefix) == 0;
-}
-
-inline std::vector<std::string> split(const std::string &text, char delimiter) {
-  std::vector<std::string> parts;
-  std::string part;
-  for (char c : text) {
-    if (c == delimiter) {
-      parts.push_back(part);
-      part.clear();
-    } else {
-      part.push_back(c);
-    }
-  }
-  parts.push_back(part);
-  return parts;
-}
-
-inline double parse_real(const std::string &text, const std::string &what) {
-  char *end = nullptr;
-  const double value = std::strtod(text.c_str(), &end);
-  if (text.empty() || end == text.c_str() || *end != '\0' || !std::isfinite(value)) {
-    bad(what + ": not a number: '" + text + "'");
-  }
+inline double parse_real(const std::string &text, const std::string &option) {
+  if (!cli::is_number(text))
+    throw std::invalid_argument(option + ": not a number: '" + text + "'");
+  const double value = std::strtod(text.c_str(), nullptr);
+  if (!std::isfinite(value))
+    throw std::invalid_argument(option + ": number out of range: '" + text + "'");
   return value;
 }
 
-inline long parse_integer(const std::string &text, const std::string &what) {
-  char *end = nullptr;
-  const long value = std::strtol(text.c_str(), &end, 10);
-  if (text.empty() || end == text.c_str() || *end != '\0') {
-    bad(what + ": not an integer: '" + text + "'");
+inline long long parse_integer_value(const std::string &text, const std::string &option) {
+  try {
+    return cli::parse_integer(text, option);
+  } catch (const std::invalid_argument &) {
+    throw std::invalid_argument(option + ": not an integer: '" + text + "'");
   }
-  return value;
 }
 
-inline std::vector<double> parse_real_list(const std::string &text, const std::string &what) {
+inline std::vector<double> parse_real_list(const std::string &text, const std::string &option) {
   std::vector<double> values;
-  for (const auto &part : split(text, ',')) {
-    values.push_back(parse_real(part, what));
-  }
+  for (const auto &item : cli::split_items(text, option))
+    values.push_back(parse_real(item, option));
   return values;
 }
 
-inline std::vector<int> parse_integer_list(const std::string &text, const std::string &what) {
-  std::vector<int> values;
-  for (const auto &part : split(text, ',')) {
-    values.push_back(static_cast<int>(parse_integer(part, what)));
-  }
-  return values;
-}
-
-// Value of the option at argv[i] (the next argument); advances i.
-inline std::string option_value(int argc, char **argv, int &i) {
-  if (i + 1 >= argc) {
-    bad(std::string("option ") + argv[i] + " needs a value");
-  }
-  return argv[++i];
-}
-
-// Spectrum: a wavelength in nm (200-2000) or Cherenkov:from:to
-// (1/lambda^2 between from and to; equal limits give a fixed wavelength). Tables read
-// from files are not supported.
 inline Spectrum parse_spectrum(const std::string &text) {
-  if (starts_with(text, "Cherenkov:")) {
-    const auto parts = split(text.substr(10), ':');
-    if (parts.size() != 2) {
-      bad("spectrum '" + text + "': expected Cherenkov:from:to");
-    }
-    const double from = parse_real(parts[0], "spectrum");
-    const double to = parse_real(parts[1], "spectrum");
-    if (from > to || from < 200.0 || to > 2000.0) {
-      bad("spectrum '" + text + "': need 200 <= from <= to <= 2000 nm");
-    }
-    if (from == to) {
-      return Fixed{from};
-    }
-    return InverseSquare{from, to};
+  const auto in_range = [&](double v) {
+    if (!(v >= 200.0 && v <= 2000.0))
+      throw std::invalid_argument("spectrum '" + text + "': wavelengths must lie in 200..2000 nm");
+    return v;
+  };
+  if (cli::is_number(text))
+    return Fixed{in_range(parse_real(text, "spectrum"))};
+  if (cli::starts_with_nocase(text, "cherenkov:")) {
+    const std::string rest = text.substr(10);
+    const std::size_t colon = rest.find(':');
+    if (colon == std::string::npos || rest.find(':', colon + 1) != std::string::npos)
+      throw std::invalid_argument("spectrum '" + text + "': Cherenkov needs two fields A:B");
+    const double a = in_range(parse_real(rest.substr(0, colon), "spectrum"));
+    const double b = in_range(parse_real(rest.substr(colon + 1), "spectrum"));
+    if (a > b)
+      throw std::invalid_argument("spectrum '" + text + "': Cherenkov range needs A <= B");
+    if (a == b)
+      return Fixed{a};
+    return InverseSquare{a, b};
   }
-  // Any plain number (400, 400.5, 4e2) is a wavelength; other text is rejected below.
-  char *end = nullptr;
-  std::strtod(text.c_str(), &end);
-  if (!text.empty() && end != text.c_str() && *end == '\0') {
-    const double wavelength = parse_real(text, "spectrum");
-    if (wavelength < 200.0 || wavelength > 2000.0) {
-      bad("spectrum '" + text + "': wavelength must be 200-2000 nm");
-    }
-    return Fixed{wavelength};
-  }
-  bad("spectrum '" + text +
-      "': only a wavelength in nm or Cherenkov:from:to is supported (no table files)");
+  throw std::invalid_argument("spectrum '" + text +
+                              "': supported are a wavelength in nm or Cherenkov:A:B");
 }
 
-// Pulse: Simple:w[,delay] (or a bare width), Gauss:x (sigma x),
-// Gauss-rms:x (sigma x), Gauss-fwhm:x (FWHM x), Exp:tau[,delay], Complex:a,b,c[,delay].
-// Widths <= 0 give a time delay only.
 inline Pulse parse_pulse(const std::string &text) {
-  const std::string key = lower(text);
-  if (starts_with(key, "complex:")) {
-    const auto values = split(text.substr(8), ',');
-    if (values.size() > 4 || values[0].empty()) {
-      bad("pulse '" + text + "': expected Complex:flat,gauss,decay[,delay]");
+  const std::string supported = "supported are Simple:W[,D], W, Gauss:S[,D], Gauss-rms:S[,D], "
+                                "Gauss-fwhm:F[,D], Exp:T[,D], Complex:A,B,C[,D]";
+  const auto bad = [&](const std::string &why) {
+    return std::invalid_argument("pulse '" + text + "': " + why);
+  };
+  const auto simple = [](double w, double d) {
+    return w > 0.0 ? Pulse{UniformRange{d - 0.5 * w, d + 0.5 * w}} : Pulse{Fixed{d}};
+  };
+  if (!text.empty() && std::isdigit(static_cast<unsigned char>(text[0]))) {
+    if (!cli::is_number(text))
+      throw bad(supported);
+    return simple(parse_real(text, "pulse"), 0.0);
+  }
+  const std::size_t colon = text.find(':');
+  if (colon == std::string::npos)
+    throw bad(supported);
+  const std::string name = cli::lower_case(text.substr(0, colon));
+  const std::string rest = text.substr(colon + 1);
+  if (name == "complex") {
+    std::vector<double> v(4, 0.0);
+    std::vector<std::string> items;
+    std::size_t start = 0;
+    while (true) {
+      const std::size_t comma = rest.find(',', start);
+      items.push_back(rest.substr(start, comma == std::string::npos ? comma : comma - start));
+      if (comma == std::string::npos)
+        break;
+      start = comma + 1;
     }
-    double v[4] = {0.0, 0.0, 0.0, 0.0};
-    for (std::size_t i = 0; i < values.size(); ++i) {
-      v[i] = parse_real(values[i], "pulse");
-    }
-    if (v[0] < 0.0 || v[1] < 0.0 || v[2] < 0.0) {
-      bad("pulse '" + text + "': widths must be >= 0");
-    }
+    if (items.size() > 4 || items[0].empty())
+      throw bad("Complex takes one to four values, the first not empty");
+    for (std::size_t i = 0; i < items.size(); ++i)
+      if (!items[i].empty())
+        v[i] = parse_real(items[i], "pulse");
+    if (v[0] < 0.0 || v[1] < 0.0 || v[2] < 0.0)
+      throw bad("Complex widths must be >= 0");
     return ComplexPulse{v[0], v[1], v[2], v[3]};
   }
-  std::string kind = "simple";
-  std::string rest = text;
-  if (starts_with(key, "simple:")) {
-    rest = text.substr(7);
-  } else if (starts_with(key, "gauss-fwhm:")) {
-    kind = "gauss-fwhm";
-    rest = text.substr(11);
-  } else if (starts_with(key, "gauss-rms:")) {
-    kind = "gauss-rms";
-    rest = text.substr(10);
-  } else if (starts_with(key, "gauss:")) {
-    kind = "gauss-rms";
-    rest = text.substr(6);
-  } else if (starts_with(key, "exp:")) {
-    kind = "exp";
-    rest = text.substr(4);
-  } else if (text.empty() || !std::isdigit(static_cast<unsigned char>(text[0]))) {
-    bad("pulse '" + text +
-        "': only Simple:, Gauss:, Gauss-rms:, Gauss-fwhm:, Exp:, Complex: "
-        "or a width are supported (no table files)");
-  }
-  double delay = 0.0;
-  const auto comma = rest.find(',');
-  if (comma != std::string::npos) {
-    delay = parse_real(rest.substr(comma + 1), "pulse delay");
-    rest = rest.substr(0, comma);
-  }
-  const double width = parse_real(rest, "pulse");
-  if (kind == "simple") {
-    if (width <= 0.0) {
-      return Fixed{delay};
-    }
-    return UniformRange{delay - 0.5 * width, delay + 0.5 * width};
-  }
-  if (kind == "exp") {
-    if (width <= 0.0) {
-      return Fixed{delay};
-    }
-    return Exponential{delay, width};
-  }
-  // Gauss:x and Gauss-rms:x are sigma x; Gauss-fwhm:x is FWHM x.
-  const double sigma = kind == "gauss-fwhm" ? width / sigma_per_fwhm : width;
-  if (sigma <= 0.0) {
-    return Fixed{delay};
-  }
-  return GaussianShape{delay, sigma};
+  if (name != "simple" && name != "gauss" && name != "gauss-rms" && name != "gauss-fwhm" &&
+      name != "exp")
+    throw bad(supported);
+  const auto values = parse_real_list(rest, "pulse");
+  if (values.size() > 2)
+    throw bad("at most two values (width and delay)");
+  const double delay = values.size() > 1 ? values[1] : 0.0;
+  const double s = values[0];
+  if (name == "simple")
+    return simple(s, delay);
+  if (name == "exp")
+    return s > 0.0 ? Pulse{Exponential{delay, s}} : Pulse{Fixed{delay}};
+  const double sigma = name == "gauss-fwhm" ? s / fwhm_per_sigma : s;
+  return sigma > 0.0 ? Pulse{GaussianShape{delay, sigma}} : Pulse{Fixed{delay}};
 }
 
-// Angular profile: isotropic, Parallel, Cone:deg, FilledCone:deg,
-// Gauss:deg / Gauss-rms:deg (2-D rms), Gauss-fwhm:deg, Rayleigh. Tables are not supported.
 inline Angular parse_angular(const std::string &text) {
-  const std::string key = lower(text);
-  constexpr double deg = 3.141592653589793238462643383279502884 / 180.0;
-  if (key == "isotropic") {
+  const std::string lower = cli::lower_case(text);
+  if (lower == "isotropic")
     return Isotropic{};
-  }
-  if (key == "parallel") {
+  if (lower == "parallel")
     return FixedAngle{0.0};
-  }
-  if (starts_with(key, "cone:")) {
-    return FixedAngle{1.0 - std::cos(deg * parse_real(text.substr(5), "angular"))};
-  }
-  if (starts_with(key, "filledcone:")) {
-    return FilledCone{1.0 - std::cos(deg * parse_real(text.substr(11), "angular"))};
-  }
-  if (starts_with(key, "gauss-fwhm:")) {
-    const double sigma = parse_real(text.substr(11), "angular") / sigma_per_fwhm;
-    return TabulatedAngular{gaussian_angular_table(deg * sigma)};
-  }
-  if (starts_with(key, "gauss-rms:")) {
-    return TabulatedAngular{gaussian_angular_table(deg * parse_real(text.substr(10), "angular"))};
-  }
-  if (starts_with(key, "gauss:")) {
-    return TabulatedAngular{gaussian_angular_table(deg * parse_real(text.substr(6), "angular"))};
-  }
-  if (key == "rayleigh") {
+  if (lower == "rayleigh")
     return TabulatedAngular{rayleigh_angular_table()};
-  }
-  bad("angular distribution '" + text +
-      "': only isotropic, Parallel, Cone:, FilledCone:, Gauss:, Gauss-rms:, Gauss-fwhm:, "
-      "Rayleigh are supported (no table files)");
-}
-
-// Wavelength range [nm] covered by a spectrum.
-inline std::pair<double, double> spectrum_range(const Spectrum &spectrum) {
-  return std::visit(
-      [](const auto &s) -> std::pair<double, double> {
-        using S = std::decay_t<decltype(s)>;
-        if constexpr (std::is_same_v<S, Fixed>) {
-          return {s.value, s.value};
-        } else if constexpr (std::is_same_v<S, UniformRange> || std::is_same_v<S, InverseSquare>) {
-          return {s.low, s.high};
-        } else {
-          return {s.density.lower(), s.density.upper()};
-        }
-      },
-      spectrum);
-}
-
-// The fiducial-sphere rule (radius_m around the origin, the telescope centre). Beyond 1.02 R
-// an isotropic emitter is restricted to the cone that contains the sphere (SphereTarget,
-// exact); fixed-angle emitters keep all photons; other profiles use a disc target on the
-// sphere's plane (weighted).
-inline Target fiducial_target(Vec3 position, double radius_m, const Angular &angular) {
-  if (!(norm(position) > fiducial_margin * radius_m)) {
-    return std::monostate{};
-  }
-  if (std::holds_alternative<Isotropic>(angular)) {
-    // The cone has sin(theta) = R / d; the 1.02 margin only decides when the cut applies.
-    return SphereTarget{Vec3{0.0, 0.0, 0.0}, radius_m};
-  }
-  if (std::holds_alternative<FixedAngle>(angular)) {
-    return std::monostate{};
-  }
-  if (position.z == 0.0) {
-    bad("a non-isotropic source in the camera plane outside the fiducial sphere is not supported");
-  }
-  return DiscTarget{Vec3{0.0, 0.0, 0.0}, Vec3{0.0, 0.0, 1.0}, radius_m};
-}
-
-// Seed of emission `index` of a program run (splitmix64), so that emissions never share
-// random draws.
-inline std::uint64_t derive_seed(std::uint64_t base, std::uint64_t index) {
-  std::uint64_t z = base + 0x9E3779B97F4A7C15ULL * (index + 1);
-  z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
-  z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
-  return z ^ (z >> 31);
-}
-
-// Uniform deviate of a program-level choice (not a photon draw).
-inline double program_uniform(std::uint64_t seed, std::uint32_t event, std::uint64_t draw) {
-  return gstrickd::uniform4({seed, stage_programs, event, 0U, draw, 1U})[0];
-}
-
-// Straight-line propagation of camera-frame photons to the camera plane z = 0 [m]: position
-// moves along the direction, the time grows by path / c [ns]. Directions are unchanged.
-inline void project_to_camera_plane(gstrickd::PhotonChunk &chunk) {
-  auto &x = chunk[gstrickd::Column::x];
-  auto &y = chunk[gstrickd::Column::y];
-  auto &z = chunk[gstrickd::Column::z];
-  auto &t = chunk[gstrickd::Column::t];
-  const auto &cx = chunk[gstrickd::Column::cx];
-  const auto &cy = chunk[gstrickd::Column::cy];
-  const auto &cz = chunk[gstrickd::Column::cz];
-  for (std::size_t i = 0; i < x.size(); ++i) {
-    if (!(cz[i] < 0.0F) || z[i] < 0.0F) {
-      bad("photon does not travel towards the camera plane (z = 0); use a narrower "
-          "--angular-distribution or --frame sky");
+  const std::size_t colon = text.find(':');
+  if (colon != std::string::npos) {
+    const std::string name = cli::lower_case(text.substr(0, colon));
+    const double value = parse_real(text.substr(colon + 1), "angular distribution");
+    const auto degrees = [&] {
+      if (!(value >= 0.0 && value <= 180.0))
+        throw std::invalid_argument("angular distribution '" + text +
+                                    "': angle must be finite and in [0, 180] deg");
+      return value * pi / 180.0;
+    };
+    if (name == "cone")
+      return FixedAngle{1.0 - std::cos(degrees())};
+    if (name == "filledcone") {
+      if (!(value > 0.0))
+        throw std::invalid_argument("angular distribution '" + text + "': angle must be > 0");
+      return FilledCone{1.0 - std::cos(degrees())};
     }
-    const double path = static_cast<double>(z[i]) / -static_cast<double>(cz[i]);
-    x[i] = static_cast<float>(x[i] + path * cx[i]);
-    y[i] = static_cast<float>(y[i] + path * cy[i]);
-    z[i] = 0.0F;
-    t[i] = static_cast<float>(t[i] + path / speed_of_light_m_per_ns);
+    if (name == "gauss" || name == "gauss-rms")
+      return TabulatedAngular{gaussian_angular_table(value * pi / 180.0)};
+    if (name == "gauss-fwhm")
+      return TabulatedAngular{gaussian_angular_table(value / fwhm_per_sigma * pi / 180.0)};
   }
+  throw std::invalid_argument("angular distribution '" + text +
+                              "': supported are isotropic, Parallel, Cone:A, FilledCone:A, "
+                              "Gauss:S, Gauss-fwhm:F, Rayleigh");
 }
 
-// Writes the complete stream: stream, run, then per event: event, telescope, photon
-// chunks, telescope_end, event_end; run_end; stream_end. Photons of one telescope and
-// event are numbered consecutively over all emissions (first_index). Sky photons also
-// get the zem column (emission altitude a.s.l.).
-inline void write_stream(std::ostream &out, const RunSetup &run, const std::vector<Event> &events) {
-  gstrickd::Writer writer(out, run.producer);
+// Target of a source in front of a sphere of radius R about the origin: none inside 1.02 R, a
+// cone target for isotropic emission, none for a fixed angle, otherwise a disc weighted target.
+inline Target fiducial_target(const Vec3 &position, double radius_m, const Angular &angular) {
+  if (norm(position) <= 1.02 * radius_m)
+    return std::monostate{};
+  if (std::holds_alternative<Isotropic>(angular))
+    return SphereTarget{{0.0, 0.0, 0.0}, radius_m};
+  if (std::holds_alternative<FixedAngle>(angular))
+    return std::monostate{};
+  if (position.z == 0.0)
+    throw std::invalid_argument("a non-isotropic source in the camera plane outside the fiducial "
+                                "sphere is not supported");
+  return DiscTarget{{0.0, 0.0, 0.0}, {0.0, 0.0, 1.0}, radius_m};
+}
 
-  double low = std::numeric_limits<double>::infinity();
-  double high = -std::numeric_limits<double>::infinity();
-  for (const auto &event : events) {
+// Writes the run, then each event with one telescope block holding all its emissions.
+inline void write_stream(std::ostream &out, const RunSetup &setup,
+                         const std::vector<Event> &events) {
+  using gstrickd::Column;
+  gstrickd::Writer writer(out, setup.producer);
+  gstrickd::Metadata run;
+  run["run_number"] = setup.run_number;
+  run["observation_level_m"] = setup.observation_level_m;
+  run["n_telescopes"] = std::int64_t{1};
+  run["telescope_x_m"] = std::vector<double>{setup.telescope_position.x};
+  run["telescope_y_m"] = std::vector<double>{setup.telescope_position.y};
+  run["telescope_z_m"] = std::vector<double>{setup.telescope_position.z};
+  run["telescope_r_m"] = std::vector<double>{setup.telescope_radius_m};
+  run["atmosphere_id"] = setup.atmosphere;
+  run["refraction_applied"] = std::int64_t{0};
+  bool any = false;
+  double wl_min = 0.0, wl_max = 0.0;
+  for (const auto &event : events)
     for (const auto &emission : event.emissions) {
-      const auto [a, b] = spectrum_range(emission.source.spectrum);
-      low = std::min(low, a);
-      high = std::max(high, b);
+      const auto [lo, hi] = spectrum_range(emission.source.spectrum);
+      wl_min = any ? std::min(wl_min, lo) : lo;
+      wl_max = any ? std::max(wl_max, hi) : hi;
+      any = true;
     }
+  if (any) {
+    run["wavelength_min_nm"] = wl_min;
+    run["wavelength_max_nm"] = wl_max;
   }
-  const auto frame_value = static_cast<std::int64_t>(run.frame);
-  gstrickd::Metadata meta;
-  meta["run_number"] = static_cast<std::int64_t>(run.run_number);
-  meta["observation_level_m"] = run.observation_level_m;
-  meta["n_telescopes"] = std::int64_t{1};
-  meta["telescope_x_m"] = std::vector<double>{run.telescope_position.x};
-  meta["telescope_y_m"] = std::vector<double>{run.telescope_position.y};
-  meta["telescope_z_m"] = std::vector<double>{run.telescope_position.z};
-  meta["telescope_r_m"] = std::vector<double>{run.telescope_radius_m};
-  meta["atmosphere_id"] = static_cast<std::int64_t>(run.atmosphere);
-  meta["refraction_applied"] = std::int64_t{0};
-  if (low <= high) {
-    meta["wavelength_min_nm"] = low;
-    meta["wavelength_max_nm"] = high;
-  }
-  writer.write_metadata(gstrickd::RecordType::run, meta);
+  writer.write_metadata(gstrickd::RecordType::run, run);
 
-  gstrickd::Metadata telescope;
-  telescope["telescope_id"] = static_cast<std::int64_t>(run.telescope_id);
-  telescope["frame"] = frame_value;
-  telescope["x_m"] = run.telescope_position.x;
-  telescope["y_m"] = run.telescope_position.y;
-  telescope["z_m"] = run.telescope_position.z;
-  telescope["r_m"] = run.telescope_radius_m;
-
+  gstrickd::PhotonChunk chunk;
   for (const auto &event : events) {
-    gstrickd::Metadata event_meta;
-    event_meta["event_number"] = static_cast<std::int64_t>(event.number);
-    writer.write_metadata(gstrickd::RecordType::event, event_meta);
-    writer.write_metadata(gstrickd::RecordType::telescope, telescope);
-
-    double total_weight = 0.0;
-    std::uint64_t index = 0;
+    const auto event_key = static_cast<std::uint32_t>(event.event_number);
+    writer.write_metadata(gstrickd::RecordType::event, {{"event_number", event.event_number}});
+    gstrickd::Metadata tm;
+    tm["telescope_id"] = static_cast<std::int64_t>(setup.telescope_id);
+    tm["frame"] = static_cast<std::int64_t>(setup.frame);
+    tm["x_m"] = setup.telescope_position.x;
+    tm["y_m"] = setup.telescope_position.y;
+    tm["z_m"] = setup.telescope_position.z;
+    tm["r_m"] = setup.telescope_radius_m;
+    writer.write_metadata(gstrickd::RecordType::telescope, tm);
+    std::uint64_t written = 0;
+    double weight = 0.0;
     for (const auto &emission : event.emissions) {
-      const Source &source = emission.source;
-      if (source.frame != run.frame) {
-        bad("all emissions of a stream must use the stream frame");
-      }
+      if (emission.source.frame != setup.frame)
+        throw std::invalid_argument("all emissions of a stream must use the stream frame");
       const std::uint64_t count =
-          photon_count(source, emission.seed, event.number, run.telescope_id);
-      for (std::uint64_t first = 0; first < count; first += gstrickd::max_chunk_rows) {
+          photon_count(emission.source, emission.seed, event_key, setup.telescope_id);
+      for (std::uint64_t done = 0; done < count;) {
         const auto rows = static_cast<std::size_t>(
-            std::min<std::uint64_t>(gstrickd::max_chunk_rows, count - first));
-        gstrickd::PhotonChunk chunk;
-        emit(source, emission.seed, event.number, run.telescope_id, first, rows, chunk);
-        chunk.first_index = index + first;
+            std::min<std::uint64_t>(gstrickd::max_chunk_rows, count - done));
+        emit(emission.source, emission.seed, event_key, setup.telescope_id, done, rows, chunk);
+        chunk.first_index = written;
+        auto &x = chunk[Column::x];
+        auto &y = chunk[Column::y];
+        auto &z = chunk[Column::z];
+        auto &t = chunk[Column::t];
+        auto &w = chunk[Column::w];
         if (emission.to_camera_plane) {
-          project_to_camera_plane(chunk);
-        }
-        auto &w = chunk[gstrickd::Column::w];
-        auto &t = chunk[gstrickd::Column::t];
-        for (std::size_t i = 0; i < rows; ++i) {
-          w[i] = static_cast<float>(w[i] * emission.bunch_size);
-          t[i] = static_cast<float>(t[i] + emission.time_offset_ns);
-          total_weight += w[i];
-        }
-        if (source.frame == gstrickd::Frame::sky) {
-          auto &zem = chunk[gstrickd::Column::zem];
-          const auto &z = chunk[gstrickd::Column::z];
-          zem.resize(rows);
           for (std::size_t i = 0; i < rows; ++i) {
-            zem[i] = static_cast<float>(run.observation_level_m + z[i]);
+            const double cz = chunk[Column::cz][i];
+            if (!(cz < 0.0) || !(z[i] >= 0.0F))
+              throw std::invalid_argument("a photon does not travel towards the camera plane");
+            const double path = static_cast<double>(z[i]) / -cz;
+            x[i] = static_cast<float>(x[i] + path * chunk[Column::cx][i]);
+            y[i] = static_cast<float>(y[i] + path * chunk[Column::cy][i]);
+            t[i] = static_cast<float>(t[i] + path / speed_of_light_m_per_ns);
+            z[i] = 0.0F;
           }
         }
+        for (std::size_t i = 0; i < rows; ++i) {
+          w[i] = static_cast<float>(static_cast<double>(w[i]) * emission.bunch_size);
+          t[i] = static_cast<float>(static_cast<double>(t[i]) + emission.time_offset_ns);
+          weight += static_cast<double>(w[i]);
+        }
+        if (setup.frame == gstrickd::Frame::sky) {
+          auto &zem = chunk[Column::zem];
+          zem.resize(rows);
+          for (std::size_t i = 0; i < rows; ++i)
+            zem[i] = static_cast<float>(setup.observation_level_m + static_cast<double>(z[i]));
+        }
         writer.write_chunk(chunk);
+        written += rows;
+        done += rows;
       }
-      index += count;
     }
-
-    gstrickd::Metadata telescope_end;
-    telescope_end["telescope_id"] = static_cast<std::int64_t>(run.telescope_id);
-    telescope_end["photons"] = total_weight;
-    writer.write_metadata(gstrickd::RecordType::telescope_end, telescope_end);
-    writer.write_metadata(gstrickd::RecordType::event_end, gstrickd::Metadata{});
+    writer.write_metadata(
+        gstrickd::RecordType::telescope_end,
+        {{"telescope_id", static_cast<std::int64_t>(setup.telescope_id)}, {"photons", weight}});
+    writer.write_metadata(gstrickd::RecordType::event_end, {});
   }
-  writer.write_metadata(gstrickd::RecordType::run_end, gstrickd::Metadata{});
+  writer.write_metadata(gstrickd::RecordType::run_end, {});
   writer.finish();
-}
-
-// Calls fn(std::ostream&) on stdout (empty path or "-") or on a binary file.
-template <class Fn> void write_output(const std::string &path, Fn &&fn) {
-  if (path.empty() || path == "-") {
-    fn(std::cout);
-    std::cout.flush();
-    if (!std::cout) {
-      bad("write error on stdout");
-    }
-    return;
-  }
-  std::ofstream file(path, std::ios::binary);
-  if (!file) {
-    bad("cannot open output " + path);
-  }
-  fn(file);
-  file.close();
-  if (!file) {
-    bad("write error on " + path);
-  }
 }
 
 } // namespace dlamb::programs

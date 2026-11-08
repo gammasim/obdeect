@@ -1,102 +1,94 @@
 #pragma once
 
-// A point light source at (x, y, z) above the observation level, emitting bunches into
-// 4 pi (or into the fiducial sphere cone). Replaces the earlier xyzls program; options keep
-// their names.
-// Output: sky-frame photons of one telescope block per telescope.
+// Point light source above the observation level, sky frame (docs/spec/tool-point-source.md).
 
 #include "dlamb/sky_sources.hpp"
-#include "dlamb/source.hpp"
 
+#include <cmath>
 #include <cstdint>
+#include <ostream>
 #include <stdexcept>
 #include <vector>
 
 namespace dlamb::programs {
 
-// Telescope of --telpos-file / --corsika-telpos-file (centre and radius in cm).
+// A telescope as listed in a telescope file: position and radius in cm.
 struct TelposCm {
-  double x{};
-  double y{};
-  double z{};
-  double r{};
+  double x{}, y{}, z{}, r{};
 };
 
-// Units cm unless noted.
 struct XyzlsOptions {
-  std::int64_t run_number{1};           // -R (default 1)
-  std::uint32_t events{1};              // -N (default 1)
-  double telcam_radius_cm{1500.0};      // -r, fiducial radius of the default telescope
-  double x_cm{0.0};                     // -x (default 0)
-  double y_cm{0.0};                     // -y (default 0)
-  double z_cm{1000e2};                  // -z, height above the observation level
-  std::vector<double> photons{1e7};     // -n, one case per entry, `events` events each
-  double bunch_size{1.0};               // -b (values below 1 are used as 1, as in Emit)
-  double altitude_m{2150.0};            // -h, observation level [m a.s.l.]
-  std::int64_t atmosphere{1};           // -A, recorded in the run keys (not applied here)
-  Vec3 direction{0.0, 0.0, -1.0};       // -d cx,cy,cz (normalised)
-  Spectrum spectrum{Fixed{400.0}};      // -s (nm, a table, or Cherenkov:a:b)
-  Pulse pulse{GaussianShape{0.0, 0.0}}; // -p (default Gauss:0.0)
-  Angular angular{Isotropic{}};         // -a (default isotropic)
-  std::uint64_t seed{1};                // random seed (new option)
-  std::vector<TelposCm> telescopes{};   // --telpos-file; empty: one telescope at (0,0,0)
+  std::int64_t run_number{1};
+  std::uint32_t events{1}; // per case
+  double telcam_radius_cm{1500.0};
+  double x_cm{0.0}, y_cm{0.0};
+  double z_cm{1000e2};
+  std::vector<double> photons{1e7}; // into 4 pi per event; one case per value
+  double bunch_size{1.0};
+  double altitude_m{2150.0};
+  std::int64_t atmosphere{1};
+  Vec3 direction{0.0, 0.0, -1.0};
+  Spectrum spectrum{Fixed{400.0}};
+  Pulse pulse{GaussianShape{0.0, 0.0}};
+  Angular angular{Isotropic{}};
+  std::uint64_t seed{1};
+  std::vector<TelposCm> telescopes; // empty: one telescope of radius telcam_radius_cm
 };
 
-[[nodiscard]] inline SkyRun point_source_run(const XyzlsOptions &o) {
-  SkyRun run;
-  run.run_number = o.run_number > 0 ? o.run_number : 1; // Run::init
-  run.observation_level_m = o.altitude_m;
-  run.atmosphere_id = o.atmosphere;
-  const auto [wl_min, wl_max] = spectrum_range(o.spectrum);
-  run.wavelength_min_nm = wl_min;
-  run.wavelength_max_nm = wl_max;
-  if (o.telescopes.empty()) {
-    run.telescopes.push_back({1, {0.0, 0.0, 0.0}, o.telcam_radius_cm / 100.0});
-  } else {
-    std::uint32_t id = 0;
-    for (const auto &t : o.telescopes)
-      run.telescopes.push_back({++id, {t.x / 100.0, t.y / 100.0, t.z / 100.0}, t.r / 100.0});
-  }
-  return run;
-}
-
-// Emissions of case `index` (one source). Count: floor(N / bunch) bunches plus
-// one with the fractional probability. Beyond 1.02 x the fiducial radius an isotropic
-// source emits only into the cone that contains the fiducial sphere around the origin
-// which is a SphereTarget here.
-[[nodiscard]] inline std::vector<SourceEmission>
-point_source_emissions(const XyzlsOptions &o, const SkyRun &run, std::size_t index) {
-  if (!(o.direction.x != 0.0 || o.direction.y != 0.0 || o.direction.z != 0.0))
-    throw std::invalid_argument("point-source: direction vector must not be zero");
-  const double bunch = std::max(1.0, o.bunch_size);
-  const double photons = o.photons.at(index);
-  if (!(photons >= 0.0) || photons > max_photon_count)
-    throw std::invalid_argument("point-source: photons must be finite, >= 0 and at most 2^53");
-  const Vec3 pos{o.x_cm / 100.0, o.y_cm / 100.0, o.z_cm / 100.0};
-  Source s;
-  s.frame = gstrickd::Frame::sky;
-  s.geometry = Emitter{pos, normalised(o.direction), o.angular};
-  s.spectrum = o.spectrum;
-  s.pulse = o.pulse;
-  s.photons = photons / bunch;
-  const double rmax = fiducial_super_radius(run.telescopes);
-  if (norm(pos) > 1.02 * rmax) {
-    if (std::holds_alternative<Isotropic>(o.angular))
-      s.target = SphereTarget{Vec3{}, 1.02 * rmax};
-    else if (!std::holds_alternative<FixedAngle>(o.angular))
-      throw std::invalid_argument("point-source: a non-isotropic profile beyond 1.02 x the "
-                                  "fiducial radius is not supported "
-                                  "(use isotropic or Cone/Parallel)");
-  }
-  return {SourceEmission{s, o.seed + index, bunch, 0.0}};
-}
-
-[[nodiscard]] inline SkyPlan<SourceEmission> plan_point_source(const XyzlsOptions &o) {
+inline SkyPlan<SourceEmission> plan_point_source(const XyzlsOptions &o) {
+  if (!within_limits(o.x_cm) || !within_limits(o.y_cm) || !within_limits(o.z_cm))
+    throw std::invalid_argument("source position out of range");
+  if (!std::isfinite(o.altitude_m))
+    throw std::invalid_argument("observation level must be finite");
+  if (!std::isfinite(o.bunch_size))
+    throw std::invalid_argument("bunch size must be finite");
+  if (!is_finite(o.direction) || norm(o.direction) == 0.0)
+    throw std::invalid_argument("direction vector must not be zero");
   SkyPlan<SourceEmission> plan;
-  plan.run = point_source_run(o);
+  plan.run.run_number = o.run_number > 0 ? o.run_number : 1;
+  plan.run.observation_level_m = o.altitude_m;
+  plan.run.atmosphere_id = o.atmosphere;
+  const auto [lo, hi] = spectrum_range(o.spectrum);
+  plan.run.wavelength_min_nm = lo;
+  plan.run.wavelength_max_nm = hi;
+  if (o.telescopes.empty()) {
+    if (!(o.telcam_radius_cm > 0.0) || !std::isfinite(o.telcam_radius_cm))
+      throw std::invalid_argument("telescope radius must be finite and positive");
+    plan.run.telescopes.push_back({1, {0.0, 0.0, 0.0}, o.telcam_radius_cm / 100.0});
+  } else {
+    std::uint32_t id = 1;
+    for (const auto &t : o.telescopes)
+      plan.run.telescopes.push_back({id++, {t.x / 100.0, t.y / 100.0, t.z / 100.0}, t.r / 100.0});
+  }
   plan.events_per_case = o.events;
-  for (std::size_t c = 0; c < o.photons.size(); ++c)
-    plan.cases.push_back(point_source_emissions(o, plan.run, c));
+
+  const double bunch = std::max(1.0, o.bunch_size);
+  const Vec3 position{o.x_cm / 100.0, o.y_cm / 100.0, o.z_cm / 100.0};
+  const double rmax = fiducial_super_radius(plan.run.telescopes);
+  Target target;
+  if (norm(position) > 1.02 * rmax) {
+    if (std::holds_alternative<Isotropic>(o.angular))
+      target = SphereTarget{{0.0, 0.0, 0.0}, 1.02 * rmax};
+    else if (!std::holds_alternative<FixedAngle>(o.angular))
+      throw std::invalid_argument("a non-isotropic profile beyond 1.02 x the fiducial radius is "
+                                  "not supported (use isotropic or Cone/Parallel)");
+  }
+  for (std::size_t c = 0; c < o.photons.size(); ++c) {
+    const double n = o.photons[c];
+    if (!std::isfinite(n) || n < 0.0 || n > max_photon_count)
+      throw std::invalid_argument("photons must be finite, >= 0 and at most 2^53");
+    SourceEmission e;
+    e.source.frame = gstrickd::Frame::sky;
+    e.source.geometry = Emitter{position, normalised(o.direction), o.angular};
+    e.source.spectrum = o.spectrum;
+    e.source.pulse = o.pulse;
+    e.source.photons = n / bunch;
+    e.source.target = target;
+    validate(e.source);
+    e.seed = o.seed + c;
+    e.bunch = bunch;
+    plan.cases.push_back({e});
+  }
   return plan;
 }
 
