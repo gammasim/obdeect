@@ -16,6 +16,7 @@ build; a source distribution does not contain gstrickd.
 
 sources
 sim_telarray
+spec/index
 changelog
 ```
 
