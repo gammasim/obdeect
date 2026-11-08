@@ -221,7 +221,11 @@ std::string run_adapter(const std::vector<Record> &records, const CameraMap &cam
                         const std::set<std::string> &allow_pending = {},
                         const std::set<std::string> &scaled = {}) {
   std::ostringstream out;
-  PsToSimtel converter{out, camera, allow_pending, scaled};
+  SimtelOptions options;
+  options.camera = camera;
+  options.allow_pending = allow_pending;
+  options.scaled = scaled;
+  PsToSimtel converter{out, std::move(options)};
   for (const Record &record : records) {
     converter.write(record);
   }
@@ -385,6 +389,181 @@ void test_telpos_zeroed_for_camera_only() {
 }
 
 // Without CORSIKA blobs, RUNH, TELPOS, EVTH, TELOFF, EVTE and RUNE are synthesised.
+// Writes records through a PsToSimtel with options and returns the EventIO bytes.
+std::string run_adapter_with(const std::vector<Record> &records, SimtelOptions options) {
+  std::ostringstream out;
+  PsToSimtel converter{out, std::move(options)};
+  for (const Record &record : records) {
+    converter.write(record);
+  }
+  converter.finish();
+  return out.str();
+}
+
+// Atmospheric table of three levels (a stand-in for a CORSIKA atmprof file).
+AtmosphereTable three_level_table() {
+  AtmosphereTable table;
+  table.profile_id = custom_profile_id;
+  table.file_name = "test_atmprof.dat";
+  table.alt_km = {0.0, 1.0, 5.0};
+  table.rho = {1.2, 1.0, 0.5};
+  table.thick = {1000.0, 900.0, 500.0};
+  table.refidx_m1 = {2.9e-4, 2.7e-4, 2.2e-4};
+  return table;
+}
+
+// Light-source records with one telescope: run, one event, end.
+std::vector<Record> light_source_records() {
+  return {
+      record_of(RecordType::run, light_source_run()),
+      record_of(RecordType::event, Metadata{{"event_number", std::int64_t{3}}}),
+      record_of(RecordType::telescope,
+                Metadata{{"telescope_id", std::int64_t{1}}, {"array_index", std::int64_t{0}}}),
+      photons_of(chunk_of(1, Frame::ground, {0.5, 1.5}, {0.2, 0.0}, {0.1, 0.0}, {-0.2, 0.0})),
+      record_of(RecordType::telescope_end, Metadata{{"telescope_id", std::int64_t{1}}}),
+      record_of(RecordType::event_end),
+      record_of(RecordType::run_end),
+  };
+}
+
+// Table text, parsing and the rejected variants.
+void test_atmprof_text() {
+  std::istringstream text("# altitude_km density thickness n-1\n"
+                          "0.0  1.2  1000.0 2.9e-4 extra ignored\n"
+                          "\n"
+                          "  1.0\t1.0\t900.0\t2.7e-4  # trailing comment\n"
+                          "5.0 0.5 500.0 2.2e-4\n");
+  const AtmosphereTable table = read_atmprof_text(text, "t.dat");
+  CHECK(table.profile_id == custom_profile_id);
+  CHECK(table.file_name == "t.dat");
+  CHECK(table.alt_km == std::vector<double>({0.0, 1.0, 5.0}));
+  CHECK(table.rho == std::vector<double>({1.2, 1.0, 0.5}));
+  CHECK(table.thick == std::vector<double>({1000.0, 900.0, 500.0}));
+  CHECK(table.refidx_m1 == std::vector<double>({2.9e-4, 2.7e-4, 2.2e-4}));
+
+  const auto parse = [](const char *content) {
+    std::istringstream in(content);
+    return read_atmprof_text(in, "bad.dat");
+  };
+  CHECK(throws_error([&] { parse("0 1.2 1000\n1 1.0 900 2.7e-4\n"); }));  // 3 columns
+  CHECK(throws_error([&] { parse("0 1.2 x 2.9e-4\n1 1 900 2e-4\n"); }));  // not a number
+  CHECK(throws_error([&] { parse("0 1.2 1000 nan\n1 1 900 2e-4\n"); }));  // not finite
+  CHECK(throws_error([&] { parse("1 1.2 1000 2e-4\n0 1 900 2e-4\n"); })); // descending
+  CHECK(throws_error([&] { parse("0 1.2 1000 2e-4\n"); }));               // one level
+  CHECK(throws_error([&] { parse("0 -1 1000 2e-4\n1 1 900 2e-4\n"); }));  // negative density
+  std::string many;
+  for (int i = 0; i < 121; ++i) {
+    many += std::to_string(i) + " 1 1 1e-4\n";
+  }
+  CHECK(throws_error([&] { parse(many.c_str()); })); // 121 levels
+}
+
+// Without CORSIKA headers the table is written as ATMPROF 99 before the first EVTH, with the
+// run's observation level; EVTH word 77 names the same profile.
+void test_atmprof_synthesised() {
+  SimtelOptions options;
+  options.atmprof = three_level_table();
+  std::ostringstream warnings;
+  options.warnings = &warnings;
+  const std::vector<EventioBlock> blocks =
+      read_blocks(run_adapter_with(light_source_records(), options));
+  std::vector<std::uint32_t> types;
+  for (const EventioBlock &block : blocks) {
+    types.push_back(block.type);
+  }
+  const std::vector<std::uint32_t> expected = {iact::runh, iact::telpos, iact::atmprof,
+                                               iact::evth, iact::teloff, iact::telarray,
+                                               iact::evte, iact::rune};
+  CHECK(types == expected);
+  if (types != expected) {
+    return;
+  }
+  const EventioBlock &atmprof = blocks[2];
+  CHECK(atmprof.ident == custom_profile_id);
+  const AtmosphereTable table = decode_atmprof(atmprof);
+  CHECK(table.observation_level_cm == 220000.0); // run metadata, 2200 m
+  CHECK(table.alt_km == std::vector<double>({0.0, 1.0, 5.0}));
+  CHECK(table.refidx_m1 == std::vector<double>({2.9e-4, 2.7e-4, 2.2e-4}));
+  const std::vector<float> evth = decode_float_block(blocks[3]);
+  const auto flags = static_cast<std::int64_t>(std::llround(evth[76]));
+  CHECK(((flags >> 10) & 0x3FF) == custom_profile_id); // profile of EVTH word 77
+  CHECK(warnings.str().find("EVTH") != std::string::npos);
+  CHECK(warnings.str().find("ATMPROF") == std::string::npos); // table given: no note
+}
+
+// Without a table the output is unchanged, and each synthesised header is reported.
+void test_synthesised_warnings() {
+  std::ostringstream warnings;
+  SimtelOptions options;
+  options.warnings = &warnings;
+  const std::vector<EventioBlock> blocks =
+      read_blocks(run_adapter_with(light_source_records(), options));
+  for (const EventioBlock &block : blocks) {
+    CHECK(block.type != iact::atmprof);
+  }
+  const std::string text = warnings.str();
+  for (const char *name : {"RUNH", "TELPOS", "EVTH", "TELOFF", "EVTE", "RUNE"}) {
+    CHECK(text.find(std::string("no CORSIKA ") + name + " block") != std::string::npos);
+  }
+  CHECK(text.find("--atmprof FILE") != std::string::npos);
+  // The same stream without a warning stream gives the same bytes.
+  CHECK(run_adapter_with(light_source_records(), SimtelOptions{}) ==
+        run_adapter(light_source_records(), {}));
+}
+
+// A CORSIKA EVTH names its own profile: the ATMPROF block takes that number and comes before it.
+void test_atmprof_takes_evth_profile() {
+  std::vector<Record> records = light_source_records();
+  records.insert(records.begin() + 2, blob_of(evth_block(3.0F)));
+  records.insert(records.begin() + 2, blob_of(teloff_block()));
+  SimtelOptions options;
+  options.atmprof = three_level_table();
+  const std::vector<EventioBlock> blocks = read_blocks(run_adapter_with(records, options));
+  std::size_t atmprof_at = blocks.size();
+  std::size_t evth_at = blocks.size();
+  for (std::size_t i = 0; i < blocks.size(); ++i) {
+    if (blocks[i].type == iact::atmprof) {
+      atmprof_at = i;
+    }
+    if (blocks[i].type == iact::evth) {
+      evth_at = i;
+    }
+  }
+  CHECK(atmprof_at < evth_at);
+  if (atmprof_at < blocks.size()) {
+    CHECK(blocks[atmprof_at].ident == 5); // evth_block() names atmosphere 5 (word 77)
+  }
+}
+
+// A stream with its own ATMPROF block cannot take --atmprof as well.
+void test_atmprof_option_conflicts_with_stream() {
+  std::vector<Record> records = light_source_records();
+  records.insert(records.begin() + 1, blob_of(make_atmprof_block(three_level_table())));
+  SimtelOptions options;
+  options.atmprof = three_level_table();
+  CHECK(throws_error([&] { run_adapter_with(records, options); }));
+  // Without the option the block passes through unchanged.
+  CHECK(!throws_error([&] { run_adapter_with(records, SimtelOptions{}); }));
+}
+
+// CORSIKA output carries all headers: no warnings, and the bytes are the input's.
+void test_no_warnings_with_corsika_headers() {
+  const std::string input = corsika_file(1);
+  std::ostringstream stream_bytes;
+  {
+    Writer writer{stream_bytes, "test_simtel"};
+    std::istringstream in(input);
+    corsika_to_records(in, [&writer](const Record &record) { write_record(writer, record); });
+    writer.finish();
+  }
+  std::istringstream stream_in(stream_bytes.str());
+  std::ostringstream output;
+  std::ostringstream warnings;
+  stream_to_simtel(stream_in, output, SimtelOptions{CameraMap{}, std::nullopt, &warnings, {}, {}});
+  CHECK(output.str() == input);
+  CHECK(warnings.str().empty());
+}
+
 void test_synthesised_headers() {
   const std::vector<Record> records = {
       record_of(RecordType::run, light_source_run()),
@@ -640,5 +819,11 @@ int main() {
     test_frames_rejected();
     test_ledger_rules();
     test_round_trip_byte_identical();
+    test_atmprof_text();
+    test_atmprof_synthesised();
+    test_synthesised_warnings();
+    test_atmprof_takes_evth_profile();
+    test_atmprof_option_conflicts_with_stream();
+    test_no_warnings_with_corsika_headers();
   });
 }

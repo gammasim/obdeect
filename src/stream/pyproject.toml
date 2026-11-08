@@ -32,7 +32,7 @@ fallback_version = "0.1.0"
 build-dir = "build/{wheel_tag}"
 cmake.args = [ "-DGSTRICKD_BUILD_TESTING=OFF" ]
 cmake.build-type = "Release"
-sdist.include = [ "cpp/**", "CMakeLists.txt", "python/**", "README.md", "LICENSE" ]
+sdist.include = [ "cmake/**", "cpp/**", "CMakeLists.txt", "python/**", "README.md", "LICENSE" ]
 wheel.packages = [ "python/gstrickd" ]
 wheel.platlib = true
 # Editable installs rebuild the extension when the C++ sources change.

@@ -2,6 +2,7 @@
 
 #include "gstrickd/simtel.hpp"
 #include "gstrickd/stdin_buffer.hpp"
+#include "tool_version.hpp"
 
 #include <cstdio>
 #include <fstream>
@@ -19,8 +20,8 @@ namespace {
 constexpr std::size_t buffer_size = std::size_t{1} << 20;
 
 void usage() {
-  std::fprintf(stderr, "usage: ps2simtel [--camera-map FILE] [--allow-pending FACTOR]... "
-                       "[--scaled-factor FACTOR]... [-o FILE|-] "
+  std::fprintf(stderr, "usage: ps2simtel [--camera-map FILE] [--atmprof FILE] "
+                       "[--allow-pending FACTOR]... [--scaled-factor FACTOR]... [-o FILE|-] "
                        "[input|-]\n");
 }
 
@@ -50,31 +51,38 @@ int main(int argc, char **argv) {
   std::string input = "-";
   std::string output = "-";
   std::string camera_path;
+  std::string atmprof_path;
   std::set<std::string> allow_pending;
   std::set<std::string> scaled;
   bool have_input = false;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
+    if (arg == "--version") {
+      print_version("ps2simtel");
+      return 0;
+    }
     if (arg == "-h" || arg == "--help") {
       usage();
       return 0;
     }
-    if (arg == "--camera-map" || arg == "-o" || arg == "--allow-pending" ||
+    if (arg == "--camera-map" || arg == "--atmprof" || arg == "-o" || arg == "--allow-pending" ||
         arg == "--scaled-factor") {
       if (i + 1 >= argc) {
         std::fprintf(stderr, "ps2simtel: %s needs an argument\n", arg.c_str());
         usage();
         return 2;
       }
-      if (arg == "--allow-pending") {
+      if (arg == "-o") {
+        output = argv[++i];
+      } else if (arg == "--allow-pending") {
         allow_pending.insert(argv[++i]);
-        continue;
-      }
-      if (arg == "--scaled-factor") {
+      } else if (arg == "--scaled-factor") {
         scaled.insert(argv[++i]);
-        continue;
+      } else if (arg == "--atmprof") {
+        atmprof_path = argv[++i];
+      } else {
+        camera_path = argv[++i];
       }
-      (arg == "-o" ? output : camera_path) = argv[++i];
       continue;
     }
     if (arg.size() > 1 && arg[0] == '-') {
@@ -92,14 +100,24 @@ int main(int argc, char **argv) {
   }
 
   try {
-    gstrickd::CameraMap camera;
+    gstrickd::SimtelOptions options;
+    options.warnings = &std::cerr;
+    options.allow_pending = std::move(allow_pending);
+    options.scaled = std::move(scaled);
     if (!camera_path.empty()) {
       std::ifstream map_file(camera_path);
       if (!map_file) {
         throw std::runtime_error("cannot open camera map " + camera_path);
       }
-      camera = gstrickd::read_camera_map(map_file);
-      report_bypass(camera);
+      options.camera = gstrickd::read_camera_map(map_file);
+      report_bypass(options.camera);
+    }
+    if (!atmprof_path.empty()) {
+      std::ifstream table_file(atmprof_path);
+      if (!table_file) {
+        throw std::runtime_error("cannot open atmospheric table " + atmprof_path);
+      }
+      options.atmprof = gstrickd::read_atmprof_text(table_file, atmprof_path);
     }
 
     static std::vector<char> in_buffer(buffer_size);
@@ -132,8 +150,7 @@ int main(int argc, char **argv) {
       out = &out_file;
     }
 
-    gstrickd::stream_to_simtel(*in, *out, std::move(camera), std::move(allow_pending),
-                               std::move(scaled));
+    gstrickd::stream_to_simtel(*in, *out, std::move(options));
     out->flush();
     if (!*out) {
       throw std::runtime_error("write error on output");

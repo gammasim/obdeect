@@ -1,7 +1,9 @@
 // ps-cat: concatenate photon streams into one valid stream on stdout, or print
 // a summary of the streams.
 
+#include "gstrickd/stdin_buffer.hpp"
 #include "gstrickd/stream.hpp"
+#include "tool_version.hpp"
 
 #include <array>
 #include <cstdint>
@@ -80,10 +82,11 @@ void summarize_stream(std::istream &in, const std::string &name, Summary &summar
 }
 
 // Calls fn(istream&, name) for each input; "-" is stdin.
-template <class Fn> void for_each_input(const std::vector<std::string> &inputs, Fn &&fn) {
+template <class Fn>
+void for_each_input(const std::vector<std::string> &inputs, std::istream &stdin_stream, Fn &&fn) {
   for (const auto &name : inputs) {
     if (name == "-") {
-      fn(std::cin, name);
+      fn(stdin_stream, name);
       continue;
     }
     std::vector<char> buffer(buffer_size);
@@ -115,6 +118,9 @@ int main(int argc, char **argv) {
     const std::string arg = argv[i];
     if (arg == "--summary") {
       summary = true;
+    } else if (arg == "--version") {
+      print_version("ps-cat");
+      return 0;
     } else if (arg == "-h" || arg == "--help") {
       usage();
       return 0;
@@ -131,9 +137,11 @@ int main(int argc, char **argv) {
   }
 
   try {
+    gstrickd::StdinBuffer stdin_buffer;
+    std::istream stdin_stream(&stdin_buffer);
     if (summary) {
       Summary result;
-      for_each_input(inputs, [&](std::istream &in, const std::string &name) {
+      for_each_input(inputs, stdin_stream, [&](std::istream &in, const std::string &name) {
         summarize_stream(in, name, result);
       });
       std::printf("records:\n");
@@ -161,8 +169,9 @@ int main(int argc, char **argv) {
     std::cout.rdbuf()->pubsetbuf(out_buffer.data(),
                                  static_cast<std::streamsize>(out_buffer.size()));
     gstrickd::Writer writer(std::cout, "ps-cat");
-    for_each_input(
-        inputs, [&](std::istream &in, const std::string &name) { copy_stream(in, name, writer); });
+    for_each_input(inputs, stdin_stream, [&](std::istream &in, const std::string &name) {
+      copy_stream(in, name, writer);
+    });
     writer.finish();
     std::cout.flush();
     if (!std::cout) {

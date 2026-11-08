@@ -158,3 +158,16 @@ counter of disjoint bit fields: photon index (40 bits), block (24 bits),
 telescope (16 bits), stream (16 bits), event (32 bits). Out-of-range fields
 are rejected. Results do not depend on chunk size, photon order or thread
 count.
+
+Stage ids are defined once in `gstrickd/stages.hpp` (a `static_assert` checks
+that they are distinct). The values are fixed: changing one changes the random
+numbers.
+
+| Constant | Value | Module |
+|---|---|---|
+| `stage_sources` | `0x444C0001` | dlamb: light sources |
+| `stage_programs` | `0x444C0002` | dlamb: calibration programs |
+| `stage_obdeect` | `0x444C0003` | obdeect, reserved: obdeect still keys its draws on (seed, photon, stream, block); it uses this id once it uses `gstrickd::DrawKey` |
+| `stage_atmosphere` | `0x444C5546` | dlufd: atmosphere ("DLUF") |
+
+A new module takes the next free value and is added to `stage_ids`.

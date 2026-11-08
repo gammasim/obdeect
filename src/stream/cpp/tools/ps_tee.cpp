@@ -1,7 +1,9 @@
 // ps-tee: copy a photon stream from stdin to stdout and to each named file,
 // record by record, flushing after every record. Photon columns are not decoded.
 
+#include "gstrickd/stdin_buffer.hpp"
 #include "gstrickd/stream.hpp"
+#include "tool_version.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -69,6 +71,10 @@ int main(int argc, char **argv) {
   std::vector<std::string> names;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
+    if (arg == "--version") {
+      print_version("ps-tee");
+      return 0;
+    }
     if (arg == "-h" || arg == "--help") {
       std::fprintf(stderr, "usage: ps-tee file...  (copies stdin to stdout and to each file)\n");
       return 0;
@@ -81,9 +87,9 @@ int main(int argc, char **argv) {
   }
 
   try {
-    static std::vector<char> in_buffer(buffer_size);
     static std::vector<char> out_buffer(buffer_size);
-    std::cin.rdbuf()->pubsetbuf(in_buffer.data(), static_cast<std::streamsize>(in_buffer.size()));
+    gstrickd::StdinBuffer stdin_buffer;
+    std::istream in(&stdin_buffer);
     std::cout.rdbuf()->pubsetbuf(out_buffer.data(),
                                  static_cast<std::streamsize>(out_buffer.size()));
 
@@ -100,7 +106,7 @@ int main(int argc, char **argv) {
 
     std::vector<std::uint8_t> record;
     StreamOrder order;
-    while (gstrickd::read_record_raw(std::cin, record)) {
+    while (gstrickd::read_record_raw(in, record)) {
       const auto type =
           static_cast<gstrickd::RecordType>(gstrickd::stream_detail::load_le(record.data() + 4, 2));
       order.accept(type);

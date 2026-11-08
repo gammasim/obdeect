@@ -14,6 +14,7 @@
 #include "gstrickd/version.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -284,6 +285,22 @@ NB_MODULE(_core, module) {
     }
     return names;
   });
+  module.attr("format_major") = gstrickd::format_major;
+  module.attr("format_minor") = gstrickd::format_minor;
+  module.attr("max_chunk_rows") = gstrickd::max_chunk_rows;
+  module.attr("frame_ids") = [] {
+    const std::array<std::pair<const char *, gstrickd::Frame>, 4> frames{{
+        {"sky", gstrickd::Frame::sky},
+        {"ground", gstrickd::Frame::ground},
+        {"telescope", gstrickd::Frame::telescope},
+        {"camera", gstrickd::Frame::camera},
+    }};
+    nb::dict out;
+    for (const auto &[name, frame] : frames) {
+      out[name] = static_cast<std::uint32_t>(frame);
+    }
+    return out;
+  }();
 
   module.def(
       "corsika_to_stream",
@@ -316,10 +333,11 @@ NB_MODULE(_core, module) {
         if (!out) {
           throw nb::value_error(("cannot open " + output + " for writing").c_str());
         }
-        gstrickd::stream_to_simtel(
-            in.get(), out, std::move(map),
-            std::set<std::string>(allow_pending.begin(), allow_pending.end()),
-            std::set<std::string>(scaled.begin(), scaled.end()));
+        gstrickd::SimtelOptions options;
+        options.camera = std::move(map);
+        options.allow_pending = std::set<std::string>(allow_pending.begin(), allow_pending.end());
+        options.scaled = std::set<std::string>(scaled.begin(), scaled.end());
+        gstrickd::stream_to_simtel(in.get(), out, std::move(options));
         out.close();
         if (out.fail()) {
           throw std::runtime_error("failed to write " + output);
