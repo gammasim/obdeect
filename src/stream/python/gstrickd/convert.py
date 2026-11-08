@@ -42,10 +42,12 @@ def stream_to_simtel(
 ) -> None:
     """Convert a photon stream file to sim_telarray input (EventIO).
 
-    ``camera_map`` lists the camera-frame telescopes: a mapping of telescope id (1-based) to
+    ``camera_map`` lists the telescopes with camera-frame photons, and the dual-mirror
+    (class 2) telescopes with telescope-frame photons: a mapping of telescope id (1-based) to
     ``(mirror_class, camera_rotation_deg)``, or the path of a text file with one line
     ``telescope_id mirror_class camera_rotation_deg`` per telescope. Telescopes not listed are
-    ground-frame telescopes (Bypass_Optics=0 in sim_telarray).
+    ground-frame telescopes (Bypass_Optics=0 in sim_telarray). A class 2 entry may also carry
+    telescope-frame photons (Bypass_Optics=1, see docs/usage.md).
 
     The efficiency ledger is checked per telescope against the frame of its photons
     (docs/format.md): a factor is valid as ``applied`` when sim_telarray does not apply it in
