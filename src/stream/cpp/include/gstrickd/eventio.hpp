@@ -1,10 +1,7 @@
 #pragma once
 
-// EventIO block container (Bernloehr's eventio.c) and the IACT payloads of
-// CORSIKA output (types 1200-1217, mc_tel.h). Own little-endian code; only the
-// formats needed by gstrickd. Byte layout and bit meanings follow eventio.c
-// (block description at its top, item header code at lines 4120-4190 for the
-// reader and 3968-3998 for the writer) and io_simtel.c (payloads).
+// EventIO block container and the IACT payloads of CORSIKA output (types
+// 1200-1217). Own little-endian code; only the formats needed by gstrickd.
 
 #include <algorithm>
 #include <bit>
@@ -20,12 +17,12 @@
 
 namespace gstrickd {
 
-// Sync tag bytes 37 8A 1F D4 read as little-endian (eventio.c:4133). The
-// swapped value 0x378A1FD4 marks big-endian data (eventio.c:4135).
+// Sync tag bytes 37 8A 1F D4 read as little-endian. The swapped value 0x378A1FD4
+// marks big-endian data.
 inline constexpr std::uint32_t eventio_sync = 0xD41F8A37U;
 inline constexpr std::uint32_t eventio_sync_swapped = 0x378A1FD4U;
 
-// IACT item types (mc_tel.h:IO_TYPE_MC_*).
+// IACT item types.
 namespace iact {
 inline constexpr std::uint32_t runh = 1200;            // run header, float array
 inline constexpr std::uint32_t telpos = 1201;          // telescope positions
@@ -117,7 +114,7 @@ private:
   std::vector<std::uint8_t> &out_;
 };
 
-// Variable-length counts of eventio.c (put_count32 and get_count32 for values below 2^32).
+// Variable-length counts for values below 2^32.
 // Big-endian: a lead byte with the high bits, then the remaining bytes.
 inline void put_count(ByteWriter &out, std::uint64_t n) {
   if (n >= (std::uint64_t{1} << 32)) {
@@ -185,7 +182,7 @@ struct ItemHeader {
 };
 
 // Parse an item header (without sync tag) at p. Throws on truncation or on
-// fields that eventio.c rejects.
+// invalid fields.
 inline ItemHeader parse_item_header(const std::uint8_t *p, std::size_t avail) {
   if (avail < 12) {
     throw std::runtime_error("EventIO: truncated item header");
@@ -206,9 +203,8 @@ inline ItemHeader parse_item_header(const std::uint8_t *p, std::size_t avail) {
   h.ident = in.u32();
   const std::uint32_t length_word = in.u32();
   h.only_subobjects = (length_word & 0x40000000U) != 0;
-  // eventio.c:4170-4187 decodes the extension from length bit 31 (and writes
-  // both flags, eventio.c:3994 and 3832). Files where the two flags disagree are
-  // rejected.
+  // The length extension is flagged in type bit 17 and in length bit 31; blocks
+  // where the two flags disagree are rejected.
   const bool extended = (length_word & 0x80000000U) != 0;
   if (extension_in_type != extended) {
     throw std::runtime_error("EventIO: inconsistent extension flags");
@@ -223,7 +219,7 @@ inline ItemHeader parse_item_header(const std::uint8_t *p, std::size_t avail) {
     if ((extension & ~0x0FFFU) != 0) {
       throw std::runtime_error("EventIO: reserved bits set in length extension");
     }
-    h.length |= std::uint64_t{extension} << 30; // eventio.c:4184
+    h.length |= std::uint64_t{extension} << 30;
     h.size = 16;
   }
   return h;
@@ -237,7 +233,7 @@ inline void copy_fields(EventioBlock &block, const ItemHeader &h) {
   block.only_subobjects = h.only_subobjects;
 }
 
-// Header bytes for a block of `length` body bytes, as eventio.c writes them.
+// Header bytes for a block of `length` body bytes.
 // top_level adds the sync tag.
 inline std::vector<std::uint8_t> encode_header_fields(std::uint32_t type, std::uint32_t version,
                                                       std::uint32_t ident, std::uint64_t length,
@@ -284,7 +280,7 @@ inline std::vector<std::uint8_t> encode_header_fields(std::uint32_t type, std::u
   return out;
 }
 
-// Header bytes for a block, as eventio.c writes them. top_level adds the sync tag.
+// Header bytes for a block. top_level adds the sync tag.
 inline std::vector<std::uint8_t> encode_header(const EventioBlock &block, bool top_level) {
   return encode_header_fields(block.type, block.version, block.ident, block.body.size(),
                               block.user_flag, block.only_subobjects, top_level);
@@ -467,9 +463,8 @@ inline void write_block(std::ostream &out, const EventioBlock &block) {
 }
 
 // ---------------------------------------------------------------------------
-// Float arrays: RUNH 1200, EVTH 1202, EVTE 1209, RUNE 1210 (write_tel_block,
-// io_simtel.c:72). Body: int32 count, then count float32. The first value is
-// stored as the bit pattern of a float (it holds the block name).
+// Float arrays: RUNH 1200, EVTH 1202, EVTE 1209, RUNE 1210. Body: int32 count, then count float32.
+// The first value is stored as the bit pattern of a float (it holds the block name).
 
 inline std::vector<float> decode_float_block(const EventioBlock &block) {
   ByteReader in{block.body};
@@ -496,7 +491,7 @@ inline EventioBlock make_float_block(std::uint32_t type, std::uint32_t ident,
 }
 
 // ---------------------------------------------------------------------------
-// Telescope positions, 1201 (write_tel_pos, io_simtel.c:484). Values in cm.
+// Telescope positions, 1201. Values in cm.
 
 struct TelPos {
   std::vector<double> x, y, z, r;
@@ -538,7 +533,7 @@ inline EventioBlock make_telpos_block(const TelPos &pos) {
 }
 
 // ---------------------------------------------------------------------------
-// Array offsets, 1203 (write_tel_offset_w, io_simtel.c:650). Version 1 adds
+// Array offsets, 1203. Version 1 adds
 // one weight per array. Core offsets in cm, toff in ns.
 
 struct TelOffset {
@@ -602,8 +597,7 @@ inline EventioBlock make_teloff_block(const TelOffset &off) {
 }
 
 // ---------------------------------------------------------------------------
-// Photon bunches, 1205 (write_tel_photons, io_simtel.c:1035; compact variant
-// write_tel_compact_photons, io_simtel.c:1297). Header: int16 array, int16
+// Photon bunches, 1205 (long and compact variants). Header: int16 array, int16
 // telescope, float32 photon sum, int32 bunch count. Units are CORSIKA's: cm,
 // ns, cm a.s.l., nm.
 
@@ -647,7 +641,7 @@ inline TelPhotons decode_photons(const EventioBlock &block) {
       b.lambda = in.f32();
       continue;
     }
-    // Compact decoding as io_simtel.c:1457-1479 (read_tel_photons).
+    // Compact bunches store positions and directions as scaled int16.
     b.x = static_cast<float>(0.1 * in.i16());
     b.y = static_cast<float>(0.1 * in.i16());
     float cx = static_cast<float>(in.i16() / 30000.0);
@@ -665,7 +659,7 @@ inline TelPhotons decode_photons(const EventioBlock &block) {
 }
 
 // Encode photon bunches as 1205. Long format: version 0. Compact format:
-// version 1000 with the quantisation of io_simtel.c; values that do not fit
+// version 1000 with fixed quantisation steps; values that do not fit
 // throw std::out_of_range. The array and telescope indices are int16 on disk
 // and must be 0..32767.
 inline EventioBlock make_photons_block(const TelPhotons &p, bool compact = false) {
@@ -714,7 +708,7 @@ inline EventioBlock make_photons_block(const TelPhotons &p, bool compact = false
   return make_block(iact::photons, version, ident, std::move(body));
 }
 
-// 3D photon bunches, 1217 (write_tel_photons3d, io_simtel.c:1164). Decoding only.
+// 3D photon bunches, 1217. Decoding only.
 struct Bunch3d {
   float x{}, y{}, z{}, cx{}, cy{}, cz{}, ctime{}, dist{}, photons{}, lambda{};
 };
@@ -756,7 +750,7 @@ inline TelPhotons3d decode_photons3d(const EventioBlock &block) {
 }
 
 // ---------------------------------------------------------------------------
-// Atmospheric profile, 1216 (write_atmprof, io_simtel.c:2878; version 1). Layout: var string
+// Atmospheric profile, 1216 (version 1). Layout: var string
 // file name, double observation level [cm], count n, n times (altitude [km], density [g/cm^3],
 // thickness [g/cm^2], n-1), count of 5-layer parameters (0 here). The block ident is the
 // profile number that EVTH word 77 names (bits 10-19). Writing only; reading supports tables

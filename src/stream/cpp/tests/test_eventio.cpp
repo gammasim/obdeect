@@ -74,7 +74,7 @@ void user_flag_and_version_round_trip() {
 }
 
 // Extension: type bit 17 and length bit 31 both set, then an extension word
-// (length bits 30-41). eventio.c:4170-4184.
+// (length bits 30-41).
 void extended_length_is_read() {
   Bytes raw;
   put_u32(raw, eventio_sync);
@@ -156,7 +156,7 @@ void rejects_bad_input() {
     EventioReader r{truncated};
     (void)r.next(read);
   }));
-  // Version with bit 11 set is invalid (eventio.c:4156).
+  // Version with bit 11 set is invalid.
   Bytes bad_version;
   put_u32(bad_version, eventio_sync);
   put_u32(bad_version, 1205U | (0x800U << 20));
@@ -250,9 +250,8 @@ void long_photons_layout_and_round_trip() {
   }
 }
 
-// Compact bunches: decoded with the formulas of io_simtel.c:1457-1479. The raw
-// values are written by hand, not by the encoder.
-void compact_decoding_matches_io_simtel() {
+// Compact bunches: decoded from raw values written by hand, not by the encoder.
+void compact_decoding_from_raw_values() {
   Bytes body;
   ByteWriter out{body};
   out.i16(1);
@@ -371,7 +370,7 @@ void photon_block_indices_are_range_checked() {
 
 } // namespace
 
-// Variable-length counts: eventio.c byte layout at the branch boundaries, and round trips.
+// Variable-length counts: byte layout at the branch boundaries, and round trips.
 void count_encoding() {
   Bytes out;
   ByteWriter w{out};
@@ -454,7 +453,7 @@ int main() {
     telpos_round_trip();
     teloff_round_trip();
     long_photons_layout_and_round_trip();
-    compact_decoding_matches_io_simtel();
+    compact_decoding_from_raw_values();
     compact_encoding_quantises();
     photons3d_decoding();
     photon_count_is_checked();
