@@ -3,6 +3,7 @@
 
 #include "gstrickd/stdin_buffer.hpp"
 #include "gstrickd/stream.hpp"
+#include "tool_version.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -70,6 +71,10 @@ int main(int argc, char **argv) {
   std::vector<std::string> names;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
+    if (arg == "--version") {
+      print_version("ps-tee");
+      return 0;
+    }
     if (arg == "-h" || arg == "--help") {
       std::fprintf(stderr, "usage: ps-tee file...  (copies stdin to stdout and to each file)\n");
       return 0;

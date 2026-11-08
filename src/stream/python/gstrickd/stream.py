@@ -10,7 +10,7 @@ from gstrickd import _core
 
 Reader = _core.Reader
 
-FRAMES = {"sky": 0, "ground": 1, "telescope": 2, "camera": 3}
+FRAMES = dict(_core.frame_ids)
 COLUMNS = tuple(_core.column_names())
 REQUIRED_COLUMNS = ("x", "y", "cx", "cy", "t", "w")
 METADATA_RECORDS = ("run", "event", "telescope", "telescope_end", "event_end", "run_end", "ledger")

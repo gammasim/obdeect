@@ -3,6 +3,7 @@
 
 #include "gstrickd/stdin_buffer.hpp"
 #include "gstrickd/stream.hpp"
+#include "tool_version.hpp"
 
 #include <array>
 #include <cstdint>
@@ -117,6 +118,9 @@ int main(int argc, char **argv) {
     const std::string arg = argv[i];
     if (arg == "--summary") {
       summary = true;
+    } else if (arg == "--version") {
+      print_version("ps-cat");
+      return 0;
     } else if (arg == "-h" || arg == "--help") {
       usage();
       return 0;

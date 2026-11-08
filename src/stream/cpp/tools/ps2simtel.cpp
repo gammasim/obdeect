@@ -2,6 +2,7 @@
 
 #include "gstrickd/simtel.hpp"
 #include "gstrickd/stdin_buffer.hpp"
+#include "tool_version.hpp"
 
 #include <cstdio>
 #include <fstream>
@@ -52,6 +53,10 @@ int main(int argc, char **argv) {
   bool have_input = false;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
+    if (arg == "--version") {
+      print_version("ps2simtel");
+      return 0;
+    }
     if (arg == "-h" || arg == "--help") {
       usage();
       return 0;
