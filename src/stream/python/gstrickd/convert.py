@@ -38,6 +38,7 @@ def stream_to_simtel(
     output_path: str | os.PathLike,
     camera_map: Mapping[int, tuple[int, float]] | str | os.PathLike | None = None,
     allow_pending: Iterable[str] = (),
+    scaled_factors: Iterable[str] = (),
 ) -> None:
     """Convert a photon stream file to sim_telarray input (EventIO).
 
@@ -52,13 +53,16 @@ def stream_to_simtel(
     sim_telarray applies it (e.g. ``qe``). ``envelope`` is never valid for factors sim_telarray
     applies. With ground-frame photons ``atmosphere`` is valid in any state. Anything else, and
     unknown factor names, raise ``RuntimeError``; ``allow_pending`` names factors to accept as
-    they are.
+    they are. ``scaled_factors`` names factors whose sim_telarray table holds f/f_env (e.g. a
+    QE table divided by the QE envelope): they must be in state ``envelope``.
     """
-    if isinstance(allow_pending, str):
-        raise TypeError("allow_pending must be a sequence of factor names, not a string")
+    for name, value in (("allow_pending", allow_pending), ("scaled_factors", scaled_factors)):
+        if isinstance(value, str):
+            raise TypeError(f"{name} must be a sequence of factor names, not a string")
     _core.stream_to_simtel(
         os.fspath(input_path),
         os.fspath(output_path),
         _camera_entries(camera_map),
         [str(name) for name in allow_pending],
+        [str(name) for name in scaled_factors],
     )

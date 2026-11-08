@@ -218,9 +218,10 @@ Metadata light_source_run() {
 
 // Writes records through a PsToSimtel and returns the EventIO bytes.
 std::string run_adapter(const std::vector<Record> &records, const CameraMap &camera,
-                        const std::set<std::string> &allow_pending = {}) {
+                        const std::set<std::string> &allow_pending = {},
+                        const std::set<std::string> &scaled = {}) {
   std::ostringstream out;
-  PsToSimtel converter{out, camera, allow_pending};
+  PsToSimtel converter{out, camera, allow_pending, scaled};
   for (const Record &record : records) {
     converter.write(record);
   }
@@ -540,6 +541,21 @@ void test_ledger_rules() {
   CHECK(!throws_error([&] {
     run_adapter(ledger_run(Frame::camera, {ledger_of("made_up", "applied")}, {}), camera,
                 {"made_up"});
+  }));
+
+  // Scaled factors (sim_telarray table holds f/f_env): only the envelope state of a factor
+  // that sim_telarray applies in the frame is accepted.
+  CHECK(throws_error(
+      [&] { run_adapter(ledger_run(Frame::camera, {ledger_of("qe", "envelope")}, {}), camera); }));
+  CHECK(!throws_error([&] {
+    run_adapter(ledger_run(Frame::camera, {ledger_of("qe", "envelope")}, {}), camera, {}, {"qe"});
+  }));
+  CHECK(throws_error([&] {
+    run_adapter(ledger_run(Frame::camera, {ledger_of("qe", "pending")}, {}), camera, {}, {"qe"});
+  }));
+  CHECK(throws_error([&] {
+    run_adapter(ledger_run(Frame::camera, {ledger_of("mirror_reflectivity", "envelope")}, {}),
+                camera, {}, {"mirror_reflectivity"});
   }));
 
   // Malformed ledgers: no factors list, no state, unknown state.

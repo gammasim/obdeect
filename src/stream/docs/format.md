@@ -144,6 +144,11 @@ factors: sim_telarray applies the full factor, not f/f_env.
 
 Any other factor (or unknown name) raises an error that names it, unless it is
 given to `ps2simtel --allow-pending FACTOR` or `allow_pending=` in Python.
+
+`envelope` for a factor that sim_telarray applies is valid only with
+`ps2simtel --scaled-factor FACTOR` (`scaled_factors=` in Python): the sim_telarray
+table of the factor then holds f/f_env, e.g. the QE table divided by the QE envelope
+applied upstream. A scaled factor in any other state is an error.
 Usage: docs/usage.md.
 
 ## Random numbers

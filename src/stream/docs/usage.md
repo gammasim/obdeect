@@ -101,3 +101,10 @@ $ ps2simtel --camera-map cam.txt --allow-pending telescope_transmission_constant
 ```
 
 In Python: `gstrickd.stream_to_simtel(run.ps, sim.simtel, cam, allow_pending=["telescope_transmission_constant"])`.
+
+When the QE envelope was applied upstream (ledger state `envelope`) and the
+sim_telarray QE table is divided by that envelope, declare it:
+
+```console
+$ ps2simtel --camera-map cam.txt --scaled-factor qe run.ps > sim.simtel
+```

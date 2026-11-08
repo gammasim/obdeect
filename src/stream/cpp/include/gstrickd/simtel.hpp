@@ -37,8 +37,10 @@
 // sim_telarray applies, because sim_telarray applies the full factor, not
 // f/f_env. With ground-frame photons `atmosphere` is accepted in any state:
 // sim_telarray applies its transmission table, which must then be all-zero when
-// the atmosphere was applied upstream. Any other factor is an error, unless it
-// is listed in `allow_pending`. Streams without a ledger are
+// the atmosphere was applied upstream. A factor listed in `scaled` must be in
+// state `envelope` and applied by sim_telarray: its sim_telarray table then
+// holds f/f_env (e.g. a QE table divided by the QE envelope). Any other factor is
+// an error, unless it is listed in `allow_pending`. Streams without a ledger are
 // converted as before.
 
 #include "gstrickd/corsika.hpp"
@@ -371,7 +373,8 @@ inline LedgerStates ledger_states(const Metadata &ledger) {
 // first factor that sim_telarray would apply twice, or would not apply at all.
 inline void check_ledger(const std::vector<Metadata> &run_ledgers,
                          const std::vector<Metadata> &telescope_ledgers, std::uint32_t telescope_id,
-                         bool camera_frame, const std::set<std::string> &allow_pending) {
+                         bool camera_frame, const std::set<std::string> &allow_pending,
+                         const std::set<std::string> &scaled = {}) {
   LedgerStates states;
   for (const Metadata &ledger : run_ledgers) {
     for (const auto &[name, state] : ledger_states(ledger)) {
@@ -403,6 +406,16 @@ inline void check_ledger(const std::vector<Metadata> &run_ledgers,
                                option);
     }
     const bool sim_telarray = sim_telarray_applies(name, camera_frame);
+    if (scaled.contains(name)) {
+      if (!sim_telarray || state != "envelope") {
+        throw std::runtime_error("efficiency ledger of " + where + ": factor '" + name +
+                                 "' is given as scaled (sim_telarray applies f/f_env), so it "
+                                 "must be in state envelope and applied by sim_telarray in "
+                                 "this frame; it is " +
+                                 state);
+      }
+      continue;
+    }
     if (state == "applied") {
       if (sim_telarray) {
         throw std::runtime_error("efficiency ledger of " + where + ": factor '" + name +
@@ -415,8 +428,9 @@ inline void check_ledger(const std::vector<Metadata> &run_ledgers,
     if (sim_telarray && state == "envelope") {
       throw std::runtime_error("efficiency ledger of " + where + ": factor '" + name +
                                "' has only its envelope applied, but sim_telarray applies the "
-                               "full factor, so the result would be too dim" +
-                               option);
+                               "full factor, so the result would be too dim; pass "
+                               "--scaled-factor " +
+                               name + " if its sim_telarray table holds f/f_env" + option);
     }
     if (!sim_telarray) {
       throw std::runtime_error("efficiency ledger of " + where + ": factor '" + name + "' is " +
@@ -435,8 +449,10 @@ inline void check_ledger(const std::vector<Metadata> &run_ledgers,
 // for the frame and header rules.
 class PsToSimtel {
 public:
-  PsToSimtel(std::ostream &out, CameraMap camera, std::set<std::string> allow_pending = {})
-      : writer_{out}, camera_{std::move(camera)}, allow_pending_{std::move(allow_pending)} {
+  PsToSimtel(std::ostream &out, CameraMap camera, std::set<std::string> allow_pending = {},
+             std::set<std::string> scaled = {})
+      : writer_{out}, camera_{std::move(camera)}, allow_pending_{std::move(allow_pending)},
+        scaled_{std::move(scaled)} {
     for (const auto &[id, telescope] : camera_) {
       if (id == 0) {
         throw std::invalid_argument("camera map telescope id must be at least 1");
@@ -629,7 +645,7 @@ private:
                                "ledger");
     }
     simtel_detail::check_ledger(run_ledgers_, telescope_ledgers_, telescope_id_,
-                                camera_.contains(telescope_id_), allow_pending_);
+                                camera_.contains(telescope_id_), allow_pending_, scaled_);
   }
 
   void begin_event(const Metadata &metadata) {
@@ -798,6 +814,7 @@ private:
   bool have_teloff_{};
   bool have_evte_{};
   std::set<std::string> allow_pending_;
+  std::set<std::string> scaled_;
   std::vector<Metadata> run_ledgers_;
   std::vector<Metadata> telescope_ledgers_;
   bool telescope_open_{};
@@ -817,8 +834,9 @@ inline void corsika_to_stream(std::istream &in, std::ostream &out, const std::st
 // Photon stream from `in` to sim_telarray EventIO on `out`. Throws on a truncated
 // stream or on a record the adapter cannot convert.
 inline void stream_to_simtel(std::istream &in, std::ostream &out, CameraMap camera,
-                             std::set<std::string> allow_pending = {}) {
-  PsToSimtel converter{out, std::move(camera), std::move(allow_pending)};
+                             std::set<std::string> allow_pending = {},
+                             std::set<std::string> scaled = {}) {
+  PsToSimtel converter{out, std::move(camera), std::move(allow_pending), std::move(scaled)};
   Reader reader{in};
   Record record;
   while (reader.next(record)) {
