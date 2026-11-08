@@ -147,6 +147,19 @@ def test_reference_transmission(table):
     assert relative.max() <= 1e-6
 
 
+def test_reference_transmission_with_od2focus_from_table(table):
+    # sim_telarray's od2focus for a 28 m path is tau(h + 28 m) - tau(h), taken from the table.
+    points = np.array(REFERENCE, dtype=np.float64)
+    lam, zem, airmass, expected = points.T
+    od_tel = np.array([table.optical_depth(lm, TELESCOPE_ALTITUDE_M) for lm in lam])
+    od_focus = (
+        np.array([table.optical_depth(lm, TELESCOPE_ALTITUDE_M + PATHLEN_M) for lm in lam]) - od_tel
+    )
+    values = table.transmission2(lam, zem, airmass, od_tel, od_focus)
+    relative = np.abs(values - expected) / expected
+    assert relative.max() <= 1e-6
+
+
 def test_constant_optical_depth(tmp_path):
     path = tmp_path / "constant.dat"
     path.write_text("# H2= 2.000, H1=    3.000     4.000\n400 0.5 0.5\n", encoding="utf-8")

@@ -4,6 +4,7 @@ The stream is read from and written to files; the work is done by the C++ core, 
 as the ``dlufd-propagate`` command-line tool.
 """
 
+import operator
 import os
 from collections.abc import Mapping, Sequence
 
@@ -26,6 +27,8 @@ def propagate(
     store_p: bool = False,
     scattering: str | os.PathLike | None = None,
     scattering_points: int = 8,
+    pathlen_m: float = 0.0,
+    telescope_pathlen_m: Mapping[int, float] | None = None,
 ) -> dict[str, float]:
     """Run the atmosphere stage on a photon stream file.
 
@@ -48,6 +51,10 @@ def propagate(
             the sky photons before extinction; scattered photons go to their telescope's block.
             The run needs telescope_r_m. Off when None.
         scattering_points: scattering points per photon (1 to 1024); used only with scattering.
+        pathlen_m: optical path inside each telescope [m] (sim_telarray pathlen_tel, the od2focus
+            part of the telescope depths). Default 0.
+        telescope_pathlen_m: per-telescope path [m] as {telescope_id: metres}, ids 1-based;
+            overrides pathlen_m for those telescopes. Default None.
 
     Returns:
         Dict with photons_in, photons_out, dropped (sky photons not reaching the telescope
@@ -61,6 +68,11 @@ def propagate(
         raise ValueError(f"mode must be one of {MODES}, not {mode!r}")
     items = envelope.items() if isinstance(envelope, Mapping) else envelope
     factors = [(str(name), os.fspath(path)) for name, path in items]
+    # operator.index rejects non-integer ids (1.5, "1") instead of truncating them.
+    pathlens = {
+        operator.index(telescope): float(metres)
+        for telescope, metres in (telescope_pathlen_m or {}).items()
+    }
     return dict(
         _core.propagate(
             os.fspath(input_path),
@@ -77,5 +89,7 @@ def propagate(
             bool(store_p),
             None if scattering is None else os.fspath(scattering),
             int(scattering_points),
+            float(pathlen_m),
+            pathlens,
         )
     )

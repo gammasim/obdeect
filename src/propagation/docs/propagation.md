@@ -25,11 +25,14 @@ With `--scattering` the stage runs one more step per event, before the steps abo
 | 2, 3 | Primaries: wavelength, extinction p_atm | G | |
 | 4 | Primaries: p = p_atm E, thinning or weighting | G | |
 | 1s | Scattered photons: sky → G, same run geometry (refraction, air delay) | sky → G | |
-| 4s | Scattered photons: p = E only, thinning or weighting (their own random stream) | G | |
+| 4s | Scattered photons: p = E exp(-od_focus), thinning or weighting (their own random stream) | G | |
 
-Scattered photons skip steps 2 and 3: their transmission to the telescope is already in w
-(`T(P -> C)` of [](scattering.md)), so the atmosphere is not applied twice. The primaries are
-scattered before their own extinction and are otherwise unchanged.
+Scattered photons skip steps 2 and 3: their transmission from the scattering point to the telescope
+sphere is already in w (`T(P -> C)` of [](scattering.md)), so the atmosphere is not applied twice.
+Step 4s adds only the in-telescope part of the extinction, exp(-od_focus(lambda)) of their telescope
+(the same `od_focus` as step 4, so the path length applies to scattered photons too). With a path of
+0 m the factor is 1. The primaries are scattered before their own extinction and are otherwise
+unchanged.
 
 An event is held until its `event_end` record, because the scattered photons of a telescope come
 from the primaries of all telescopes of the event. Memory: one event of the input.
@@ -66,6 +69,7 @@ Example:
 factors                 atmosphere,wavelength,scattering,qe
 atmosphere.state        applied
 atmosphere.source       atm_trans_2000_1_10_0_0_2000.dat
+atmosphere.pathlen_m    [28, 0]
 wavelength.state        applied
 wavelength.range_nm     [250, 700]
 scattering.state        applied
@@ -77,7 +81,8 @@ qe.wavelength_nm        [200, 800]
 qe.value                [0.9, 0.5]
 ```
 
-- `atmosphere`: applied; source = transmission file.
+- `atmosphere`: applied; source = transmission file; `pathlen_m` = path inside each telescope [m]
+  in telescope_id order (entry 0 is telescope 1), as used for od2focus.
 - `wavelength`: applied; rows without a wavelength get one from the range.
 - `scattering`: only with scattering; applied; source = scattering table; points per photon.
 - Each envelope factor: state `envelope` (its value is part of the thinning, not applied in
@@ -123,7 +128,15 @@ dlufd-propagate: photons in <n>, out <m> (weight <w>), dropped <d>
 | `--store-p` | keep column p |
 | `--scattering FILE` | single scattering with this scattering table (off by default) |
 | `--scattering-points N` | scattering points per photon, 1 to 1024 (default 8; needs `--scattering`) |
+| `--pathlen M` | path inside each telescope [m], finite and >= 0 (default 0) |
+| `--telescope-pathlen ID=M` | path inside telescope ID (1-based) [m]; overrides `--pathlen`; repeatable |
 | `-i FILE\|-`, `-o FILE\|-` | input and output stream (default stdin, stdout) |
+
+Example with the in-telescope path of 28 m for all telescopes, 0 m for telescope 2:
+
+```console
+$ dlufd-propagate ... --pathlen 28 --telescope-pathlen 2=0
+```
 
 The summary goes to stderr.
 
@@ -139,18 +152,29 @@ summary = dlufd.propagate(
     envelope={"qe": "qe.dat", "mirror": "mirror.dat"},
     wavelength_range=(250.0, 700.0), mode="thinned",
     scattering="scattering_exponential.dat", scattering_points=8,  # optional
+    pathlen_m=28.0, telescope_pathlen_m={2: 0.0},                  # optional
 )
 ```
 
 `summary` is a dict with `photons_in`, `photons_out`, `dropped`, `weight_out`.
 Files are paths only (no `-`).
 
+## In-telescope path
+
+The telescope depths of sim_telarray (`od2focus`) cover the path from the telescope sphere plane to
+the focus. With path length l (`pathlen_m`), the depth is tau(h_T + l) - tau(h_T), with h_T the
+telescope altitude. `--pathlen` (`pathlen_m`) sets l for all telescopes, `--telescope-pathlen`
+(`telescope_pathlen_m`, keys 1-based telescope ids) overrides it for single telescopes. Default 0,
+so existing runs keep their result. Each telescope's l must come from its optics (sim_telarray
+`pathlen_tel`: focal length for single-mirror telescopes, `|p0-s0|+|s0-f0|` for dual-mirror ones).
+An id that the run does not have is an error.
+
 ## Limits
 
 - Plane-parallel airmass and straight-line geometry (no Earth curvature).
 - Scattering needs sky-frame input and `telescope_r_m` in the run keys; it is not available for
   photons already in frame G.
-- Path inside the telescope is 0 (`pathlen_tel` of sim_telarray is not set).
+- The in-telescope path is not derived from the optics: it is given per telescope (default 0).
 - Wavelengths are integer nm, as in sim_telarray.
 - Envelope tables must cover the wavelength range (rounded outwards).
 - The 60-degree time term of CORSIKA's ray bending is reproduced as it is; see
