@@ -1,8 +1,8 @@
 cff-version: 1.2.0
 message: "If you use dlamb, please cite it using the metadata below."
 title: "dlamb: Artificial light sources for Cherenkov-telescope simulations"
-version: 0.0.1
-date-released: 2026-11-07
+version: 0.1.0
+date-released: 2026-11-08
 license: BSD-3-Clause
 type: software
 repository-code: "https://github.com/GernotMaier/dlamb"
