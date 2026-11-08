@@ -120,6 +120,67 @@ def test_camera_frame_conversion(tmp_path, camera_map):
     np.testing.assert_allclose(_column(converted, "cy"), -_column(original, "cy"), atol=1e-6)
 
 
+def _write_flasher_stream(path):
+    """One telescope-frame photon: emission point (0.1, 0.2, 0.5) m, direction (0.6, 0, -0.8)."""
+    one = np.ones(1, dtype=np.float32)
+    with gstrickd.Writer(str(path), "pytest") as writer:
+        writer.write(
+            "run",
+            {
+                "run_number": 4,
+                "observation_level_m": 2200.0,
+                "telescope_x_m": np.array([0.0]),
+                "telescope_y_m": np.array([0.0]),
+                "telescope_z_m": np.array([0.0]),
+                "telescope_r_m": np.array([1.2]),
+            },
+        )
+        writer.write("event", {"event_number": 1})
+        writer.write("telescope", {"telescope_id": 1, "frame": "telescope", "array_index": 0})
+        writer.write_photons(
+            1,
+            "telescope",
+            0,
+            {
+                "x": 0.1 * one,
+                "y": 0.2 * one,
+                "z": 0.5 * one,
+                "cx": 0.6 * one,
+                "cy": 0.0 * one,
+                "cz": -0.8 * one,
+                "t": 3.0 * one,
+                "w": one,
+            },
+        )
+        writer.write("telescope_end", {"telescope_id": 1, "photons": 1.0})
+        writer.write("event_end", {})
+        writer.write("run_end", {})
+
+
+def test_telescope_frame_conversion(tmp_path):
+    stream = tmp_path / "flasher.ps"
+    simtel = tmp_path / "flasher.simtel"
+    back = tmp_path / "back.ps"
+    _write_flasher_stream(stream)
+    gstrickd.stream_to_simtel(stream, simtel, {1: (2, 0.0)})
+    gstrickd.corsika_to_stream(simtel, back)
+    converted = _photons_by_telescope(back)[1]
+    # Crossing of the plane z = 0 after 0.625 m: x = 0.1 + 0.625 * 0.6.
+    np.testing.assert_allclose(_column(converted, "x"), [0.475], atol=1e-6)
+    np.testing.assert_allclose(_column(converted, "y"), [0.2], atol=1e-6)
+    np.testing.assert_allclose(_column(converted, "t"), [3.0 + 0.625 / 0.299792458], atol=1e-4)
+    np.testing.assert_allclose(_column(converted, "zem"), [2200.5], atol=1e-3)
+
+
+def test_telescope_frame_needs_dual_mirror_entry(tmp_path):
+    stream = tmp_path / "flasher.ps"
+    _write_flasher_stream(stream)
+    with pytest.raises(RuntimeError, match="camera map entry"):
+        gstrickd.stream_to_simtel(stream, tmp_path / "a.simtel")
+    with pytest.raises(RuntimeError, match="dual-mirror"):
+        gstrickd.stream_to_simtel(stream, tmp_path / "b.simtel", {1: (1, 0.0)})
+
+
 def test_rejects_sky_frame(tmp_path):
     stream = tmp_path / "sky.ps"
     with gstrickd.Writer(str(stream), "pytest") as writer:
@@ -140,7 +201,7 @@ def test_rejects_sky_frame(tmp_path):
         writer.write("telescope_end", {"telescope_id": 1, "photons": 3.0})
         writer.write("event_end", {})
         writer.write("run_end", {})
-    with pytest.raises(RuntimeError, match="sky or telescope frame"):
+    with pytest.raises(RuntimeError, match="sky frame"):
         gstrickd.stream_to_simtel(stream, tmp_path / "sky.simtel")
 
 
