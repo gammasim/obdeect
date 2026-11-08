@@ -568,7 +568,12 @@ void test_telescope_frame_rejected() {
   CHECK(throws_error([&] { telescope_to_bypass_convention(not_unit, 2200.0); }));
   CHECK_NEAR(not_unit[Column::x][0], 0.1, 1e-6);
   PhotonChunk implied_not_unit = telescope_chunk(1, {0.1}, {0.2}, {0.5}, {0.9}, {0.9}, {}, {3.0});
-  CHECK(throws_error([&] { telescope_to_bypass_convention(implied_not_unit, 2200.0); }));
+  try {
+    telescope_to_bypass_convention(implied_not_unit, 2200.0);
+    CHECK(false);
+  } catch (const std::invalid_argument &error) {
+    CHECK(std::string(error.what()).find("unit vector") != std::string::npos);
+  }
   PhotonChunk tiny_cz = telescope_chunk(1, {0.1}, {0.2}, {5.0}, {1.0}, {0.0}, {-1e-38}, {3.0});
   CHECK(throws_error([&] { telescope_to_bypass_convention(tiny_cz, 2200.0); }));
   CHECK_NEAR(tiny_cz[Column::t][0], 3.0, 1e-6);

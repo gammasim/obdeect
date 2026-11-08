@@ -270,8 +270,8 @@ inline void camera_to_bypass_convention(PhotonChunk &chunk, const CameraTelescop
 // time t + |s| / c and emission altitude zem = observation_level_m + z, all in metres and
 // ns as in the stream. Without a cz column cz = -sqrt(1 - cx^2 - cy^2). Arithmetic in
 // double, rounded to float once. Throws std::invalid_argument, leaving the chunk unchanged,
-// for a photon parallel to the plane, with a non-finite value or result, or with a direction
-// that is not a unit vector.
+// for a photon with a non-finite value or result, with a direction that is not a unit vector,
+// or parallel to the plane.
 inline void telescope_to_bypass_convention(PhotonChunk &chunk, double observation_level_m) {
   if (!(chunk.has(Column::x) && chunk.has(Column::y) && chunk.has(Column::z) &&
         chunk.has(Column::cx) && chunk.has(Column::cy) && chunk.has(Column::t))) {
@@ -302,15 +302,16 @@ inline void telescope_to_bypass_convention(PhotonChunk &chunk, double observatio
     const double norm2 = cxi * cxi + cyi * cyi;
     const double czi =
         has_cz ? static_cast<double>(chunk[Column::cz][i]) : -std::sqrt(std::max(0.0, 1.0 - norm2));
-    if (!std::isfinite(cxi) || !std::isfinite(cyi) || !std::isfinite(czi) || czi == 0.0 ||
-        !std::isfinite(x[i]) || !std::isfinite(y[i]) || !std::isfinite(z[i]) ||
-        !std::isfinite(t[i])) {
-      throw std::invalid_argument(
-          "telescope-frame photon with a non-finite value or parallel to the plane z = 0");
+    if (!std::isfinite(cxi) || !std::isfinite(cyi) || !std::isfinite(czi) || !std::isfinite(x[i]) ||
+        !std::isfinite(y[i]) || !std::isfinite(z[i]) || !std::isfinite(t[i])) {
+      throw std::invalid_argument("telescope-frame photon with a non-finite value");
     }
     if (std::abs(norm2 + czi * czi - 1.0) > unit_tolerance) {
       throw std::invalid_argument("telescope-frame photon direction (cx, cy, cz) is not a unit "
                                   "vector");
+    }
+    if (czi == 0.0) {
+      throw std::invalid_argument("telescope-frame photon parallel to the plane z = 0");
     }
     const double path = -static_cast<double>(z[i]) / czi;
     new_x[i] = static_cast<float>(x[i] + path * cxi);

@@ -122,7 +122,10 @@ def test_camera_frame_conversion(tmp_path, camera_map):
 
 def _write_flasher_stream(path):
     """One telescope-frame photon: emission point (0.1, 0.2, 0.5) m, direction (0.6, 0, -0.8)."""
-    one = np.ones(1, dtype=np.float32)
+
+    def column(value):
+        return np.array([value], dtype=np.float32)
+
     with gstrickd.Writer(str(path), "pytest") as writer:
         writer.write(
             "run",
@@ -142,14 +145,14 @@ def _write_flasher_stream(path):
             "telescope",
             0,
             {
-                "x": 0.1 * one,
-                "y": 0.2 * one,
-                "z": 0.5 * one,
-                "cx": 0.6 * one,
-                "cy": 0.0 * one,
-                "cz": -0.8 * one,
-                "t": 3.0 * one,
-                "w": one,
+                "x": column(0.1),
+                "y": column(0.2),
+                "z": column(0.5),
+                "cx": column(0.6),
+                "cy": column(0.0),
+                "cz": column(-0.8),
+                "t": column(3.0),
+                "w": column(1.0),
             },
         )
         writer.write("telescope_end", {"telescope_id": 1, "photons": 1.0})
