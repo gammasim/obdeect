@@ -35,7 +35,7 @@ RECORD_TYPES = {
     "event_end": 7,
     "run_end": 8,
     "blob": 9,
-    "ledger": 10,
+    "efficiency_status": 10,
     "stream_end": 15,
 }
 NAMES = {value: key for key, value in RECORD_TYPES.items()}
@@ -239,7 +239,7 @@ def envelope_files(tmp_path):
 
 
 def _ledger(records):
-    return next(r["metadata"] for r in records if r["type"] == "ledger")
+    return next(r["metadata"] for r in records if r["type"] == "efficiency_status")
 
 
 def test_export_is_lazy():
@@ -275,7 +275,7 @@ def test_ledger_and_counts(tmp_path, envelope_files):
     assert ledger["mirror.state"] == "envelope"
     assert len(ledger["qe.wavelength_nm"]) == len(ledger["qe.value"]) == 2
     # The ledger follows the run record.
-    assert [r["type"] for r in records[:3]] == ["stream", "run", "ledger"]
+    assert [r["type"] for r in records[:3]] == ["stream", "run", "efficiency_status"]
 
     # Thinned count against the weighted expectation: w_out = w p, so the variance of the
     # number of survivors is sum w p (1 - p) = sum w_out (1 - p).
@@ -308,7 +308,7 @@ def test_input_ledger_showing_atmosphere_applied_is_rejected(tmp_path):
             "wavelength_max_nm": 600.0,
         },
     )
-    writer.metadata("ledger", {"factors": "atmosphere", "atmosphere.state": "applied"})
+    writer.metadata("efficiency_status", {"factors": "atmosphere", "atmosphere.state": "applied"})
     writer.metadata("event", {"event_number": 1})
     writer.metadata("event_end")
     writer.metadata("run_end")

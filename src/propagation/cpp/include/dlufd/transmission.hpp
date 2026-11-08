@@ -150,6 +150,11 @@ public:
     if (!std::isfinite(static_cast<double>(zem_m))) {
       throw std::invalid_argument("height must be finite");
     }
+    if (!std::isfinite(static_cast<double>(airmass)) || airmass < T(0) ||
+        !std::isfinite(static_cast<double>(od_tel)) || od_tel < T(0) ||
+        !std::isfinite(static_cast<double>(od_focus)) || od_focus < T(0)) {
+      throw std::invalid_argument("airmass and optical depths must be finite and non-negative");
+    }
     if (static_cast<double>(zem_m) < 1000.0 * h2_km_ ||
         static_cast<double>(od_tel) > max_telescope_depth) {
       (void)row_of(static_cast<double>(wavelength_nm)); // validates the wavelength

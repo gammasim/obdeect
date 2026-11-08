@@ -259,7 +259,7 @@ private:
   // One record of the stream (process without the event hold).
   template <class Sink> void process_record(const gstrickd::Record &record, Sink &sink) {
     using gstrickd::RecordType;
-    if (record.type == RecordType::ledger) {
+    if (record.type == RecordType::efficiency_status) {
       check_incoming_ledger(record.metadata);
       sink(record);
       return;
@@ -305,7 +305,7 @@ private:
       sink(out);
       break;
     }
-    case RecordType::ledger:
+    case RecordType::efficiency_status:
     case RecordType::stream_end:
       break;
     }
@@ -566,7 +566,7 @@ private:
     }
     ledger_pending_ = false;
     gstrickd::Record out;
-    out.type = gstrickd::RecordType::ledger;
+    out.type = gstrickd::RecordType::efficiency_status;
     out.metadata = run_->ledger;
     sink(out);
   }

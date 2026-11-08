@@ -62,7 +62,7 @@ profile), the time and direction come from `bend` at the telescope plane.
 
 ## Ledger
 
-One `ledger` record follows each `run` record (before the first record that is not a ledger).
+One `efficiency_status` record follows each `run` record (before the first record that is not an efficiency-status record).
 Example:
 
 ```text

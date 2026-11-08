@@ -239,6 +239,19 @@ void test_wavelength_lookup_bounds() {
   CHECK_NEAR(table.transmission<double>(-1e300, 3500.0, 1.0), at_table, 0.0);
 }
 
+void test_transmission2_parameters() {
+  const auto table = constant_table();
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double inf = std::numeric_limits<double>::infinity();
+  CHECK(throws_invalid([&] { (void)table.transmission2<double>(400.0, 3500.0, nan, 0.0, 0.0); }));
+  CHECK(throws_invalid([&] { (void)table.transmission2<double>(400.0, 3500.0, inf, 0.0, 0.0); }));
+  CHECK(throws_invalid([&] { (void)table.transmission2<double>(400.0, 3500.0, -1.0, 0.0, 0.0); }));
+  CHECK(throws_invalid([&] { (void)table.transmission2<double>(400.0, 3500.0, 1.0, nan, 0.0); }));
+  CHECK(throws_invalid([&] { (void)table.transmission2<double>(400.0, 3500.0, 1.0, 0.0, inf); }));
+  CHECK(throws_invalid([&] { (void)table.transmission2<double>(400.0, 3500.0, 1.0, -1.0, 0.0); }));
+  CHECK(throws_invalid([&] { (void)table.transmission2<double>(400.0, 3500.0, 1.0, 0.0, -1.0); }));
+}
+
 } // namespace
 
 int main() {
@@ -252,5 +265,6 @@ int main() {
     test_reference_table();
     test_non_finite_tables_rejected();
     test_wavelength_lookup_bounds();
+    test_transmission2_parameters();
   });
 }

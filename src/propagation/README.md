@@ -6,10 +6,8 @@ Atmospheric propagation for Cherenkov-telescope simulations: extinction, refract
 
 `dlufd` is one module of a modular Cherenkov-telescope simulation chain
 (CORSIKA7 or light sources, atmosphere, optics, camera). Modules exchange photons as
-[gstrickd](https://github.com/gammasim/gstrickd) photon streams;
+[gstrickd](https://github.com/gernotmaier/gstrickd) photon streams;
 [simtools](https://github.com/gammasim/simtools) configures and runs the chain.
-
-Status: pre-alpha, no functionality yet.
 
 ## User Installation
 
