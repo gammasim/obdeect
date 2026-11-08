@@ -106,7 +106,12 @@ public:
         }
         value[column] = detail::parse_profile_number(token, line_number);
       }
-      z_.push_back(value[0] * 1e5);
+      const double altitude_cm = value[0] * 1e5;
+      if (!std::isfinite(altitude_cm)) {
+        throw std::invalid_argument("atmospheric profile line " + std::to_string(line_number) +
+                                    ": altitude is too large");
+      }
+      z_.push_back(altitude_cm);
       rho_.push_back(value[1]);
       thick_.push_back(value[2]);
       nu_.push_back(value[3]);

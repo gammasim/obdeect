@@ -171,6 +171,9 @@ template <class T>
     return false;
   }
   const double s_obs = s_e * (1. + nu_e) / (1. + nu_obs);
+  if (!(s_obs < 1.)) {
+    return false; // total internal reflection
+  }
 
   // Moments M_b = integral of nu^b over [obs, h], b = 0 is the height.
   std::array<double, AtmosphereProfile::max_moment + 1> m{};

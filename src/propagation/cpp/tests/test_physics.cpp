@@ -279,6 +279,28 @@ bool throws_invalid(const std::function<void()> &action) {
   return false;
 }
 
+void test_overflow_and_reflection() {
+  // An altitude that overflows in cm is rejected, not converted to a cell count.
+  CHECK(throws_invalid([] {
+    dlufd::AtmosphereProfile("0 1e-3 100 2e-4\n1e304 9e-4 90 2e-4\n1e305 8e-4 80 2e-4\n"
+                             "1e306 7e-4 70 2e-4\n1e307 6e-4 60 2e-4\n");
+  }));
+  // n-1 rising with height (valid table, unphysical): a ray from the layer above the denser
+  // ground would need sin(theta_obs) > 1 and is not bent.
+  std::ostringstream text;
+  for (int km = 0; km <= 20; km += 2) {
+    const double rho = kRho0 * std::exp(-km / kScaleHeightKm);
+    const double rho_top = kRho0 * std::exp(-20. / kScaleHeightKm);
+    text << km << ' ' << rho << ' ' << kScaleHeightKm * 1e5 * (rho - rho_top) << ' '
+         << 1e-4 * (1 + km / 4.0) << '\n';
+  }
+  const dlufd::AtmosphereProfile rising(text.str());
+  const dlufd::RefractionTables tables(rising, 0.);
+  double cx = std::sin(1.55), cy = 0., x = 0., y = 0., t = 0.;
+  CHECK(!dlufd::bend(tables, 15000., cx, cy, x, y, t));
+  CHECK(cx == std::sin(1.55) && x == 0. && t == 0.);
+}
+
 void test_public_argument_validation() {
   const dlufd::AtmosphereProfile profile(exponential_text());
   const dlufd::RefractionTables tables(profile, 2000.);
@@ -338,6 +360,7 @@ int main() {
     test_zero_index_limit();
     test_extinction_gradient();
     test_public_argument_validation();
+    test_overflow_and_reflection();
     test_etadsn();
     test_table_header_comments();
   });
