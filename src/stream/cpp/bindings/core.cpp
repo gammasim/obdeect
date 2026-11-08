@@ -7,6 +7,7 @@
 #include <nanobind/stl/vector.h>
 
 #include "gstrickd/format.hpp"
+#include "gstrickd/grisu.hpp"
 #include "gstrickd/photons.hpp"
 #include "gstrickd/simtel.hpp"
 #include "gstrickd/stdin_buffer.hpp"
@@ -263,8 +264,8 @@ private:
   std::istream *stream_{nullptr};
 };
 
-std::string producer_name() {
-  return "corsika2ps " + std::to_string(gstrickd::version_major) + "." +
+std::string producer_name(const char *tool = "corsika2ps") {
+  return std::string(tool) + " " + std::to_string(gstrickd::version_major) + "." +
          std::to_string(gstrickd::version_minor) + "." + std::to_string(gstrickd::version_patch);
 }
 
@@ -345,6 +346,38 @@ NB_MODULE(_core, module) {
       },
       nb::arg("input_path"), nb::arg("output_path"), nb::arg("camera"), nb::arg("allow_pending"),
       nb::arg("scaled_factors"));
+  module.def(
+      "stream_to_grisu",
+      [](const std::string &input, const std::string &output, const std::string &telescope_config,
+         double qe, bool expand_bunches, bool event_details) {
+        gstrickd::GrisuOptions options;
+        options.qe = qe;
+        options.expand_bunches = expand_bunches;
+        options.event_details = event_details;
+        options.producer = producer_name("ps2grisu");
+        if (!telescope_config.empty()) {
+          std::ifstream config(telescope_config);
+          if (!config) {
+            throw nb::value_error(("cannot open " + telescope_config).c_str());
+          }
+          options.telescopes = gstrickd::read_tlloc(config);
+        }
+        std::ostringstream warnings;
+        options.warnings = &warnings;
+        InputStream in{input};
+        std::ofstream out(output, std::ios::binary);
+        if (!out) {
+          throw nb::value_error(("cannot open " + output + " for writing").c_str());
+        }
+        gstrickd::stream_to_grisu(in.get(), out, std::move(options));
+        out.close();
+        if (out.fail()) {
+          throw std::runtime_error("failed to write " + output);
+        }
+        return warnings.str();
+      },
+      nb::arg("input_path"), nb::arg("output_path"), nb::arg("telescope_config"), nb::arg("qe"),
+      nb::arg("expand_bunches"), nb::arg("event_details"));
   module.def(
       "parse_camera_map",
       [](const std::string &text) {
