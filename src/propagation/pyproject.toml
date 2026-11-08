@@ -7,7 +7,7 @@ name = "dlufd"
 description = "Atmospheric propagation of Cherenkov and artificial-source photons"
 readme = "README.md"
 license = { file = "LICENSE" }
-authors = [ { name = "dlufd contributors" } ]
+authors = [ { name = "Gernot Maier (DESY)" } ]
 requires-python = ">=3.14"
 classifiers = [
   "Development Status :: 3 - Alpha",
