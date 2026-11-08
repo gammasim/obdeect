@@ -457,11 +457,20 @@ inline bool sim_telarray_applies(const std::string &factor, bool camera_frame) {
 // Factor names of the efficiency status vocabulary (docs/format.md). Any other name is unknown.
 inline bool known_factor(const std::string &factor) {
   return sim_telarray_applies(factor, false) || factor == "atmosphere" ||
-         factor == "telescope_transmission_constant";
+         factor == "telescope_transmission_constant" || factor == "wavelength" ||
+         factor == "scattering";
 }
 
 // Factor -> state of one efficiency status record.
 using EfficiencyStates = std::map<std::string, std::string>;
+
+inline int efficiency_state_rank(const std::string &state) {
+  if (state == "pending")
+    return 0;
+  if (state == "envelope")
+    return 1;
+  return 2; // applied; callers validate the state before ranking it.
+}
 
 inline EfficiencyStates efficiency_status_states(const Metadata &efficiency_status) {
   const auto factors = efficiency_status.find("factors");
@@ -497,6 +506,23 @@ inline EfficiencyStates efficiency_status_states(const Metadata &efficiency_stat
   return states;
 }
 
+inline void apply_efficiency_status_update(EfficiencyStates &states, const Metadata &metadata,
+                                           const std::string &scope) {
+  for (const auto &[name, state] : efficiency_status_states(metadata)) {
+    const auto previous = states.find(name);
+    if (previous == states.end()) {
+      states.emplace(name, state);
+      continue;
+    }
+    if (efficiency_state_rank(state) <= efficiency_state_rank(previous->second)) {
+      throw std::runtime_error("efficiency status factor '" + name + "' in " + scope +
+                               " has an invalid transition from " + previous->second + " to " +
+                               state);
+    }
+    previous->second = state;
+  }
+}
+
 // Checks the efficiency status of one telescope: run efficiency status records, then its telescope
 // efficiency status records, which override the run efficiency status records per factor. Throws
 // std::runtime_error naming the first factor that sim_telarray would apply twice, or would not
@@ -508,22 +534,15 @@ inline void check_efficiency_status(const std::vector<Metadata> &run_efficiency_
                                     const std::set<std::string> &scaled = {}) {
   EfficiencyStates states;
   for (const Metadata &efficiency_status : run_efficiency_statuses) {
-    for (const auto &[name, state] : efficiency_status_states(efficiency_status)) {
-      if (!states.emplace(name, state).second) {
-        throw std::runtime_error("efficiency status lists factor '" + name +
-                                 "' in more than one run efficiency status record");
-      }
-    }
+    apply_efficiency_status_update(states, efficiency_status, "run status records");
   }
   EfficiencyStates own;
   for (const Metadata &efficiency_status : telescope_efficiency_statuses) {
-    for (const auto &[name, state] : efficiency_status_states(efficiency_status)) {
-      if (!own.emplace(name, state).second) {
-        throw std::runtime_error("efficiency status lists factor '" + name +
-                                 "' twice for telescope " + std::to_string(telescope_id));
-      }
-      states[name] = state;
-    }
+    apply_efficiency_status_update(own, efficiency_status,
+                                   "telescope " + std::to_string(telescope_id) + " status records");
+  }
+  for (const auto &[name, state] : own) {
+    states[name] = state;
   }
   const std::string where = "telescope " + std::to_string(telescope_id) +
                             (camera_frame ? " (camera frame)" : " (ground frame)");
@@ -570,6 +589,12 @@ inline void check_efficiency_status(const std::vector<Metadata> &run_efficiency_
                                ", but sim_telarray does not apply it in this frame; "
                                "apply it upstream (state applied)" +
                                option);
+    }
+  }
+  for (const std::string &name : scaled) {
+    if (!states.contains(name)) {
+      throw std::runtime_error("efficiency status of " + where + ": scaled factor '" + name +
+                               "' has no efficiency status (expected state envelope)");
     }
   }
 }
@@ -840,7 +865,8 @@ private:
       return;
     }
     telescope_open_ = false;
-    if (run_efficiency_statuses_.empty() && telescope_efficiency_statuses_.empty()) {
+    if (run_efficiency_statuses_.empty() && telescope_efficiency_statuses_.empty() &&
+        scaled_.empty()) {
       return;
     }
     if (!telescope_id_known_ || telescope_id_ == 0) {

@@ -127,6 +127,9 @@ factor whose state is `applied`.
 Run efficiency status records (before the first event) apply to all telescopes; a telescope
 efficiency status (after its `telescope` record, before its photons) applies to that
 telescope and overrides the run efficiency status per factor.
+Within either scope, repeated status records may advance a factor only from `pending` to
+`envelope` to `applied`; a repeated or backward state is invalid. Telescope updates are checked
+separately from run updates before the telescope status overrides the run status.
 
 `ps2simtel` checks the efficiency status of each telescope against the frame of its
 photons. It accepts a factor that is `applied` upstream unless sim_telarray
@@ -139,6 +142,7 @@ factors: sim_telarray applies the full factor, not f/f_env.
 | `qe`, `camera_transmission`, `camera_filter` | sim_telarray applies: pending ok | sim_telarray applies: pending ok |
 | `mirror_reflectivity`, `telescope_transmission` | not applied by sim_telarray: error | sim_telarray applies: pending ok |
 | `atmosphere` | must be applied upstream | any state; with `applied` sim_telarray needs an all-zero optical-depth table |
+| `wavelength`, `scattering` | must be applied upstream | must be applied upstream |
 | `telescope_transmission_constant` | not applied by sim_telarray: error | not applied by sim_telarray: error |
 | any other name | error | error |
 
@@ -148,7 +152,8 @@ given to `ps2simtel --allow-pending FACTOR` or `allow_pending=` in Python.
 `envelope` for a factor that sim_telarray applies is valid only with
 `ps2simtel --scaled-factor FACTOR` (`scaled_factors=` in Python): the sim_telarray
 table of the factor then holds f/f_env, e.g. the QE table divided by the QE envelope
-applied upstream. A scaled factor in any other state is an error.
+applied upstream. Every `--scaled-factor` must have a matching efficiency status in state
+`envelope`; a missing status or a scaled factor in any other state is an error.
 Usage: docs/usage.md.
 
 ## Random numbers

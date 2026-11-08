@@ -70,8 +70,8 @@ def test_transform(tmp_path):
     np.testing.assert_array_equal(records[2]["metadata"]["qe.value"], [0.1, 0.2])
     assert records[4]["metadata"]["frame"] == gstrickd.FRAMES["camera"]
     assert records[7]["data"] == b"\x01\x02"
-    assert records[8]["metadata"] == {"photons": 8.0}
-    for record, first, rows in ((records[5], 0, 3), (records[6], 6, 1)):
+    assert records[8]["metadata"] == {"photons": 52.0}
+    for record, first, rows in ((records[5], 0, 3), (records[6], 3, 1)):
         assert record["frame"] == gstrickd.FRAMES["camera"]
         assert record["first_index"] == first
         assert len(record["columns"]["x"]) == rows

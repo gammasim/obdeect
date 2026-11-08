@@ -76,7 +76,8 @@ def transform(
     equal length (at most ``gstrickd.max_chunk_rows``, may differ from the input; ``{}`` writes
     an empty chunk). ``metadata`` is a dict with the latest ``run``, ``event`` and ``telescope``
     record metadata (empty dicts before the first), the chunk's ``frame`` and ``first_index``,
-    and ``stage_id``. The output chunk keeps ``first_index`` and gets ``frame_out``.
+    and ``stage_id``. Output indices are contiguous and the output uses ``frame_out``.
+    ``telescope_end.photons`` is updated to the sum of output weights.
 
     All other records known to the reader are copied unchanged (records of unknown type are
     dropped, as the reader skips them), except that the ``frame`` of ``telescope`` records
@@ -95,6 +96,8 @@ def transform(
     context: dict[str, dict[str, object]] = {"run": {}, "event": {}, "telescope": {}}
     entry_applied = _applied(entry) if entry else set()
     efficiency_status_pending = False
+    output_index = 0
+    output_weight = 0.0
 
     with Writer(os.fspath(output), f"gstrickd.stage {stage_id:#x}") as writer:
         for record in Reader(os.fspath(input)):
@@ -108,6 +111,11 @@ def transform(
                 metadata = dict(record["metadata"])
                 if kind in context:
                     context[kind] = metadata
+                if kind == "telescope":
+                    output_index = 0
+                    output_weight = 0.0
+                elif kind == "telescope_end":
+                    metadata["photons"] = output_weight
                 if kind == "run":
                     efficiency_status_pending = entry is not None
                 elif kind == "efficiency_status":
@@ -127,6 +135,6 @@ def transform(
                     "stage_id": stage_id,
                 }
                 result = func(record["telescope_id"], record["columns"], info)
-                writer.write_photons(
-                    record["telescope_id"], frame_code, record["first_index"], result
-                )
+                writer.write_photons(record["telescope_id"], frame_code, output_index, result)
+                output_index += len(result.get("x", ()))
+                output_weight += float(np.sum(result.get("w", ()), dtype=np.float64))

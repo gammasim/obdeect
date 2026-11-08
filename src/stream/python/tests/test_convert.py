@@ -272,7 +272,9 @@ def test_efficiency_status_scaled_factor_accepts_envelope(tmp_path):
     stream = tmp_path / "light.ps"
     simtel = tmp_path / "light.simtel"
     _write_light_source_stream(
-        stream, telescope_efficiency_status=_efficiency_status("qe", "envelope")
+        stream,
+        run_efficiency_status=_efficiency_status("qe", "envelope"),
+        telescope_efficiency_status=_efficiency_status("qe", "envelope"),
     )
     with pytest.raises(RuntimeError, match="--scaled-factor qe"):
         gstrickd.stream_to_simtel(stream, tmp_path / "bad.simtel", {2: (1, 0.0)})
@@ -294,7 +296,11 @@ def test_efficiency_status_scaled_factor_needs_envelope_applied_by_sim_telarray(
     tmp_path, efficiency_status
 ):
     stream = tmp_path / "light.ps"
-    _write_light_source_stream(stream, telescope_efficiency_status=efficiency_status)
+    _write_light_source_stream(
+        stream,
+        run_efficiency_status=_efficiency_status(efficiency_status["factors"], "envelope"),
+        telescope_efficiency_status=efficiency_status,
+    )
     name = efficiency_status["factors"]
     with pytest.raises(RuntimeError, match="given as scaled"):
         gstrickd.stream_to_simtel(
@@ -444,7 +450,9 @@ def test_cli_scaled_factor_option(tmp_path):
     camera = tmp_path / "camera.txt"
     camera.write_text("2 1 0.0\n")
     _write_light_source_stream(
-        stream, telescope_efficiency_status=_efficiency_status("qe", "envelope")
+        stream,
+        run_efficiency_status=_efficiency_status("qe", "envelope"),
+        telescope_efficiency_status=_efficiency_status("qe", "envelope"),
     )
     out = tmp_path / "ok.simtel"
     base = [_executable("ps2simtel"), "--camera-map", str(camera), "-o", str(out)]

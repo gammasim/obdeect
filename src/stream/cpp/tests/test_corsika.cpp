@@ -459,6 +459,10 @@ void chunk_indices_must_be_contiguous() {
     feed_writer({tel, photons_record(photon_chunk(1, 2, 2)), photons_record(photon_chunk(1, 0, 2)),
                  telescope_end_record(1)});
   }));
+  CHECK(!throws_error([&] {
+    feed_writer({tel, photons_record(photon_chunk(1, 0, 0)), photons_record(photon_chunk(1, 0, 1)),
+                 telescope_end_record(1)});
+  }));
   // The next telescope starts again at index 0.
   CHECK(!throws_error([&] {
     feed_writer({tel, photons_record(photon_chunk(1, 0, 2)), telescope_end_record(1),

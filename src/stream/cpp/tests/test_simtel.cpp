@@ -979,6 +979,45 @@ void test_efficiency_status_rules() {
         efficiency_status_run(Frame::camera, {efficiency_status_of("atmosphere", "applied")}, {}),
         camera);
   }));
+  // dlufd assigns wavelengths and may add scattered photons; both are upstream-only factors.
+  for (const std::string &factor : {"wavelength", "scattering"}) {
+    CHECK(!throws_error([&] {
+      run_adapter(
+          efficiency_status_run(Frame::ground, {efficiency_status_of(factor, "applied")}, {}), {});
+    }));
+    CHECK(throws_error([&] {
+      run_adapter(
+          efficiency_status_run(Frame::ground, {efficiency_status_of(factor, "pending")}, {}), {});
+    }));
+  }
+  // Status records describe ordered stage updates: pending -> envelope -> applied is valid;
+  // moving backwards is not.
+  CHECK(!throws_error([&] {
+    run_adapter(efficiency_status_run(Frame::camera,
+                                      {efficiency_status_of("wavelength", "pending"),
+                                       efficiency_status_of("wavelength", "applied")},
+                                      {}),
+                camera);
+  }));
+  CHECK(throws_error([&] {
+    run_adapter(efficiency_status_run(Frame::camera,
+                                      {efficiency_status_of("wavelength", "applied"),
+                                       efficiency_status_of("wavelength", "pending")},
+                                      {}),
+                camera);
+  }));
+  CHECK(!throws_error([&] {
+    run_adapter(efficiency_status_run(Frame::camera, {},
+                                      {efficiency_status_of("qe", "pending"),
+                                       efficiency_status_of("qe", "envelope")}),
+                camera, {}, {"qe"});
+  }));
+  CHECK(throws_error([&] {
+    run_adapter(efficiency_status_run(Frame::camera, {},
+                                      {efficiency_status_of("qe", "envelope"),
+                                       efficiency_status_of("qe", "pending")}),
+                camera, {}, {"qe"});
+  }));
   // Applied upstream and applied again by sim_telarray: rejected.
   CHECK(throws_error([&] {
     run_adapter(efficiency_status_run(Frame::camera, {efficiency_status_of("qe", "applied")}, {}),
@@ -1002,6 +1041,8 @@ void test_efficiency_status_rules() {
         efficiency_status_run(Frame::camera, {efficiency_status_of("made_up", "applied")}, {}),
         camera, {"made_up"});
   }));
+  CHECK(throws_error(
+      [&] { run_adapter(efficiency_status_run(Frame::camera, {}, {}), camera, {}, {"qe"}); }));
 
   // Scaled factors (sim_telarray table holds f/f_env): only the envelope state of a factor
   // that sim_telarray applies in the frame is accepted.
