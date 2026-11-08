@@ -1,8 +1,8 @@
 #pragma once
 
-// Atmospheric acceptance of photons in frame ground (G), as sim_telarray.c:2713-2862
-// does for bunches without 3D data: plane-parallel airmass 1/|cz| and
-// atmospheric_transmission2 at the bunch's integer wavelength.
+// Atmospheric acceptance of photons in frame ground (G): plane-parallel airmass 1/|cz| and the
+// transmission with telescope optical depths (TransmissionTable::transmission2) at the photon's
+// integer wavelength.
 
 #include "dlufd/transmission.hpp"
 
@@ -17,7 +17,7 @@
 namespace dlufd {
 
 // Airmass 1/|cz| for direction cosines cx, cy of a downward photon, cz = -sqrt(1 - cx^2 -
-// cy^2). Requires cx^2 + cy^2 <= 1. cz = 0 gives unlimited_airmass (sim_telarray.c:2707).
+// cy^2). Requires cx^2 + cy^2 <= 1. cz = 0 gives unlimited_airmass.
 template <std::floating_point T> [[nodiscard]] T airmass(T cx, T cy) {
   const T cz = -std::sqrt(T{1} - cx * cx - cy * cy);
   return cz == T{0} ? T{unlimited_airmass} : T{1} / -cz;
@@ -31,8 +31,8 @@ inline void check_wavelength(double lambda_nm) {
 }
 
 // Integer wavelength of a photon row for the table lookups, or -1 at or above max_lambda_nm
-// (sim_telarray skips such photons). The value is checked in floating point before the
-// conversion to int.
+// (such photons are dropped). The value is checked in floating point before the conversion
+// to int.
 [[nodiscard]] inline int table_wavelength(double lambda_nm) {
   check_wavelength(lambda_nm);
   return lambda_nm >= max_lambda_nm ? -1 : static_cast<int>(lambda_nm);
@@ -40,7 +40,7 @@ inline void check_wavelength(double lambda_nm) {
 
 // Atmospheric transmission p_atm of each row, without the detector envelope and without
 // the fraction of a bunch (applied in thinning). Rows need an integer wavelength in nm
-// (check_wavelength); rows at or above max_lambda_nm get 0, as sim_telarray skips them.
+// (check_wavelength); rows at or above max_lambda_nm get 0.
 // Requires the columns cx, cy, zem and wavelength; out.size() >= rows.
 template <std::floating_point T>
 void atmospheric_acceptance(const gstrickd::PhotonChunk &chunk, const TransmissionTable &table,

@@ -3,7 +3,7 @@
 ## Scope
 
 `dlufd` propagates photons through the atmosphere, from an emission point or the
-CORSIKA telescope-sphere plane to the telescope-sphere plane: extinction, refraction
+sky-frame plane to the telescope-sphere plane: extinction, refraction
 and group-index timing from n(h), optional single scattering, wavelength assignment,
 and early thinning with the efficiency envelope. Photon generation, optics and camera
 simulation are out of scope.
@@ -36,7 +36,7 @@ simulation are out of scope.
 - Use Python >=3.14 (as in `pyproject.toml`).
 - Atmospheric effects are an ordered list of independent effects. Each is recorded
   in the efficiency ledger of the stream.
-- Extinction must stay identical to sim_telarray's `atmospheric_transmission2`.
+- Extinction follows the formulas of `docs/extinction.md`; its tests hold the reference values.
 
 ## Changes and validation
 

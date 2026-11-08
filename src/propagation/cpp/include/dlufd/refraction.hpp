@@ -12,12 +12,12 @@
 
 namespace dlufd {
 
-// Refraction tables of CORSIKA atmo.c for one profile and observation level.
-// Port of init_refraction_tables() (atmo.c:426-550) and trace_ray_planar() (atmo.c:336-395).
-// Units inside: cm and ns, as in atmo.c. Public heights are m a.s.l.
+// Refraction tables for one profile and observation level: air-time excess and ray-bending
+// coefficients from planar ray integration (see docs/refraction.md).
+// Units inside: cm and ns. Public heights are m a.s.l.
 class RefractionTables {
 public:
-  static constexpr double vacuum_speed_cm_per_ns = 29.9792458; // atmo.c vc
+  static constexpr double vacuum_speed_cm_per_ns = 29.9792458; // speed of light in vacuum
   static constexpr double pi = 3.14159265358979323846;
 
   RefractionTables(AtmosphereProfile profile, double observation_level_m)
@@ -78,7 +78,7 @@ public:
         time_a[rev] = std::sqrt(-((t0_45 - t_45) - (t0_vt - t_vt)) * (c * c * c) / (s * s));
     }
 
-    // Cubic splines of the coefficients, resampled on the equidistant tables of atmo.c.
+    // Cubic splines of the coefficients, resampled on the equidistant tables.
     std::vector<double> rho_rev(n);
     for (std::size_t i = 0; i < n; ++i)
       rho_rev[i] = rho[n - 1 - i];
@@ -114,7 +114,7 @@ public:
   std::span<const double> fast_time_coefficient() const { return fast_time_a_; }
   std::span<const double> fast_time0() const { return fast_time0_; }
 
-  // atmo.c rpol() on the table levels: linear in altitude, used for vertical rays.
+  // Linear interpolation in altitude on the table levels, used for vertical rays.
   double vertical_time0_cm(double zem) const {
     require_finite(zem, "height");
     const std::size_t n = table_alt_.size();
@@ -130,7 +130,7 @@ public:
   }
 
 private:
-  // atmo.c trace_ray_planar(): planar ray from emlev down to olev, step in cm.
+  // Planar ray from emlev down to olev, step in cm.
   // Outputs: horizontal displacement xo [cm], time to via [ns] and path length so [cm].
   void trace_ray_planar(double emlev, double olev, double za, double step, double &xo, double &to,
                         double &so) const {
@@ -176,14 +176,14 @@ private:
   std::vector<double> fast_rho_rev_, fast_hori_a_, fast_time_a_, fast_time0_;
 };
 
-// Per-photon ray bending (atmo.c raybnd_, atmo.c:1691-1790) for a photon emitted at height
+// Per-photon ray bending for a photon emitted at height
 // h_emission_m (m a.s.l.) with direction cosines (cx, cy) (downward, cz > 0), the straight-line
 // position (x_m, y_m) at the observation level, and time t_ns.
 //
 // On return the direction is the observed one, the position is displaced horizontally, and
 // the time includes the light travel time to the observation level. Returns false and leaves
 // the photon unchanged when the direction is outside the unit circle (upward or horizontal
-// rays, which atmo.c does not treat) or when any input (or the height in cm) is not finite.
+// rays, which are not bent) or when any input (or the height in cm) is not finite.
 // Rejection is a return value, not an exception, so the per-photon kernel stays allocation-free.
 //
 // Template on the scalar type of the photon state; table lookups are evaluated in double.
@@ -251,7 +251,7 @@ bool bend(const RefractionTables &tables, Scalar h_emission_m, Scalar &cx, Scala
   const Scalar travel_ns =
       Scalar(time0_fast) - (Scalar(time_cm) * Scalar(time_cm)) * (s * s) / c3 + straight_ns;
 
-  // Displacement along the horizontal direction of the photon (atmo.c dx += hori_off*u/sin).
+  // Displacement along the horizontal direction of the photon.
   x_m += hori_off_cm / Scalar(100) * cx / sin_em;
   y_m += hori_off_cm / Scalar(100) * cy / sin_em;
   cx = cx * sin_obs / sin_em;

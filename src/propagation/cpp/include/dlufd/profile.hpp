@@ -23,8 +23,8 @@ inline void require_finite(double value, const char *name) {
     throw std::invalid_argument(std::string(name) + " must be finite");
 }
 
-// Natural cubic spline with the coefficients of CORSIKA rpolator.c, set_1d_cubic_params()
-// with clamped = 0. On interval i, y = a + b r + c r^2 + d r^3 with r = x - x[i].
+// Natural cubic spline (zero second derivative at both ends). On interval i,
+// y = a + b r + c r^2 + d r^3 with r = x - x[i].
 class CubicSpline {
 public:
   CubicSpline(std::vector<double> x, std::span<const double> y) : x_(std::move(x)) {
@@ -35,7 +35,7 @@ public:
       if (!(x_[i + 1] > x_[i]))
         throw std::invalid_argument("cubic spline abscissae must be strictly ascending");
 
-    // rpolator.c set_1d_cubic_params(), natural boundary conditions.
+    // Natural boundary conditions.
     std::vector<double> h(n - 1), a(y.begin(), y.end()), big_a(n, 0.0), l(n), m(n - 1), z(n), c(n),
         b(n - 1), d(n - 1);
     for (std::size_t i = 0; i + 1 < n; ++i)
@@ -95,22 +95,22 @@ private:
   double first_value_ = 0., last_value_ = 0.;
 };
 
-// CORSIKA atmo.c atmospheric table and its interpolation.
+// Atmospheric table (atmprof format) and its interpolation.
 //
-// Input: CORSIKA / sim_telarray atmprof text. Lines starting with '#' and blank lines are
+// Input: atmprof text. Lines starting with '#' and blank lines are
 // skipped. The first four columns are used: altitude [km a.s.l.], density [g/cm^3],
-// thickness [g/cm^2], n-1; further columns are ignored (as in the CORSIKA short format).
+// thickness [g/cm^2], n-1; further columns are ignored.
 //
-// Public heights are in m a.s.l. The *_cm methods use the units of atmo.c (cm).
-// Interpolation: density, thickness and n-1 are linear in the 40000-point equidistant table
-// that atmo.c derives from cubic splines of the input levels (init_fast_interpolation).
+// Public heights are in m a.s.l. The *_cm methods use cm.
+// Interpolation: density, thickness and n-1 are linear in a 40000-point equidistant table
+// derived from cubic splines of the input levels.
 class AtmosphereProfile {
 public:
-  // atmo.c MAX_PROFILE: most table levels accepted.
+  // Most table levels accepted.
   static constexpr std::size_t max_levels = 120;
-  // atmo.c MAX_FAST_PROFILE: equidistant lookup points.
+  // Equidistant lookup points.
   static constexpr std::size_t fast_points = 40000;
-  // atmo.c etadsn default (n-1 per density) used while the fast table of n-1 is built.
+  // Default n-1 per density, used while the equidistant table of n-1 is built.
   static constexpr double default_etadsn = 0.000283 * 994186.38 / 1222.656;
 
   explicit AtmosphereProfile(std::string_view text) {
@@ -143,7 +143,7 @@ public:
     return index_minus_one_cm(100. * height_m);
   }
 
-  // atmo.c rhofx_: density [g/cm^3] at height [cm].
+  // Density [g/cm^3] at height [cm].
   double density_cm(double h) const {
     require_finite(h, "height");
     if (h <= bottom_cm_)
@@ -157,7 +157,7 @@ public:
     return r * (fast_rho_[i + 1] - fast_rho_[i]) + fast_rho_[i];
   }
 
-  // atmo.c thickx_: thickness [g/cm^2] at height [cm], with the exponential top layer.
+  // Thickness [g/cm^2] at height [cm], with the exponential top layer.
   double thickness_cm(double h) const {
     require_finite(h, "height");
     if (h <= bottom_cm_)
@@ -173,7 +173,7 @@ public:
     return r * (fast_thick_[i + 1] - fast_thick_[i]) + fast_thick_[i];
   }
 
-  // atmo.c refim1x_: n-1 at height [cm].
+  // n-1 at height [cm].
   double index_minus_one_cm(double h) const {
     require_finite(h, "height");
     if (h <= bottom_cm_)
@@ -204,7 +204,7 @@ public:
   double top_cm() const { return top_cm_; }
   double fast_height_factor() const { return fast_h_fac_; }
   std::span<const double> fast_altitude_cm() const { return fast_alt_; }
-  // Raw table columns in atmo.c units.
+  // Raw table columns (cm units).
 
 private:
   static void parse(std::string_view text, std::vector<double> &alt_km, std::vector<double> &rho,
@@ -247,7 +247,7 @@ private:
     }
   }
 
-  // Table validation and the atmo.c set-up: init_common_atmosphere(), init_fast_interpolation().
+  // Table validation and set-up of the equidistant lookup tables.
   void build(const std::vector<double> &alt_km, const std::vector<double> &rho,
              const std::vector<double> &thick, const std::vector<double> &n_1) {
     const std::size_t n = alt_km.size();
@@ -345,7 +345,7 @@ private:
         fast_log_thick[i] =
             t_top > 0. ? std::log(t_top)
                        : fast_log_thick[i - 1] + (fast_log_thick[i - 1] - fast_log_thick[i - 2]);
-        // atmo.c uses etadsn here; it still holds its default value at this point.
+        // The default n-1 per density applies here, not the value derived from the table.
         fast_log_n1[i] = rho_top > 0.
                              ? std::log(default_etadsn * rho_top)
                              : fast_log_n1[i - 1] + (fast_log_n1[i - 1] - fast_log_n1[i - 2]);

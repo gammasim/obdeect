@@ -1,4 +1,4 @@
-"""Atmospheric extinction and early thinning, identical to sim_telarray's transmission.
+"""Atmospheric extinction and early thinning from a transmission table.
 
 Arrays are float64 for the transmission lookups and float32 for photon columns, as in the
 photon stream. The lookups broadcast their array arguments.
@@ -20,10 +20,10 @@ def _vectorized(function, *arguments):
 
 
 class TransmissionTable(_core.TransmissionTable):
-    """sim_telarray atmospheric transmission table (read_trans of sim_absorb.c).
+    """Atmospheric transmission table (optical depth against height and wavelength).
 
     Args:
-        path: sim_telarray transmission file (``# H2= ..., H1= ...`` header).
+        path: transmission file in the extinction-table format (``# H2= ..., H1= ...`` header).
         site_altitude_m: observation level [m a.s.l.]; must match H2 within 25 m.
     """
 
@@ -32,11 +32,11 @@ class TransmissionTable(_core.TransmissionTable):
         return _vectorized(super().optical_depth, wavelength_nm, height_m)
 
     def transmission(self, wavelength_nm, zem_m, airmass):
-        """sim_telarray atmospheric_transmission: exp(-od * airmass)."""
+        """Direct transmission exp(-od * airmass)."""
         return _vectorized(super().transmission, wavelength_nm, zem_m, airmass)
 
     def transmission2(self, wavelength_nm, zem_m, airmass, od_tel, od_focus):
-        """sim_telarray atmospheric_transmission2 with telescope optical depths od_tel, od_focus."""
+        """Transmission exp(-(|od - od_tel| * airmass + od_focus)) with telescope depths."""
         return _vectorized(super().transmission2, wavelength_nm, zem_m, airmass, od_tel, od_focus)
 
     def telescope_depths(self, telescope_altitude_m, pathlen_m=0.0):
@@ -44,7 +44,7 @@ class TransmissionTable(_core.TransmissionTable):
 
         Args:
             telescope_altitude_m: telescope altitude a.s.l. [m].
-            pathlen_m: optical path inside the telescope [m] (sim_telarray pathlen_tel).
+            pathlen_m: optical path inside the telescope [m].
         """
         return super().telescope_depths(float(telescope_altitude_m), float(pathlen_m))
 
@@ -66,7 +66,7 @@ def apply_extinction(
     """Extinction, wavelength assignment and envelope thinning of photons in frame ground.
 
     Columns (float32, equal length): x, y, cx, cy, t, zem, w; optional z, cz, wavelength
-    (0 = assign from 1/lambda^2 on wavelength_range; nm, integer as in sim_telarray).
+    (0 = assign from 1/lambda^2 on wavelength_range; nm, integer).
 
     The acceptance is p = p_atm(lambda) * E(lambda), with E the envelope (linear in lambda,
     values in [0, 1]). Thinned mode (weighted=False) returns one row per surviving photon

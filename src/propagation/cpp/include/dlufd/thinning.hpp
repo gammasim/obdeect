@@ -3,7 +3,6 @@
 // Early thinning with the detector envelope. A photon survives with probability
 // p = p_atm(lambda) * E(lambda), where E is the envelope (the upper bound over the
 // later wavelength-dependent factors, e.g. QE x max_qe_rel, see docs/extinction.md).
-// sim_telarray applies the same cut before tracing (sim_telarray.c:2914).
 
 #include "dlufd/streams.hpp"
 

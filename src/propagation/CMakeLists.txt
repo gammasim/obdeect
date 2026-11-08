@@ -93,15 +93,16 @@ if(DLUFD_BUILD_TESTING)
                     propagator scattering gstrickd_contract)
     add_executable(test_${test_name} cpp/tests/test_${test_name}.cpp)
     target_link_libraries(test_${test_name} PRIVATE dlufd_core)
-    # Reference data: cpp/tests/data (copied from sim_telarray, see test_transmission.cpp).
+    # Reference data: cpp/tests/data (see test_transmission.cpp).
     target_compile_definitions(test_${test_name}
                                PRIVATE DLUFD_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/cpp/tests/data")
     dlufd_enable_warnings(test_${test_name})
     add_test(NAME ${test_name} COMMAND test_${test_name})
   endforeach()
 
-  # Agreement with CORSIKA's atmo.c: DLUFD_CORSIKA_REFERENCE=<corsika7/bernlohr directory>.
-  option(DLUFD_CORSIKA_REFERENCE "Path to CORSIKA's corsika7/bernlohr directory (atmo.c)" OFF)
+  # Agreement with a reference implementation of the interpolation and ray bending:
+  # DLUFD_CORSIKA_REFERENCE=<reference source directory>.
+  option(DLUFD_CORSIKA_REFERENCE "Path to the reference source directory (atmo.c and helpers)" OFF)
   if(DLUFD_CORSIKA_REFERENCE)
     enable_language(C)
     add_library(corsika_atmo STATIC

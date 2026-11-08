@@ -29,7 +29,7 @@ constexpr std::uint64_t seed = 20261107;
 constexpr double lambda_nm = 355.0;
 
 // Vertical beam, one telescope on the ground at horizontal distance D: the test geometry of
-// the analytic integral and the ls-beam port. Observation level obs_m, emission at h0_m.
+// the analytic integral and the step sum. Observation level obs_m, emission at h0_m.
 constexpr double obs_m = 2000.0;
 constexpr double h0_m = 50000.0;
 constexpr double distance_m = 3000.0;
@@ -43,7 +43,7 @@ std::uint32_t mask_of(std::initializer_list<Column> columns) {
   return mask;
 }
 
-// Exponential molecular-only table as in the ls-beam comparison: tau(h) = k exp(-h/scale),
+// Exponential molecular-only table as in the step-sum comparison: tau(h) = k exp(-h/scale),
 // h in m a.s.l., nodes every 500 m from 1 to 60 km, wavelengths 354..356 nm.
 std::string exponential_table_text(double k, double scale_m) {
   std::ostringstream text;
@@ -105,13 +105,12 @@ double analytic_yield(const dlufd::ScatteringTable &table, const dlufd::Transmis
   return sum * step / 3.0;
 }
 
-// Expected yield of the ls-beam.cc formula (LightEmission/ls-beam.cc:314 density
-// hscale = exp(-z/7500 m), emission per step nphot_per_cm * hscale * steplength; the
-// Rayleigh angular distribution of :1818-1836 is the analytic (3/16 pi)(1 + cos^2) of
-// the same density; the sphere is hit with the solid angle Omega of the sphere). ls-beam
+// Expected yield as a sum over beam steps (density hscale = exp(-z/7500 m), emission per step
+// nphot_per_cm * hscale * steplength; Rayleigh angular distribution (3/16 pi)(1 + cos^2) of
+// the same density; the sphere is hit with the solid angle Omega of the sphere). The sum
 // neglects the attenuation of the beam before the scattering point. Per-step sum, 1 m steps,
 // with q0 = w (K/H) exp(-obs/H) photons per metre at the observation level.
-double ls_beam_yield(double k, double scale_m, const dlufd::TransmissionTable &tr, double lambda) {
+double step_sum_yield(double k, double scale_m, const dlufd::TransmissionTable &tr, double lambda) {
   using dlufd::rayleigh_phase;
   const double q0 = (k / scale_m) * std::exp(-obs_m / scale_m);
   const double ds = 1.0;
@@ -119,7 +118,7 @@ double ls_beam_yield(double k, double scale_m, const dlufd::TransmissionTable &t
   for (double z = 0.0; z < h0_m - obs_m; z += ds) {
     const double z_mid = z + 0.5 * ds;
     const double h = obs_m + z_mid;
-    const double hscale = std::exp(-z_mid / scale_m); // ls-beam: exp(-lb.z/7500e2)
+    const double hscale = std::exp(-z_mid / scale_m); // exp(-z/7500 m)
     const double dist = std::hypot(distance_m, z_mid);
     const double mu = z_mid / dist;
     const double ratio = radius_m / dist;
@@ -216,8 +215,8 @@ void test_zero_optical_depth() {
 
 // Analytic single-scattering integral against the Monte Carlo estimate (per-primary totals,
 // standard error from their spread), for the exponential Rayleigh table, and against the
-// ls-beam.cc formula with the beam attenuation neglected (as ls-beam does).
-void test_vertical_beam_against_integral_and_ls_beam() {
+// step sum with the beam attenuation neglected.
+void test_vertical_beam_against_integral_and_step_sum() {
   const double k = 0.02;
   const double scale = 7500.0;
   const dlufd::ScatteringTable table(exponential_table_text(k, scale));
@@ -238,15 +237,15 @@ void test_vertical_beam_against_integral_and_ls_beam() {
 
   const double with_attenuation = analytic_yield(table, tr, lambda_nm, h0_m, true);
   const double no_attenuation = analytic_yield(table, tr, lambda_nm, h0_m, false);
-  const double ls_beam = ls_beam_yield(k, scale, tr, lambda_nm);
+  const double step_sum = step_sum_yield(k, scale, tr, lambda_nm);
   std::fprintf(stderr,
                "vertical beam: MC %.6e +- %.2e, analytic %.6e, analytic w/o beam attenuation %.6e, "
-               "ls-beam formula %.6e\n",
-               mean, std_error, with_attenuation, no_attenuation, ls_beam);
+               "step sum %.6e\n",
+               mean, std_error, with_attenuation, no_attenuation, step_sum);
   CHECK(std::abs(mean - with_attenuation) <= 4.0 * std_error);
-  // ls-beam port against the same integral without beam attenuation (1 m steps vs Simpson).
-  CHECK(std::abs(ls_beam - no_attenuation) <= 1e-3 * no_attenuation);
-  // The stated approximation of ls-beam: beam attenuation is neglected (here a few percent).
+  // Step sum against the same integral without beam attenuation (1 m steps vs Simpson).
+  CHECK(std::abs(step_sum - no_attenuation) <= 1e-3 * no_attenuation);
+  // The step sum neglects the beam attenuation (here a few percent).
   CHECK(with_attenuation < no_attenuation);
 }
 
@@ -593,7 +592,7 @@ int main() {
   return run_checks([] {
     test_phase_functions();
     test_zero_optical_depth();
-    test_vertical_beam_against_integral_and_ls_beam();
+    test_vertical_beam_against_integral_and_step_sum();
     test_example_table_against_integral();
     test_determinism_across_chunk_splits();
     test_rejects_invalid_input();

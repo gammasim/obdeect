@@ -1,11 +1,10 @@
 #pragma once
 
-// Atmospheric transmission tables and telescope optical depths, as in sim_telarray
-// (sim_absorb.c: read_trans, atmospheric_transmission, atmospheric_transmission2;
-// rpolator.c: rpol; sim_telarray.c: od2tel and od2focus, MAX_LAMBDA 1000).
+// Atmospheric transmission tables (extinction-table format) and telescope optical depths.
+// Photons with a wavelength of max_lambda_nm or more are not transmitted.
 //
-// Units: altitudes in metres a.s.l. at the API; sim_telarray works in cm, and
-// the conversion is a multiplication by 100 before the table lookup.
+// Units: altitudes in metres a.s.l. at the API; the table lookup works in cm (log10 of the
+// height in cm), a multiplication by 100 before the lookup.
 
 #include <algorithm>
 #include <array>
@@ -24,15 +23,15 @@
 
 namespace dlufd {
 
-// Limits and sentinels of sim_telarray.
-inline constexpr int max_lambda_nm = 1000;                 // MAX_LAMBDA (mc_aux.h)
-inline constexpr std::size_t max_table_heights = 100;      // MAX_TRANS_HEIGHT (sim_absorb.c)
-inline constexpr std::size_t max_table_wavelengths = 1200; // MAX_WL (sim_absorb.c)
-inline constexpr double optical_depth_limit = 100.0;       // transmission cut (sim_absorb.c)
+// Limits and sentinels of the table format and the acceptance.
+inline constexpr int max_lambda_nm = 1000;                 // wavelengths at or above are dropped
+inline constexpr std::size_t max_table_heights = 100;      // most heights in a table
+inline constexpr std::size_t max_table_wavelengths = 1200; // most wavelength rows in a table
+inline constexpr double optical_depth_limit = 100.0;       // optical depths above this give 0
 inline constexpr double telescope_optical_depth_limit = 1000.0;
-inline constexpr double unset_optical_depth = 99999.0; // sim_telarray.c: od when t <= 0
-inline constexpr double altitude_tolerance_m = 25.0;   // read_trans altitude check
-inline constexpr double unlimited_airmass = 1e10;      // sim_telarray.c: cz == 0
+inline constexpr double unset_optical_depth = 99999.0; // od when the transmission is <= 0
+inline constexpr double altitude_tolerance_m = 25.0;   // table H2 against site altitude
+inline constexpr double unlimited_airmass = 1e10;      // airmass for cz == 0
 
 // Optical depths per integer wavelength (0 .. max_lambda_nm - 1) for one telescope:
 // od_tel between the telescope and the observation level, od_focus inside the telescope.
@@ -95,9 +94,9 @@ inline double parse_number(std::string_view token, const char *what) {
   return value;
 }
 
-// rpol() of rpolator.c: linear interpolation in ascending x, clamped to the edge
-// values outside [x[0], x[n-1]]. The result for an interior point does not depend on
-// which of two intervals sharing a node is used, so a binary search gives the C result.
+// Linear interpolation in ascending x, clamped to the edge values outside [x[0], x[n-1]].
+// The result for an interior point does not depend on which of two intervals sharing a node
+// is used, so a binary search is enough.
 template <std::floating_point T>
 [[nodiscard]] T rpol(const std::vector<double> &x, const double *y, T xp) {
   const std::size_t n = x.size();
@@ -116,11 +115,11 @@ template <std::floating_point T>
 
 } // namespace detail
 
-// A sim_telarray atmospheric transmission table: optical depth as a function of
+// An atmospheric transmission table: optical depth as a function of
 // wavelength (integer nm rows) and emission altitude (log10 of height in cm).
 class TransmissionTable {
 public:
-  // Parse the text of a sim_telarray transmission file (read_trans, sim_absorb.c:84).
+  // Parse the text of a transmission file (extinction-table format).
   // site_altitude_m is the observation level; it must match the table's H2 within 25 m.
   // Throws std::invalid_argument on invalid input.
   TransmissionTable(std::string_view text, double site_altitude_m) { parse(text, site_altitude_m); }
@@ -149,7 +148,7 @@ public:
     return detail::rpol(log_h_cm_, row(lambda_nm).data(), std::log10(height_m * T{100}));
   }
 
-  // sim_telarray atmospheric_transmission(): exp(-od * airmass) for an emission at
+  // Direct transmission exp(-od * airmass) for an emission at
   // zem_m a.s.l., or 0 below the observation level or above the optical-depth cut.
   template <std::floating_point T>
   [[nodiscard]] T transmission(double lambda_nm, T zem_m, T airmass) const {
@@ -164,7 +163,8 @@ public:
     return std::exp(-od);
   }
 
-  // sim_telarray atmospheric_transmission2(): the default extinction of photon bunches.
+  // Transmission of a photon with the telescope optical depths subtracted: exp(-od) with
+  // od = |od(zem) - od_tel| * airmass + od_focus.
   // od_tel and od_focus are the telescope optical depths at this wavelength
   // (TelescopeDepths); od_focus is not multiplied by the airmass.
   template <std::floating_point T>
@@ -183,9 +183,9 @@ public:
     return std::exp(-od);
   }
 
-  // Per-telescope optical depths for all integer wavelengths 0..999, as set up in
-  // sim_telarray.c (lines 1854-1890). telescope_altitude_m is the telescope's altitude
-  // a.s.l. and pathlen_m the optical path inside the telescope (sim_config.c, pathlen_tel).
+  // Per-telescope optical depths for all integer wavelengths 0..999: od_tel =
+  // -ln T(h_T), od_focus = -ln(T(h_T + l) / T(h_T)). telescope_altitude_m is the telescope's
+  // altitude a.s.l. and pathlen_m the optical path l inside the telescope.
   [[nodiscard]] TelescopeDepths telescope_depths(double telescope_altitude_m,
                                                  double pathlen_m) const {
     TelescopeDepths depths;
@@ -195,8 +195,8 @@ public:
       depths.od_tel[iwl] = t1 <= 0.0 ? unset_optical_depth : -std::log(t1);
       depths.od_focus[iwl] = (t1 <= 0.0 || t2 <= 0.0) ? unset_optical_depth : -std::log(t2 / t1);
     }
-    // sim_telarray.c:1866: a 400 nm depth above the limit means the table does not fit
-    // the site; sim_telarray then ignores the telescope depths entirely.
+    // A 400 nm depth above the limit means the table does not fit the site: the telescope
+    // depths are then ignored (set to 0).
     if (depths.od_tel[400] > telescope_optical_depth_limit) {
       depths.od_tel.fill(0.0);
       depths.od_focus.fill(0.0);
@@ -212,7 +212,7 @@ private:
 
   [[nodiscard]] double h2_cm() const noexcept { return h2_km_ * 1e5; }
 
-  // Table row for an integer wavelength, clamped to the table range (sim_absorb.c).
+  // Table row for an integer wavelength, clamped to the table range.
   // The clamp is done in floating point, so no out-of-range value is converted to an integer.
   [[nodiscard]] const std::vector<double> &row(double lambda_nm) const {
     if (!std::isfinite(lambda_nm)) {
@@ -263,7 +263,7 @@ private:
       throw std::invalid_argument("transmission table H2 does not match the site altitude");
     }
 
-    // Heights: H2 followed by the H1 list (sim_absorb.c:198-227).
+    // Heights: H2 followed by the H1 list.
     const auto h1_at = header.find(" H1=");
     if (h1_at == std::string_view::npos) {
       throw std::invalid_argument("transmission table: missing H1 list");

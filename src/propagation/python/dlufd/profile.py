@@ -18,8 +18,9 @@ def _as_float_array(values) -> np.ndarray:
 
 
 class AtmosphereProfile:
-    """CORSIKA/sim_telarray atmprof table with the atmo.c interpolation of density,
-    thickness and n-1 (see docs/refraction.md)."""
+    """Atmprof table with spline interpolation of density, thickness and n-1.
+
+    See docs/refraction.md."""
 
     def __init__(self, path: str | Path):
         self._core = _core.AtmosphereProfile(str(path))
@@ -60,7 +61,7 @@ class AtmosphereProfile:
 
 
 class RefractionTables:
-    """Refraction tables of CORSIKA atmo.c for a profile and an observation level."""
+    """Refraction tables for a profile and an observation level."""
 
     def __init__(self, profile: AtmosphereProfile, observation_level_m: float):
         self._core = _core.RefractionTables(profile._core, float(observation_level_m))

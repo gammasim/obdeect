@@ -35,7 +35,7 @@ def propagate(
     Args:
         input_path: input gstrickd stream.
         output_path: output gstrickd stream (overwritten).
-        transmission: sim_telarray transmission file of the site (``# H2=`` header).
+        transmission: transmission table of the site (extinction-table format, ``# H2=`` header).
         site_altitude_m: observation level [m a.s.l.]; must match the table within 25 m.
         seed: Philox seed of the wavelength and thinning draws.
         profile: optional atmospheric profile (atmprof format); enables the air delay and
@@ -51,8 +51,8 @@ def propagate(
             the sky photons before extinction; scattered photons go to their telescope's block.
             The run needs telescope_r_m. Off when None.
         scattering_points: scattering points per photon (1 to 1024); used only with scattering.
-        pathlen_m: optical path inside each telescope [m] (sim_telarray pathlen_tel, the od2focus
-            part of the telescope depths). Default 0.
+        pathlen_m: optical path inside each telescope [m] (the in-telescope part of the
+            extinction, see docs/propagation.md). Default 0.
         telescope_pathlen_m: per-telescope path [m] as {telescope_id: metres}, ids 1-based;
             overrides pathlen_m for those telescopes. Default None.
 
