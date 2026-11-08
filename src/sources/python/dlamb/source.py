@@ -37,6 +37,9 @@ import numpy as np
 
 from dlamb import _core
 
+# Copies of gstrickd constants (no runtime dependency on gstrickd). The tests in
+# python/tests/test_gstrickd_contract.py compare them with the compiled gstrickd headers.
+
 #: Largest number of photons in one chunk (gstrickd photon chunk limit).
 CHUNK_ROWS = 1 << 16
 

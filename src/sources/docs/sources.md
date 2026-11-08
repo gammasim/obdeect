@@ -67,10 +67,11 @@ photons that can reach it:
 ## Random numbers
 
 Each photon draws from Philox (gstrickd `uniform4`) keyed on
-`(seed, stage, event, telescope, photon index, stream)`, with stage `0x444C0001` and
-streams in `cpp/include/dlamb/streams.hpp`. Results do not depend on chunk size or
-order. Two sources with the same seed, event and telescope use the same draws: give
-each independent source its own seed.
+`(seed, stage, event, telescope, photon index, stream)`, with stage
+`dlamb::stage_sources` (alias of `gstrickd::stage_sources`, `0x444C0001`) and streams in
+`cpp/include/dlamb/streams.hpp`. Results do not depend on chunk size or order. Two sources
+with the same seed, event and telescope use the same draws: give each independent source
+its own seed.
 
 ## Differences to obdeect
 

@@ -8,7 +8,11 @@
 
 #include "dlamb/density.hpp"
 #include "dlamb/source.hpp"
+#include "dlamb/streams.hpp"
 #include "dlamb/version.hpp"
+
+#include "gstrickd/format.hpp"
+#include "gstrickd/photons.hpp"
 
 #include <cstdint>
 #include <stdexcept>
@@ -178,6 +182,28 @@ nb::dict emit_chunk(const dlamb::Source &source, std::uint64_t seed, std::uint32
   return result;
 }
 
+// Format constants of the gstrickd headers this build compiles against, and the columns
+// dlamb emits. dlamb.source keeps Python copies of them; the tests compare the copies.
+nb::dict gstrickd_contract() {
+  nb::dict frames;
+  frames["sky"] = static_cast<std::uint32_t>(gstrickd::Frame::sky);
+  frames["telescope"] = static_cast<std::uint32_t>(gstrickd::Frame::telescope);
+  frames["camera"] = static_cast<std::uint32_t>(gstrickd::Frame::camera);
+  std::vector<std::string> emitted;
+  for (std::uint32_t c = 0; c < gstrickd::n_columns; ++c) {
+    if ((dlamb::source_columns >> c) & 1U)
+      emitted.emplace_back(gstrickd::column_name(static_cast<gstrickd::Column>(c)));
+  }
+  nb::dict result;
+  result["format_major"] = gstrickd::format_major;
+  result["format_minor"] = gstrickd::format_minor;
+  result["max_chunk_rows"] = gstrickd::max_chunk_rows;
+  result["dlamb_format_major"] = dlamb::photon_stream_format_major;
+  result["frames"] = frames;
+  result["emitted_columns"] = emitted;
+  return result;
+}
+
 } // namespace
 
 NB_MODULE(_core, module) {
@@ -185,6 +211,8 @@ NB_MODULE(_core, module) {
   module.def("core_version", [] {
     return std::make_tuple(dlamb::version_major, dlamb::version_minor, dlamb::version_patch);
   });
+  module.def("gstrickd_contract", &gstrickd_contract,
+             "Format constants of the gstrickd headers and the columns dlamb emits.");
 
   nb::class_<SpectrumBox>(module, "Spectrum");
   nb::class_<PulseBox>(module, "Pulse");
