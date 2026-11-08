@@ -65,7 +65,7 @@ Options that belong to one type are rejected with the other type, e.g.
 plane z = 0 of the camera, without atmosphere. Time is emission time plus path / c. Count and
 directions equal the sky-frame output for the same seed; positions lie in a disc of radius
 `R / sqrt(1 - (R / d)^2)`. A photon that does not travel towards the plane is an error.
-Pipeline: see [](../sim_telarray.md).
+Pipeline: see [Using dlamb with sim_telarray](../sim_telarray.md).
 
 ## Differences to the originals
 
