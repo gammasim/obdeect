@@ -199,5 +199,5 @@ An id that the run does not have is an error.
 - The in-telescope path is not derived from the optics: it is given per telescope (default 0).
 - Wavelengths are integer nm.
 - Envelope tables must cover the wavelength range (rounded outwards).
-- The 60-degree time term of the ray bending is a fit extrapolated to large zenith angles; see
-  [](refraction.md).
+- Photons within about 3 degrees of the horizon are not bent and are dropped (series limit of
+  the ray bending, see [](refraction.md)).
