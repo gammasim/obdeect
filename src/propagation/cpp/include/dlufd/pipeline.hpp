@@ -31,27 +31,21 @@ struct ExtinctionSettings {
   bool weighted{};
 };
 
-// Process one chunk (at most 2^16 rows). first_index of the chunk is the index of its
-// first photon among all photons of this telescope and event; out_first_index numbers the
-// output photons (thinned mode). Returns the output chunks (thinned mode may return more
-// than one chunk; weighted mode returns the input chunk).
-[[nodiscard]] inline std::vector<gstrickd::PhotonChunk>
-apply_extinction_chunk(gstrickd::PhotonChunk chunk, const ExtinctionSettings &settings,
-                       std::uint64_t out_first_index) {
+namespace detail {
+
+// Validation shared by the ground-frame steps: frame G, direction cosines, bunch weights,
+// optional cz, zem (when needed), wavelength values. Throws std::invalid_argument.
+inline void validate_ground_chunk(gstrickd::PhotonChunk &chunk, bool need_zem) {
   using gstrickd::Column;
-  if (settings.table == nullptr || settings.depths == nullptr || settings.envelope == nullptr) {
-    throw std::invalid_argument("extinction settings incomplete");
-  }
-  settings.wavelengths.validate();
   if (chunk.frame != gstrickd::Frame::ground) {
-    throw std::invalid_argument("extinction needs photons in frame ground (G)");
+    throw std::invalid_argument("photons must be in frame ground (G)");
   }
   chunk.validate();
   const std::size_t rows = chunk.rows();
   if (rows == 0) {
-    return {};
+    return;
   }
-  if (!chunk.has(Column::zem)) {
+  if (need_zem && !chunk.has(Column::zem)) {
     throw std::invalid_argument("extinction needs the zem column");
   }
   if (chunk.has(Column::p)) {
@@ -64,7 +58,6 @@ apply_extinction_chunk(gstrickd::PhotonChunk chunk, const ExtinctionSettings &se
   const auto &cx = chunk[Column::cx];
   const auto &cy = chunk[Column::cy];
   const auto &w = chunk[Column::w];
-  const auto &zem = chunk[Column::zem];
   for (std::size_t row = 0; row < rows; ++row) {
     const double r2 =
         static_cast<double>(cx[row]) * cx[row] + static_cast<double>(cy[row]) * cy[row];
@@ -84,18 +77,56 @@ apply_extinction_chunk(gstrickd::PhotonChunk chunk, const ExtinctionSettings &se
           static_cast<double>(w[row]) <= static_cast<double>(max_bunch_photons))) {
       throw std::invalid_argument("bunch weight must be within [0, max_bunch_photons]");
     }
-    if (!std::isfinite(zem[row])) {
+    if (need_zem && !std::isfinite(chunk[Column::zem][row])) {
       throw std::invalid_argument("zem must be finite");
     }
   }
 
-  auto &wavelength = chunk[Column::wavelength];
+  const auto &wavelength = chunk[Column::wavelength];
   for (std::size_t row = 0; row < rows; ++row) {
     // 0 means not assigned; any other value must be a finite, non-negative integer.
     if (wavelength[row] != 0.0F) {
       check_wavelength(static_cast<double>(wavelength[row]));
     }
   }
+}
+
+} // namespace detail
+
+// Geometry-only step: the same checks and wavelength assignment as apply_extinction_chunk, but
+// no extinction, envelope or thinning. Every row is kept with its weight; zem is not needed.
+[[nodiscard]] inline std::vector<gstrickd::PhotonChunk>
+assign_wavelength_chunk(gstrickd::PhotonChunk chunk, const WavelengthRange &wavelengths,
+                        std::uint64_t seed, std::uint32_t event, std::uint32_t telescope) {
+  wavelengths.validate();
+  detail::validate_ground_chunk(chunk, false);
+  if (chunk.rows() == 0) {
+    return {};
+  }
+  assign_wavelengths(chunk, wavelengths, seed, event, telescope);
+  std::vector<gstrickd::PhotonChunk> out;
+  out.push_back(std::move(chunk));
+  return out;
+}
+
+// Process one chunk (at most 2^16 rows). first_index of the chunk is the index of its
+// first photon among all photons of this telescope and event; out_first_index numbers the
+// output photons (thinned mode). Returns the output chunks (thinned mode may return more
+// than one chunk; weighted mode returns the input chunk).
+[[nodiscard]] inline std::vector<gstrickd::PhotonChunk>
+apply_extinction_chunk(gstrickd::PhotonChunk chunk, const ExtinctionSettings &settings,
+                       std::uint64_t out_first_index) {
+  using gstrickd::Column;
+  if (settings.table == nullptr || settings.depths == nullptr || settings.envelope == nullptr) {
+    throw std::invalid_argument("extinction settings incomplete");
+  }
+  settings.wavelengths.validate();
+  detail::validate_ground_chunk(chunk, true);
+  const std::size_t rows = chunk.rows();
+  if (rows == 0) {
+    return {};
+  }
+  auto &wavelength = chunk[Column::wavelength];
   assign_wavelengths(chunk, settings.wavelengths, settings.seed, settings.event,
                      settings.telescope);
 

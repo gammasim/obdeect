@@ -29,14 +29,15 @@ inline void bind_propagator(nb::module_ &module) {
   module.def(
       "propagate",
       [](const std::string &input_path, const std::string &output_path,
-         const std::string &transmission_path, double site_altitude_m,
+         const std::optional<std::string> &transmission_path, double site_altitude_m,
          const std::optional<std::string> &profile_path,
          const std::vector<std::pair<std::string, std::string>> &envelope_paths,
          const std::optional<std::tuple<double, double>> &wavelength_range, std::uint64_t seed,
          bool weighted, bool store_p, const std::optional<std::string> &scattering_path,
          std::uint32_t scattering_points, double pathlen_m,
-         const std::map<std::int64_t, double> &telescope_pathlen_m) {
+         const std::map<std::int64_t, double> &telescope_pathlen_m, bool geometry_only) {
         dlufd::PropagatorConfig config;
+        config.geometry_only = geometry_only;
         config.default_pathlen_m = pathlen_m;
         for (const auto &[id, metres] : telescope_pathlen_m) {
           if (id < 1 || id > static_cast<std::int64_t>(gstrickd::max_telescope)) {
@@ -44,9 +45,11 @@ inline void bind_propagator(nb::module_ &module) {
           }
           config.telescope_pathlen_m[static_cast<std::uint32_t>(id)] = metres;
         }
-        config.transmission.emplace(
-            dlufd::TransmissionTable::from_file(transmission_path, site_altitude_m));
-        config.transmission_source = transmission_path;
+        if (transmission_path) {
+          config.transmission.emplace(
+              dlufd::TransmissionTable::from_file(*transmission_path, site_altitude_m));
+          config.transmission_source = *transmission_path;
+        }
         config.site_altitude_m = site_altitude_m;
         if (profile_path) {
           config.profile.emplace(dlufd::AtmosphereProfile::from_file(*profile_path));
@@ -97,7 +100,9 @@ inline void bind_propagator(nb::module_ &module) {
       nb::arg("store_p") = false, nb::arg("scattering_path") = nb::none(),
       nb::arg("scattering_points") = std::uint32_t{8}, nb::arg("pathlen_m") = 0.0,
       nb::arg("telescope_pathlen_m") = std::map<std::int64_t, double>{},
-      "Run the atmosphere stage on a photon stream file. envelope_paths: (name, file) pairs of "
+      nb::arg("geometry_only") = false,
+      "Run the atmosphere stage on a photon stream file (geometry_only: no extinction, see "
+      "docs/propagation.md). envelope_paths: (name, file) pairs of "
       "two-column text tables (nm, value). scattering_path: optional scattering table (single "
       "scattering of the primaries, off when None). pathlen_m: path inside each telescope [m]; "
       "telescope_pathlen_m: {telescope_id (1-based): metres} overrides.");

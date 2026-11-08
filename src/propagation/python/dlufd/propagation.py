@@ -11,24 +11,26 @@ from collections.abc import Mapping, Sequence
 from dlufd import _core
 
 MODES = ("thinned", "weighted")
+DEFAULT_SCATTERING_POINTS = 8
 
 
 def propagate(
     input_path: str | os.PathLike,
     output_path: str | os.PathLike,
     *,
-    transmission: str | os.PathLike,
+    transmission: str | os.PathLike | None = None,
     site_altitude_m: float,
     seed: int,
     profile: str | os.PathLike | None = None,
     envelope: Mapping[str, str | os.PathLike] | Sequence[tuple[str, str | os.PathLike]] = (),
     wavelength_range: tuple[float, float] | None = None,
-    mode: str = "thinned",
+    mode: str | None = None,
     store_p: bool = False,
     scattering: str | os.PathLike | None = None,
-    scattering_points: int = 8,
-    pathlen_m: float = 0.0,
+    scattering_points: int | None = None,
+    pathlen_m: float | None = None,
     telescope_pathlen_m: Mapping[int, float] | None = None,
+    extinction: bool = True,
 ) -> dict[str, float]:
     """Run the atmosphere stage on a photon stream file.
 
@@ -36,6 +38,7 @@ def propagate(
         input_path: input gstrickd stream.
         output_path: output gstrickd stream (overwritten).
         transmission: transmission table of the site (extinction-table format, ``# H2=`` header).
+            Required with extinction; not allowed without.
         site_altitude_m: observation level [m a.s.l.]; must match the table within 25 m.
         seed: Philox seed of the wavelength and thinning draws.
         profile: optional atmospheric profile (atmprof format); enables the air delay and
@@ -45,16 +48,22 @@ def propagate(
         wavelength_range: (lo, hi) nm for wavelengths drawn from 1/lambda^2. Default: the run
             keys wavelength_min_nm and wavelength_max_nm.
         mode: ``"thinned"`` (one row per surviving photon, w = 1) or ``"weighted"``
-            (w multiplied by the acceptance).
+            (w multiplied by the acceptance). Default ``"thinned"``; without extinction the
+            output is always weighted and ``"thinned"`` is an error.
         store_p: keep the acceptance column p in the output.
         scattering: optional scattering table (docs/scattering.md). Enables single scattering of
             the sky photons before extinction; scattered photons go to their telescope's block.
             The run needs telescope_r_m. Off when None.
         scattering_points: scattering points per photon (1 to 1024); used only with scattering.
+            Default None: 8 points.
         pathlen_m: optical path inside each telescope [m] (the in-telescope part of the
-            extinction, see docs/propagation.md). Default 0.
+            extinction, see docs/propagation.md). Default None: 0 m.
         telescope_pathlen_m: per-telescope path [m] as {telescope_id: metres}, ids 1-based;
             overrides pathlen_m for those telescopes. Default None.
+        extinction: False for geometry only: sky to ground frame (refraction, air delay) and
+            wavelength assignment, no extinction, envelope or thinning. All photons keep their
+            weight and the ledger records ``atmosphere`` as pending. Cannot be combined with
+            transmission, envelope, mode="thinned", scattering, store_p or the path options.
 
     Returns:
         Dict with photons_in, photons_out, dropped (sky photons not reaching the telescope
@@ -64,8 +73,22 @@ def propagate(
         ValueError: invalid settings or input, or an input ledger that shows a factor as applied.
         RuntimeError: unreadable or truncated files.
     """
-    if mode not in MODES:
+    if mode is not None and mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, not {mode!r}")
+    if extinction:
+        if transmission is None:
+            raise ValueError("transmission is required (or extinction=False)")
+    else:
+        _check_geometry_only(
+            transmission,
+            envelope,
+            mode,
+            scattering,
+            scattering_points,
+            store_p,
+            pathlen_m,
+            telescope_pathlen_m,
+        )
     items = envelope.items() if isinstance(envelope, Mapping) else envelope
     factors = [(str(name), os.fspath(path)) for name, path in items]
     # operator.index rejects non-integer ids (1.5, "1") instead of truncating them.
@@ -77,7 +100,7 @@ def propagate(
         _core.propagate(
             os.fspath(input_path),
             os.fspath(output_path),
-            os.fspath(transmission),
+            None if transmission is None else os.fspath(transmission),
             float(site_altitude_m),
             None if profile is None else os.fspath(profile),
             factors,
@@ -85,11 +108,38 @@ def propagate(
             if wavelength_range is None
             else (float(wavelength_range[0]), float(wavelength_range[1])),
             int(seed),
-            mode == "weighted",
+            mode == "weighted" or not extinction,
             bool(store_p),
             None if scattering is None else os.fspath(scattering),
-            int(scattering_points),
-            float(pathlen_m),
+            DEFAULT_SCATTERING_POINTS if scattering_points is None else int(scattering_points),
+            0.0 if pathlen_m is None else float(pathlen_m),
             pathlens,
+            not extinction,
         )
     )
+
+
+def _check_geometry_only(
+    transmission,
+    envelope,
+    mode,
+    scattering,
+    scattering_points,
+    store_p,
+    pathlen_m,
+    telescope_pathlen_m,
+) -> None:
+    """Reject settings that need extinction or thinning (extinction=False)."""
+    rejected = {
+        "transmission": transmission is not None,
+        "envelope": bool(envelope),
+        'mode="thinned"': mode == "thinned",
+        "scattering": scattering is not None,
+        "scattering_points": scattering_points is not None,
+        "store_p": bool(store_p),
+        "pathlen_m": pathlen_m is not None,
+        "telescope_pathlen_m": bool(telescope_pathlen_m),
+    }
+    given = [name for name, is_set in rejected.items() if is_set]
+    if given:
+        raise ValueError(f"extinction=False cannot be combined with {', '.join(given)}")

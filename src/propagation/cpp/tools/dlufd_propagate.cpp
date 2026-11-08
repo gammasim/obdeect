@@ -27,7 +27,8 @@ namespace {
 
 void usage() {
   std::fprintf(stderr,
-               "usage: dlufd-propagate --transmission FILE --site-altitude M [--profile FILE]\n"
+               "usage: dlufd-propagate (--transmission FILE | --no-extinction) --site-altitude M\n"
+               "                       [--profile FILE]\n"
                "                       [--envelope NAME=FILE]... [--wavelength-range LO HI]\n"
                "                       --seed N [--mode thinned|weighted] [--store-p]\n"
                "                       [--scattering FILE] [--scattering-points N]\n"
@@ -113,11 +114,13 @@ int main(int argc, char **argv) {
   std::optional<std::string> profile;
   std::optional<WavelengthRange> wavelengths;
   std::vector<std::pair<std::string, std::string>> envelope_files;
-  OutputMode mode = OutputMode::thinned;
+  std::optional<OutputMode> mode;
+  bool no_extinction = false;
   bool store_p = false;
   std::optional<std::string> scattering;
   std::optional<std::uint32_t> scattering_points;
   double pathlen = 0.0;
+  bool pathlen_given = false;
   std::map<std::uint32_t, double> telescope_pathlen;
   std::string input = "-";
   std::string output = "-";
@@ -131,7 +134,9 @@ int main(int argc, char **argv) {
         }
         return argv[++i];
       };
-      if (arg == "--transmission") {
+      if (arg == "--no-extinction") {
+        no_extinction = true;
+      } else if (arg == "--transmission") {
         transmission = value("--transmission");
       } else if (arg == "--site-altitude") {
         site_altitude = parse_double(value("--site-altitude"), "--site-altitude");
@@ -170,6 +175,7 @@ int main(int argc, char **argv) {
         scattering_points = parse_points(value("--scattering-points"));
       } else if (arg == "--pathlen") {
         pathlen = parse_pathlen(value("--pathlen"), "--pathlen");
+        pathlen_given = true;
       } else if (arg == "--telescope-pathlen") {
         const auto [id, metres] = parse_telescope_pathlen(value("--telescope-pathlen"));
         if (telescope_pathlen.count(id) != 0) {
@@ -187,16 +193,40 @@ int main(int argc, char **argv) {
         throw UsageError("unknown argument: " + arg);
       }
     }
-    if (!transmission || !site_altitude || !seed) {
-      throw UsageError("--transmission, --site-altitude and --seed are required");
+    if (!site_altitude || !seed || (!transmission && !no_extinction)) {
+      throw UsageError("--transmission (or --no-extinction), --site-altitude and --seed are "
+                       "required");
+    }
+    if (no_extinction) {
+      // Geometry only: nothing is thinned or weighted, so these options make no sense.
+      if (transmission || pathlen_given || !telescope_pathlen.empty()) {
+        throw UsageError("--no-extinction cannot be combined with --transmission, --pathlen or "
+                         "--telescope-pathlen");
+      }
+      if (!envelope_files.empty()) {
+        throw UsageError("--no-extinction cannot be combined with --envelope");
+      }
+      if (mode == OutputMode::thinned) {
+        throw UsageError("--no-extinction cannot be combined with --mode thinned");
+      }
+      if (scattering || scattering_points) {
+        throw UsageError("--no-extinction cannot be combined with --scattering or "
+                         "--scattering-points");
+      }
+      if (store_p) {
+        throw UsageError("--no-extinction cannot be combined with --store-p");
+      }
     }
     if (scattering_points && !scattering) {
       throw UsageError("--scattering-points needs --scattering");
     }
 
     PropagatorConfig config;
-    config.transmission.emplace(TransmissionTable::from_file(*transmission, *site_altitude));
-    config.transmission_source = *transmission;
+    config.geometry_only = no_extinction;
+    if (transmission) {
+      config.transmission.emplace(TransmissionTable::from_file(*transmission, *site_altitude));
+      config.transmission_source = *transmission;
+    }
     config.site_altitude_m = *site_altitude;
     config.default_pathlen_m = pathlen;
     config.telescope_pathlen_m = telescope_pathlen;
@@ -209,7 +239,7 @@ int main(int argc, char **argv) {
     }
     config.wavelength_range = wavelengths;
     config.seed = *seed;
-    config.mode = mode;
+    config.mode = mode.value_or(no_extinction ? OutputMode::weighted : OutputMode::thinned);
     config.store_p = store_p;
     if (scattering) {
       config.scattering.enabled = true;
