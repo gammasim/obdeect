@@ -10,10 +10,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifndef _WIN32
 #include <fcntl.h>
 #include <unistd.h>
-#endif
 
 static int failures = 0;
 
@@ -276,7 +274,6 @@ int main(int argc, char **argv) {
     gstrickd_reader_close(reader);
   }
 
-#ifndef _WIN32
   { /* The same through file descriptors. */
     char path[1100];
     int fd;
@@ -295,7 +292,6 @@ int main(int argc, char **argv) {
     close(fd);
     CHECK(gstrickd_reader_open_fd(-1, &reader) == GSTRICKD_ERROR_ARGUMENT);
   }
-#endif
 
   test_arguments(directory);
   test_conformance(argv[2]);

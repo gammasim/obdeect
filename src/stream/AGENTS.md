@@ -36,7 +36,7 @@ the only EventIO code of the chain: `corsika2ps` (CORSIKA IACT output to stream)
 - Plotting is optional (`.[plot]`); matplotlib is never a core dependency.
 - Use Python >=3.14 (as in `pyproject.toml`).
 - The EventIO reader and writer are this project's own code. Never depend on
-  sim_telarray's `eventio.c` or `io_simtel.c`; use them only as test references.
+  sim_telarray's EventIO code; use sim_telarray only as a test reference.
 - The stream format is versioned. Readers reject unknown major versions.
 
 ## Changes and validation

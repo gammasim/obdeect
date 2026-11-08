@@ -11,21 +11,10 @@
 #include <iostream>
 #include <string>
 #include <vector>
-#ifdef _WIN32
-#include <fcntl.h>
-#include <io.h>
-#endif
 
 namespace {
 
 constexpr std::size_t buffer_size = std::size_t{1} << 20;
-
-void set_binary_stdio() {
-#ifdef _WIN32
-  _setmode(_fileno(stdin), _O_BINARY);
-  _setmode(_fileno(stdout), _O_BINARY);
-#endif
-}
 
 // Checks the record order of a raw copy: one stream record first, stream_end
 // last, nothing after stream_end. Records are checked before they are written.
@@ -67,7 +56,6 @@ private:
 
 int main(int argc, char **argv) {
   std::ios::sync_with_stdio(false);
-  set_binary_stdio();
   std::vector<std::string> names;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];

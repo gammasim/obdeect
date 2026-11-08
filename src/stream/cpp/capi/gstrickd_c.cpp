@@ -23,11 +23,7 @@
 #include <variant>
 #include <vector>
 
-#ifdef _WIN32
-#include <io.h>
-#else
 #include <unistd.h>
-#endif
 
 #ifndef GSTRICKD_PACKAGE_VERSION
 #define GSTRICKD_PACKAGE_VERSION "0.0.0"
@@ -94,13 +90,8 @@ protected:
   std::streamsize xsputn(const char *data, std::streamsize n) override {
     std::streamsize done = 0;
     while (done < n) {
-#ifdef _WIN32
-      const auto got =
-          static_cast<long long>(_write(fd_, data + done, static_cast<unsigned int>(n - done)));
-#else
       const auto got =
           static_cast<long long>(::write(fd_, data + done, static_cast<std::size_t>(n - done)));
-#endif
       if (got < 0) {
         if (errno == EINTR) {
           continue;

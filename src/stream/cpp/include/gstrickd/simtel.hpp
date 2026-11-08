@@ -4,14 +4,13 @@
 // CORSIKA output to a photon stream (corsika2ps) and a photon stream to
 // sim_telarray input (ps2simtel). Header-only, standard library only.
 //
-// Camera-frame (C) photons are converted per telescope to the sim_telarray
-// bypass convention exactly as simtools' camera_bunches does
-// (simtools/src/simtools/simtel/photon_bunch_file.py:105-156):
+// Camera-frame (C) photons are converted per telescope to the Bypass_Optics
+// convention of the receiving program:
 //   - single mirror (Bypass_Optics=1): (x, y) -> (x, -y), (cx, cy) -> (cx, -cy);
 //   - dual mirror (Bypass_Optics=2): the camera rotation by camera_rotation_deg,
 //     x' = x cos r + y sin r, y' = y cos r - x sin r (same for cx, cy).
-// The bypass value is an option of the sim_telarray run and is printed by
-// ps2simtel for each converted telescope.
+// The Bypass_Optics value is printed by ps2simtel for each converted telescope;
+// it must be set as an option of the receiving run.
 //
 // Telescope-frame (T) photons are for dual-mirror telescopes only (camera map
 // mirror_class 2), e.g. flashers at the camera firing onto the secondary mirror. Each photon
@@ -19,28 +18,22 @@
 // crossing point of the photon's line with that plane (x, y), the direction (cx, cy), the
 // arrival time t + |s| / c with s the path from the emission point to the plane, and the
 // emission altitude zem = observation_level_m + z. The sign of cz is not written. The
-// sim_telarray run needs Bypass_Optics=1. The camera rotation is not used.
+// receiving run needs Bypass_Optics=1. The camera rotation is not used.
 //
-// Telescopes with C photons get z = 0 in TELPOS (1201). sim_telarray moves each
-// bunch from the observation level to the telescope by ztel * airmass along its
-// direction (sim_telarray.c:2740-2790), which applies to ground-frame bunches
-// only. Camera-frame bunches are already at the camera, so the shift must be
-// zero (simtools shower_route._zero_traced_telescope_heights, :594).
+// Telescopes with C photons get z = 0 in TELPOS (1201), because their photons
+// are already at the camera. Ground-frame telescopes keep their height.
 //
 // A telescope is either listed in the camera map (camera-frame or telescope-frame
 // photons) or ground-frame (not listed). Mixing ground frame with the others, or camera
 // with telescope frame, for one telescope is rejected, because the TELPOS height and the
 // Bypass_Optics value are per telescope for the whole run.
 //
-// Streams without CORSIKA blobs (e.g. from light sources) get the sim_telarray
-// headers RUNH, TELPOS, EVTH, TELOFF, EVTE, INPUTCFG (one line, NSHOW <events>, before
-// RUNE) and RUNE synthesised from the run and
-// event metadata with the words simtools photon_bunch_file.py fills
-// (write_photon_bunches, :379-466; _EVENT_WORDS :49-98). Each synthesised header
-// is reported as a warning. ATMPROF (1216) is written only when a table is given
+// Streams without CORSIKA blobs (e.g. from light sources) get the headers RUNH,
+// TELPOS, EVTH, TELOFF, EVTE, INPUTCFG (one line, NSHOW <events>, before RUNE) and
+// RUNE synthesised from the run and event metadata. Each synthesised header is
+// reported as a warning. ATMPROF (1216) is written only when a table is given
 // (ps2simtel --atmprof): before the first EVTH, with the profile number that EVTH
-// names (99 for synthesised headers). sim_telarray takes the table over the
-// profile number only when the block precedes the first event.
+// names (99 for synthesised headers).
 //
 // Efficiency ledger (docs/format.md): run ledgers apply to every telescope, a
 // telescope ledger to its telescope and overrides the run ledgers per factor.
@@ -92,7 +85,7 @@ struct CameraTelescope {
 // Camera-frame telescopes by telescope id (1-based, sim_telarray numbering).
 using CameraMap = std::map<std::uint32_t, CameraTelescope>;
 
-// sim_telarray Bypass_Optics value for a mirror class (simtools bypass_optics_level).
+// Bypass_Optics value for a mirror class.
 [[nodiscard]] inline int bypass_optics_level(int mirror_class) {
   if (mirror_class != 1 && mirror_class != 2) {
     throw std::invalid_argument("mirror class must be 1 (single) or 2 (dual)");
@@ -171,13 +164,13 @@ inline CameraMap read_camera_map(std::istream &in) {
   return map;
 }
 
-// Profile number of the custom table (CORSIKA ATMOFILE, simtools _PROFILE_ID).
+// Profile number of the custom table (CORSIKA ATMOFILE).
 inline constexpr std::uint32_t custom_profile_id = 99;
 
-// Parses an atmospheric table as CORSIKA and sim_telarray read it (dlufd profile.hpp):
+// Parses an atmospheric table as CORSIKA and sim_telarray read it:
 // '#' starts a comment, blank lines are skipped, and the first four columns are altitude
 // [km a.s.l.], density [g/cm^3], thickness [g/cm^2] and n-1. Further columns are ignored.
-// Altitudes must ascend; 2 to 120 levels (atmo.c MAX_PROFILE). The profile number is
+// Altitudes must ascend; 2 to 120 levels. The profile number is
 // custom_profile_id; the observation level is set by the caller. Throws
 // std::invalid_argument with the line number.
 inline AtmosphereTable read_atmprof_text(std::istream &in, const std::string &file_name) {
@@ -230,7 +223,7 @@ inline AtmosphereTable read_atmprof_text(std::istream &in, const std::string &fi
 
 // Converts camera-frame positions and directions in place to the sim_telarray
 // bypass convention (metres, as in the stream). The frame label is not changed.
-// Arithmetic in double, rounded to float once, as simtools does in float64.
+// Arithmetic in double, rounded to float once.
 inline void camera_to_bypass_convention(PhotonChunk &chunk, const CameraTelescope &camera) {
   if (!(chunk.has(Column::x) && chunk.has(Column::y) && chunk.has(Column::cx) &&
         chunk.has(Column::cy))) {
@@ -332,17 +325,17 @@ inline void telescope_to_bypass_convention(PhotonChunk &chunk, double observatio
 
 namespace simtel_detail {
 
-// Words of the simtools header blocks (1-based CORSIKA word numbers).
+// Words of the synthesised header blocks (1-based CORSIKA word numbers).
 using Words = std::vector<std::pair<int, double>>;
 
 inline constexpr std::size_t block_words = 273;
-inline constexpr double energy_gev = 1e-9; // simtools _ENERGY_GEV
-inline constexpr double date = 261022.0;   // simtools _DATE
+inline constexpr double energy_gev = 1e-9;
+inline constexpr double date = 261022.0;
 inline constexpr double corsika_version = 6.999;
-inline constexpr std::int64_t profile_id = 99;   // simtools _PROFILE_ID
-inline constexpr std::int64_t event_flags = 187; // simtools _EVENT_FLAGS
+inline constexpr std::int64_t profile_id = 99;
+inline constexpr std::int64_t event_flags = 187;
 
-// simtools _EVENT_WORDS: constant words of the event header.
+// Constant words of the event header.
 inline const Words event_constants = {{3, 1.0},
                                       {4, energy_gev},
                                       {10, -1.0},
@@ -986,7 +979,7 @@ private:
     writer_.write(record);
   }
 
-  // RUNH: simtools photon_bunch_file.py write_photon_bunches, run = {2, 3, 4, 5, 6, 17, 18}.
+  // RUNH: run number, date, version, observation level and the energy limits.
   EventioBlock run_header() const {
     using namespace simtel_detail;
     const auto run = static_cast<std::int64_t>(number_field(run_metadata_, "run_number"));
@@ -1017,7 +1010,7 @@ private:
     return make_telpos_block(pos);
   }
 
-  // EVTH: simtools _EVENT_WORDS plus the event number, observation level, run number,
+  // EVTH: the constant event words plus the event number, observation level, run number,
   // and the profile word (77) that refers to the ATMPROF block, which is not written.
   EventioBlock event_header() const {
     using namespace simtel_detail;
@@ -1033,7 +1026,7 @@ private:
     return named_block(iact::evth, static_cast<std::uint32_t>(event_number_), "EVTH", words);
   }
 
-  // TELOFF: one array at zero offset (simtools _telescope_offsets_payload with one reuse).
+  // TELOFF: one array at zero offset.
   EventioBlock array_offsets() const {
     TelOffset off;
     off.toff = 0.0;
@@ -1059,7 +1052,7 @@ private:
     return make_block(iact::inputcfg, 0, 0, std::move(body));
   }
 
-  // RUNE: "RUNE", run number and number of showers (simtools write_photon_bunches).
+  // RUNE: "RUNE", run number and number of showers.
   EventioBlock run_end_block() const {
     using namespace simtel_detail;
     const auto run = static_cast<std::int64_t>(number_field(run_metadata_, "run_number"));

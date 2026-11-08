@@ -155,6 +155,15 @@ sim_telarray QE table is divided by that envelope, declare it:
 $ ps2simtel --camera-map cam.txt --scaled-factor qe run.ps > sim.simtel
 ```
 
+### Developer checks
+
+`scripts/validate_container.sh OUTDIR` is a manual end-to-end check of the codec. In the
+`ghcr.io/gammasim/simtools-dev` container it runs CORSIKA, then
+`corsika2ps | ps2simtel`, and compares the EventIO file written by CORSIKA with the
+round-trip file. It then runs sim_telarray on both files with the same configuration and
+seed and compares the outputs. The container, CORSIKA and sim_telarray are not part of the
+automated tests.
+
 ## CMake package
 
 `cmake --install` puts the headers and a CMake package in the install prefix; a wheel

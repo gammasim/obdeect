@@ -10,10 +10,6 @@
 #include <set>
 #include <string>
 #include <vector>
-#ifdef _WIN32
-#include <fcntl.h>
-#include <io.h>
-#endif
 
 namespace {
 
@@ -25,18 +21,10 @@ void usage() {
                        "[input|-]\n");
 }
 
-void set_binary_stdio() {
-#ifdef _WIN32
-  _setmode(_fileno(stdin), _O_BINARY);
-  _setmode(_fileno(stdout), _O_BINARY);
-#endif
-}
-
 } // namespace
 
 int main(int argc, char **argv) {
   std::ios::sync_with_stdio(false);
-  set_binary_stdio();
   std::string input = "-";
   std::string output = "-";
   std::string camera_path;
