@@ -35,12 +35,12 @@ else()
     message(FATAL_ERROR "dlufd: no installed gstrickd package. Set -Dgstrickd_DIR=<directory of "
                         "gstrickd-config.cmake> (python -m gstrickd --cmake-dir) or pip install gstrickd.")
   endif()
-  message(STATUS "dlufd: no installed gstrickd package, fetching gstrickd 5af0079 (FetchContent)")
+  message(STATUS "dlufd: no installed gstrickd package, fetching gstrickd 73f3447 (FetchContent)")
   include(FetchContent)
   # Headers only, fetched directly and not added as a subdirectory: gstrickd's install
   # rules, tests and tools then stay out of dlufd's build, wheel and installs.
   FetchContent_Populate(gstrickd GIT_REPOSITORY https://github.com/GernotMaier/gstrickd.git
-                        GIT_TAG 5af00790005283f81a46a4a49cfef97cd41556ff)
+                        GIT_TAG 73f34474ab5a9174ead729de07d62527b9d8d60c)
   add_library(gstrickd_fetched INTERFACE)
   target_include_directories(gstrickd_fetched INTERFACE "${gstrickd_SOURCE_DIR}/cpp/include")
   target_compile_features(gstrickd_fetched INTERFACE cxx_std_20)

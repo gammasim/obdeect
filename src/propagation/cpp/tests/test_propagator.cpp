@@ -251,7 +251,7 @@ std::string ground_stream(std::size_t n, std::size_t chunk_rows, int refraction 
 // Ledger record that follows the run record (first one), or nullptr.
 const gstrickd::Metadata *first_ledger(const std::vector<gstrickd::Record> &records) {
   for (const auto &record : records) {
-    if (record.type == RecordType::ledger) {
+    if (record.type == RecordType::efficiency_status) {
       return &record.metadata;
     }
   }
@@ -296,7 +296,7 @@ void test_ledger_layout() {
   }
   CHECK(records[0].type == RecordType::stream);
   CHECK(records[1].type == RecordType::run);
-  CHECK(records[2].type == RecordType::ledger);
+  CHECK(records[2].type == RecordType::efficiency_status);
   CHECK(records[3].type == RecordType::event);
   const auto *ledger = first_ledger(records);
   CHECK(ledger != nullptr);
@@ -385,7 +385,7 @@ void test_never_apply_twice() {
   const auto run_then_ledger = [](const gstrickd::Metadata &ledger) {
     return make_stream([&](gstrickd::Writer &writer) {
       writer.write_metadata(RecordType::run, run_keys(0));
-      writer.write_metadata(RecordType::ledger, ledger);
+      writer.write_metadata(RecordType::efficiency_status, ledger);
       writer.write_metadata(RecordType::event, event_keys());
       writer.write_metadata(RecordType::event_end, {});
       writer.write_metadata(RecordType::run_end, {});
