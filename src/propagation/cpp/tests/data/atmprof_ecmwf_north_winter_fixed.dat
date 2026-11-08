@@ -1,5 +1,5 @@
-# Copied verbatim from sim_telarray/cfg/CTA/atmprof_ecmwf_north_winter_fixed.dat (sim_telarray ce43a06).
-# Used as test data for dlufd (CORSIKA atmo.c reference and obdeect timing). Do not edit.
+# ECMWF north winter profile in atmprof format. Test data for dlufd (reference comparison and
+# timing). Do not edit.
 #
 #
 # ----------------------------------------------------------------------------------------

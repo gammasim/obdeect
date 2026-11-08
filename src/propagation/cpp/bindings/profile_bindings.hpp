@@ -54,7 +54,7 @@ inline void bind_profile(nb::module_ &module) {
   nb::class_<AtmosphereProfile>(module, "AtmosphereProfile")
       .def(nb::new_([](const std::string &path) { return AtmosphereProfile::from_file(path); }),
            nb::arg("path"),
-           "Read a CORSIKA/sim_telarray atmprof table (altitude km, density, "
+           "Read an atmprof table (altitude km, density, "
            "thickness, n-1).")
       .def_prop_ro("levels", &AtmosphereProfile::levels)
       .def_prop_ro("bottom_m", &AtmosphereProfile::bottom_m)
@@ -64,19 +64,19 @@ inline void bind_profile(nb::module_ &module) {
           [](const AtmosphereProfile &p, const ConstArray &h) {
             return map_values(h, [&p](double x) { return p.density(x); });
           },
-          nb::arg("height_m"), "Density [g/cm^3] at heights [m a.s.l.] (atmo.c rhofx).")
+          nb::arg("height_m"), "Density [g/cm^3] at heights [m a.s.l.] (spline table lookup).")
       .def(
           "thickness",
           [](const AtmosphereProfile &p, const ConstArray &h) {
             return map_values(h, [&p](double x) { return p.thickness(x); });
           },
-          nb::arg("height_m"), "Thickness [g/cm^2] at heights [m a.s.l.] (atmo.c thickx).")
+          nb::arg("height_m"), "Thickness [g/cm^2] at heights [m a.s.l.] (spline table lookup).")
       .def(
           "refractive_index_minus_one",
           [](const AtmosphereProfile &p, const ConstArray &h) {
             return map_values(h, [&p](double x) { return p.refractive_index_minus_one(x); });
           },
-          nb::arg("height_m"), "n-1 at heights [m a.s.l.] (atmo.c refim1x).")
+          nb::arg("height_m"), "n-1 at heights [m a.s.l.] (spline table lookup).")
       .def(
           "group_index",
           [](const AtmosphereProfile &p, double observation_level_m) {
@@ -88,7 +88,7 @@ inline void bind_profile(nb::module_ &module) {
   nb::class_<RefractionTables>(module, "RefractionTables")
       .def(nb::init<AtmosphereProfile, double>(), nb::arg("profile"),
            nb::arg("observation_level_m"),
-           "Refraction tables of atmo.c for a profile and observation level [m a.s.l.].")
+           "Refraction tables for a profile and observation level [m a.s.l.].")
       .def_prop_ro("etadsn", &RefractionTables::etadsn)
       .def_prop_ro("observation_level_m",
                    [](const RefractionTables &t) { return t.observation_level_cm() / 100.; });

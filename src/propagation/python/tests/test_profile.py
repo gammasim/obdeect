@@ -28,7 +28,7 @@ def tables(profile):
     return dlufd.RefractionTables(profile, OBSERVATION_LEVEL_M)
 
 
-def test_profile_reads_corsika_table(profile):
+def test_profile_reads_atmprof_table(profile):
     assert profile.levels == 55
     assert profile.bottom_m == 0.0
     assert profile.top_m == 120000.0

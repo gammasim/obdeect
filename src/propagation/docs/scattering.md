@@ -142,25 +142,22 @@ photons = out[1]  # dict of float32 arrays
 - Phase functions: normalisation and mean cosine (`test_scattering.cpp`).
 - Vertical beam, one telescope at 3 km, ground level, 355 nm, molecular only: Monte Carlo
   per-primary mean 1.736507e-8 +- 1.5e-12 against the numerical integral 1.736294e-8
-  (1.4 sigma). The numerical integral without beam attenuation is 1.755344e-8; the ls-beam
-  formula gives 1.755214e-8 (7e-5 relative), so the beam attenuation (1.1 %) is the only
-  difference, as ls-beam neglects it.
+  (1.4 sigma). The numerical integral without beam attenuation is 1.755344e-8; the sum over
+  beam steps (below) gives 1.755214e-8 (7e-5 relative), so the beam attenuation (1.1 %) is the
+  only difference, as the sum neglects it.
 - Example table, aerosol and molecular, 355 nm, 128 points: MC 4.041856e-7 +- 4.7e-12
   against the integral 4.041797e-7 (1.3 sigma).
 - Chunk splits give bit-identical output; zero optical depth gives no photons.
 
-## ls-beam correspondence
+## Sum over beam steps
 
-`sim_telarray/LightEmission/ls-beam.cc`: the emitted photon density per step is
-`nphot_per_cm * hscale * steplength_cm` with `hscale = exp(-z/7500 m)` (`ls-beam.cc:314`),
-emitted with the Rayleigh angular distribution (`IactLightEmission.cc:1818-1836`, the
-tabulated form of (3/16 pi)(1 + cos^2) integrated over azimuth), and each photon reaches the
-sphere with the sphere solid angle. ls-beam neglects the attenuation of the laser beam before
-the scattering point. The test ports this sum (1 m steps) and matches the analytic integral
-without attenuation to 1e-4.
+A second check sums the expected photons per primary over beam steps of 1 m: the density per
+step is `nphot_per_cm * hscale * steplength_cm` with `hscale = exp(-z/7500 m)`, the angular
+distribution is Rayleigh, (3/16 pi)(1 + cos^2) integrated over azimuth, and each photon reaches
+the sphere with the sphere solid angle. The sum neglects the attenuation of the beam before the
+scattering point; it matches the analytic integral without attenuation to 1e-4.
 
 ## References
 
 - `cpp/include/dlufd/scattering.hpp`, `python/dlufd/scattering.py`.
-- sim_telarray `LightEmission/ls-beam.cc`, `LightEmission/IactLightEmission.cc`.
 - Transmission table and optical depths: [extinction](extinction.md).

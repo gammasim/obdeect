@@ -619,7 +619,7 @@ def test_pathlen_default_and_override(tmp_path):
     records = read_records(out.read_bytes())
     assert list(_ledger(records)["atmosphere.pathlen_m"]) == [28.0, 0.0]
 
-    # Acceptance of each row against sim_telarray's formula with od2focus = tau(h + l) - tau(h).
+    # Acceptance of each row with od_focus = tau(h + l) - tau(h).
     table = dlufd.TransmissionTable(str(TABLE_PATH), SITE_M)
     for telescope, pathlen in ((1, 28.0), (2, 0.0)):
         lam = _photon_block(records, telescope, "wavelength")

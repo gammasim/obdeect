@@ -1,4 +1,4 @@
-"""Atmospheric extinction against sim_telarray reference values and photon statistics."""
+"""Atmospheric extinction against reference values and photon statistics."""
 
 import math
 from pathlib import Path
@@ -13,9 +13,9 @@ OBSERVATION_LEVEL_M = 2000.0
 TELESCOPE_ALTITUDE_M = 2030.0
 PATHLEN_M = 28.0
 
-# (lambda_nm, zem_m, airmass, transmission) from the simtools Python port of sim_telarray's
-# transmission lookup (simtools/src/simtools/simtel/shower_transmission.py), obs 2000 m,
-# telescope 2030 m, pathlen 28 m; same values as cpp/tests/test_transmission.cpp.
+# (lambda_nm, zem_m, airmass, transmission) from an independent implementation of the
+# transmission lookup, obs 2000 m, telescope 2030 m, pathlen 28 m; same values as
+# cpp/tests/test_transmission.cpp.
 REFERENCE = [
     (300, 2000.0, 1.0, 0.98806406601046559),
     (300, 2000.0, 1.7, 0.98375386766848683),
@@ -147,8 +147,8 @@ def test_reference_transmission(table):
     assert relative.max() <= 1e-6
 
 
-def test_reference_transmission_with_od2focus_from_table(table):
-    # sim_telarray's od2focus for a 28 m path is tau(h + 28 m) - tau(h), taken from the table.
+def test_reference_transmission_with_od_focus_from_table(table):
+    # od_focus for a 28 m path is tau(h + 28 m) - tau(h), taken from the table.
     points = np.array(REFERENCE, dtype=np.float64)
     lam, zem, airmass, expected = points.T
     od_tel = np.array([table.optical_depth(lm, TELESCOPE_ALTITUDE_M) for lm in lam])
@@ -271,7 +271,7 @@ def test_non_integral_or_non_finite_wavelength_rejected(table, bad):
 
 @pytest.mark.parametrize("lambda_nm", [1000.0, 1e10])
 def test_wavelength_at_or_above_max_is_dropped(table, lambda_nm):
-    # sim_telarray never traces photons at or above MAX_LAMBDA; no int conversion overflows.
+    # Photons at or above 1000 nm are dropped; no int conversion overflows.
     columns = _photons(100, np.random.default_rng(7))
     columns["wavelength"] = np.full(100, lambda_nm, dtype=np.float32)
     thinned = _apply(table, columns, weighted=False)
