@@ -147,6 +147,9 @@ public:
   // level, for od_tel above 1000 and for a total depth above 100.
   template <class T>
   [[nodiscard]] T transmission2(T wavelength_nm, T zem_m, T airmass, T od_tel, T od_focus) const {
+    if (!std::isfinite(static_cast<double>(zem_m))) {
+      throw std::invalid_argument("height must be finite");
+    }
     if (static_cast<double>(zem_m) < 1000.0 * h2_km_ ||
         static_cast<double>(od_tel) > max_telescope_depth) {
       (void)row_of(static_cast<double>(wavelength_nm)); // validates the wavelength
@@ -270,8 +273,9 @@ private:
       }
       ++rows_;
     }
-    if (heights_km.size() > max_table_heights) {
-      throw std::invalid_argument("transmission table: at most 100 heights are supported");
+    if (heights_km.size() + 1 > max_table_heights) { // H2 counts as a height
+      throw std::invalid_argument(
+          "transmission table: at most 100 heights (H2 and H1) are supported");
     }
     if (!have_header || heights_km.empty() || rows_ == 0) {
       throw std::invalid_argument("transmission table needs a header with H2 and H1 and data rows");

@@ -22,6 +22,10 @@
 
 namespace dlufd {
 
+class RefractionTables;
+template <class T>
+[[nodiscard]] bool bend(const RefractionTables &tables, T height_m, T &cx, T &cy, T &x, T &y, T &t);
+
 class RefractionTables {
 public:
   static constexpr int terms = 6; // order of the expansion in s_e * delta
@@ -72,6 +76,9 @@ public:
     return profile_.index_moment_cm(h_cm, power) - moment_obs_[static_cast<std::size_t>(power)];
   }
 
+private:
+  template <class T> friend bool bend(const RefractionTables &, T, T &, T &, T &, T &, T &);
+
   // Coefficient of nu_e^a * M_b in the expansion of (nu_e - nu)^k (1 + nu)^m, m = -k (position)
   // or 1 - k (time), truncated at total degree `terms`.
   [[nodiscard]] double position_coefficient(int k, int a, int b) const {
@@ -83,7 +90,6 @@ public:
                 [static_cast<std::size_t>(b)];
   }
 
-private:
   static constexpr std::size_t dim = terms + 1;
   using Table = std::array<std::array<std::array<double, dim>, dim>, dim>;
 

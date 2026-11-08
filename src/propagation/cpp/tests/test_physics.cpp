@@ -289,6 +289,11 @@ void test_public_argument_validation() {
   CHECK(throws_invalid([&] { (void)tables.moment(1e5, -1); }));
   CHECK(throws_invalid([&] { (void)tables.moment(1e5, 7); }));
   CHECK(throws_invalid([&] { (void)tables.moment(nan, 1); }));
+  CHECK(throws_invalid([&] { (void)dlufd::airmass<double>(1.1, 0.); }));
+  CHECK(throws_invalid([&] { (void)dlufd::airmass<double>(nan, 0.); }));
+  CHECK(dlufd::airmass<double>(1., 0.) == dlufd::unlimited_airmass);
+  const dlufd::TransmissionTable open("# H2= 2.000, H1= 3.000\n400 0.5\n", 2000.);
+  CHECK(throws_invalid([&] { (void)open.transmission<double>(1500., nan, 1.); }));
   CHECK(throws_invalid([&] { (void)dlufd::table_wavelength(400.5); }));
   CHECK(throws_invalid([&] { (void)dlufd::table_wavelength(-1.); }));
   CHECK(dlufd::table_wavelength(1e10) == -1);
@@ -309,9 +314,9 @@ void test_table_header_comments() {
   const dlufd::TransmissionTable table(
       "# H2= 2.000, H1= 3.000 4.000 # heights\n400 0.1 0.2 # first row\n401 0.1 0.2\n", 2000.0);
   CHECK(table.last_wavelength_nm() == 401);
-  // At most 100 heights.
+  // At most 100 heights including H2.
   std::string header = "# H2= 2.000, H1=", row = "400";
-  for (int i = 1; i <= 101; ++i) {
+  for (int i = 1; i <= 100; ++i) { // 100 H1 plus H2
     header += " " + std::to_string(2.0 + 0.1 * i);
     row += " 0.5";
   }

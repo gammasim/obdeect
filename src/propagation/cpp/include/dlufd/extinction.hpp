@@ -8,6 +8,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -16,6 +17,9 @@ namespace dlufd {
 // Plane-parallel airmass 1 / |cz| of a downward photon; unlimited_airmass for a horizontal one.
 template <class T> [[nodiscard]] T airmass(T cx, T cy) {
   const T cz2 = T(1) - cx * cx - cy * cy;
+  if (!std::isfinite(cz2) || cz2 < -T(4) * std::numeric_limits<T>::epsilon()) {
+    throw std::invalid_argument("direction cosines must satisfy cx^2 + cy^2 <= 1");
+  }
   return cz2 > T(0) ? T(1) / std::sqrt(cz2) : static_cast<T>(unlimited_airmass);
 }
 
