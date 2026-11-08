@@ -1,6 +1,6 @@
 # dlamb-night-sky
 
-Night-sky background photons on one telescope sphere in a cone about the zenith, sky frame.
+Night-sky background photons on one telescope sphere in a cone about the downward viewing axis (0,0,-1), sky frame.
 Writer B, producer `dlamb-night-sky`; source in [background](background.md).
 
 ## Options
@@ -35,7 +35,7 @@ bunchsize)`; mean bunches `photons / b`; seed = `--seed`; rows written with `w =
 the origin with radius `r`; `wavelength_min/max` from the spectrum range. Run extra keys:
 `viewcone_deg` (f64), `background` (string `night sky`). `atmosphere_id` = `-A`.
 
-`cos(theta)` (angle from the zenith direction) is uniform in `[cos v, 1]`; all positions lie at
+`cos(theta)` (angle from the downward axis (0,0,-1); photons travel with `cz <= -cos v`) is uniform in `[cos v, 1]`; all positions lie at
 distance `r` from the origin.
 
 ## Acceptance (`test_night-sky`)

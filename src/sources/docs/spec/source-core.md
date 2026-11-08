@@ -8,7 +8,7 @@ Headers `dlamb/source.hpp`, `streams.hpp`, `vec3.hpp`. Namespace `dlamb`.
   returns `(e1, e2)`: `e1 = normalise(n x (1,0,0))` if `|n.x| < 0.9` else `normalise(n x
   (0,1,0))`, `e2 = n x e1` (right-handed). The basis choice fixes the azimuth zero point; it is
   part of the contract only for tests that compare azimuths with this definition.
-- `Emitter{position, pointing (unit), angular}` (default pointing (0,0,-1), Isotropic).
+- `Emitter{position, pointing (unit), angular}` (default pointing (0,0,+1), Isotropic).
 - `Star{towards_source (unit, z>0), distance_m (default +inf), disk_radius_m, disk_z_m, start_z_m}`.
 - Targets: `DiscTarget{centre, normal (unit), radius_m}`, `SphereTarget{centre, radius_m}`,
   `Target = monostate | DiscTarget | SphereTarget`.
@@ -102,4 +102,4 @@ start plane: `target + direction * ((start_z - target.z)/direction.z)`. Time add
 `(|start - position| - distance)/c`. Test: source at 20 m, direction (0.6, 0, 0.8), disc centre
 height 1.5, start plane 30: start at (12, 0, 17.5), `t = -20/c`.
 
-Frame is stored unchanged in the chunk (a star in frame T keeps `z = start_z`).
+The frame is stored unchanged in the chunk. A plane-wave star or a point source above the start plane starts at `z = start_z` (in its frame, e.g. T); a point source at or below the start plane starts at its own position.
