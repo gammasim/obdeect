@@ -85,7 +85,7 @@ for heights above `--observation-level` (= H2): every altitude of the source, ei
 the lowest 6 km above the observation level and points 10 m to 500 m above it. The absolute
 offset of $c$ does not matter. At the grid heights $\tau$ reproduces the source exactly; between
 them dlufd interpolates in $\log_{10} h$ instead of $h$, which differs by less than 1 % of
-$\tau$. If the grid would exceed the 100 heights a table can hold, coarser steps are used, or the table is rejected. The observation level must lie inside the altitude range of the source and above 0 m.
+$\tau$. If the grid would exceed the 100 heights (H2 included) a table can hold, coarser steps are used, or the table is rejected. The observation level must lie inside the altitude range of the source and above 0 m.
 
 | `--format` | layout | wavelengths |
 |---|---|---|

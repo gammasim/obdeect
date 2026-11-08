@@ -202,5 +202,5 @@ def test_too_many_heights_rejected_or_coarsened(tmp_path):
     source.write_text(rows, encoding="utf-8")
     out = tmp_path / "tall.dat"
     convert_table(source, out, format="kascade", observation_level_m=OBSERVATION_M)
-    assert len(heights_of(out)) <= 100
+    assert len(heights_of(out)) < 100  # H2 takes one of the 100 slots
     TransmissionTable(str(out), OBSERVATION_M)

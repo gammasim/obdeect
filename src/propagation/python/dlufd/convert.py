@@ -29,7 +29,7 @@ FORMATS: dict[str, float | None] = {
     "modtran5": 205.0,
 }
 
-MAX_HEIGHTS = 100  # most heights of a dlufd table
+MAX_HEIGHTS = 100  # most heights of a dlufd table, H2 included
 NEAR_OFFSETS_KM = (0.01, 0.02, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5)
 
 # corsika-atmabs: heights 0, 1, ..., 50 km per wavelength.
@@ -142,11 +142,11 @@ def height_grid_km(altitude_km: np.ndarray, observation_km: float) -> np.ndarray
             grid.extend(low + (high - low) * k / parts for k in range(1, parts + 1))
         near = [observation_km + offset for offset in NEAR_OFFSETS_KM if parts_low > 1]
         grid = [*(h for h in near if h < grid[0]), *grid]
-        if len(grid) <= MAX_HEIGHTS:
+        if len(grid) < MAX_HEIGHTS:  # one slot is H2
             return np.array(grid)
     raise ValueError(
         f"the table has {len(knots) - 1} altitudes above the observation level; "
-        f"at most {MAX_HEIGHTS} heights are supported"
+        f"at most {MAX_HEIGHTS - 1} heights above it are supported"
     )
 
 
