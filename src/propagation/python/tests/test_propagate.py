@@ -617,7 +617,7 @@ def test_pathlen_default_and_override(tmp_path):
         telescope_pathlen_m={2: 0.0},
     )
     records = read_records(out.read_bytes())
-    assert _ledger(records)["atmosphere.pathlen_m"] == [28.0, 0.0]
+    assert list(_ledger(records)["atmosphere.pathlen_m"]) == [28.0, 0.0]
 
     # Acceptance of each row against sim_telarray's formula with od2focus = tau(h + l) - tau(h).
     table = dlufd.TransmissionTable(str(TABLE_PATH), SITE_M)
@@ -653,7 +653,7 @@ def test_pathlen_changes_acceptance(tmp_path):
     p_without = _photon_block(read_records(without.read_bytes()), 1, "p")
     assert p_with.shape == p_without.shape
     assert np.abs(p_with - p_without).max() > 1e-5
-    assert _ledger(read_records(without.read_bytes()))["atmosphere.pathlen_m"] == [0.0, 0.0]
+    assert list(_ledger(read_records(without.read_bytes()))["atmosphere.pathlen_m"]) == [0.0, 0.0]
 
 
 @pytest.mark.parametrize(
@@ -731,7 +731,7 @@ def test_executable_pathlen_matches_api(tmp_path):
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
     assert cli_out.read_bytes() == api_out.read_bytes()
-    assert _ledger(read_records(cli_out.read_bytes()))["atmosphere.pathlen_m"] == [28.0, 0.0]
+    assert list(_ledger(read_records(cli_out.read_bytes()))["atmosphere.pathlen_m"]) == [28.0, 0.0]
 
 
 @pytest.mark.parametrize(
