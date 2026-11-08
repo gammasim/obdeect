@@ -20,6 +20,7 @@ _EXPORTS = {
     "propagation_time_ns": "dlufd.profile",
     "refract": "dlufd.profile",
     "propagate": "dlufd.propagation",
+    "convert_table": "dlufd.convert",
 }
 __all__ = [*_EXPORTS, "__version__"]
 

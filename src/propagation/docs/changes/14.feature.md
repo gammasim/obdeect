@@ -1,0 +1,1 @@
+Converter `dlufd-convert-table` and `dlufd.convert_table` for older extinction tables (cumulative vertical optical depth in 5 nm steps: blocks per wavelength, or a matrix of altitude rows) to the dlufd transmission-table format.
