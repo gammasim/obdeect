@@ -1,9 +1,9 @@
 #pragma once
 
-// Buffered std::streambuf over the standard input file descriptor. Each read returns what the
-// pipe has (partial reads), so a pipeline streams. std::cin is much slower for binary input
-// on some standard libraries (libc++ reads it one character at a time after
-// sync_with_stdio(false)), so the "-" input of the tools uses this buffer.
+// Buffered std::streambuf over a file descriptor (default: standard input). Each read returns what
+// the pipe has (partial reads), so a pipeline streams. std::cin is much slower for binary input on
+// some standard libraries (libc++ reads it one character at a time after sync_with_stdio(false)),
+// so the "-" input of the tools uses this buffer.
 
 #include <cerrno>
 #include <cstddef>
@@ -20,7 +20,8 @@ namespace gstrickd {
 
 class StdinBuffer : public std::streambuf {
 public:
-  explicit StdinBuffer(std::size_t size = std::size_t{1} << 20) : buffer_(size) {
+  explicit StdinBuffer(std::size_t size = std::size_t{1} << 20, int fd = 0)
+      : buffer_(size), fd_(fd) {
     char *end = buffer_.data() + buffer_.size();
     setg(end, end, end);
   }
@@ -33,9 +34,9 @@ protected:
     for (;;) {
 #ifdef _WIN32
       const auto n = static_cast<long long>(
-          _read(0, buffer_.data(), static_cast<unsigned int>(buffer_.size())));
+          _read(fd_, buffer_.data(), static_cast<unsigned int>(buffer_.size())));
 #else
-      const auto n = static_cast<long long>(::read(0, buffer_.data(), buffer_.size()));
+      const auto n = static_cast<long long>(::read(fd_, buffer_.data(), buffer_.size()));
 #endif
       if (n > 0) {
         setg(buffer_.data(), buffer_.data(), buffer_.data() + n);
@@ -51,6 +52,7 @@ protected:
 
 private:
   std::vector<char> buffer_;
+  int fd_;
 };
 
 } // namespace gstrickd

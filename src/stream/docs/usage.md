@@ -170,3 +170,69 @@ Configure with `-Dgstrickd_DIR=$(python -m gstrickd --cmake-dir)`, or with
 The version is defined once. Wheels and sdists take it from the git tag (setuptools-scm,
 passed by scikit-build-core as `SKBUILD_PROJECT_VERSION`). Other builds take the newest
 `v*` tag, or 0.0.0 without one. CMake derives `project()` and the C++ `version.hpp` from it.
+
+## Using gstrickd from other languages
+
+`libgstrickd_c` exposes the reader and writer through a plain C ABI
+(`gstrickd/gstrickd.h`, `gstrickd::gstrickd_c` in the CMake package), so Rust (`bindgen`
+or hand-written `extern "C"`), Julia (`ccall`) or Go (cgo) can use it. Every returned
+pointer, including the photon columns, belongs to the reader and is valid until the next
+`gstrickd_reader_next()`; nothing is copied. Errors are negative codes with a message in
+`gstrickd_last_error()`. Build scripts find the files with `python -m gstrickd --include-dir`,
+`--lib-dir` and `--cmake-dir`.
+
+A ray tracer in Python reads ground-frame photons and writes camera-frame photons:
+
+```python
+import numpy as np
+from gstrickd.stage import transform
+
+def trace(telescope_id, columns, metadata):
+    # columns: x, y, cx, cy, t, w, ... as float32 arrays (ground frame, metres)
+    x, y = columns["x"], columns["y"]
+    hit = x**2 + y**2 < 12.0**2                  # your optics here
+    out = {name: values[hit] for name, values in columns.items()}
+    out["x"], out["y"] = out["x"] * 0.01, out["y"] * 0.01   # focal plane
+    return out                                   # float32 arrays of equal length
+
+transform("ground.ps", "camera.ps", trace, stage_id=0x444C0010, frame_out="camera",
+          ledger={"mirror": {"state": "applied", "source": "my-model-v1"}})
+```
+
+`transform` copies all other records unchanged (records of unknown type are dropped), sets the frame of the output chunks and
+telescope records, and appends one `ledger` record per run (it refuses a factor that is
+`applied` in any input ledger).
+
+The same in C (error handling shortened):
+
+```c
+#include <gstrickd/gstrickd.h>
+
+gstrickd_reader *in;  gstrickd_writer *out;
+gstrickd_reader_open("ground.ps", &in);
+gstrickd_writer_open("camera.ps", "my-tracer", &out);
+int type;
+while (gstrickd_reader_next(in, &type) == GSTRICKD_OK) {
+  if (type == GSTRICKD_RECORD_PHOTONS) {
+    uint32_t telescope, rows;  uint64_t first;
+    gstrickd_reader_photons(in, &telescope, NULL, &first, &rows, NULL);
+    const float *columns[GSTRICKD_N_COLUMNS];
+    for (int c = 0; c < GSTRICKD_N_COLUMNS; ++c)
+      columns[c] = gstrickd_reader_column(in, c);        /* NULL if absent; trace here */
+    gstrickd_writer_write_photons(out, telescope, GSTRICKD_FRAME_CAMERA, first, rows, columns);
+  }                       /* copy other records with gstrickd_reader_meta_* / write_record */
+}                         /* the loop ends with GSTRICKD_END, anything else is an error */
+gstrickd_writer_close(out);  gstrickd_reader_close(in);
+```
+
+Link with `-L$(python -m gstrickd --lib-dir) -lgstrickd_c` or, in CMake,
+`target_link_libraries(tracer PRIVATE gstrickd::gstrickd_c)`.
+
+### Conformance streams
+
+`cpp/tests/data/conformance/` holds `valid.ps` (every record type, plus a record of unknown
+type that must be skipped), four invalid streams (bad magic, unknown major version,
+truncated chunk, more than 2^16 rows) and `expected.json` with the decoded content and the
+expected error. `make_conformance.py` regenerates them with the standard library only. An
+independent implementation of [](format.md) should decode `valid.ps` to `expected.json` and
+reject the other files.

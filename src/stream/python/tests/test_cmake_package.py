@@ -29,6 +29,8 @@ def _module_output(option):
 def test_cmake_dir_and_include_dir():
     assert (_module_output("--cmake-dir") / "gstrickd-config.cmake").is_file()
     assert (_module_output("--include-dir") / "gstrickd" / "stream.hpp").is_file()
+    assert (_module_output("--include-dir") / "gstrickd" / "gstrickd.h").is_file()
+    assert any(_module_output("--lib-dir").glob("*gstrickd_c.*"))
 
 
 def test_consumer_builds_and_runs(tmp_path):
@@ -43,5 +45,6 @@ def test_consumer_builds_and_runs(tmp_path):
         capture_output=True,
     )
     subprocess.run([cmake, "--build", str(build)], check=True, capture_output=True)
-    executable = build / ("consumer.exe" if os.name == "nt" else "consumer")
-    subprocess.run([str(executable)], check=True)
+    for name in ("consumer", "consumer_c"):
+        executable = build / (name + (".exe" if os.name == "nt" else ""))
+        subprocess.run([str(executable)], check=True)
