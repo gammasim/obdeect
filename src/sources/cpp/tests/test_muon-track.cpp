@@ -212,8 +212,8 @@ void profile_steps() {
   CHECK(rejected);
 }
 
-// Options that are not ported are rejected.
-void rejects_unported() {
+// Options that are not supported are rejected.
+void rejects_unsupported() {
   muon_track::Options o;
   o.multiple_scattering = true;
   bool rejected = false;
@@ -435,7 +435,7 @@ int main() {
     default_options();
     non_default_options();
     profile_steps();
-    rejects_unported();
+    rejects_unsupported();
     stream_round_trip();
     emission_altitude();
     rejects_large_magnitudes();

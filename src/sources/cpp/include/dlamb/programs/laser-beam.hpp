@@ -1,9 +1,9 @@
 #pragma once
 
-// Port of sim_telarray/LightEmission/ls-beam.cc, changed for the chain (see
-// docs/programs/laser-beam.md): the laser beam's primary photons are emitted along the beam inside
-// the field-of-view cone. The light scattered towards the telescope is not generated here: it is
-// dlufd's single-scattering effect. The original emits the scattered light itself.
+// Laser beam crossing the field of view of a telescope (replaces the earlier ls-beam
+// program; options keep their names; see docs/programs/laser-beam.md): the primary photons are
+// emitted along the beam inside the field-of-view cone. The light scattered towards the
+// telescope is not generated here: it is dlufd's single-scattering effect.
 
 #include "dlamb/sky_sources.hpp"
 #include "dlamb/source.hpp"
@@ -16,10 +16,10 @@
 
 namespace dlamb::programs {
 
-// Options of ls-beam.cc (units as in the original: m and deg).
+// Units: m and deg.
 struct LsBeamOptions {
   std::uint32_t events{1}; // --events (default 1)
-  double step_m{0.1};      // --step (original: steplength_cm = 100 x step)
+  double step_m{0.1};      // --step [m]
   double bunch_size{3.0};  // --bunchsize (values below 1 are used as 1)
   // Replaces --brightness (photons into 4 pi per m at ground, scattered). The primary
   // photons per metre are what dlufd scatters: scattered yield per m = this x beta_s(h)
@@ -29,7 +29,7 @@ struct LsBeamOptions {
   Pulse pulse{Fixed{0.0}};                 // --lightpulse (default Simple:0)
   std::string angular{"Rayleigh"};         // --angular-distribution: recorded for dlufd
   std::int64_t run_number{1};              // --run
-  double altitude_m{2150.0};               // --altitude (original help says 2100, code 2150)
+  double altitude_m{2150.0};               // --altitude [m]
   std::int64_t atmosphere{1};              // --atmosphere: recorded only
   Vec3 laser_position_m{1000.0, 0.0, 0.0}; // --laser-position x,y,z (w.r.t. telescope)
   double laser_theta_deg{60.0};            // --laser-theta (zenith angle of the beam)
@@ -37,11 +37,11 @@ struct LsBeamOptions {
   double telescope_theta_deg{30.0};        // --telescope-theta (zenith of the axis)
   double telescope_phi_deg{0.0};           // --telescope-phi (mathematical azimuth)
   double telescope_radius_m{12.5};         // --telescope-radius
-  double fov_deg{15.0};                    // --fov (diameter of the cone in the original)
+  double fov_deg{15.0};                    // --fov (full opening angle of the cone)
   std::uint64_t seed{1};                   // random seed (new option)
 };
 
-// Intersection of the beam with the field-of-view cone (ls-beam.cc, solve_quadratic_equation).
+// Intersection of the beam with the field-of-view cone (quadratic equation).
 inline bool solve_quadratic(double a, double b, double c, double &x1, double &x2) {
   const double bb = b * b, ac4 = 4.0 * a * c;
   if (a == 0.0) {
@@ -80,7 +80,7 @@ struct BeamGeometry {
     throw std::invalid_argument("laser-beam: field of view must lie in (0, 90) deg");
   const double deg = pi / 180.0;
   const Vec3 dir = direction_from_altitude((90.0 - o.laser_theta_deg) * deg, o.laser_phi_deg * deg);
-  // Frame of the telescope axis: Rotate_z(-phi), then Rotate_y(-theta), as ls-beam.cc.
+  // Frame of the telescope axis: Rotate_z(-phi), then Rotate_y(-theta).
   const Vec3 p = rotate_y(rotate_z(o.laser_position_m, -o.telescope_phi_deg * deg),
                           -o.telescope_theta_deg * deg);
   const Vec3 q = rotate_y(rotate_z(dir, -o.telescope_phi_deg * deg), -o.telescope_theta_deg * deg);

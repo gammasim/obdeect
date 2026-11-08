@@ -1,10 +1,10 @@
 #!/bin/bash
-# Cross-check dlamb-flasher --type dish (default options, 20 events) against sim_telarray LightEmission/ff-1m.cc
+# Cross-check dlamb-flasher --type dish (default options, 20 events) against the reference ff-1m program
 # in the simtools-dev container. Needs the built dlamb tool (build/debug/dlamb-flasher --type dish) and podman.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 : "${WORK:?set WORK to a scratch directory for the cross-check outputs}"
-: "${CFG:?set CFG to the sim_telarray cfg/common directory}"
+: "${CFG:?set CFG to the configuration directory of the reference programs}"
 mkdir -p "$WORK"
 "$ROOT/build/debug/dlamb-flasher" --type dish --events 20 -o "$WORK/dlamb.gst"
 podman run --rm -v "$CFG:/cfg:ro" -v "$WORK:/out" -v "$ROOT/scripts:/scripts:ro" \

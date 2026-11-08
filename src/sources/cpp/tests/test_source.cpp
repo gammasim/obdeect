@@ -221,7 +221,7 @@ void directions_and_frames() {
       CHECK_NEAR(c[Column::z][i], 3.0, 0.0);
     }
   }
-  // Fixed-angle (LightEmission "Cone:") emission is at exactly the given angle.
+  // Fixed-angle (option "Cone:") emission is at exactly the given angle.
   Source cone = lamp_source(1e3);
   const Vec3 axis = normalised({0.2, 0.1, -1.0});
   cone.geometry = Emitter{{0.0, 0.0, 10.0}, axis, FixedAngle{1.0 - std::cos(0.2)}};

@@ -18,7 +18,7 @@ namespace {
 
 constexpr double deg = pi / 180.0;
 
-// E[z] of the sphere point of the original: projected radius r = 1 - sqrt(U), z = sqrt(1 - r^2).
+// E[z] of the sphere point: projected radius r = 1 - sqrt(U), z = sqrt(1 - r^2).
 double mean_zi() {
   const int n = 2000000;
   double s = 0.0;

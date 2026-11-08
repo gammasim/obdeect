@@ -98,8 +98,7 @@ def _kind(section: Mapping[str, Any], table: Mapping[str, tuple[str, ...]], labe
     return kind
 
 
-# Optional parameters and their defaults (delays and mean times are zero, as in
-# LightEmission).
+# Optional parameters and their defaults (delays and mean times are zero).
 _OPTIONAL = {"delay_ns": 0.0, "mean_ns": 0.0}
 
 

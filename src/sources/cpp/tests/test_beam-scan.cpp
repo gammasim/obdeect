@@ -15,7 +15,7 @@ using gstrickd::Column;
 
 namespace {
 
-// Number of scan positions of xyls.cc for a camera radius r (cm): the loops of the original.
+// Number of scan positions for a camera radius r (cm): a line along x, then along y.
 std::uint64_t scan_positions(double x0, double y0, double r) {
   std::uint64_t n = 0;
   for (double x = x0; x < x0 + 0.4 * r; x += 0.001 * r)

@@ -61,7 +61,7 @@ photons that can reach it:
   emitter (general: `I_max / (2 pi integral(I du)) * pi R^2 / h^2`). Sum of weights
   = expected photons on the disc. Efficient when the profile covers the disc.
   Narrow cones off the disc give mostly `w = 0`.
-- `sphere` (LightEmission style): directions sampled in the cone that contains the
+- `sphere`: directions sampled in the cone that contains the
   sphere, `w = 1`, count `photons * (1 - cos theta_max) / 2`. Isotropic emitters only.
 
 ## Random numbers
@@ -73,28 +73,16 @@ Each photon draws from Philox (gstrickd `uniform4`) keyed on
 with the same seed, event and telescope use the same draws: give each independent source
 its own seed.
 
-## Differences to obdeect
+## Conventions
 
-- Same distributions (star and emitter formulas ported; moment tests cite obdeect),
-  but the random numbers differ: obdeect keys on `(seed, photon id)`.
-- The emitter count is `floor(mean)` plus one with probability equal to the fraction
-  (LightEmission rounding), not a Poisson draw. The mean is the same; the weights are
-  not thinned, so there is no Bernoulli step.
-- `sphere` target is new. Photons are gstrickd columns, not obdeect `Ray` objects.
-
-## Differences to LightEmission
-
-- Units are SI-like (m, ns, nm, deg), not cm and bunches of `bsize` photons.
-  Every photon has weight 1 except for disc targets.
-- `photons` is the total number of emitted photons; LightEmission's fiducial-sphere
-  fraction is replaced by an explicit target.
+- The emitter count is `floor(mean)` plus one with probability equal to the fraction,
+  not a Poisson draw. The mean is the same; the weights are not thinned.
+- Units are SI-like (m, ns, nm, deg). Every photon has weight 1 except for disc targets
+  and bunches (`bunch_size` photons per row in the tools).
 - Gaussian pulse parameters are sigma: convert FWHM with `sigma = FWHM / 2.35482`.
-- `Cone:` is `cone`, `FilledCone:` is `filled_cone`, `Parallel` is `cone` with 0 deg,
-  `Gauss-rms:` is `gauss`, `Rayleigh` is `rayleigh`, `Cherenkov:a:b` is
-  `inverse_square`, and `Simple:`, `Gauss:`, `Exp:`, `Complex:` are the pulse kinds.
+- Tool option spellings map to the dictionary kinds: `Cone:` is `cone`, `FilledCone:` is
+  `filled_cone`, `Parallel` is `cone` with 0 deg, `Gauss-rms:` is `gauss`, `Rayleigh` is
+  `rayleigh`, `Cherenkov:a:b` is `inverse_square`, and `Simple:`, `Gauss:`, `Exp:`,
+  `Complex:` are the pulse kinds.
 - Tables are passed as arrays, not read from files.
-- The night-sky background (`dlamb-night-sky`) and moving track sources
-  (`dlamb-muon-track`) are ported; refraction and airlight belong to dlufd. The
-  Gaussian spectrum is missing.
-- The IACT bunch writes (`telout_`, block 1205) are the adapter's job. LightEmission
-  stores `w = -cz`; the mapping to gstrickd is not checked here.
+- Refraction and airlight belong to dlufd. The Gaussian spectrum is not available.

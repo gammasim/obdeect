@@ -1,9 +1,7 @@
 #pragma once
 
-// Shared parts of the sky-level light-source programs (ports of sim_telarray
-// LightEmission): run and event layout of the photon stream, emissions of core
-// sources, and vector helpers with the rotation sign convention of LightEmission
-// (SpaceVect::Rotate_y, Rotate_z).
+// Shared parts of the sky-level light-source programs: run and event layout of the photon
+// stream, emissions of core sources, and vector helpers (rotations about y and z).
 
 #include "dlamb/source.hpp"
 #include "dlamb/streams.hpp"
@@ -27,7 +25,7 @@
 namespace dlamb {
 
 // Telescope key of all sky-frame photons: one emission, identical for every telescope
-// of the run (LightEmission bunches are written once, telescopes only select them).
+// of the run (bunches are written once, telescopes only select them).
 inline constexpr std::uint32_t shared_telescope_key = 0;
 
 // A telescope fiducial sphere in the sky frame (metres; z above the observation level).
@@ -48,7 +46,7 @@ struct SkyRun {
   gstrickd::Metadata extra{};
 };
 
-// Rotations with the sign convention of LightEmission (SpaceVect::Rotate_y/Rotate_z).
+// Rotations about y (x' = x cos a + z sin a) and z (right-handed) by `angle` [rad].
 [[nodiscard]] inline Vec3 rotate_y(Vec3 v, double angle) {
   const double c = std::cos(angle), s = std::sin(angle);
   return {v.x * c + v.z * s, v.y, v.z * c - v.x * s};
@@ -58,7 +56,7 @@ struct SkyRun {
   return {v.x * c - v.y * s, v.x * s + v.y * c, v.z};
 }
 
-// Unit vector of DirectionVect(altitude, azimuth) in LightEmission.
+// Unit vector of the direction with the given altitude and azimuth [rad].
 [[nodiscard]] inline Vec3 direction_from_altitude(double altitude_rad, double azimuth_rad) {
   return {std::cos(altitude_rad) * std::cos(azimuth_rad),
           std::cos(altitude_rad) * std::sin(azimuth_rad), std::sin(altitude_rad)};
@@ -89,7 +87,7 @@ struct SkyRun {
 }
 
 // Emission of a core source for one event. Each row is one bunch of `bunch` photons
-// (LightEmission bunch; gstrickd column w = photons in the bunch). `time_offset_ns`
+// (gstrickd column w = photons in the bunch). `time_offset_ns`
 // is added to the emission time.
 struct SourceEmission {
   Source source{};

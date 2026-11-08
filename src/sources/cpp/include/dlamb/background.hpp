@@ -1,8 +1,8 @@
 #pragma once
 
-// Night-sky background source (port of sim_telarray LightEmission BackgroundLightSource,
-// used by night-sky). Photons start on the sphere of one telescope, on the hemisphere that
-// faces the sky, and travel in a cone of half angle `viewcone_rad` about `pointing`.
+// Night-sky background source (used by night-sky). Photons start on the sphere of one telescope, on
+// the hemisphere that faces the sky, and travel in a cone of half angle `viewcone_rad` about
+// `pointing`.
 
 #include "dlamb/sky_sources.hpp"
 #include "dlamb/source.hpp"
@@ -27,12 +27,12 @@ struct BackgroundSource {
   Vec3 pointing{0.0, 0.0, -1.0};           // viewing axis (photon directions point away from it)
   double viewcone_rad{1.5707963267948966}; // half opening angle of the cone
   Spectrum spectrum{Fixed{400.0}};
-  double pulse_width_ns{0.0}; // width of the flat time distribution (as original)
+  double pulse_width_ns{0.0}; // width of the flat time distribution (flat time distribution)
   double pulse_delay_ns{0.0};
 };
 
 // Mean of bunches for one event and telescope: floor plus one with the fractional
-// probability (LightEmission bunch rounding). Keys as photon counts of dlamb/source.hpp.
+// probability (bunch rounding). Keys as photon counts of dlamb/source.hpp.
 [[nodiscard]] inline std::uint64_t background_count(double mean_bunches, std::uint64_t seed,
                                                     std::uint32_t event, std::uint32_t telescope) {
   const double whole = std::floor(mean_bunches);
@@ -42,8 +42,8 @@ struct BackgroundSource {
 }
 
 // Photon number `index` of one background source. Directions are drawn uniformly in
-// cos(theta) inside the cone; the emission point follows the LightEmission construction
-// (projected radius 1 - sqrt(U) on the unit hemisphere, rotated with Rotate_y, Rotate_z),
+// cos(theta) inside the cone; the emission point has
+// projected radius 1 - sqrt(U) on the unit hemisphere (rotated with Rotate_y, Rotate_z),
 // and its time is shifted by the travel time from the sphere to the observation level.
 [[nodiscard]] inline Photon sample_background(const BackgroundSource &s, std::uint64_t seed,
                                               std::uint32_t event, std::uint32_t telescope,

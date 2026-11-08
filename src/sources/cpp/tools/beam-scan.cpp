@@ -1,6 +1,5 @@
-// dlamb-beam-scan: parallel light beam scanned along two lines, as sim_telarray
-// LightEmission/xyls.cc (test program). Writes a gstrickd photon stream (sky frame) to stdout or -o
-// FILE.
+// dlamb-beam-scan: parallel light beam scanned along two lines. Writes a
+// gstrickd photon stream (sky frame) to stdout or -o FILE.
 
 #include "dlamb/programs/beam-scan.hpp"
 
@@ -16,7 +15,7 @@ namespace {
 const char *usage_text =
     "Usage: dlamb-beam-scan [options]\n"
     "Parallel downward light beam scanned along x and y; photon stream on stdout.\n"
-    "Options (original xyls.cc option, unit, default; defaults from r = 123 cm):\n"
+    "Options (option, unit, default; defaults from r = 123 cm):\n"
     "  -r rcam     camera fiducial radius [cm] (123)\n"
     "  -x xpos     start of the scan [cm] (0.3 x 123)\n"
     "  -y ypos     start of the scan [cm] (0.2 x 123)\n"

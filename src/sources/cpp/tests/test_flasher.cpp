@@ -23,21 +23,21 @@ std::string stream_bytes(const flasher::Options &options) {
   return out.str();
 }
 
-// u = 1 - cos(theta) of the fiducial cone of LightSource::Emit: sin(theta) = R / d
-// (measured on the original ff-1m output, scripts/compare_flasher-dish.sh).
+// u = 1 - cos(theta) of the fiducial cone: sin(theta) = R / d (agrees with the reference
+// program, scripts/compare_flasher-dish.sh).
 double cone_umax(double distance_m, double radius_m) {
   const double sine = radius_m / distance_m;
   return 1.0 - std::sqrt(1.0 - sine * sine);
 }
 
-// Flasher i in metres (ls1..ls4 of ff-gct.cc): z = (356.1075 - 305.03801 + depth) cm.
+// Flasher i in metres (flashers 1 to 4): z = (356.1075 - 305.03801 + depth) cm.
 Vec3 secondary_position(int i, double xy_cm, double depth_cm) {
   const double sx = i < 2 ? 1.0 : -1.0;
   const double sy = i % 2 == 0 ? 1.0 : -1.0;
   return {0.01 * sx * xy_cm, 0.01 * sy * xy_cm, 0.01 * (356.1075 - 305.03801 + depth_cm)};
 }
 
-// dish (ff-1m.cc)
+// dish
 
 void dish_default_options() {
   flasher::Options options;
@@ -162,7 +162,7 @@ void dish_event_numbering_and_repeat() {
   CHECK(last_event == 4);
 }
 
-// secondary (ff-gct.cc)
+// secondary
 
 void secondary_geometry_and_counts() {
   flasher::Options options;

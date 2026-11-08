@@ -1,6 +1,7 @@
 #pragma once
 
-// Port of LightEmission fake-muon.cc: Cherenkov light of a single muon-like track, emitted
+// Cherenkov light of a single muon-like track (replaces the earlier fake-muon program;
+// options keep their names), emitted
 // at sky level (frame sky, altitude above the observation level) and filtered to a
 // telescope sphere at the observation-level origin. Refraction and extinction are applied
 // downstream (dlufd), not here.
@@ -23,45 +24,44 @@
 namespace dlamb::muon_track {
 
 // Refractive index minus one as a function of altitude above the observation level [m]
-// (LightEmission: run.RefIdx(dz)). Linear between nodes, constant outside.
+// Linear between nodes, constant outside.
 struct IndexProfile {
   std::vector<double> altitude_m;
   std::vector<double> index_minus_one;
 };
 
-// Options of fake-muon.cc (line numbers in the original). Lengths in metres, angles in
-// degrees, wavelengths in nanometres.
+// Lengths in metres, angles in degrees, wavelengths in nanometres.
 struct Options {
-  int run_number{1};                    // --run (fake-muon.cc:260)
+  int run_number{1};                    // --run
   std::uint64_t seed{1};                // --seed (new: explicit random seed)
-  std::uint32_t events{1};              // -N, --events (fake-muon.cc:257)
-  double observation_level_m{2150.0};   // -a (fake-muon.cc:239)
-  double telescope_radius_m{15.0};      // -r (fake-muon.cc:240)
-  double impact_x_m{0.0};               // -x (fake-muon.cc:241)
-  double impact_y_m{0.0};               // -y (fake-muon.cc:242)
-  double rscat_m{0.0};                  // --rscat (fake-muon.cc:243); must be 0
-  int nscat{1};                         // --nscat (fake-muon.cc:244); must be 1
-  double h_start_m{3000.0};             // -h (fake-muon.cc:245)
-  double theta_deg{0.0};                // --theta (fake-muon.cc:249)
-  double phi_deg{0.0};                  // --phi (fake-muon.cc:249)
-  double index_minus_one{0.000292};     // -n (fake-muon.cc:250)
-  IndexProfile index_profile{};         // -A (fake-muon.cc:258); empty = constant
-  double bunch_size{5.0};               // -b (fake-muon.cc:247); no effect here
-  double wavelength_min_nm{240.0};      // -l (fake-muon.cc:248)
-  double wavelength_max_nm{1000.0};     // -L (fake-muon.cc:248)
-  double charge{-1.0};                  // -q (fake-muon.cc:251)
-  double beta{1.0};                     // --beta (fake-muon.cc:252)
-  std::optional<double> momentum_gev{}; // -p (fake-muon.cc:252); sets beta, see apply_momentum
-  double mass_gev{0.105658};            // -m (fake-muon.cc:253)
-  int primary_id{6};                    // --primary (fake-muon.cc:262); mu-, as charge -1
-  bool multiple_scattering{false};      // --enable-scatter (fake-muon.cc:259)
+  std::uint32_t events{1};              // -N, --events
+  double observation_level_m{2150.0};   // -a
+  double telescope_radius_m{15.0};      // -r
+  double impact_x_m{0.0};               // -x
+  double impact_y_m{0.0};               // -y
+  double rscat_m{0.0};                  // --rscat; must be 0
+  int nscat{1};                         // --nscat; must be 1
+  double h_start_m{3000.0};             // -h
+  double theta_deg{0.0};                // --theta
+  double phi_deg{0.0};                  // --phi
+  double index_minus_one{0.000292};     // -n
+  IndexProfile index_profile{};         // -A; empty = constant
+  double bunch_size{5.0};               // -b; no effect here
+  double wavelength_min_nm{240.0};      // -l
+  double wavelength_max_nm{1000.0};     // -L
+  double charge{-1.0};                  // -q
+  double beta{1.0};                     // --beta
+  std::optional<double> momentum_gev{}; // -p; sets beta, see apply_momentum
+  double mass_gev{0.105658};            // -m
+  int primary_id{6};                    // --primary; mu-, as charge -1
+  bool multiple_scattering{false};      // --enable-scatter
 };
 
-// Fine-structure constant (fake-muon.cc:256).
+// Fine-structure constant.
 inline constexpr double alpha_fine = 0.0072973526;
 
-// Mass [GeV] and charge of a CORSIKA particle type (port of get_mass_charge,
-// fake-muon.cc:63-179). Unknown types give mass 1.2 GeV and charge 0.
+// Mass [GeV] and charge of a CORSIKA particle type (from the CORSIKA
+// particle table). Unknown types give mass 1.2 GeV and charge 0.
 inline void mass_charge(int type, double &mass, double &charge) {
   charge = mass = 0.0;
   if ((type > 1 && type < 100) || (type > 110 && type < 199)) {
@@ -216,7 +216,7 @@ inline void mass_charge(int type, double &mass, double &charge) {
   return profile;
 }
 
-// Lorentz factor, momentum and energy of the track (fake-muon.cc:404-410). Energy [GeV] is
+// Lorentz factor, momentum and energy of the track. Energy [GeV] is
 // 1e-9 for a photon-like track (beta 1 or no mass).
 [[nodiscard]] inline double energy_gev(const Options &o) {
   if (o.beta < 1.0 && o.mass_gev > 0.0) {
@@ -226,13 +226,13 @@ inline void mass_charge(int type, double &mass, double &charge) {
   return 1e-9;
 }
 
-// Throws std::invalid_argument for options the port cannot or should not run.
+// Throws std::invalid_argument for options that cannot or should not run.
 inline void validate(const Options &o) {
   const auto fail = [](const std::string &message) { throw std::invalid_argument(message); };
   if (o.multiple_scattering)
-    fail("multiple scattering is not ported (needs the density profile; fake-muon.cc:534-589)");
+    fail("multiple scattering is not supported (needs the density profile)");
   if (o.rscat_m != 0.0)
-    fail("--rscat is not supported: the impact randomisation is disabled in fake-muon.cc:468");
+    fail("--rscat is not supported");
   if (o.nscat != 1)
     fail("--nscat must be 1 (each event is used once)");
   if (o.events < 1)
@@ -290,19 +290,17 @@ inline void validate(const Options &o) {
   return p.index_minus_one[i - 1] + f * (p.index_minus_one[i] - p.index_minus_one[i - 1]);
 }
 
-// Photons per metre of track emitted into 4 pi (Frank-Tamm; fake-muon.cc:504 and 594 with
-// the cm to m factor of 100 and the nm/cm factor of 1e7).
+// Photons per metre of track emitted into 4 pi (Frank-Tamm; includes the
+// factor 1e9 for 1/nm to 1/m).
 [[nodiscard]] inline double photons_per_metre(double charge, double sin2_theta, double wl1,
                                               double wl2) {
   return 2.0 * pi * alpha_fine * charge * charge * sin2_theta * (1.0 / wl1 - 1.0 / wl2) * 1e9;
 }
 
 // Track segments of one event (the impact position is the same for all events). Without an
-// index profile the track is one segment with a constant index (LightEmission atmosphere
-// "const", fake-muon.cc:486). With a profile it is cut into 10 m steps, each with the index
-// at its mid-point (fake-muon.cc:529-611). A step with cos(theta) > 1 emits nothing; the
-// original skips it without advancing the track (a bug, not reproduced: the geometry stays
-// consistent here).
+// index profile the track is one segment with a constant index. With a profile it is cut
+// into 10 m steps, each with the index at its mid-point. A step with cos(theta) > 1 emits nothing
+// but the track still advances, so the geometry stays consistent.
 [[nodiscard]] inline std::vector<Track> tracks(const Options &o) {
   validate(o);
   const double theta = o.theta_deg * pi / 180.0, phi = o.phi_deg * pi / 180.0;

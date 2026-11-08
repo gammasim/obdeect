@@ -1,12 +1,12 @@
 #pragma once
 
-// Port of sim_telarray/LightEmission/pixled.cc: an LED in front of selected camera pixels,
-// to test trigger definitions.
+// An LED in front of selected camera pixels, to test trigger definitions. Replaces the
+// earlier pixled program; options keep their names.
 //
-// Geometry: LED at the pixel centre (x, y) of the camera definition, z = 0 (camera plane,
-// dist_cm = 0 in pixled.cc:508), pointing down (parallel to -z, pixled.cc:511, 757). The
-// photons are already on the camera plane, so they are written in the camera frame C,
-// in the pixel-file coordinates (no y flip: sim_telarray and ps2simtel apply it).
+// Geometry: LED at the pixel centre (x, y) of the camera definition, z = 0 (camera plane),
+// pointing down (parallel to -z). The photons are already on the camera plane, so they are
+// written in the camera frame C, in the pixel-file coordinates (no y flip; the adapter
+// to the simulation applies it).
 
 #include "dlamb/programs/stream_output.hpp"
 
@@ -31,7 +31,7 @@ struct PixelPosition {
 };
 
 struct Camera {
-  // Keyed by pixel ID as cam[id] (pixled.cc:175); the file order does not matter.
+  // Keyed by pixel ID as cam[id]; the file order does not matter.
   std::map<int, PixelPosition> pixels;
   std::vector<std::string> triggers; // cleaned trigger-group pixel lists
 };
@@ -43,35 +43,33 @@ struct Use {
   std::vector<int> slaves;
 };
 
-// Options with the names of pixled.cc. Defaults are the values in the code (the --help
-// text says 2500000 photons; the code uses 500, pixled.cc:509).
+// Option names as in the earlier pixled program.
 struct Options {
-  Camera camera;                      // read from --camera-file (pixled.cc:652-667)
-  bool slaves{false};                 // --slaves, pixled.cc:540-545
-  std::string use;                    // --use pixel-list, pixled.cc:583-590
-  int trigger_random{0};              // --use-trg-rand n, pixled.cc:599-607 (0 = off)
-  bool trigger_all{false};            // --use-trg-all, pixled.cc:608-617
-  int require{0};                     // --require n, pixled.cc:618-619 (0 = all pixels)
-  bool random{false};                 // --random n, pixled.cc:620-624 (uses --require n)
-  int events{1};                      // --events, pixled.cc:629-630
-  double photons{500.0};              // --photons [per pixel], pixled.cc:509, 571-572
-  double bunch_size{1.0};             // --bunchsize, pixled.cc:510, 573-574
-  double camera_radius_cm{123.0};     // --camera-radius [cm], pixled.cc:507, 575-576
-  std::string spectrum{"400"};        // --spectrum, pixled.cc:511, 579-580
-  std::string lightpulse{"Simple:0"}; // --lightpulse, pixled.cc:511, 581-582
-  std::string angular{"parallel"};    // pixled.cc:511 (fixed to Parallel in the original)
-  int run_number{1};                  // --run, pixled.cc:512, 625-626
-  double altitude_m{2150.0};          // --altitude [m], pixled.cc:506, 569-570
-  int atmosphere{1};                  // --atmosphere, pixled.cc:512, 627-628 (numbers only)
-  std::uint64_t seed{1};              // new: Philox seed (the original uses the global RNG)
+  Camera camera;                      // read from --camera-file
+  bool slaves{false};                 // --slaves
+  std::string use;                    // --use pixel-list
+  int trigger_random{0};              // --use-trg-rand n (0 = off)
+  bool trigger_all{false};            // --use-trg-all
+  int require{0};                     // --require n (0 = all pixels)
+  bool random{false};                 // --random n (uses --require n)
+  int events{1};                      // --events
+  double photons{500.0};              // --photons [per pixel]
+  double bunch_size{1.0};             // --bunchsize
+  double camera_radius_cm{123.0};     // --camera-radius [cm]
+  std::string spectrum{"400"};        // --spectrum
+  std::string lightpulse{"Simple:0"}; // --lightpulse
+  std::string angular{"parallel"};    // fixed to Parallel
+  int run_number{1};                  // --run
+  double altitude_m{2150.0};          // --altitude [m]
+  int atmosphere{1};                  // --atmosphere (numbers only)
+  std::uint64_t seed{1};              // new: Philox seed (random numbers are counter-based)
 };
 
-// Reads the Pixel and Trigger lines of a sim_telarray camera definition (pixled.cc:139-199).
+// Reads the Pixel and Trigger lines of a camera definition.
 inline Camera read_camera(std::istream &in, bool keep_slaves);
 
 // Trigger or pixel list without the "...of N:" prefix and, unless keep_slaves, without
-// the [..] slave lists (pixled.cc:96-131). The original's copy of the character after a
-// removed [..] group is dropped here; no list depends on it.
+// the [..] slave lists.
 inline std::string clean_trigger_list(const std::string &text, bool keep_slaves) {
   const std::string line = text.substr(0, text.find('\n'));
   std::size_t start = 0;
@@ -148,8 +146,7 @@ inline bool is_digit_at(const std::string &text, std::size_t i) {
 } // namespace detail
 
 // Pixel list such as "3 +5 7[8,9]": pixel ids separated by blanks, '+' for required
-// pixels, [..] for pre-sum slaves, '%' starts a comment (pixled.cc:205-334, simplified:
-// no separate fixed-width buffers). Duplicate ids are skipped with a warning.
+// pixels, [..] for pre-sum slaves, '%' starts a comment. Duplicate ids are skipped with a warning.
 inline std::vector<Use> parse_pixel_list(const std::string &text) {
   std::vector<Use> result;
   std::size_t i = 0;
@@ -219,7 +216,7 @@ inline void validate(const Options &o) {
   }
 }
 
-// Recursive selection of pixel combinations (pixled.cc:424-497): the required pixels plus
+// Recursive selection of pixel combinations: the required pixels plus
 // the next combination of available ones, in increasing order.
 template <class Callback>
 void for_each_combination(const std::vector<std::size_t> &selected,
@@ -238,13 +235,13 @@ void for_each_combination(const std::vector<std::size_t> &selected,
   }
 }
 
-// Sources of all events (pixled.cc:679-916). Pixel lists come from --use, or from trigger
+// Sources of all events. Pixel lists come from --use, or from trigger
 // groups of the camera file (--use-trg-all, --use-trg-rand n). Per list and per event:
 // all pixels (--require 0), or --random n distinct random pixels, or every combination of
 // --require n pixels as one event each. Each lit pixel is one emission from its centre.
 inline std::vector<Event> build_sources(const Options &o) {
   validate(o);
-  const double bunch = o.bunch_size < 1.0 ? 1.0 : o.bunch_size; // IactLightEmission.cc:1514
+  const double bunch = o.bunch_size < 1.0 ? 1.0 : o.bunch_size;
   const double radius_m = 0.01 * o.camera_radius_cm;
   const Angular angular = parse_angular(o.angular);
   const Spectrum spectrum = parse_spectrum(o.spectrum);
@@ -373,7 +370,7 @@ inline RunSetup run_setup(const Options &o) {
   return run;
 }
 
-// Pixel labels of an event in the --list-only format of pixled.cc:443-453.
+// Pixel labels of an event in the --list-only format `(@) id id ...`.
 inline void print_labels(std::ostream &out, const Event &event) {
   auto sorted = event.labels;
   std::sort(sorted.begin(), sorted.end());

@@ -1,6 +1,5 @@
-// dlamb-flasher: flasher photon stream. --type dish (default) is a port of LightEmission/ff-1m.cc,
-// --type secondary a port of LightEmission/ff-gct.cc. Writes a gstrickd stream to stdout or -o
-// FILE.
+// dlamb-flasher: flasher photon stream, --type dish (default) or --type secondary. Writes a
+// gstrickd stream to stdout or -o FILE.
 
 #include "dlamb/programs/flasher.hpp"
 
@@ -17,7 +16,7 @@ namespace {
 
 void usage(std::ostream &out, const char *name) {
   out << "usage: " << name << " [--type dish|secondary] [options]\n"
-      << "Options (default in braces; names as in ff-1m.cc for dish, ff-gct.cc for secondary):\n"
+      << "Options (default in braces; per type):\n"
       << "  --type dish|secondary     dish: flasher above the dish centre lighting the camera;\n"
       << "                            secondary: four camera-corner flashers onto the secondary "
          "{dish}\n"

@@ -21,7 +21,7 @@ namespace dlamb {
 
 inline constexpr double speed_of_light_m_per_ns = 0.299792458;
 
-// A point emitter (LightEmission LightSource, obdeect Emitter). Directions follow the
+// A point emitter (as obdeect Emitter). Directions follow the
 // angular profile about `pointing`; positions and directions are in the source frame.
 struct Emitter {
   Vec3 position{};
@@ -43,8 +43,8 @@ struct Star {
 // Importance targets: only emitted photons that reach the target are generated.
 // DiscTarget keeps every candidate with a weight equal to its probability of reaching
 // the disc (obdeect Emitter); it works with any density-based angular profile.
-// SphereTarget samples directions in the cone that contains the sphere (LightEmission
-// style); it is exact for isotropic emitters only.
+// SphereTarget samples directions in the cone that contains the sphere;
+// it is exact for isotropic emitters only.
 struct DiscTarget {
   Vec3 centre{};
   Vec3 normal{0.0, 0.0, 1.0};
@@ -256,7 +256,7 @@ inline double unchecked_expected_count(const Source &source) {
 }
 
 // Number of photons of one source in one (event, telescope): the expected count rounded
-// up with probability equal to its fractional part (LightEmission rounds bunches so).
+// up with probability equal to its fractional part.
 [[nodiscard]] inline std::uint64_t photon_count(const Source &source, std::uint64_t seed,
                                                 std::uint32_t event, std::uint32_t telescope) {
   const double mean = expected_count(source);

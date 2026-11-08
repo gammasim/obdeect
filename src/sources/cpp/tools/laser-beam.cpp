@@ -1,5 +1,5 @@
-// dlamb-laser-beam: primary photons of a laser beam crossing the field of view of a telescope,
-// as sim_telarray LightEmission/ls-beam.cc (primary light only; scattering is dlufd's job).
+// dlamb-laser-beam: primary photons of a laser beam crossing the field of view of a telescope
+// (primary light only; scattering is dlufd's job).
 // Writes a gstrickd photon stream (sky frame) to stdout or -o FILE.
 
 #include "dlamb/programs/laser-beam.hpp"
@@ -16,7 +16,7 @@ namespace {
 const char *usage_text =
     "Usage: dlamb-laser-beam [options]\n"
     "Primary photons of a laser beam inside the telescope field of view; stream on stdout.\n"
-    "Options (original ls-beam.cc option, unit, default):\n"
+    "Options (option, unit, default):\n"
     "  --events n            events (1)\n"
     "  --step m              step along the beam [m] (0.1)\n"
     "  --bunchsize f         photons per bunch (3; values below 1 are used as 1)\n"
@@ -39,7 +39,7 @@ const char *usage_text =
     "  -o fname              output file (stdout)\n"
     "  --help                this text\n";
 
-// Astronomical azimuth to the mathematical sense, as ls-beam.cc.
+// Astronomical azimuth to the mathematical sense.
 double math_azimuth(double astronomical_deg) {
   return astronomical_deg <= 0.0 ? -astronomical_deg : 360.0 - astronomical_deg;
 }

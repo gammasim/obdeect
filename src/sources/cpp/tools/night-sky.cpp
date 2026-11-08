@@ -1,5 +1,5 @@
-// dlamb-night-sky: night-sky background photons on one telescope sphere, as sim_telarray
-// LightEmission/nsbls.cc. Writes a gstrickd photon stream (sky frame) to stdout or -o FILE.
+// dlamb-night-sky: night-sky background photons on one telescope sphere. Writes a gstrickd photon
+// stream (sky frame) to stdout or -o FILE.
 
 #include "dlamb/programs/night-sky.hpp"
 
@@ -15,7 +15,7 @@ namespace {
 const char *usage_text =
     "Usage: dlamb-night-sky [options]\n"
     "Night-sky background photons on the telescope sphere; photon stream on stdout.\n"
-    "Options (original nsbls.cc option, unit, default):\n"
+    "Options (option, unit, default):\n"
     "  -r, --radius, --telescope-radius rtel_m  fiducial radius [m] (15)\n"
     "  -v, --viewcone deg    half opening angle of the emission cone [deg] (10)\n"
     "  -a, --altitude, --obslev, --observation-level m  observation level [m] (2150)\n"
@@ -26,9 +26,9 @@ const char *usage_text =
     "  --run n               run number (1)\n"
     "  -s, --spectrum s      wavelength [nm] (200..2000) or table file, default\n"
     "                        Benn_LaPalma_sky_converted.lis read from the working directory\n"
-    "                        (copy it from sim_telarray/cfg/common or give -s)\n"
-    "  -w, --pulse-width w   width [ns] of the flat time distribution (0). As the original,\n"
-    "                        the width enters divided by 2.35482\n"
+    "                        (or give -s)\n"
+    "  -w, --pulse-width w   width [ns] of the flat time distribution (0). The width\n"
+    "                        enters divided by 2.35482\n"
     "  -d, --pulse-delay d   delay of emission times [ns] (0)\n"
     "  --seed n              random seed (1, new option)\n"
     "  -o, --output fname    output file (stdout)\n"

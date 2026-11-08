@@ -110,7 +110,7 @@ void one_dimensional_shapes() {
   const ComplexPulse complex{2.0, 1.0, 1.0, 0.5};
   check_moments("complex pulse", 0.5, complex.variance(),
                 [&](std::uint64_t i) { return complex.sample(draw(i)); });
-  // Cherenkov spectrum: density 1/lambda^2 on [300, 600] nm (LightEmission "Cherenkov:").
+  // Cherenkov spectrum: density 1/lambda^2 on [300, 600] nm (option "Cherenkov:").
   const InverseSquare cherenkov{300.0, 600.0};
   const double mean = std::log(2.0) / (1.0 / 300.0 - 1.0 / 600.0);
   CHECK_NEAR(cherenkov.mean(), mean, 1e-9);
