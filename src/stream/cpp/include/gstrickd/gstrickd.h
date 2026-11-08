@@ -23,17 +23,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#if defined(_WIN32)
-#if defined(GSTRICKD_C_BUILDING)
-#define GSTRICKD_C_API __declspec(dllexport)
-#elif defined(GSTRICKD_C_STATIC)
-#define GSTRICKD_C_API
-#else
-#define GSTRICKD_C_API __declspec(dllimport)
-#endif
-#else
 #define GSTRICKD_C_API __attribute__((visibility("default")))
-#endif
 
 #ifdef __cplusplus
 extern "C" {

@@ -268,7 +268,7 @@ void test_invalid_camera_map() {
   }
 }
 
-// Hand-computed with simtools camera_bunches (photon_bunch_file.py:105-156), input
+// Hand-computed, input
 // (x, y) = (0.5, 0.2) m, (cx, cy) = (0.1, -0.2), camera rotation 30 deg:
 //   single mirror: y -> -y, cy -> -cy                 -> (0.5, -0.2), (0.1, 0.2)
 //   dual mirror:   x' = x cos r + y sin r = 0.5 cos30 + 0.2 sin30 = 0.5330127019
