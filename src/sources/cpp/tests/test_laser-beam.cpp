@@ -159,6 +159,21 @@ void clips_intersection_to_laser_start() {
   CHECK_NEAR(g.path_m, std::tan(0.5 * o.fov_deg * deg), 1e-12);
 }
 
+// A beam aimed within the cone never leaves it, so its intersection cannot be finitely sampled.
+void rejects_unbounded_intersection() {
+  LsBeamOptions o;
+  o.laser_position_m = {1.0, 0.0, 0.0};
+  o.laser_theta_deg = 0.0;
+  o.telescope_theta_deg = 0.0;
+  bool threw = false;
+  try {
+    (void)laser_beam_geometry(o);
+  } catch (const std::invalid_argument &error) {
+    threw = std::string(error.what()).find("unbounded intersection") != std::string::npos;
+  }
+  CHECK(threw);
+}
+
 // The field of view must lie in (0, 90) deg: a negative cone is not accepted as its mirror.
 void rejects_fov_outside_range() {
   const auto throws_for = [](double fov) {
@@ -191,6 +206,7 @@ int main() {
     rejects_missing_beam();
     rejects_intersections_behind_laser();
     clips_intersection_to_laser_start();
+    rejects_unbounded_intersection();
     rejects_fov_outside_range();
   });
 }
