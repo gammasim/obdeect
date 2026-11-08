@@ -871,7 +871,7 @@ private:
     }
     if (!telescope_id_known_ || telescope_id_ == 0) {
       throw std::runtime_error("telescope record lacks telescope_id, needed for the efficiency "
-                               "efficiency_status");
+                               "status");
     }
     simtel_detail::check_efficiency_status(run_efficiency_statuses_, telescope_efficiency_statuses_,
                                            telescope_id_, camera_.contains(telescope_id_),

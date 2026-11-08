@@ -39,6 +39,13 @@ Record efficiency_status_of(const std::string &state) {
                             {"qe.source", std::string("test")}});
 }
 
+Record atmosphere_status_of(const std::string &state) {
+  return record_of(RecordType::efficiency_status,
+                   Metadata{{"factors", std::string("atmosphere")},
+                            {"atmosphere.state", state},
+                            {"atmosphere.source", std::string("test")}});
+}
+
 struct Photon {
   float x, y, cx, cy, t, w, zem, lambda;
 };
@@ -302,6 +309,18 @@ void error_cases() {
   std::vector<Record> override_records = stream_records();
   override_records.insert(override_records.begin() + 5, efficiency_status_of("pending"));
   CHECK(throws_error([&] { convert(override_records, options); }));
+
+  // Validate run and telescope transitions independently before applying the override.
+  std::vector<Record> forward = stream_records(1.0F, "");
+  forward.insert(forward.begin() + 2, atmosphere_status_of("applied"));
+  forward.insert(forward.begin() + 2, atmosphere_status_of("envelope"));
+  forward.insert(forward.begin() + 2, atmosphere_status_of("pending"));
+  CHECK(!throws_error([&] { convert(forward, options); }));
+  std::vector<Record> backward = stream_records(1.0F, "");
+  backward.insert(backward.begin() + 2, atmosphere_status_of("pending"));
+  backward.insert(backward.begin() + 2, atmosphere_status_of("envelope"));
+  backward.insert(backward.begin() + 2, atmosphere_status_of("applied"));
+  CHECK(throws_error([&] { convert(backward, options); }));
 }
 
 } // namespace

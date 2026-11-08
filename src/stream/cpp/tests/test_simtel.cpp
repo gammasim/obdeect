@@ -980,7 +980,7 @@ void test_efficiency_status_rules() {
         camera);
   }));
   // dlufd assigns wavelengths and may add scattered photons; both are upstream-only factors.
-  for (const std::string &factor : {"wavelength", "scattering"}) {
+  for (const char *factor : {"wavelength", "scattering"}) {
     CHECK(!throws_error([&] {
       run_adapter(
           efficiency_status_run(Frame::ground, {efficiency_status_of(factor, "applied")}, {}), {});

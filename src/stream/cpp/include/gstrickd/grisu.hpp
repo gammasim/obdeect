@@ -415,16 +415,21 @@ private:
   // The atmosphere must be applied upstream: state of the factor from the run efficiency status
   // records, overridden per factor by the efficiency status records of the telescope.
   void check_atmosphere() {
-    std::string state;
-    for (const auto *efficiency_statuses :
-         {&run_efficiency_statuses_, &telescope_efficiency_statuses_}) {
-      for (const Metadata &efficiency_status : *efficiency_statuses) {
-        const auto states = simtel_detail::efficiency_status_states(efficiency_status);
-        if (const auto it = states.find("atmosphere"); it != states.end()) {
-          state = it->second;
-        }
-      }
+    simtel_detail::EfficiencyStates run_states;
+    for (const Metadata &status : run_efficiency_statuses_) {
+      simtel_detail::apply_efficiency_status_update(run_states, status, "run status records");
     }
+    simtel_detail::EfficiencyStates telescope_states;
+    for (const Metadata &status : telescope_efficiency_statuses_) {
+      simtel_detail::apply_efficiency_status_update(telescope_states, status,
+                                                    "telescope " + std::to_string(telescope_id_) +
+                                                        " status records");
+    }
+    const auto telescope_state = telescope_states.find("atmosphere");
+    const auto run_state = run_states.find("atmosphere");
+    const std::string state = telescope_state != telescope_states.end()
+                                  ? telescope_state->second
+                                  : (run_state != run_states.end() ? run_state->second : "");
     if (state != "applied") {
       throw std::runtime_error(
           "ps2grisu: efficiency status of telescope " + std::to_string(telescope_id_) +
