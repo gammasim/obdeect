@@ -53,8 +53,10 @@ inline void validate(const Track &t) {
   validate_spectrum(t.spectrum);
 }
 
-// Arc of azimuths from the point at distance s along the track.
-inline TrackArc track_arc(const Track &t, double s) {
+namespace detail {
+
+// Arc without validation (for loops over a validated track).
+inline TrackArc arc_at(const Track &t, double s) {
   const Vec3 point = t.start + t.direction * s;
   const Vec3 to_centre = t.target.centre - point;
   const double distance = norm(to_centre);
@@ -82,6 +84,14 @@ inline TrackArc track_arc(const Track &t, double s) {
   return {true, phi0, std::acos(x)};
 }
 
+} // namespace detail
+
+// Arc of azimuths from the point at distance s along a (validated) track.
+inline TrackArc track_arc(const Track &t, double s) {
+  validate(t);
+  return detail::arc_at(t, s);
+}
+
 inline std::uint64_t track_count(const Track &t, std::uint64_t seed, std::uint32_t event,
                                  std::uint32_t telescope) {
   validate(t);
@@ -96,7 +106,7 @@ inline void emit_track(const Track &t, std::uint64_t seed, std::uint32_t event,
   const double sin_theta = std::sqrt(std::max(0.0, 1.0 - t.cos_theta * t.cos_theta));
   for (std::uint64_t k = 0; k < n; ++k) {
     const double s = t.length_m * philox_draw(seed, event, telescope, k, Stream::target)[0];
-    const TrackArc arc = track_arc(t, s);
+    const TrackArc arc = detail::arc_at(t, s);
     if (!arc.hit)
       continue;
     const double u = philox_draw(seed, event, telescope, k, Stream::direction)[0];
@@ -114,11 +124,12 @@ inline void emit_track(const Track &t, std::uint64_t seed, std::uint32_t event,
 
 // Expected sum of weights (midpoint rule along the track).
 inline double expected_track_weight(const Track &t, int steps = 20000) {
+  validate(t);
   if (!(t.length_m > 0.0) || !(t.photons > 0.0))
     return 0.0;
   double sum = 0.0;
   for (int j = 0; j < steps; ++j)
-    sum += track_arc(t, t.length_m * (j + 0.5) / steps).half / pi;
+    sum += detail::arc_at(t, t.length_m * (j + 0.5) / steps).half / pi;
   return t.photons * sum / steps;
 }
 

@@ -1,5 +1,10 @@
 // nanobind extension dlamb._core: the only C++ file that depends on Python.
 
+#include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
+
 #include "dlamb/density.hpp"
 #include "dlamb/source.hpp"
 #include "dlamb/streams.hpp"
@@ -7,11 +12,6 @@
 
 #include "gstrickd/format.hpp"
 #include "gstrickd/photons.hpp"
-
-#include <nanobind/nanobind.h>
-#include <nanobind/ndarray.h>
-#include <nanobind/stl/string.h>
-#include <nanobind/stl/vector.h>
 
 #include <cmath>
 #include <cstdint>
@@ -57,8 +57,10 @@ Spectrum make_spectrum(const std::string &kind, const std::vector<double> &p,
     need(p, 2, "inverse_square spectrum");
     return InverseSquare{p[0], p[1]};
   }
-  if (kind == "table")
+  if (kind == "table") {
+    need(p, 0, "table spectrum");
     return Tabulated{table(x, y)};
+  }
   throw std::invalid_argument("unknown spectrum kind '" + kind + "'");
 }
 
@@ -84,8 +86,10 @@ Pulse make_pulse(const std::string &kind, const std::vector<double> &p,
     need(p, 4, "complex pulse");
     return ComplexPulse{p[0], p[1], p[2], p[3]};
   }
-  if (kind == "table")
+  if (kind == "table") {
+    need(p, 0, "table pulse");
     return Tabulated{table(x, y)};
+  }
   throw std::invalid_argument("unknown pulse kind '" + kind + "'");
 }
 
@@ -97,6 +101,8 @@ double cone_u0(double angle_deg) {
 
 Angular make_angular(const std::string &kind, const std::vector<double> &p,
                      const std::vector<double> &x, const std::vector<double> &y) {
+  if (kind == "isotropic" || kind == "lambertian" || kind == "rayleigh" || kind == "table")
+    need(p, 0, kind.c_str());
   if (kind == "isotropic")
     return Isotropic{};
   if (kind == "lambertian")
@@ -190,6 +196,7 @@ NB_MODULE(_core, m) {
              self->spectrum = spectrum;
              self->pulse = pulse;
              self->photons = photons;
+             validate(*self);
            })
       .def("set_disc_target",
            [](Source &s, const std::vector<double> &centre, const std::vector<double> &normal,
