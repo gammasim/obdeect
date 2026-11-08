@@ -35,13 +35,11 @@ inline void check_wavelength(double wavelength_nm) {
 
 // Integer wavelength for table lookups, or -1 at or above max_lambda (no transmission).
 [[nodiscard]] inline int table_wavelength(double wavelength_nm) {
-  if (!std::isfinite(wavelength_nm)) {
-    throw std::invalid_argument("wavelength must be finite");
-  }
+  check_wavelength(wavelength_nm);
   if (wavelength_nm >= max_lambda) {
     return -1;
   }
-  return wavelength_nm <= 0.0 ? 0 : static_cast<int>(wavelength_nm);
+  return static_cast<int>(wavelength_nm);
 }
 
 namespace detail {
@@ -226,16 +224,18 @@ private:
           throw std::invalid_argument("transmission table: empty H2");
         }
         h2_km_ = number(token, line_number, "H2");
-        std::istringstream list(line.substr(h1 + 3));
+        const std::string_view after_h1 =
+            detail::trim_comment(std::string_view(line).substr(h1 + 3));
+        std::istringstream list{std::string(after_h1)};
         while (list >> token) {
           heights_km.push_back(number(token, line_number, "height"));
         }
         have_header = true;
         continue;
       }
-      std::istringstream row(line);
+      std::istringstream row{std::string(detail::trim_comment(line))};
       std::string token;
-      if (!(row >> token) || token[0] == '#') {
+      if (!(row >> token)) {
         continue;
       }
       if (!have_header) {

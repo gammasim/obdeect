@@ -183,6 +183,10 @@ public:
   // Integral of (n-1)^power from the bottom of the table to h [cm]; h above the top gives the
   // value at the top.
   double index_moment_cm(double h, int power) const {
+    check(h);
+    if (power < 0 || power > max_moment) {
+      throw std::invalid_argument("moment order must be in [0, max_moment]");
+    }
     if (h <= zf_.front()) {
       return 0.;
     }

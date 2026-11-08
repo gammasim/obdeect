@@ -39,14 +39,14 @@ public:
     }
     // Gladstone-Dale ratio at the first level more than 1.5 km above the observation level.
     const auto &z = profile_.table_altitude_cm();
-    std::size_t level = z.size() - 1;
+    // Without such a level the default is kept.
+    etadsn_ = AtmosphereProfile::default_etadsn;
     for (std::size_t i = 0; i < z.size(); ++i) {
       if (z[i] > obs_cm_ + 1.5e5) {
-        level = i;
+        etadsn_ = profile_.table_index_minus_one()[i] / profile_.table_density()[i];
         break;
       }
     }
-    etadsn_ = profile_.table_index_minus_one()[level] / profile_.table_density()[level];
     build_coefficients();
   }
 
@@ -66,6 +66,9 @@ public:
 
   // Integral of nu^power from the observation level to h [cm].
   [[nodiscard]] double moment(double h_cm, int power) const {
+    if (power < 0 || power > AtmosphereProfile::max_moment) {
+      throw std::invalid_argument("moment order must be in [0, max_moment]");
+    }
     return profile_.index_moment_cm(h_cm, power) - moment_obs_[static_cast<std::size_t>(power)];
   }
 

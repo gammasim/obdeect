@@ -11,7 +11,9 @@
 
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 
 #ifndef DLUFD_TEST_DATA_DIR
@@ -268,6 +270,48 @@ void test_extinction_gradient() {
         table.transmission<double>(400., 4000., 1.0));
 }
 
+bool throws_invalid(const std::function<void()> &action) {
+  try {
+    action();
+  } catch (const std::invalid_argument &) {
+    return true;
+  }
+  return false;
+}
+
+void test_public_argument_validation() {
+  const dlufd::AtmosphereProfile profile(exponential_text());
+  const dlufd::RefractionTables tables(profile, 2000.);
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  CHECK(throws_invalid([&] { (void)profile.index_moment_cm(nan, 1); }));
+  CHECK(throws_invalid([&] { (void)profile.index_moment_cm(1e5, -1); }));
+  CHECK(throws_invalid([&] { (void)profile.index_moment_cm(1e5, 7); }));
+  CHECK(throws_invalid([&] { (void)tables.moment(1e5, -1); }));
+  CHECK(throws_invalid([&] { (void)tables.moment(1e5, 7); }));
+  CHECK(throws_invalid([&] { (void)tables.moment(nan, 1); }));
+  CHECK(throws_invalid([&] { (void)dlufd::table_wavelength(400.5); }));
+  CHECK(throws_invalid([&] { (void)dlufd::table_wavelength(-1.); }));
+  CHECK(dlufd::table_wavelength(1e10) == -1);
+  CHECK(dlufd::table_wavelength(400.) == 400);
+}
+
+void test_etadsn() {
+  const dlufd::AtmosphereProfile profile(exponential_text());
+  // Level more than 1.5 km above the observation level: n-1 / density of that level.
+  const dlufd::RefractionTables low(profile, 2000.);
+  CHECK_NEAR(low.etadsn(), kNu0 / kRho0, 1e-6);
+  // No such level (observation level within 1.5 km of the top): the default.
+  const dlufd::RefractionTables high(profile, 79000.);
+  CHECK(high.etadsn() == dlufd::AtmosphereProfile::default_etadsn);
+}
+
+void test_table_header_comments() {
+  const dlufd::TransmissionTable table(
+      "# H2= 2.000, H1= 3.000 4.000 # heights\n400 0.1 0.2 # first row\n401 0.1 0.2\n", 2000.0);
+  CHECK(table.last_wavelength_nm() == 401);
+  CHECK_NEAR(table.optical_depth<double>(400., 4000.), 0.2, 1e-14);
+}
+
 } // namespace
 
 int main() {
@@ -281,5 +325,8 @@ int main() {
     test_symmetry_and_monotonicity();
     test_zero_index_limit();
     test_extinction_gradient();
+    test_public_argument_validation();
+    test_etadsn();
+    test_table_header_comments();
   });
 }
