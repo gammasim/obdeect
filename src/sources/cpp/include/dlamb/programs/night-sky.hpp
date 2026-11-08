@@ -1,7 +1,7 @@
 #pragma once
 
-// Port of sim_telarray/LightEmission/nsbls.cc: night-sky background photons on one
-// telescope sphere, in a viewing cone around the zenith (downward directions).
+// Night-sky background photons on one telescope sphere, in a viewing cone around the zenith
+// (downward directions). Replaces the earlier nsbls program; options keep their names.
 
 #include "dlamb/background.hpp"
 #include "dlamb/sky_sources.hpp"
@@ -15,18 +15,18 @@
 
 namespace dlamb::programs {
 
-// Options of nsbls.cc (units as in the original: m, ns, deg, nm).
+// Units: m, ns, deg, nm.
 struct NsbOptions {
   double telescope_radius_m{15.0}; // -r (--radius, --telescope-radius)
   double viewcone_deg{10.0};       // -v (--viewcone): half opening angle
   double altitude_m{2150.0};       // --altitude
-  std::int64_t atmosphere{-1};     // --atmosphere: recorded only (original: none)
+  std::int64_t atmosphere{-1};     // --atmosphere: recorded only
   double photons{1e6};             // --photons, photons per event (bunch counting)
   double bunch_size{2.0};          // -b (values below 1 are used as 1)
   std::uint32_t events{1};         // --events
   std::int64_t run_number{1};      // --run
-  // -s: the original defaults to Benn_LaPalma_sky_converted.lis (sim_telarray/cfg/common).
-  // The default here is 400 nm; the tool reads the table when given (or by default).
+  // -s: the tool defaults to the table Benn_LaPalma_sky_converted.lis in the working
+  // directory. The default here is 400 nm; the tool reads the table when given (or by default).
   Spectrum spectrum{Fixed{400.0}};
   double pulse_width_ns{0.0}; // -w (--pulse-width): see sample_background
   double pulse_delay_ns{0.0}; // -d (--pulse-delay)

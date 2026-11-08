@@ -1,7 +1,7 @@
 #pragma once
 
-// Shared pieces of the LightEmission ports: option syntax of the original programs,
-// the fiducial-sphere rule of LightSource::Emit, and the gstrickd stream writer.
+// Shared pieces of the light-source programs: option syntax, the fiducial-sphere rule and
+// the gstrickd stream writer.
 // Header-only, standard library only (plus the dlamb and gstrickd headers).
 
 #include "dlamb/density.hpp"
@@ -42,15 +42,15 @@ namespace dlamb::programs {
 // gstrickd::stage_programs; sources use dlamb::stage_sources.
 inline constexpr std::uint32_t stage_programs = gstrickd::stage_programs;
 
-// LightSource::Emit only restricts emission to the fiducial sphere when the source is
-// farther than 1.02 times the sphere radius (IactLightEmission.cc, rls > 1.02 Rmax).
+// Emission is restricted to the fiducial sphere only when the source is farther than 1.02
+// times the sphere radius.
 inline constexpr double fiducial_margin = 1.02;
 
-// FWHM to sigma, as in IactLightEmission.cc.
+// FWHM to sigma.
 inline constexpr double sigma_per_fwhm = 2.35482004503095;
 
-// One LightSource::Emit call of the original: a source with its own seed. The bunch size
-// multiplies the photon weights and time_offset_ns is the `when` argument of Emit.
+// One emission: a source with its own seed. The bunch size multiplies the photon weights
+// and time_offset_ns is added to the emission times.
 struct Emission {
   Source source;
   std::uint64_t seed{};
@@ -147,7 +147,7 @@ inline std::string option_value(int argc, char **argv, int &i) {
   return argv[++i];
 }
 
-// Spectrum as in LightSource::Emit: a wavelength in nm (200-2000) or Cherenkov:from:to
+// Spectrum: a wavelength in nm (200-2000) or Cherenkov:from:to
 // (1/lambda^2 between from and to; equal limits give a fixed wavelength). Tables read
 // from files are not supported.
 inline Spectrum parse_spectrum(const std::string &text) {
@@ -180,7 +180,7 @@ inline Spectrum parse_spectrum(const std::string &text) {
       "': only a wavelength in nm or Cherenkov:from:to is supported (no table files)");
 }
 
-// Pulse as in LightSource::Emit: Simple:w[,delay] (or a bare width), Gauss:x (sigma x),
+// Pulse: Simple:w[,delay] (or a bare width), Gauss:x (sigma x),
 // Gauss-rms:x (sigma x), Gauss-fwhm:x (FWHM x), Exp:tau[,delay], Complex:a,b,c[,delay].
 // Widths <= 0 give a time delay only.
 inline Pulse parse_pulse(const std::string &text) {
@@ -247,7 +247,7 @@ inline Pulse parse_pulse(const std::string &text) {
   return GaussianShape{delay, sigma};
 }
 
-// Angular profile as in LightSource::Emit: isotropic, Parallel, Cone:deg, FilledCone:deg,
+// Angular profile: isotropic, Parallel, Cone:deg, FilledCone:deg,
 // Gauss:deg / Gauss-rms:deg (2-D rms), Gauss-fwhm:deg, Rayleigh. Tables are not supported.
 inline Angular parse_angular(const std::string &text) {
   const std::string key = lower(text);
@@ -298,18 +298,16 @@ inline std::pair<double, double> spectrum_range(const Spectrum &spectrum) {
       spectrum);
 }
 
-// The LightSource::Emit rule for the fiducial sphere (radius_m around the origin, the
-// telescope centre). Beyond 1.02 R an isotropic emitter is restricted to the cone that
-// contains the sphere (SphereTarget, exact); fixed-angle emitters keep all photons (as
-// the original, frac = 1); other profiles use a disc target on the sphere's plane (a
-// weighted approximation of the original's angular cut).
+// The fiducial-sphere rule (radius_m around the origin, the telescope centre). Beyond 1.02 R
+// an isotropic emitter is restricted to the cone that contains the sphere (SphereTarget,
+// exact); fixed-angle emitters keep all photons; other profiles use a disc target on the
+// sphere's plane (weighted).
 inline Target fiducial_target(Vec3 position, double radius_m, const Angular &angular) {
   if (!(norm(position) > fiducial_margin * radius_m)) {
     return std::monostate{};
   }
   if (std::holds_alternative<Isotropic>(angular)) {
-    // The cone of the original has sin(theta) = R / d (checked against the flasher output
-    // in scripts/compare_flasher-dish.sh); the 1.02 margin only decides when the cut applies.
+    // The cone has sin(theta) = R / d; the 1.02 margin only decides when the cut applies.
     return SphereTarget{Vec3{0.0, 0.0, 0.0}, radius_m};
   }
   if (std::holds_alternative<FixedAngle>(angular)) {

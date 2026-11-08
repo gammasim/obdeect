@@ -100,7 +100,7 @@ void slaves_and_trigger_groups() {
 
   auto labels = led::build_sources(with_slaves);
   CHECK(labels.size() == 2);
-  CHECK(labels[0].labels.size() == 2); // slaves are not labels (pixled.cc list output)
+  CHECK(labels[0].labels.size() == 2); // slaves are not labels
 }
 
 void random_pixels() {

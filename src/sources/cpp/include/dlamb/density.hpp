@@ -50,7 +50,7 @@ inline constexpr double two_pi = 2.0 * pi;
 }
 
 // Unnormalised density, linear between nodes and zero outside, sampled by inverting
-// its cumulative distribution (port of obdeect LinearDensity). An empty density is a
+// its cumulative distribution (as obdeect LinearDensity). An empty density is a
 // point mass at zero.
 class LinearDensity {
 public:
@@ -156,7 +156,7 @@ struct GaussianShape {
 };
 
 // Exponential decay with decay time tau, mean `mean_value` (leading edge at mean - tau),
-// as LightEmission "Exp:" (t = mean + tau (E - 1), E ~ Exp(1)).
+// as option "Exp:" (t = mean + tau (E - 1), E ~ Exp(1)).
 struct Exponential {
   double mean_value{};
   double tau{};
@@ -168,7 +168,7 @@ struct Exponential {
 };
 
 // Sum of a flat pulse of full width flat_width, a Gaussian of r.m.s. gauss_rms and an
-// exponential of decay time decay (LightEmission "Complex:"), all centred on delay.
+// exponential of decay time decay (option "Complex:"), all centred on delay.
 struct ComplexPulse {
   double flat_width{};
   double gauss_rms{};
@@ -184,7 +184,7 @@ struct ComplexPulse {
   }
 };
 
-// Density proportional to 1/lambda^2 on [low, high] (LightEmission "Cherenkov:").
+// Density proportional to 1/lambda^2 on [low, high] (option "Cherenkov:").
 struct InverseSquare {
   double low{};
   double high{};
@@ -226,7 +226,7 @@ struct Isotropic {
   [[nodiscard]] double quantile(double p) const { return 2.0 * p; }
 };
 
-// All photons at one angle with u0 = 1 - cos(theta) (LightEmission "Cone:", "Parallel"
+// All photons at one angle with u0 = 1 - cos(theta) (option "Cone:", "Parallel"
 // for u0 = 0). It has no density, so it cannot be used with a disc target.
 struct FixedAngle {
   double u0{};
@@ -238,7 +238,7 @@ struct FixedAngle {
   [[nodiscard]] double quantile(double) const { return u0; }
 };
 
-// Uniform intensity within u <= u0 (LightEmission "FilledCone:").
+// Uniform intensity within u <= u0 (option "FilledCone:").
 struct FilledCone {
   double u0{};
   [[nodiscard]] double intensity(double u) const { return u >= 0.0 && u <= u0 ? 1.0 : 0.0; }
@@ -289,7 +289,7 @@ using Angular = std::variant<Isotropic, FixedAngle, FilledCone, Lambertian, Tabu
   return std::visit([](const auto &x) { return x.integral(); }, a);
 }
 
-// Gaussian intensity exp(-theta^2 / (2 sigma^2)) (LightEmission "Gauss-rms:"), tabulated
+// Gaussian intensity exp(-theta^2 / (2 sigma^2)) (option "Gauss-rms:"), tabulated
 // on a grid of 0.05 sigma up to 5 sigma (or 180 deg).
 [[nodiscard]] inline LinearDensity gaussian_angular_table(double sigma_rad) {
   // Below 1e-12 rad, sigma^2 underflows and the table would be NaN.
@@ -307,7 +307,7 @@ using Angular = std::variant<Isotropic, FixedAngle, FilledCone, Lambertian, Tabu
   return {u, value};
 }
 
-// Rayleigh-scattering intensity 0.5 (1 + cos^2 theta) (LightEmission "Rayleigh"),
+// Rayleigh-scattering intensity 0.5 (1 + cos^2 theta) (option "Rayleigh"),
 // tabulated in 1 degree steps.
 [[nodiscard]] inline LinearDensity rayleigh_angular_table() {
   std::vector<double> u, value;

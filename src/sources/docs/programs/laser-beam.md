@@ -1,32 +1,27 @@
 # laser-beam
 
-Laser beam crossing the field of view of a telescope. Port of sim_telarray `LightEmission/ls-beam.cc`.
-Tool `dlamb-laser-beam`, programme `cpp/include/dlamb/programs/laser-beam.hpp`.
+Laser beam crossing the field of view of a telescope. Tool `dlamb-laser-beam`, programme
+`cpp/include/dlamb/programs/laser-beam.hpp`. Replaces the earlier ls-beam program; options
+keep their names.
 
-## What changes
+## Primary photons
 
-The original emits the light **scattered** from the beam towards the sphere
-(`LightSource::Emit`, Rayleigh profile, `brightness x exp(-h/7.5 km)` photons per step).
-dlamb emits the **primary** photons along the beam inside the field-of-view cone.
-Scattering is dlufd's single-scattering effect (plan step 6b).
+dlamb emits the **primary** photons along the beam inside the field-of-view cone. The
+scattered light is computed from them by dlufd (single scattering, plan step 6b).
 
-| Original | dlamb |
-| --- | --- |
-| step point: `N = brightness x exp(-h/7500 m) x step` photons into 4 pi, Rayleigh | step point: `N = primary_photons_per_m x step` primary photons along the beam |
-| `--brightness` (photons/m into 4 pi, ground) | replaced by `--primary-per-m` (primary photons per m) |
-| `--angular-distribution` (Rayleigh) | recorded in the run key `scattering_angular` for dlufd |
-| time = path / c_air | path / c (vacuum); group delay is dlufd's |
+- step point: `N = primary_photons_per_m x step` primary photons along the beam
+- `--primary-per-m` sets the primary photons per metre (a sampling choice, not physics)
+- `--angular-distribution` (Rayleigh) is recorded in the run key `scattering_angular`
+  for dlufd
+- time = path / c (vacuum); group delay is dlufd's
 
-## Mapping of the yield to dlufd
+## Yield per metre
 
-Original scattered yield per metre at height h:
-`B(h) = brightness x exp(-h/7.5 km)`.
 dlufd computes, for primary weight `w` at height h:
 `scattered per m = sum(w) x beta_s(h) x (phase function) x (transmission)`.
-With uniform primaries, `sum(w) per m = primary_photons_per_m` and so
-`primary_photons_per_m = brightness / beta_s(ground)` reproduces the ground yield
-(brightness of the original, `beta_s` the scattering coefficient per m at the laser
-wavelength). The original's `exp(-h/7.5 km)` is replaced by dlufd's `beta_s(h)`
+With uniform primaries, `sum(w) per m = primary_photons_per_m`. To obtain a scattered
+yield per metre `B` at the ground, set `primary_photons_per_m = B / beta_s(ground)`, with
+`beta_s` the scattering coefficient per m at the laser wavelength. dlufd takes `beta_s(h)`
 from the atmosphere profile.
 
 Parameters dlufd does not have: `beta_s(ground)` at 355 nm for the aerosol part (only
@@ -35,30 +30,27 @@ albedo and phase-function asymmetry g. These come from simulation-models (step 6
 
 ## Options
 
-| Original | Default | dlamb |
+| Option | Default | dlamb field |
 | --- | --- | --- |
 | `--events` | 1 | `events` |
-| `--step` [m] | 0.1 | `step_m` (the original's `steplength_cm` = 100 x step) |
+| `--step` [m] | 0.1 | `step_m` |
 | `--bunchsize` | 3 | `bunch_size` (below 1 used as 1) |
 | `--spectrum` [nm] | 355 | `spectrum` |
 | `--lightpulse` | Simple:0 | `pulse` |
 | `--laser-position` [m] | 1000,0,0 | `laser_position_m` |
-| `--laser-theta`, `--laser-phi` | 60, 180 | `laser_theta_deg`, `laser_phi_deg` (CLI phi astronomical, converted as the original) |
+| `--laser-theta`, `--laser-phi` | 60, 180 | `laser_theta_deg`, `laser_phi_deg` (CLI phi astronomical, converted) |
 | `--telescope-theta`, `--telescope-phi` | 30, 0 | same, telescope axis |
 | `--telescope-radius` [m] | 12.5 | `telescope_radius_m` |
 | `--fov` [deg] | 15 | `fov_deg` (full cone opening angle, must lie in (0, 90)) |
 | `--altitude`, `--run`, `--atmosphere` | 2150, 1, 1 | `altitude_m`, `run_number`, `atmosphere` (recorded) |
-| (new) `--primary-per-m` | 1e4 | `primary_photons_per_m` (sampling choice, not physics) |
-
-Notes on the original: the help text says `--altitude` default 2100, the code uses
-2150. `--bunches` is in the help but not parsed.
+| `--primary-per-m` | 1e4 | `primary_photons_per_m` |
 
 ## Geometry
 
-Beam and cone are solved as in `ls-beam.cc` (rotations with `Rotate_z(-phi)`, `Rotate_y(-theta)`,
-quadratic in the cone). The emitted segment is the one between the two cone-surface roots,
-as in the original; the original does not check the nappe, so for a beam crossing both
-nappes the segment includes points below the telescope.
+The beam is rotated by `Rotate_z(-phi)`, `Rotate_y(-theta)` and intersected with the
+field-of-view cone (a quadratic). The emitted segment is the one between the two
+cone-surface roots. The nappe is not checked: for a beam crossing both nappes the segment
+includes points below the telescope.
 
 ## Checks
 

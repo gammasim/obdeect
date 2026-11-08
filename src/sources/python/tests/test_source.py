@@ -171,7 +171,7 @@ def test_tabulated_spectrum_and_pulse_follow_their_tables():
 def test_gauss_angular_table_matches_its_width():
     photons = emit(emitter_with({"kind": "gauss", "sigma_deg": 5.0}, photons=1e5), seed=2)
     angle = np.degrees(np.arccos(np.clip(cosine_to_axis(photons, [0.0, 0.0, -1.0]), -1, 1)))
-    # Two-dimensional r.m.s. of the Gaussian angular profile: sigma (LightEmission "Gauss").
+    # Two-dimensional r.m.s. of the Gaussian angular profile: sigma (option "Gauss").
     assert np.sqrt(np.mean(angle**2) / 2.0) == pytest.approx(5.0, rel=0.02)
 
 

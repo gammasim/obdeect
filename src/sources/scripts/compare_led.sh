@@ -1,10 +1,10 @@
 #!/bin/bash
-# Cross-check dlamb-led against sim_telarray LightEmission/pixled.cc (test camera, pixels
+# Cross-check dlamb-led against the reference pixled program (test camera, pixels
 # 0 1 2 with two pixels per event, 10 photons per pixel). Both write pixel positions.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 : "${WORK:?set WORK to a scratch directory for the cross-check outputs}"
-: "${CFG:?set CFG to the sim_telarray cfg/common directory}"
+: "${CFG:?set CFG to the configuration directory of the reference programs}"
 mkdir -p "$WORK"
 cp "$ROOT/scripts/compare-led-camera.txt" "$WORK/camera.txt"
 "$ROOT/build/debug/dlamb-led" -c "$WORK/camera.txt" --use "0 1 2" --require 2 --photons 10 -o "$WORK/dlamb.gst"

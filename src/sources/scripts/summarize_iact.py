@@ -1,4 +1,4 @@
-"""Summarise photon bunches of an IACT (EventIO) file written by a LightEmission program.
+"""Summarise photon bunches of an IACT (EventIO) file written by a reference light-source program.
 
 Prints per telescope: bunches, sum of bunch sizes (photons), mean wavelength and the mean
 and r.m.s. of the bunch impact positions at the observation level [m]. Run inside a

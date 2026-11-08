@@ -23,9 +23,9 @@ namespace {
 constexpr double deg = pi / 180.0;
 
 // Default: 1e7 photons into 4 pi, source 1000 m above the origin, telescope radius 15 m.
-// The original emits only into the cone that contains the 1.02 R sphere:
+// Emission is only into the cone that contains the 1.02 R sphere:
 // frac = 0.5 (1 - cos(asin(1.02 R / d))).
-void default_count_matches_original() {
+void default_count_matches_formula() {
   const XyzlsOptions o;
   const auto plan = plan_point_source(o);
   CHECK(plan.cases.size() == 1);
@@ -104,7 +104,7 @@ void non_default_moments() {
 }
 
 // Non-isotropic profiles beyond the fiducial sphere are rejected, not silently changed.
-void rejects_unported_profile() {
+void rejects_unsupported_profile() {
   XyzlsOptions o;
   o.angular = Lambertian{};
   bool threw = false;
@@ -197,10 +197,10 @@ void telpos_rejects_malformed() {
 
 int main() {
   return run_checks([] {
-    default_count_matches_original();
+    default_count_matches_formula();
     default_stream();
     non_default_moments();
-    rejects_unported_profile();
+    rejects_unsupported_profile();
     emission_altitude();
     rejects_negative_photons();
     telpos_valid();

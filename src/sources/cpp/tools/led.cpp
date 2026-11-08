@@ -1,4 +1,4 @@
-// dlamb-led: LED photon stream for selected camera pixels (port of LightEmission/pixled.cc).
+// dlamb-led: LED photon stream for selected camera pixels.
 // Writes a gstrickd stream to stdout or to -o FILE; --list-only prints the pixel combinations
 // instead.
 
@@ -18,7 +18,7 @@ void usage(std::ostream &out, const char *name) {
   out << "usage: " << name << " --camera-file FILE (--use LIST | --use-trg-rand N | "
       << "--use-trg-all) [options]\n"
       << "Options (default in braces; names as in led):\n"
-      << "  --camera-file FILE        sim_telarray camera definition (required)\n"
+      << "  --camera-file FILE        camera definition (required)\n"
       << "  --use LIST                pixels, '+' required, [a,b] pre-sum slaves\n"
       << "  --use-trg-rand N          N random trigger groups of the camera file\n"
       << "  --use-trg-all             all trigger groups of the camera file\n"

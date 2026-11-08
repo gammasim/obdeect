@@ -1,13 +1,13 @@
-"""Compare a sim_telarray LightEmission IACT file with a dlamb gstrickd stream.
+"""Compare a reference IACT file with a dlamb gstrickd stream.
 
 Usage (inside the simtools-dev container, which has eventio and numpy):
-    python3 compare_stream.py ORIGINAL.dat.gz DLAMB.gst
+    python3 compare_stream.py REFERENCE.dat.gz DLAMB.gst
 
-Per event: photon count (original: sum of bunch sizes; dlamb: sum of weights).
+Per event: photon count (reference: sum of bunch sizes; dlamb: sum of weights).
 Over all photons: means of cx, cy, cz, time [ns], wavelength [nm] with standard errors.
-Original cz = -sqrt(1 - cx^2 - cy^2) (IACT stores w = -cz with cz < 0 downwards).
-Positions are not compared: the original writes them at the observation plane.
-Times: the original adds the flight time to the observation plane; dlamb writes emission
+Reference cz = -sqrt(1 - cx^2 - cy^2) (IACT stores w = -cz with cz < 0 downwards).
+Positions are not compared: the reference writes them at the observation plane.
+Times: the reference adds the flight time to the observation plane; dlamb writes emission
 times, so the t difference equals the path length / c (flasher --type dish: 16 m, 53.4 ns).
 """
 
@@ -23,7 +23,7 @@ RECORD_PHOTONS = 5
 COLUMNS = ["x", "y", "z", "cx", "cy", "cz", "t", "zem", "w", "wavelength", "p"]
 
 
-def read_original(path):
+def read_reference(path):
     counts, cols = [], {"cx": [], "cy": [], "t": [], "wavelength": []}
     with IACTFile(path) as f:
         for event in f:
@@ -33,7 +33,7 @@ def read_original(path):
                 n += float(np.sum(tel["photons"]))
                 cols["cx"].append(tel["cx"])
                 cols["cy"].append(tel["cy"])
-                # Original times are arrival times at the observation plane, relative to
+                # Reference times are arrival times at the observation plane, relative to
                 # time_offset (the event's first interaction); add it back.
                 cols["t"].append(tel["time"] + event.time_offset)
                 cols["wavelength"].append(tel["wavelength"])
@@ -83,16 +83,16 @@ def moments(a):
     return float(np.mean(a)), float(np.std(a) / np.sqrt(n)) if n > 1 else float("nan")
 
 
-def main(original, dlamb):
-    oc, oo = read_original(original)
+def main(reference, dlamb):
+    oc, oo = read_reference(reference)
     dc, dd = read_dlamb(dlamb)
-    print(f"events: original {len(oc)}, dlamb {len(dc)}")
+    print(f"events: reference {len(oc)}, dlamb {len(dc)}")
     if oc and dc:
         print(
-            f"photons per event: original mean {np.mean(oc):.2f} (sum {np.sum(oc):.0f}), "
+            f"photons per event: reference mean {np.mean(oc):.2f} (sum {np.sum(oc):.0f}), "
             f"dlamb mean {np.mean(dc):.2f} (sum {np.sum(dc):.0f})"
         )
-    print(f"{'quantity':12s} {'original':>24s} {'dlamb':>24s} {'diff/sigma':>11s}")
+    print(f"{'quantity':12s} {'reference':>24s} {'dlamb':>24s} {'diff/sigma':>11s}")
     for name in ["cx", "cy", "cz", "t", "wavelength"]:
         mo, so = moments(oo[name])
         md, sd = moments(dd[name])

@@ -1,5 +1,5 @@
-// dlamb-muon-track: Cherenkov light of a single muon-like track as a gstrickd photon stream
-// (port of LightEmission/fake-muon.cc). Writes to stdout, or to -o FILE.
+// dlamb-muon-track: Cherenkov light of a single muon-like track as a gstrickd photon stream.
+// Writes to stdout, or to -o FILE.
 
 #include "dlamb/programs/muon-track.hpp"
 #include "dlamb/cli.hpp"
@@ -44,7 +44,7 @@ void usage(std::FILE *to) {
       "  --seed S                            random seed [1]\n"
       "  -o, --output FILE                   output file (default stdout)\n"
       "  --help                              this text\n"
-      "Not ported: multiple scattering (--enable-scatter), --rscat, -I.\n");
+      "Not supported: multiple scattering (--enable-scatter), --rscat, -I.\n");
 }
 
 } // namespace

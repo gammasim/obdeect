@@ -1,7 +1,7 @@
 #pragma once
 
 // Command-line helpers shared by the sky-level tools: strict number parsing and the
-// spectrum, pulse and angular syntax of sim_telarray LightEmission (case-insensitive
+// spectrum, pulse and angular syntax (case-insensitive
 // names, parameters after a colon, optional ",delay" for pulses).
 
 #include "dlamb/density.hpp"

@@ -1,7 +1,8 @@
 #pragma once
 
-// Port of sim_telarray/LightEmission/xyzls.cc: a point light source at (x, y, z) above
-// the observation level, emitting bunches into 4 pi (or into the fiducial sphere cone).
+// A point light source at (x, y, z) above the observation level, emitting bunches into
+// 4 pi (or into the fiducial sphere cone). Replaces the earlier xyzls program; options keep
+// their names.
 // Output: sky-frame photons of one telescope block per telescope.
 
 #include "dlamb/sky_sources.hpp"
@@ -21,10 +22,9 @@ struct TelposCm {
   double r{};
 };
 
-// Options of xyzls.cc; units as in the original (cm unless noted). Line numbers refer
-// to sim_telarray/LightEmission/xyzls.cc.
+// Units cm unless noted.
 struct XyzlsOptions {
-  std::int64_t run_number{1};           // -R (main, default 1)
+  std::int64_t run_number{1};           // -R (default 1)
   std::uint32_t events{1};              // -N (default 1)
   double telcam_radius_cm{1500.0};      // -r, fiducial radius of the default telescope
   double x_cm{0.0};                     // -x (default 0)
@@ -60,10 +60,10 @@ struct XyzlsOptions {
   return run;
 }
 
-// Emissions of case `index` (one source). Original count: floor(N / bunch) bunches plus
+// Emissions of case `index` (one source). Count: floor(N / bunch) bunches plus
 // one with the fractional probability. Beyond 1.02 x the fiducial radius an isotropic
 // source emits only into the cone that contains the fiducial sphere around the origin
-// (LightSource::Emit, `frac`), which is a SphereTarget here.
+// which is a SphereTarget here.
 [[nodiscard]] inline std::vector<SourceEmission>
 point_source_emissions(const XyzlsOptions &o, const SkyRun &run, std::size_t index) {
   if (!(o.direction.x != 0.0 || o.direction.y != 0.0 || o.direction.z != 0.0))
@@ -84,9 +84,9 @@ point_source_emissions(const XyzlsOptions &o, const SkyRun &run, std::size_t ind
     if (std::holds_alternative<Isotropic>(o.angular))
       s.target = SphereTarget{Vec3{}, 1.02 * rmax};
     else if (!std::holds_alternative<FixedAngle>(o.angular))
-      throw std::invalid_argument(
-          "point-source: a non-isotropic profile beyond 1.02 x the fiducial radius is not ported "
-          "(the original restricts its directions per profile); use isotropic or Cone/Parallel");
+      throw std::invalid_argument("point-source: a non-isotropic profile beyond 1.02 x the "
+                                  "fiducial radius is not supported "
+                                  "(use isotropic or Cone/Parallel)");
   }
   return {SourceEmission{s, o.seed + index, bunch, 0.0}};
 }

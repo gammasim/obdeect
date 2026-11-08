@@ -1,5 +1,5 @@
-// dlamb-point-source: point light source above the telescope, as sim_telarray
-// LightEmission/xyzls.cc. Writes a gstrickd photon stream (sky frame) to stdout or to -o FILE.
+// dlamb-point-source: point light source above the telescope. Writes a gstrickd photon stream (sky
+// frame) to stdout or to -o FILE.
 
 #include "dlamb/programs/point-source.hpp"
 
@@ -16,7 +16,7 @@ namespace {
 const char *usage_text =
     "Usage: dlamb-point-source [options]\n"
     "Point light source at (x, y, z) above the observation level; photon stream on stdout.\n"
-    "Options (original xyzls.cc option, unit, default):\n"
+    "Options (option, unit, default):\n"
     "  -R run          run number (1)\n"
     "  -N nevents      events per case (1)\n"
     "  -r rtelcam      fiducial radius of the default telescope [cm] (1500)\n"
@@ -95,7 +95,7 @@ int run(int argc, char **argv) {
       throw std::invalid_argument("unknown option " + arg + " (see --help)");
     }
   }
-  // Numbers as pulse names are Gauss sigma, as in xyzls.cc (main: isdigit -> "Gauss:").
+  // Numbers as pulse names are Gauss sigma, as "Gauss:".
   o.pulse = dlamb::cli::parse_pulse(pulse_text, "-p", true);
   o.spectrum = dlamb::cli::parse_spectrum(spectrum_text, "-s");
   o.angular = dlamb::cli::parse_angular(angular_text, "-a");

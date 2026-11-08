@@ -17,11 +17,11 @@
 
 namespace dlamb {
 
-// Track: a moving line source (LightEmission LightSource with length and beta) that emits
+// Track: a moving line source (length and beta) that emits
 // at a fixed angle to its direction of motion, as the Cherenkov light of a charged particle
 // (muon-track). Photons are uniform along the segment and have a uniform azimuth. The
 // sphere target keeps only the photons that reach it, with weight = the fraction of the
-// azimuths that do (importance sampling; LightEmission keeps the same photons as bunches).
+// azimuths that do (importance sampling).
 struct Track {
   Vec3 start{};                   // Upper end of the segment, altitude above observation level [m].
   Vec3 direction{0.0, 0.0, -1.0}; // Unit direction of motion, the emission axis.

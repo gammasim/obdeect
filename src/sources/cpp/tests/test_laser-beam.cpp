@@ -19,7 +19,7 @@ namespace {
 
 constexpr double deg = pi / 180.0;
 
-// Telescope axis of ls-beam.cc: DirectionVect((90 - theta) deg, phi deg).
+// Telescope axis: altitude (90 - theta) deg, azimuth phi deg.
 Vec3 telescope_axis(const LsBeamOptions &o) {
   return direction_from_altitude((90.0 - o.telescope_theta_deg) * deg, o.telescope_phi_deg * deg);
 }
