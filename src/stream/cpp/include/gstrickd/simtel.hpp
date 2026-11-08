@@ -29,10 +29,11 @@
 // Bypass_Optics value are per telescope for the whole run.
 //
 // Streams without CORSIKA blobs (e.g. from light sources) get the headers RUNH,
-// TELPOS, EVTH, TELOFF, EVTE and RUNE synthesised from the run and event
-// metadata. Each synthesised header is reported as a warning. ATMPROF (1216) is
-// written only when a table is given (ps2simtel --atmprof): before the first
-// EVTH, with the profile number that EVTH names (99 for synthesised headers).
+// TELPOS, EVTH, TELOFF, EVTE, INPUTCFG (one line, NSHOW <events>, before RUNE) and
+// RUNE synthesised from the run and event metadata. Each synthesised header is
+// reported as a warning. ATMPROF (1216) is written only when a table is given
+// (ps2simtel --atmprof): before the first EVTH, with the profile number that EVTH
+// names (99 for synthesised headers).
 //
 // Efficiency ledger (docs/format.md): run ledgers apply to every telescope, a
 // telescope ledger to its telescope and overrides the run ledgers per factor.
@@ -773,6 +774,9 @@ private:
     case iact::rune:
       have_rune_ = true;
       break;
+    case iact::inputcfg:
+      have_inputcfg_ = true;
+      break;
     default:
       break;
     }
@@ -790,7 +794,7 @@ private:
     run_metadata_ = metadata;
     run_headers_done_ = false;
     atmprof_pending_ = atmprof_.has_value();
-    have_runh_ = have_telpos_ = have_rune_ = false;
+    have_runh_ = have_telpos_ = have_rune_ = have_inputcfg_ = false;
     events_ = 0;
     run_ledgers_.clear();
     telescope_ledgers_.clear();
@@ -913,6 +917,12 @@ private:
     end_event();
     ensure_run_headers();
     if (!have_rune_) {
+      if (!have_inputcfg_) {
+        // The receiving run checks the number of showers it reads against the NSHOW
+        // line of the CORSIKA input, which a stream without CORSIKA blobs lacks.
+        note_synthesised("INPUTCFG");
+        emit(input_lines_block());
+      }
       note_synthesised("RUNE");
       emit(run_end_block());
     }
@@ -1031,6 +1041,17 @@ private:
                        {{2, static_cast<double>(event_number_)}});
   }
 
+  // INPUTCFG: the single input line `NSHOW n` with the number of events written.
+  EventioBlock input_lines_block() const {
+    std::vector<std::uint8_t> body;
+    ByteWriter out{body};
+    const std::string line = "NSHOW " + std::to_string(events_);
+    out.i32(1);
+    out.i16(static_cast<std::int16_t>(line.size()));
+    body.insert(body.end(), line.begin(), line.end());
+    return make_block(iact::inputcfg, 0, 0, std::move(body));
+  }
+
   // RUNE: "RUNE", run number and number of showers.
   EventioBlock run_end_block() const {
     using namespace simtel_detail;
@@ -1061,6 +1082,7 @@ private:
   bool have_runh_{};
   bool have_telpos_{};
   bool have_rune_{};
+  bool have_inputcfg_{};
   bool event_open_{};
   bool event_headers_done_{};
   bool have_evth_{};

@@ -83,6 +83,14 @@ The camera map lists the camera-frame telescopes, one per line:
 per line, `#` comments). It is written as ATMPROF (1216) before the first event, with the profile number
 that EVTH names (99 for synthesised headers). A stream with its own ATMPROF block rejects the option.
 
+A stream without CORSIKA blocks gets synthesised headers. The run end (RUNE) and the input
+block (INPUTCFG, one line `NSHOW <n>`) carry the number of events written, so that
+sim_telarray reports the run as complete:
+
+```text
+Run(s) completed as expected after 3 events (3 showers).
+```
+
 Telescopes not listed are ground-frame (sim_telarray `Bypass_Optics=0`). Listed telescopes with
 camera-frame photons are converted to the bypass convention and need `Bypass_Optics=1` (class 1) or
 `2` (class 2) in sim_telarray; `ps2simtel` prints the value for each. Listed dual-mirror telescopes

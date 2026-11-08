@@ -668,9 +668,9 @@ void test_atmprof_synthesised() {
   for (const EventioBlock &block : blocks) {
     types.push_back(block.type);
   }
-  const std::vector<std::uint32_t> expected = {iact::runh, iact::telpos, iact::atmprof,
-                                               iact::evth, iact::teloff, iact::telarray,
-                                               iact::evte, iact::rune};
+  const std::vector<std::uint32_t> expected = {iact::runh, iact::telpos,   iact::atmprof,
+                                               iact::evth, iact::teloff,   iact::telarray,
+                                               iact::evte, iact::inputcfg, iact::rune};
   CHECK(types == expected);
   if (types != expected) {
     return;
@@ -699,7 +699,7 @@ void test_synthesised_warnings() {
     CHECK(block.type != iact::atmprof);
   }
   const std::string text = warnings.str();
-  for (const char *name : {"RUNH", "TELPOS", "EVTH", "TELOFF", "EVTE", "RUNE"}) {
+  for (const char *name : {"RUNH", "TELPOS", "EVTH", "TELOFF", "EVTE", "INPUTCFG", "RUNE"}) {
     CHECK(text.find(std::string("no CORSIKA ") + name + " block") != std::string::npos);
   }
   CHECK(text.find("--atmprof FILE") != std::string::npos);
@@ -777,8 +777,9 @@ void test_synthesised_headers() {
   for (const EventioBlock &block : blocks) {
     types.push_back(block.type);
   }
-  const std::vector<std::uint32_t> expected = {
-      iact::runh, iact::telpos, iact::evth, iact::teloff, iact::telarray, iact::evte, iact::rune};
+  const std::vector<std::uint32_t> expected = {iact::runh,     iact::telpos,   iact::evth,
+                                               iact::teloff,   iact::telarray, iact::evte,
+                                               iact::inputcfg, iact::rune};
   CHECK(types == expected);
   if (types == expected) {
     const std::vector<float> runh = decode_float_block(blocks[0]);
@@ -795,7 +796,7 @@ void test_synthesised_headers() {
     const std::vector<float> evte = decode_float_block(blocks[5]);
     CHECK_NEAR(evte[1], 3.0, 0.0);
     // RUNE body: count 3, "RUNE", run number, number of showers.
-    const std::vector<std::uint8_t> &body = blocks[6].body;
+    const std::vector<std::uint8_t> &body = blocks[7].body;
     CHECK(body.size() == 16);
     if (body.size() == 16) {
       CHECK(std::string(body.begin() + 4, body.begin() + 8) == "RUNE");
@@ -807,6 +808,65 @@ void test_synthesised_headers() {
       CHECK_NEAR(showers, 1.0, 0.0);
     }
   }
+}
+
+// Records of a light-source run with `events` events of one telescope each.
+std::vector<Record> light_source_events(int events) {
+  std::vector<Record> records = {record_of(RecordType::run, light_source_run())};
+  for (int i = 1; i <= events; ++i) {
+    records.push_back(record_of(RecordType::event, Metadata{{"event_number", std::int64_t{i}}}));
+    records.push_back(record_of(RecordType::telescope, Metadata{{"telescope_id", std::int64_t{1}},
+                                                                {"array_index", std::int64_t{0}}}));
+    records.push_back(
+        photons_of(chunk_of(1, Frame::ground, {0.5, 1.5}, {0.2, 0.0}, {0.1, 0.0}, {-0.2, 0.0})));
+    records.push_back(
+        record_of(RecordType::telescope_end, Metadata{{"telescope_id", std::int64_t{1}}}));
+    records.push_back(record_of(RecordType::event_end));
+  }
+  records.push_back(record_of(RecordType::run_end));
+  return records;
+}
+
+// The synthesised run end counts the events written, and the input line NSHOW
+// that precedes it gives the same number; a CORSIKA input block is not duplicated.
+void test_synthesised_run_end_counts_events() {
+  for (const int events : {1, 4}) {
+    const std::vector<EventioBlock> blocks =
+        read_blocks(run_adapter(light_source_events(events), {}));
+    const EventioBlock &rune = blocks.back();
+    const EventioBlock &inputcfg = blocks[blocks.size() - 2];
+    CHECK(rune.type == iact::rune);
+    CHECK(inputcfg.type == iact::inputcfg);
+    if (rune.type != iact::rune || inputcfg.type != iact::inputcfg) {
+      return;
+    }
+    // RUNE: count 3, "RUNE", run number, number of showers.
+    CHECK(rune.body.size() == 16);
+    float showers = 0.0F;
+    std::memcpy(&showers, rune.body.data() + 12, 4);
+    CHECK_NEAR(showers, static_cast<double>(events), 0.0);
+    // INPUTCFG: int32 line count, then int16 length and text per line.
+    const std::vector<std::uint8_t> &body = inputcfg.body;
+    CHECK(body.size() >= 6);
+    std::int32_t lines = 0;
+    std::int16_t length = 0;
+    std::memcpy(&lines, body.data(), 4);
+    std::memcpy(&length, body.data() + 4, 2);
+    CHECK(lines == 1);
+    const std::string text(body.begin() + 6, body.begin() + 6 + length);
+    CHECK(text == "NSHOW " + std::to_string(events));
+  }
+  // A stream with its own INPUTCFG keeps it and gets no second one.
+  std::vector<Record> records = light_source_events(2);
+  std::vector<std::uint8_t> body = {1, 0, 0, 0, 7, 0};
+  const std::string line = "NSHOW 2";
+  body.insert(body.end(), line.begin(), line.end());
+  records.insert(records.begin() + 1, blob_of(make_block(iact::inputcfg, 0, 0, body)));
+  int count = 0;
+  for (const EventioBlock &block : read_blocks(run_adapter(records, {}))) {
+    count += block.type == iact::inputcfg ? 1 : 0;
+  }
+  CHECK(count == 1);
 }
 
 // A stream without the metadata sim_telarray needs is rejected, not padded with defaults.
@@ -1015,6 +1075,7 @@ int main() {
     test_telescope_frame_report_and_telpos();
     test_telescope_frame_rejected();
     test_synthesised_headers();
+    test_synthesised_run_end_counts_events();
     test_missing_metadata_rejected();
     test_frames_rejected();
     test_ledger_rules();
