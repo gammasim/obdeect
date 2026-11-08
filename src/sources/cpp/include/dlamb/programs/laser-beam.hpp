@@ -61,12 +61,18 @@ inline BeamGeometry laser_beam_geometry(const LsBeamOptions &o) {
   const double b = 2.0 * (q.x * p.x + q.y * p.y - q.z * p.z * t2);
   const double c = p.x * p.x + p.y * p.y - p.z * p.z * t2;
   const char *miss = "laser beam does not cross the field of view";
+  const char *unbounded = "laser beam has an unbounded intersection with the field of view";
   double r1, r2;
   if (a == 0.0) {
-    if (b == 0.0)
+    if (b < 0.0 || (b == 0.0 && c <= 0.0))
+      throw std::invalid_argument(unbounded);
+    if (b == 0.0 || c >= 0.0)
       throw std::invalid_argument(miss);
-    r1 = r2 = -c / b;
+    r2 = -c / b;
+    return {o.laser_position_m, dir, r2};
   } else {
+    if (a < 0.0)
+      throw std::invalid_argument(unbounded);
     const double disc = b * b - 4.0 * a * c;
     if (disc < 0.0)
       throw std::invalid_argument(miss);
@@ -82,6 +88,9 @@ inline BeamGeometry laser_beam_geometry(const LsBeamOptions &o) {
   }
   if (r1 > r2)
     std::swap(r1, r2);
+  if (r2 <= 0.0)
+    throw std::invalid_argument(miss);
+  r1 = std::max(r1, 0.0);
   return {o.laser_position_m + dir * r1, dir, r2 - r1};
 }
 
