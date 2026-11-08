@@ -39,10 +39,12 @@ so `dir.z = cos(theta)`). Telescope-axis frame: `p = rotate_y(rotate_z(laser_pos
 `a = qx^2 + qy^2 - qz^2 T^2`, `b = 2 (qx px + qy py - qz pz T^2)`, `c = px^2 + py^2 - pz^2
 T^2`. Roots `t1 <= t2` (numerically stable evaluation, relative accuracy 1e-12; if `a = 0`
 and `b != 0` both roots are `-c/b`; `a = 0 = b`, or negative discriminant, is an error
-`laser-beam: laser beam does not cross the field of view`). Beam start (sky frame, relative to
-the telescope) `laser_position + dir t1`, inside-cone path length `L = t2 - t1`. The nappe is
-not checked. Test: both ends have angle `h` to the axis (cosine to 1e-9); a beam that misses
-the cone (laser at (0,1000,0), theta 90) is rejected.
+`laser-beam: laser beam does not cross the field of view`). The forward interval is
+`[max(t1, 0), t2]`; if `t2 <= 0` the beam misses. Beam start (sky frame, relative to the
+telescope) `laser_position + dir max(t1, 0)`, inside-cone path length `L = t2 - max(t1, 0)`.
+The nappe is not checked. Test: both ends have angle `h` to the axis (cosine to 1e-9); a beam
+that misses the cone (laser at (0,1000,0), theta 90) and intersections behind the laser are
+rejected.
 
 ## Emissions
 

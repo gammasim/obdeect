@@ -82,6 +82,9 @@ inline BeamGeometry laser_beam_geometry(const LsBeamOptions &o) {
   }
   if (r1 > r2)
     std::swap(r1, r2);
+  if (r2 <= 0.0)
+    throw std::invalid_argument(miss);
+  r1 = std::max(r1, 0.0);
   return {o.laser_position_m + dir * r1, dir, r2 - r1};
 }
 
