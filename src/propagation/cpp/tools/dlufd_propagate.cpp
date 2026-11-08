@@ -18,10 +18,6 @@ using namespace dlufd;
 #include <string>
 #include <utility>
 #include <vector>
-#ifdef _WIN32
-#include <fcntl.h>
-#include <io.h>
-#endif
 
 namespace {
 
@@ -96,18 +92,10 @@ std::uint64_t parse_seed(const std::string &text) {
   return static_cast<std::uint64_t>(value);
 }
 
-void set_binary_stdio() {
-#ifdef _WIN32
-  _setmode(_fileno(stdin), _O_BINARY);
-  _setmode(_fileno(stdout), _O_BINARY);
-#endif
-}
-
 } // namespace
 
 int main(int argc, char **argv) {
   std::ios::sync_with_stdio(false);
-  set_binary_stdio();
   std::optional<std::string> transmission;
   std::optional<double> site_altitude;
   std::optional<std::uint64_t> seed;
