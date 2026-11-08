@@ -888,6 +888,9 @@ def test_geometry_only_on_ground_stream_keeps_every_photon(tmp_path):
         ({"mode": "thinned"}, "thinned"),
         ({"scattering": "table.dat"}, "scattering"),
         ({"scattering_points": 4}, "scattering_points"),
+        # The default value is rejected too, as the CLI rejects any --scattering-points.
+        ({"scattering_points": 8}, "scattering_points"),
+        ({"pathlen_m": 0.0}, "pathlen_m"),
         ({"store_p": True}, "store_p"),
         ({"pathlen_m": 1.0}, "pathlen_m"),
         ({"telescope_pathlen_m": {1: 1.0}}, "telescope_pathlen_m"),

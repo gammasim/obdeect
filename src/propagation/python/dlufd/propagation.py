@@ -27,8 +27,8 @@ def propagate(
     mode: str | None = None,
     store_p: bool = False,
     scattering: str | os.PathLike | None = None,
-    scattering_points: int = DEFAULT_SCATTERING_POINTS,
-    pathlen_m: float = 0.0,
+    scattering_points: int | None = None,
+    pathlen_m: float | None = None,
     telescope_pathlen_m: Mapping[int, float] | None = None,
     extinction: bool = True,
 ) -> dict[str, float]:
@@ -55,8 +55,9 @@ def propagate(
             the sky photons before extinction; scattered photons go to their telescope's block.
             The run needs telescope_r_m. Off when None.
         scattering_points: scattering points per photon (1 to 1024); used only with scattering.
+            Default None: 8 points.
         pathlen_m: optical path inside each telescope [m] (the in-telescope part of the
-            extinction, see docs/propagation.md). Default 0.
+            extinction, see docs/propagation.md). Default None: 0 m.
         telescope_pathlen_m: per-telescope path [m] as {telescope_id: metres}, ids 1-based;
             overrides pathlen_m for those telescopes. Default None.
         extinction: False for geometry only: sky to ground frame (refraction, air delay) and
@@ -110,8 +111,8 @@ def propagate(
             mode == "weighted" or not extinction,
             bool(store_p),
             None if scattering is None else os.fspath(scattering),
-            int(scattering_points),
-            float(pathlen_m),
+            DEFAULT_SCATTERING_POINTS if scattering_points is None else int(scattering_points),
+            0.0 if pathlen_m is None else float(pathlen_m),
             pathlens,
             not extinction,
         )
@@ -134,9 +135,9 @@ def _check_geometry_only(
         "envelope": bool(envelope),
         'mode="thinned"': mode == "thinned",
         "scattering": scattering is not None,
-        "scattering_points": scattering_points != DEFAULT_SCATTERING_POINTS,
+        "scattering_points": scattering_points is not None,
         "store_p": bool(store_p),
-        "pathlen_m": pathlen_m != 0.0,
+        "pathlen_m": pathlen_m is not None,
         "telescope_pathlen_m": bool(telescope_pathlen_m),
     }
     given = [name for name, is_set in rejected.items() if is_set]
