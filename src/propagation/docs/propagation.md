@@ -179,7 +179,7 @@ $ dlufd-propagate --no-extinction --site-altitude 2000 --profile atmprof.dat --s
   stage applies it; `wavelength` is `applied`.
 - No transmission table is needed. `zem` is not needed either.
 - Rejected with a clear error: `--transmission`, `--envelope`, `--mode thinned`, `--scattering`,
-  `--store-p`, `--pathlen`, `--telescope-pathlen`. `--mode weighted` is accepted.
+  `--scattering-points`, `--store-p`, `--pathlen`, `--telescope-pathlen`. `--mode weighted` is accepted.
 
 ## In-telescope path
 

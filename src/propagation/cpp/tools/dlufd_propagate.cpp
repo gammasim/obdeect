@@ -210,7 +210,8 @@ int main(int argc, char **argv) {
         throw UsageError("--no-extinction cannot be combined with --mode thinned");
       }
       if (scattering || scattering_points) {
-        throw UsageError("--no-extinction cannot be combined with --scattering");
+        throw UsageError("--no-extinction cannot be combined with --scattering or "
+                         "--scattering-points");
       }
       if (store_p) {
         throw UsageError("--no-extinction cannot be combined with --store-p");

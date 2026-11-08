@@ -11,6 +11,7 @@ from collections.abc import Mapping, Sequence
 from dlufd import _core
 
 MODES = ("thinned", "weighted")
+DEFAULT_SCATTERING_POINTS = 8
 
 
 def propagate(
@@ -26,7 +27,7 @@ def propagate(
     mode: str | None = None,
     store_p: bool = False,
     scattering: str | os.PathLike | None = None,
-    scattering_points: int = 8,
+    scattering_points: int = DEFAULT_SCATTERING_POINTS,
     pathlen_m: float = 0.0,
     telescope_pathlen_m: Mapping[int, float] | None = None,
     extinction: bool = True,
@@ -78,7 +79,14 @@ def propagate(
             raise ValueError("transmission is required (or extinction=False)")
     else:
         _check_geometry_only(
-            transmission, envelope, mode, scattering, store_p, pathlen_m, telescope_pathlen_m
+            transmission,
+            envelope,
+            mode,
+            scattering,
+            scattering_points,
+            store_p,
+            pathlen_m,
+            telescope_pathlen_m,
         )
     items = envelope.items() if isinstance(envelope, Mapping) else envelope
     factors = [(str(name), os.fspath(path)) for name, path in items]
@@ -111,7 +119,14 @@ def propagate(
 
 
 def _check_geometry_only(
-    transmission, envelope, mode, scattering, store_p, pathlen_m, telescope_pathlen_m
+    transmission,
+    envelope,
+    mode,
+    scattering,
+    scattering_points,
+    store_p,
+    pathlen_m,
+    telescope_pathlen_m,
 ) -> None:
     """Reject settings that need extinction or thinning (extinction=False)."""
     rejected = {
@@ -119,6 +134,7 @@ def _check_geometry_only(
         "envelope": bool(envelope),
         'mode="thinned"': mode == "thinned",
         "scattering": scattering is not None,
+        "scattering_points": scattering_points != DEFAULT_SCATTERING_POINTS,
         "store_p": bool(store_p),
         "pathlen_m": pathlen_m != 0.0,
         "telescope_pathlen_m": bool(telescope_pathlen_m),
