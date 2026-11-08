@@ -64,19 +64,13 @@ target_compile_features(dlamb_core INTERFACE cxx_std_20)
 target_link_libraries(dlamb_core INTERFACE gstrickd::gstrickd_core)
 # Identical floating-point results for any thread count and chunk size on one
 # platform: no implicit fused multiply-add contraction.
-if(NOT MSVC)
-  target_compile_options(dlamb_core INTERFACE -ffp-contract=off)
-endif()
+target_compile_options(dlamb_core INTERFACE -ffp-contract=off)
 
 function(dlamb_enable_warnings target)
-  if(MSVC)
-    target_compile_options(${target} PRIVATE /W4 /WX)
-  else()
-    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror)
-    # GCC 13 reports false maybe-uninitialized warnings inside std::variant at -O3.
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-      target_compile_options(${target} PRIVATE -Wno-error=maybe-uninitialized)
-    endif()
+  target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  # GCC 13 reports false maybe-uninitialized warnings inside std::variant at -O3.
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(${target} PRIVATE -Wno-error=maybe-uninitialized)
   endif()
 endfunction()
 
