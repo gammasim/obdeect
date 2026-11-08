@@ -8,6 +8,7 @@ Status: pre-alpha. Extinction (with wavelength assignment and thinning), refract
 :maxdepth: 1
 
 changelog
+installation
 extinction
 refraction
 propagation
