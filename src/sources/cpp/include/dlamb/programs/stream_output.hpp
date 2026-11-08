@@ -56,6 +56,9 @@ struct Emission {
   std::uint64_t seed{};
   double bunch_size{1.0};
   double time_offset_ns{};
+  // Camera frame only: move each photon along its direction to the plane z = 0 and add the
+  // travel time (path / c) to its time. Photons not travelling towards the plane are an error.
+  bool to_camera_plane{false};
 };
 
 // One IACT event (one telescope). labels: pixel ids fired (led only).
@@ -333,6 +336,29 @@ inline double program_uniform(std::uint64_t seed, std::uint32_t event, std::uint
   return gstrickd::uniform4({seed, stage_programs, event, 0U, draw, 1U})[0];
 }
 
+// Straight-line propagation of camera-frame photons to the camera plane z = 0 [m]: position
+// moves along the direction, the time grows by path / c [ns]. Directions are unchanged.
+inline void project_to_camera_plane(gstrickd::PhotonChunk &chunk) {
+  auto &x = chunk[gstrickd::Column::x];
+  auto &y = chunk[gstrickd::Column::y];
+  auto &z = chunk[gstrickd::Column::z];
+  auto &t = chunk[gstrickd::Column::t];
+  const auto &cx = chunk[gstrickd::Column::cx];
+  const auto &cy = chunk[gstrickd::Column::cy];
+  const auto &cz = chunk[gstrickd::Column::cz];
+  for (std::size_t i = 0; i < x.size(); ++i) {
+    if (!(cz[i] < 0.0F) || z[i] < 0.0F) {
+      bad("photon does not travel towards the camera plane (z = 0); use a narrower "
+          "--angular-distribution or --frame sky");
+    }
+    const double path = static_cast<double>(z[i]) / -static_cast<double>(cz[i]);
+    x[i] = static_cast<float>(x[i] + path * cx[i]);
+    y[i] = static_cast<float>(y[i] + path * cy[i]);
+    z[i] = 0.0F;
+    t[i] = static_cast<float>(t[i] + path / speed_of_light_m_per_ns);
+  }
+}
+
 // Writes the complete stream: stream, run, then per event: event, telescope, photon
 // chunks, telescope_end, event_end; run_end; stream_end. Photons of one telescope and
 // event are numbered consecutively over all emissions (first_index). Sky photons also
@@ -395,6 +421,9 @@ inline void write_stream(std::ostream &out, const RunSetup &run, const std::vect
         gstrickd::PhotonChunk chunk;
         emit(source, emission.seed, event.number, run.telescope_id, first, rows, chunk);
         chunk.first_index = index + first;
+        if (emission.to_camera_plane) {
+          project_to_camera_plane(chunk);
+        }
         auto &w = chunk[gstrickd::Column::w];
         auto &t = chunk[gstrickd::Column::t];
         for (std::size_t i = 0; i < rows; ++i) {

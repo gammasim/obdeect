@@ -35,6 +35,8 @@ void usage(std::ostream &out, const char *name) {
       << "  -o FILE                   output file {stdout}\n"
       << "  -h, --help                this text\n"
       << "--type dish only:\n"
+      << "  --frame sky|camera        sky: emission points; camera: photons on the camera plane\n"
+      << "                            (straight line from the flasher, no atmosphere) {sky}\n"
       << "  --events N[,...]          events per photon level {1}; a short list repeats its last "
          "value\n"
       << "  --xy X,Y (--flasher-xy X,Y)  flasher offset from the axis [cm] {0,0}\n"
@@ -103,6 +105,15 @@ int main(int argc, char **argv) {
           options.y_cm = xy[1];
         } else {
           options.flasher_xy_cm = parse_real(value, arg);
+        }
+      } else if (arg == "--frame") {
+        dish_only(arg);
+        if (value == "sky") {
+          options.frame = gstrickd::Frame::sky;
+        } else if (value == "camera") {
+          options.frame = gstrickd::Frame::camera;
+        } else {
+          bad("--frame must be sky or camera");
         }
       } else if (arg == "--distance") {
         dish_only(arg);

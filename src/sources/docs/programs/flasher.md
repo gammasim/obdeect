@@ -28,6 +28,7 @@ Options that belong to one type are rejected with the other type, e.g.
 | `--seed N` | both | `1` | Philox seed |
 | `-o FILE` | both | stdout | output file |
 | `--events N[,...]` | dish | `1` | events per photon level; a short list repeats its last value |
+| `--frame sky\|camera` | dish | `sky` | `camera`: photons on the camera plane z = 0, see below |
 | `--xy X,Y` (`--flasher-xy X,Y`) | dish | `0,0` | flasher offset from the axis [cm] |
 | `--distance D` (`-z D`) | dish | `1600` | flasher distance above the telescope centre [cm] |
 | `--camera-radius R` (`-r R`) | dish | `120` | fiducial camera radius [cm] |
@@ -53,6 +54,12 @@ Options that belong to one type are rejected with the other type, e.g.
 - secondary fire modes: `all` (four emissions), `alternate` (flasher `event mod 4`), `demo`
   (four individual flashes, then all with `delays[4]`), `n` (one flasher). `demo` with
   all-zero delays uses the demo values `0,10,20,30,50` ns.
+
+`--frame camera` (dish): frame C. The photons run in a straight line from the flasher to the
+plane z = 0 of the camera, without atmosphere. Time is emission time plus path / c. Count and
+directions equal the sky-frame output for the same seed; positions lie in a disc of radius
+`R / sqrt(1 - (R / d)^2)`. A photon that does not travel towards the plane is an error.
+Pipeline: see [Using dlamb with sim_telarray](../sim_telarray.md).
 
 ## Times and frames
 
