@@ -2,6 +2,7 @@
 
 #include "gstrickd/simtel.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -398,6 +399,202 @@ std::string run_adapter_with(const std::vector<Record> &records, SimtelOptions o
   }
   converter.finish();
   return out.str();
+}
+
+// Telescope-frame chunk: emission points x y z [m], direction cx cy (cz below, or none),
+// times t [ns]; w = 1.
+PhotonChunk telescope_chunk(std::uint32_t telescope, const std::vector<double> &x,
+                            const std::vector<double> &y, const std::vector<double> &z,
+                            const std::vector<double> &cx, const std::vector<double> &cy,
+                            const std::vector<double> &cz, const std::vector<double> &t) {
+  PhotonChunk chunk;
+  chunk.telescope_id = telescope;
+  chunk.frame = Frame::telescope;
+  const std::size_t n = x.size();
+  chunk.resize(n, required_columns | column_bit(Column::z) | column_bit(Column::wavelength) |
+                      (cz.empty() ? 0U : column_bit(Column::cz)));
+  for (std::size_t i = 0; i < n; ++i) {
+    chunk[Column::x][i] = static_cast<float>(x[i]);
+    chunk[Column::y][i] = static_cast<float>(y[i]);
+    chunk[Column::z][i] = static_cast<float>(z[i]);
+    chunk[Column::cx][i] = static_cast<float>(cx[i]);
+    chunk[Column::cy][i] = static_cast<float>(cy[i]);
+    if (!cz.empty()) {
+      chunk[Column::cz][i] = static_cast<float>(cz[i]);
+    }
+    chunk[Column::t][i] = static_cast<float>(t[i]);
+    chunk[Column::w][i] = 1.0F;
+    chunk[Column::wavelength][i] = 400.0F;
+  }
+  return chunk;
+}
+
+std::vector<Record> telescope_frame_records(std::uint32_t telescope, const PhotonChunk &chunk) {
+  return {
+      record_of(RecordType::run, light_source_run()),
+      record_of(RecordType::event, Metadata{{"event_number", std::int64_t{1}}}),
+      record_of(RecordType::telescope, Metadata{{"telescope_id", std::int64_t{telescope}},
+                                                {"array_index", std::int64_t{0}}}),
+      photons_of(chunk),
+      record_of(RecordType::telescope_end, Metadata{{"telescope_id", std::int64_t{telescope}}}),
+      record_of(RecordType::event_end),
+      record_of(RecordType::run_end),
+  };
+}
+
+// Bunches of the first telescope photon block of an adapter output.
+std::vector<Bunch> first_bunches(const std::string &bytes) {
+  for (const EventioBlock &block : read_blocks(bytes)) {
+    if (block.type != iact::telarray) {
+      continue;
+    }
+    for (const EventioBlock &child : subblocks(block)) {
+      return decode_photons(child).bunches;
+    }
+  }
+  return {};
+}
+
+// Telescope frame (dual mirror, Bypass_Optics=1), observation level 2200 m. Emission point
+// (0.1, 0.2, 0.5) m, t = 3 ns, direction (0.6, 0, cz):
+//   cz = -0.8 (towards the plane z = 0): path 0.625 m, crossing x = 0.1 + 0.625 * 0.6 = 0.475 m
+//   cz = +0.8 (away from it):            path -0.625 m, crossing x = 0.1 - 0.375 = -0.275 m
+//   both: y = 0.2 m, t = 3 + 0.625 / 0.299792458 ns, zem = 2200.5 m (bunch values in cm)
+void test_telescope_frame_through_adapter() {
+  const CameraMap camera{{1, CameraTelescope{2, 30.0}}};
+  const double t_out = 3.0 + 0.625 / 0.299792458;
+  const std::vector<Bunch> down = first_bunches(
+      run_adapter(telescope_frame_records(
+                      1, telescope_chunk(1, {0.1}, {0.2}, {0.5}, {0.6}, {0.0}, {-0.8}, {3.0})),
+                  camera));
+  CHECK(down.size() == 1);
+  if (down.size() == 1) {
+    CHECK_NEAR(down[0].x, 47.5, 1e-3);
+    CHECK_NEAR(down[0].y, 20.0, 1e-3);
+    CHECK_NEAR(down[0].cx, 0.6, 1e-6);
+    CHECK_NEAR(down[0].cy, 0.0, 1e-6);
+    CHECK_NEAR(down[0].ctime, t_out, 1e-4);
+    CHECK_NEAR(down[0].zem, 220050.0, 0.1);
+    CHECK_NEAR(down[0].photons, 1.0, 1e-6);
+    CHECK_NEAR(down[0].lambda, 400.0, 1e-6);
+  }
+  const std::vector<Bunch> up = first_bunches(
+      run_adapter(telescope_frame_records(
+                      1, telescope_chunk(1, {0.1}, {0.2}, {0.5}, {0.6}, {0.0}, {0.8}, {3.0})),
+                  camera));
+  CHECK(up.size() == 1);
+  if (up.size() == 1) {
+    CHECK_NEAR(up[0].x, -27.5, 1e-3);
+    CHECK_NEAR(up[0].y, 20.0, 1e-3);
+    CHECK_NEAR(up[0].cx, 0.6, 1e-6);
+    CHECK_NEAR(up[0].ctime, t_out, 1e-4);
+    CHECK_NEAR(up[0].zem, 220050.0, 0.1);
+  }
+  // Without cz the photon moves towards the plane: same bunch as cz = -0.8.
+  const std::vector<Bunch> implied = first_bunches(run_adapter(
+      telescope_frame_records(1, telescope_chunk(1, {0.1}, {0.2}, {0.5}, {0.6}, {0.0}, {}, {3.0})),
+      camera));
+  CHECK(implied.size() == 1);
+  if (implied.size() == 1 && down.size() == 1) {
+    CHECK_NEAR(implied[0].x, down[0].x, 1e-4);
+    CHECK_NEAR(implied[0].ctime, down[0].ctime, 1e-4);
+  }
+}
+
+// Bypass_Optics=1 is reported for a telescope-frame telescope; the camera rotation is unused.
+void test_telescope_frame_report_and_telpos() {
+  const CameraMap camera{{1, CameraTelescope{2, 30.0}}};
+  const std::vector<Record> records = telescope_frame_records(
+      1, telescope_chunk(1, {0.1}, {0.2}, {0.5}, {0.6}, {0.0}, {-0.8}, {3.0}));
+  std::ostringstream warnings;
+  SimtelOptions options;
+  options.camera = camera;
+  options.warnings = &warnings;
+  const std::string bytes = run_adapter_with(records, options);
+  CHECK(warnings.str().find("ps2simtel: telescope 1: telescope frame, mirror class 2, "
+                            "Bypass_Optics=1\n") != std::string::npos);
+  for (const EventioBlock &block : read_blocks(bytes)) {
+    if (block.type == iact::telpos) {
+      const TelPos pos = decode_telpos(block);
+      CHECK(pos.z.size() == 2);
+      if (pos.z.size() == 2) {
+        CHECK_NEAR(pos.z[0], 0.0, 1e-9);
+      }
+    }
+  }
+  // Rotation 0 and 30 deg give the same bunches.
+  const std::vector<Bunch> other =
+      first_bunches(run_adapter(records, {{1, CameraTelescope{2, 0.0}}}));
+  const std::vector<Bunch> rotated = first_bunches(bytes);
+  CHECK(other.size() == 1 && rotated.size() == 1);
+  if (other.size() == 1 && rotated.size() == 1) {
+    CHECK_NEAR(other[0].x, rotated[0].x, 1e-6);
+    CHECK_NEAR(other[0].cx, rotated[0].cx, 1e-6);
+  }
+}
+
+// Telescope-frame photons need a dual-mirror camera map entry and a single frame per telescope.
+void test_telescope_frame_rejected() {
+  const PhotonChunk tframe = telescope_chunk(1, {0.1}, {0.2}, {0.5}, {0.6}, {0.0}, {-0.8}, {3.0});
+  const std::vector<Record> records = telescope_frame_records(1, tframe);
+  CHECK(throws_error([&] { run_adapter(records, {}); }));                             // no entry
+  CHECK(throws_error([&] { run_adapter(records, {{1, CameraTelescope{1, 0.0}}}); })); // single
+  CHECK(throws_error([&] { run_adapter(records, {{2, CameraTelescope{2, 0.0}}}); })); // other id
+  CHECK(!throws_error([&] { run_adapter(records, {{1, CameraTelescope{2, 0.0}}}); }));
+
+  // A photon parallel to the plane z = 0, and a chunk without z, are errors.
+  const CameraMap dual{{1, CameraTelescope{2, 0.0}}};
+  CHECK(throws_error([&] {
+    run_adapter(telescope_frame_records(
+                    1, telescope_chunk(1, {0.1}, {0.2}, {0.5}, {1.0}, {0.0}, {0.0}, {3.0})),
+                dual);
+  }));
+  PhotonChunk no_z = tframe;
+  no_z[Column::z].clear();
+  CHECK(throws_error([&] { telescope_to_bypass_convention(no_z, 2200.0); }));
+  for (const float bad : {std::nanf(""), INFINITY}) {
+    PhotonChunk bad_direction = tframe; // with an explicit cz column
+    bad_direction[Column::cx][0] = bad;
+    CHECK(throws_error([&] { telescope_to_bypass_convention(bad_direction, 2200.0); }));
+    PhotonChunk bad_cy = tframe;
+    bad_cy[Column::cy][0] = bad;
+    CHECK(throws_error([&] { telescope_to_bypass_convention(bad_cy, 2200.0); }));
+  }
+  // A direction that is not a unit vector, and results out of float range, are errors; the
+  // chunk is left unchanged.
+  PhotonChunk not_unit = tframe;
+  not_unit[Column::cx][0] = 0.0F;
+  not_unit[Column::cz][0] = -2.0F;
+  CHECK(throws_error([&] { telescope_to_bypass_convention(not_unit, 2200.0); }));
+  CHECK_NEAR(not_unit[Column::x][0], 0.1, 1e-6);
+  PhotonChunk implied_not_unit = telescope_chunk(1, {0.1}, {0.2}, {0.5}, {0.9}, {0.9}, {}, {3.0});
+  try {
+    telescope_to_bypass_convention(implied_not_unit, 2200.0);
+    CHECK(false);
+  } catch (const std::invalid_argument &error) {
+    CHECK(std::string(error.what()).find("unit vector") != std::string::npos);
+  }
+  PhotonChunk tiny_cz = telescope_chunk(1, {0.1}, {0.2}, {5.0}, {1.0}, {0.0}, {-1e-38}, {3.0});
+  CHECK(throws_error([&] { telescope_to_bypass_convention(tiny_cz, 2200.0); }));
+  CHECK_NEAR(tiny_cz[Column::t][0], 3.0, 1e-6);
+  PhotonChunk bad_level = tframe;
+  CHECK(throws_error([&] { telescope_to_bypass_convention(bad_level, std::nan("")); }));
+
+  // Camera and telescope frame for one telescope in one run.
+  for (const Frame first : {Frame::camera, Frame::telescope}) {
+    std::vector<Record> mixed = telescope_frame_records(1, tframe);
+    const PhotonChunk camera_chunk = chunk_of(1, Frame::camera, {0.5}, {0.2}, {0.1}, {-0.2});
+    const PhotonChunk a = first == Frame::camera ? camera_chunk : tframe;
+    const PhotonChunk b = first == Frame::camera ? tframe : camera_chunk;
+    mixed[3] = photons_of(a);
+    mixed.insert(mixed.begin() + 4, photons_of(b));
+    CHECK(throws_error([&] { run_adapter(mixed, dual); }));
+  }
+  // Ground frame for a camera-map telescope is still an error.
+  CHECK(throws_error([&] {
+    run_adapter(telescope_frame_records(1, chunk_of(1, Frame::ground, {0.5}, {0.2}, {0.1}, {-0.2})),
+                dual);
+  }));
 }
 
 // Atmospheric table of three levels (a stand-in for a CORSIKA atmprof file).
@@ -874,6 +1071,9 @@ int main() {
     test_camera_conversion();
     test_camera_frame_through_adapter();
     test_telpos_zeroed_for_camera_only();
+    test_telescope_frame_through_adapter();
+    test_telescope_frame_report_and_telpos();
+    test_telescope_frame_rejected();
     test_synthesised_headers();
     test_synthesised_run_end_counts_events();
     test_missing_metadata_rejected();

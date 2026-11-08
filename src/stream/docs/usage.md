@@ -91,9 +91,41 @@ sim_telarray reports the run as complete:
 Run(s) completed as expected after 3 events (3 showers).
 ```
 
-Telescopes not listed are ground-frame (sim_telarray `Bypass_Optics=0`). Listed telescopes are
-converted to the bypass convention and need `Bypass_Optics=1` (class 1) or `2` (class 2) in
-sim_telarray; `ps2simtel` prints the value for each.
+Telescopes not listed are ground-frame (sim_telarray `Bypass_Optics=0`). Listed telescopes with
+camera-frame photons are converted to the bypass convention and need `Bypass_Optics=1` (class 1) or
+`2` (class 2) in sim_telarray; `ps2simtel` prints the value for each. Listed dual-mirror telescopes
+may instead carry telescope-frame photons (next section).
+
+### Telescope-frame photons (dual-mirror telescopes)
+
+A dual-mirror telescope listed with `mirror_class` 2 may carry telescope-frame (T) photons
+instead of camera-frame photons, for example four flashers at the camera firing onto the
+secondary mirror. The T frame has its origin at the secondary centre and z along the optical
+axis towards the sky; each photon is an emission point (`x`, `y`, `z`) with direction
+(`cx`, `cy`, `cz`) and emission time `t`. `ps2simtel` writes one bunch per photon at the
+plane z = 0 of that frame, and sim_telarray needs `Bypass_Optics=1`:
+
+```text
+photon:  x, y, z = 0.1, 0.2, 0.5 m   c = (0.6, 0, -0.8)   t = 3 ns   observation level 2200 m
+bunch:   x, y = 47.5, 20.0 cm   cx, cy = 0.6, 0   time = 5.085 ns   zem = 220050 cm
+```
+
+The bunch position is where the photon's line crosses z = 0 (path 0.625 m here, also for a
+photon moving away from the plane), the time is `t` plus that path length over the speed of
+light, and `zem` is the observation level plus `z`. Without a `cz` column the photon moves
+towards the plane. The camera rotation of the map is not used, and TELPOS z is set to 0 as for
+camera-frame telescopes. `ps2simtel` reports the value when it sees the first photons:
+
+```console
+$ cat cam.txt
+1 2 0.0
+$ dlamb-flasher --type secondary --photons 1e6 | ps2simtel --camera-map cam.txt | sim_telarray ... -C Bypass_Optics=1 -
+ps2simtel: telescope 1: telescope frame, mirror class 2, Bypass_Optics=1
+```
+
+Errors: T photons for a telescope without map entry or with `mirror_class` 1, a photon with
+cz = 0, and camera-frame and T photons for the same telescope in one run.
+The efficiency ledger of such a telescope is checked as for camera frame.
 
 ### Efficiency ledger
 
