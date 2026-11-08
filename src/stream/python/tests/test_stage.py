@@ -169,3 +169,23 @@ def test_conformance_streams():
     for name, message in expected["invalid"].items():
         with pytest.raises(Exception, match=re.escape(message)):
             list(gstrickd.Reader(str(CONFORMANCE / name)))
+
+
+def test_transform_rejects_reapplied_factor_in_telescope_ledger(tmp_path):
+    with gstrickd.Writer(str(tmp_path / "in.ps"), "pytest") as writer:
+        writer.write("run", {})
+        writer.write("event", {})
+        writer.write("telescope", {"telescope_id": 1, "frame": 1})
+        writer.write("ledger", {"factors": "qe", "qe.state": "applied"})
+        writer.write("telescope_end", {})
+        writer.write("event_end", {})
+        writer.write("run_end", {})
+    with pytest.raises(ValueError, match="already applied"):
+        transform(
+            tmp_path / "in.ps",
+            tmp_path / "out.ps",
+            lambda t, c, m: c,
+            stage_id=1,
+            frame_out="camera",
+            ledger={"qe": {"state": "applied", "source": "x"}},
+        )

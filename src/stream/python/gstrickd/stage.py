@@ -69,10 +69,12 @@ def transform(
     record metadata (empty dicts before the first), the chunk's ``frame`` and ``first_index``,
     and ``stage_id``. The output chunk keeps ``first_index`` and gets ``frame_out``.
 
-    All other records are copied unchanged, except that the ``frame`` of ``telescope`` records
+    All other records known to the reader are copied unchanged (records of unknown type are
+    dropped, as the reader skips them), except that the ``frame`` of ``telescope`` records
     becomes ``frame_out``. ``ledger`` (see ``ledger_record``) is written as one ``ledger``
     record per run, after the ledger records already there and before the first event. A
-    factor already ``applied`` in the input cannot be applied again (ValueError). The writer's
+    factor ``applied`` in any input ledger, also one that follows a ``telescope`` record,
+    cannot be applied again (ValueError). The writer's
     ``producer`` is ``"gstrickd.stage 0x<stage_id>"``.
     """
     if isinstance(stage_id, bool) or not isinstance(stage_id, int) or not 0 <= stage_id < 2**32:
@@ -82,7 +84,7 @@ def transform(
         raise ValueError(f"unknown frame {frame_out!r}")
     entry = ledger_record(ledger) if ledger else None
     context: dict[str, dict[str, object]] = {"run": {}, "event": {}, "telescope": {}}
-    previous_applied: set[str] = set()
+    entry_applied = _applied(entry) if entry else set()
     ledger_pending = False
 
     with Writer(os.fspath(output), f"gstrickd.stage {stage_id:#x}") as writer:
@@ -91,9 +93,6 @@ def transform(
             if kind == "stream":
                 continue
             if ledger_pending and kind in ("event", "run_end"):
-                repeated = _applied(entry) & previous_applied
-                if repeated:
-                    raise ValueError(f"factor(s) already applied upstream: {sorted(repeated)}")
                 writer.write("ledger", entry)
                 ledger_pending = False
             if kind in METADATA_RECORDS:
@@ -101,10 +100,11 @@ def transform(
                 if kind in context:
                     context[kind] = metadata
                 if kind == "run":
-                    previous_applied = set()
                     ledger_pending = entry is not None
                 elif kind == "ledger":
-                    previous_applied |= _applied(metadata)
+                    repeated = entry_applied & _applied(metadata)
+                    if repeated:
+                        raise ValueError(f"factor(s) already applied upstream: {sorted(repeated)}")
                 elif kind == "telescope" and "frame" in metadata:
                     metadata["frame"] = frame_code
                 writer.write(kind, metadata)

@@ -134,9 +134,9 @@ transform("ground.ps", "camera.ps", trace, stage_id=0x444C0010, frame_out="camer
           ledger={"mirror": {"state": "applied", "source": "my-model-v1"}})
 ```
 
-`transform` copies all other records unchanged, sets the frame of the output chunks and
+`transform` copies all other records unchanged (records of unknown type are dropped), sets the frame of the output chunks and
 telescope records, and appends one `ledger` record per run (it refuses a factor that is
-already `applied`).
+`applied` in any input ledger).
 
 The same in C (error handling shortened):
 

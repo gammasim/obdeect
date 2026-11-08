@@ -197,11 +197,22 @@ static void test_arguments(const char *directory) {
           GSTRICKD_OK);
     free(many);
   }
+  /* Empty array and empty blob with NULL pointers. */
+  CHECK(gstrickd_writer_set_array(writer, "empty", NULL, 0) == GSTRICKD_OK);
+  CHECK(gstrickd_writer_write_record(writer, GSTRICKD_RECORD_RUN) == GSTRICKD_OK);
+  CHECK(gstrickd_writer_write_blob(writer, 1, 2, NULL, 0) == GSTRICKD_OK);
   CHECK(gstrickd_writer_close(writer) == GSTRICKD_OK);
 
   CHECK(gstrickd_reader_open(path, &reader) == GSTRICKD_OK);
   expect_next(reader, GSTRICKD_RECORD_STREAM);
   expect_next(reader, GSTRICKD_RECORD_PHOTONS);
+  expect_next(reader, GSTRICKD_RECORD_RUN);
+  {
+    const double *values = NULL;
+    size_t n = 7;
+    CHECK(gstrickd_reader_meta_array(reader, "empty", &values, &n) == GSTRICKD_OK && n == 0);
+  }
+  expect_next(reader, GSTRICKD_RECORD_BLOB);
   CHECK(gstrickd_reader_next(reader, &type) == GSTRICKD_END);
   gstrickd_reader_close(reader);
 }

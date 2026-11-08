@@ -40,8 +40,22 @@ namespace {
 
 thread_local std::string last_error_message;
 
-int fail(int code, std::string message) {
-  last_error_message = std::move(message);
+// Never throws: if the message cannot be stored it is empty.
+int fail(int code, const char *message) noexcept {
+  try {
+    last_error_message = message;
+  } catch (...) {
+    last_error_message.clear();
+  }
+  return code;
+}
+
+int fail_key(int code, const char *prefix, const char *key, const char *suffix) noexcept {
+  try {
+    last_error_message = std::string(prefix) + key + suffix;
+  } catch (...) {
+    last_error_message.clear();
+  }
   return code;
 }
 
@@ -54,11 +68,11 @@ int from_exception() noexcept {
   } catch (const std::invalid_argument &error) {
     return fail(GSTRICKD_ERROR_ARGUMENT, error.what());
   } catch (const std::runtime_error &error) {
-    const std::string text = error.what();
-    if (text.find("unsupported format major version") != std::string::npos) {
+    const char *text = error.what();
+    if (std::strstr(text, "unsupported format major version") != nullptr) {
       return fail(GSTRICKD_ERROR_VERSION, text);
     }
-    if (text.find("read error") != std::string::npos) {
+    if (std::strstr(text, "read error") != nullptr) {
       return fail(GSTRICKD_ERROR_IO, text);
     }
     return fail(GSTRICKD_ERROR_FORMAT, text);
@@ -167,12 +181,12 @@ template <class T> const T *typed_value(const gstrickd_reader *reader, const cha
   }
   const gstrickd::Value *value = reader->find(key);
   if (value == nullptr) {
-    code = fail(GSTRICKD_ERROR_NOT_FOUND, std::string("no metadata key '") + key + "'");
+    code = fail_key(GSTRICKD_ERROR_NOT_FOUND, "no metadata key \'", key, "\'");
     return nullptr;
   }
   const T *typed = std::get_if<T>(value);
   if (typed == nullptr) {
-    code = fail(GSTRICKD_ERROR_TYPE, std::string("metadata key '") + key + "' has another type");
+    code = fail_key(GSTRICKD_ERROR_TYPE, "metadata key '", key, "' has another type");
   }
   return typed;
 }
@@ -252,7 +266,7 @@ int gstrickd_reader_open(const char *path, gstrickd_reader **out) {
     auto handle = std::make_unique<gstrickd_reader>(-1);
     handle->file = std::make_unique<std::ifstream>(path, std::ios::binary);
     if (!*handle->file) {
-      return fail(GSTRICKD_ERROR_IO, std::string("cannot open ") + path);
+      return fail_key(GSTRICKD_ERROR_IO, "cannot open ", path, "");
     }
     handle->input = handle->file.get();
     return open_reader(std::move(handle), out);
@@ -337,86 +351,106 @@ const char *gstrickd_reader_key(const gstrickd_reader *reader, size_t i) {
 }
 
 int gstrickd_reader_meta_type(const gstrickd_reader *reader, const char *key, int *value_type) {
-  const int code = check_metadata_access(reader, key);
-  if (code != GSTRICKD_OK) {
-    return code;
+  try {
+    const int code = check_metadata_access(reader, key);
+    if (code != GSTRICKD_OK) {
+      return code;
+    }
+    if (value_type == nullptr) {
+      return bad_argument("NULL argument");
+    }
+    const gstrickd::Value *value = reader->find(key);
+    if (value == nullptr) {
+      return fail_key(GSTRICKD_ERROR_NOT_FOUND, "no metadata key \'", key, "\'");
+    }
+    *value_type = static_cast<int>(value->index()) + 1; // variant order = GSTRICKD_VALUE_*
+    return GSTRICKD_OK;
+  } catch (...) {
+    return from_exception();
   }
-  if (value_type == nullptr) {
-    return bad_argument("NULL argument");
-  }
-  const gstrickd::Value *value = reader->find(key);
-  if (value == nullptr) {
-    return fail(GSTRICKD_ERROR_NOT_FOUND, std::string("no metadata key '") + key + "'");
-  }
-  *value_type = static_cast<int>(value->index()) + 1; // variant order = GSTRICKD_VALUE_*
-  return GSTRICKD_OK;
 }
 
 int gstrickd_reader_meta_int(const gstrickd_reader *reader, const char *key, int64_t *value) {
-  int code = GSTRICKD_OK;
-  const auto *typed = typed_value<std::int64_t>(reader, key, code);
-  if (typed == nullptr) {
-    return code;
+  try {
+    int code = GSTRICKD_OK;
+    const auto *typed = typed_value<std::int64_t>(reader, key, code);
+    if (typed == nullptr) {
+      return code;
+    }
+    if (value == nullptr) {
+      return bad_argument("NULL argument");
+    }
+    *value = *typed;
+    return GSTRICKD_OK;
+  } catch (...) {
+    return from_exception();
   }
-  if (value == nullptr) {
-    return bad_argument("NULL argument");
-  }
-  *value = *typed;
-  return GSTRICKD_OK;
 }
 
 int gstrickd_reader_meta_float(const gstrickd_reader *reader, const char *key, double *value) {
-  const int code = check_metadata_access(reader, key);
-  if (code != GSTRICKD_OK) {
-    return code;
+  try {
+    const int code = check_metadata_access(reader, key);
+    if (code != GSTRICKD_OK) {
+      return code;
+    }
+    if (value == nullptr) {
+      return bad_argument("NULL argument");
+    }
+    const gstrickd::Value *found = reader->find(key);
+    if (found == nullptr) {
+      return fail_key(GSTRICKD_ERROR_NOT_FOUND, "no metadata key \'", key, "\'");
+    }
+    if (const auto *real = std::get_if<double>(found)) {
+      *value = *real;
+    } else if (const auto *integer = std::get_if<std::int64_t>(found)) {
+      *value = static_cast<double>(*integer);
+    } else {
+      return fail_key(GSTRICKD_ERROR_TYPE, "metadata key '", key, "' is not a number");
+    }
+    return GSTRICKD_OK;
+  } catch (...) {
+    return from_exception();
   }
-  if (value == nullptr) {
-    return bad_argument("NULL argument");
-  }
-  const gstrickd::Value *found = reader->find(key);
-  if (found == nullptr) {
-    return fail(GSTRICKD_ERROR_NOT_FOUND, std::string("no metadata key '") + key + "'");
-  }
-  if (const auto *real = std::get_if<double>(found)) {
-    *value = *real;
-  } else if (const auto *integer = std::get_if<std::int64_t>(found)) {
-    *value = static_cast<double>(*integer);
-  } else {
-    return fail(GSTRICKD_ERROR_TYPE, std::string("metadata key '") + key + "' is not a number");
-  }
-  return GSTRICKD_OK;
 }
 
 int gstrickd_reader_meta_string(const gstrickd_reader *reader, const char *key, const char **value,
                                 size_t *length) {
-  int code = GSTRICKD_OK;
-  const auto *typed = typed_value<std::string>(reader, key, code);
-  if (typed == nullptr) {
-    return code;
+  try {
+    int code = GSTRICKD_OK;
+    const auto *typed = typed_value<std::string>(reader, key, code);
+    if (typed == nullptr) {
+      return code;
+    }
+    if (value == nullptr) {
+      return bad_argument("NULL argument");
+    }
+    *value = typed->c_str();
+    if (length != nullptr) {
+      *length = typed->size();
+    }
+    return GSTRICKD_OK;
+  } catch (...) {
+    return from_exception();
   }
-  if (value == nullptr) {
-    return bad_argument("NULL argument");
-  }
-  *value = typed->c_str();
-  if (length != nullptr) {
-    *length = typed->size();
-  }
-  return GSTRICKD_OK;
 }
 
 int gstrickd_reader_meta_array(const gstrickd_reader *reader, const char *key,
                                const double **values, size_t *n) {
-  int code = GSTRICKD_OK;
-  const auto *typed = typed_value<std::vector<double>>(reader, key, code);
-  if (typed == nullptr) {
-    return code;
+  try {
+    int code = GSTRICKD_OK;
+    const auto *typed = typed_value<std::vector<double>>(reader, key, code);
+    if (typed == nullptr) {
+      return code;
+    }
+    if (values == nullptr || n == nullptr) {
+      return bad_argument("NULL argument");
+    }
+    *values = typed->data();
+    *n = typed->size();
+    return GSTRICKD_OK;
+  } catch (...) {
+    return from_exception();
   }
-  if (values == nullptr || n == nullptr) {
-    return bad_argument("NULL argument");
-  }
-  *values = typed->data();
-  *n = typed->size();
-  return GSTRICKD_OK;
 }
 
 int gstrickd_reader_photons(const gstrickd_reader *reader, uint32_t *telescope_id, uint32_t *frame,
@@ -488,7 +522,7 @@ int gstrickd_writer_open(const char *path, const char *producer, gstrickd_writer
     auto handle = std::make_unique<gstrickd_writer>(-1);
     handle->file = std::make_unique<std::ofstream>(path, std::ios::binary);
     if (!*handle->file) {
-      return fail(GSTRICKD_ERROR_IO, std::string("cannot open ") + path + " for writing");
+      return fail_key(GSTRICKD_ERROR_IO, "cannot open ", path, " for writing");
     }
     handle->output = handle->file.get();
     return open_writer(std::move(handle), producer, out);
@@ -544,7 +578,8 @@ int gstrickd_writer_set_array(gstrickd_writer *writer, const char *key, const do
     if (values == nullptr && n > 0) {
       return bad_argument("NULL array");
     }
-    return set_pending(writer, key, std::vector<double>(values, values + n));
+    return set_pending(writer, key,
+                       (n == 0 ? std::vector<double>() : std::vector<double>(values, values + n)));
   } catch (...) {
     return from_exception();
   }
@@ -608,7 +643,8 @@ int gstrickd_writer_write_blob(gstrickd_writer *writer, uint32_t eventio_type, u
       return bad_argument("NULL argument");
     }
     writer->writer->write_blob(eventio_type, eventio_id,
-                               std::vector<std::uint8_t>(data, data + size));
+                               size == 0 ? std::vector<std::uint8_t>()
+                                         : std::vector<std::uint8_t>(data, data + size));
     return check_output(writer);
   } catch (...) {
     return from_exception();
