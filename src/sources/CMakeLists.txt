@@ -14,11 +14,17 @@ include(FetchContent)
 # gstrickd (photon-stream format, Philox draws, stage ids). Lookup order:
 #   1. an installed package: gstrickd_DIR or CMAKE_PREFIX_PATH;
 #   2. the package of the Python interpreter: python -m gstrickd --cmake-dir;
-#   3. FetchContent of a pinned commit (not with DLAMB_REQUIRE_INSTALLED_GSTRICKD=ON).
+#   3. FetchContent of the version tag from pyproject.toml (not with
+#      DLAMB_REQUIRE_INSTALLED_GSTRICKD=ON).
 option(DLAMB_REQUIRE_INSTALLED_GSTRICKD
        "Require an installed gstrickd package (no FetchContent fallback)" OFF)
-set(DLAMB_GSTRICKD_VERSION 0.1.0)
-set(DLAMB_GSTRICKD_GIT_TAG 7f4de4d4afccbb929a596d45a3365e5f9ed4e4e2)
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml" dlamb_gstrickd_version_line
+     REGEX "^gstrickd-version = ")
+if(NOT dlamb_gstrickd_version_line MATCHES "^gstrickd-version = \"([^\"]+)\"$")
+  message(FATAL_ERROR "pyproject.toml must define [tool.dlamb] gstrickd-version")
+endif()
+set(DLAMB_GSTRICKD_VERSION "${CMAKE_MATCH_1}")
+set(DLAMB_GSTRICKD_GIT_TAG "v${DLAMB_GSTRICKD_VERSION}")
 
 find_package(gstrickd ${DLAMB_GSTRICKD_VERSION} EXACT CONFIG QUIET)
 if(NOT gstrickd_FOUND AND NOT gstrickd_DIR)
