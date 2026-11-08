@@ -25,8 +25,8 @@ namespace dlufd {
 
 // Limits and sentinels of the table format and the acceptance.
 inline constexpr int max_lambda_nm = 1000;                 // wavelengths at or above are dropped
-inline constexpr std::size_t max_table_heights = 100;      // most heights in a table
-inline constexpr std::size_t max_table_wavelengths = 1200; // most wavelength rows in a table
+inline constexpr std::size_t max_table_heights = 100;      // maximum number of heights in a table
+inline constexpr std::size_t max_table_wavelengths = 1200; // maximum number of wavelength rows in a table
 inline constexpr double optical_depth_limit = 100.0;       // optical depths above this give 0
 inline constexpr double telescope_optical_depth_limit = 1000.0;
 inline constexpr double unset_optical_depth = 99999.0; // od when the transmission is <= 0

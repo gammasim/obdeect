@@ -102,7 +102,7 @@ if(DLUFD_BUILD_TESTING)
 
   # Agreement with a reference implementation of the interpolation and ray bending:
   # DLUFD_CORSIKA_REFERENCE=<reference source directory>.
-  option(DLUFD_CORSIKA_REFERENCE "Path to the reference source directory (atmo.c and helpers)" OFF)
+  set(DLUFD_CORSIKA_REFERENCE "" CACHE PATH "Path to the reference source directory (atmo.c and helpers)")
   if(DLUFD_CORSIKA_REFERENCE)
     enable_language(C)
     add_library(corsika_atmo STATIC

@@ -36,7 +36,11 @@ class TransmissionTable(_core.TransmissionTable):
         return _vectorized(super().transmission, wavelength_nm, zem_m, airmass)
 
     def transmission2(self, wavelength_nm, zem_m, airmass, od_tel, od_focus):
-        """Transmission exp(-(|od - od_tel| * airmass + od_focus)) with telescope depths."""
+        """Transmission exp(-od) with the telescope optical depths od_tel and od_focus.
+
+        od = |tau(wavelength, zem) - od_tel| * airmass + od_focus, with tau the optical depth of
+        the table at the emission height. od_focus is not multiplied by the airmass.
+        """
         return _vectorized(super().transmission2, wavelength_nm, zem_m, airmass, od_tel, od_focus)
 
     def telescope_depths(self, telescope_altitude_m, pathlen_m=0.0):
