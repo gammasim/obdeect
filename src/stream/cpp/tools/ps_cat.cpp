@@ -14,10 +14,6 @@
 #include <memory>
 #include <string>
 #include <vector>
-#ifdef _WIN32
-#include <fcntl.h>
-#include <io.h>
-#endif
 
 namespace {
 
@@ -100,18 +96,10 @@ void for_each_input(const std::vector<std::string> &inputs, std::istream &stdin_
   }
 }
 
-void set_binary_stdio() {
-#ifdef _WIN32
-  _setmode(_fileno(stdin), _O_BINARY);
-  _setmode(_fileno(stdout), _O_BINARY);
-#endif
-}
-
 } // namespace
 
 int main(int argc, char **argv) {
   std::ios::sync_with_stdio(false);
-  set_binary_stdio();
   bool summary = false;
   std::vector<std::string> inputs;
   for (int i = 1; i < argc; ++i) {

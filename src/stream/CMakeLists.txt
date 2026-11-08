@@ -64,16 +64,10 @@ target_include_directories(gstrickd_core INTERFACE
 target_compile_features(gstrickd_core INTERFACE cxx_std_20)
 # Identical floating-point results for any thread count and chunk size on one
 # platform: no implicit fused multiply-add contraction.
-if(NOT MSVC)
-  target_compile_options(gstrickd_core INTERFACE -ffp-contract=off)
-endif()
+target_compile_options(gstrickd_core INTERFACE -ffp-contract=off)
 
 function(gstrickd_enable_warnings target)
-  if(MSVC)
-    target_compile_options(${target} PRIVATE /W4 /WX)
-  else()
-    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror)
-  endif()
+  target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endfunction()
 
 # Headers and the package config for consumers (find_package(gstrickd CONFIG)).
@@ -164,9 +158,7 @@ if(GSTRICKD_BUILD_TESTING)
     set(CMAKE_C_EXTENSIONS OFF)
     add_executable(test_capi cpp/tests/test_capi.c)
     target_link_libraries(test_capi PRIVATE gstrickd_c)
-    if(NOT MSVC)
-      target_compile_options(test_capi PRIVATE -Wall -Wextra -Wpedantic -Werror)
-    endif()
+    target_compile_options(test_capi PRIVATE -Wall -Wextra -Wpedantic -Werror)
     set(GSTRICKD_CONFORMANCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/cpp/tests/data/conformance)
     add_test(NAME capi COMMAND test_capi ${CMAKE_CURRENT_BINARY_DIR}/capi_roundtrip.ps
              ${GSTRICKD_CONFORMANCE_DIR})

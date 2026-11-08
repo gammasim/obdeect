@@ -10,11 +10,7 @@
 #include <streambuf>
 #include <vector>
 
-#ifdef _WIN32
-#include <io.h>
-#else
 #include <unistd.h>
-#endif
 
 namespace gstrickd {
 
@@ -32,12 +28,7 @@ protected:
       return traits_type::to_int_type(*gptr());
     }
     for (;;) {
-#ifdef _WIN32
-      const auto n = static_cast<long long>(
-          _read(fd_, buffer_.data(), static_cast<unsigned int>(buffer_.size())));
-#else
       const auto n = static_cast<long long>(::read(fd_, buffer_.data(), buffer_.size()));
-#endif
       if (n > 0) {
         setg(buffer_.data(), buffer_.data(), buffer_.data() + n);
         return traits_type::to_int_type(*gptr());

@@ -25,11 +25,8 @@
 namespace gstrickd {
 
 // Word indices into the CORSIKA RUNH (1200) and EVTH (1202) float arrays: C
-// index = Fortran word - 1. Sources (corsika7/): doc/corsika.tex tables RUNH at
-// lines 8431-8440 and 8436-8437 (levels), EVTH at 8502-8516, 8530-8536, 8575-8599
-// (words 77, 96, 97) and the footnote on word 77 at 8624-8637. Same indices in
-// bernlohr/fake_corsika.c:168-237 and in bernlohr/iact.c:2509 (particle, word 3)
-// and :2525 (first interaction height, word 7).
+// index = Fortran word - 1 (e.g. EVTH word 3 is the primary particle, word 7 the
+// first interaction height).
 namespace corsika_word {
 // RUNH
 inline constexpr std::size_t runh_run_number = 1;  // word 2
@@ -546,7 +543,7 @@ private:
     if (zem.empty()) {
       throw std::runtime_error("sim_telarray input needs the zem column");
     }
-    // Each bunch is encoded in place as its 1205 record (io_simtel layout, 32 bytes):
+    // Each bunch is encoded in place as its 1205 record (32 bytes):
     // x y cx cy t zem photons lambda, float32 little-endian, cm and ns as CORSIKA.
     const std::size_t at = bunch_bytes_.size();
     bunch_bytes_.resize(at + n * photon_bunch_size);
