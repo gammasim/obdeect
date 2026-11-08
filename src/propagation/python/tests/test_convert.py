@@ -179,3 +179,28 @@ def test_malformed_atmabs_rejected(tmp_path):
     bad(tmp_path, "180\n" + values.replace("0.05", "x") + "\n", "corsika-atmabs")
     bad(tmp_path, block, "corsika-atmabs", min_wavelength_nm=180.0)  # one wavelength only
     bad(tmp_path, "# EXTINCTION only\n", "corsika-atmabs")
+
+
+def test_local_decrease_above_the_site_rejected(tmp_path):
+    # c rises from the site (2 km) to 3 km, then falls at 4 km although it stays above c(2 km).
+    rows = ["0 0"] * 2 + ["1 1", "3 3", "2 2"] + ["4 4"] * 3
+    bad(tmp_path, "\n".join(rows) + "\n")
+
+
+def test_step_must_be_exactly_5_nm(tmp_path):
+    values = " ".join(f"{0.01 * i:.4f}" for i in range(51))
+    bad(tmp_path, f"180\n{values}\n185.00004\n{values}\n", "corsika-atmabs")
+
+
+def test_too_many_heights_rejected_or_coarsened(tmp_path):
+    # 200 km of altitude rows cannot fit 100 heights above a 2 km site.
+    rows = "\n".join(f"{0.01 * a} {0.02 * a}" for a in range(201)) + "\n"
+    bad(tmp_path, rows)
+    # 60 rows still convert, and the output is readable.
+    rows = "\n".join(f"{0.01 * a} {0.02 * a}" for a in range(61)) + "\n"
+    source = tmp_path / "tall.ext"
+    source.write_text(rows, encoding="utf-8")
+    out = tmp_path / "tall.dat"
+    convert_table(source, out, format="kascade", observation_level_m=OBSERVATION_M)
+    assert len(heights_of(out)) <= 100
+    TransmissionTable(str(out), OBSERVATION_M)

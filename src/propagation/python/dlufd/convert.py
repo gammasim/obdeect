@@ -29,6 +29,7 @@ FORMATS: dict[str, float | None] = {
     "modtran5": 205.0,
 }
 
+MAX_HEIGHTS = 100  # most heights of a dlufd table
 NEAR_OFFSETS_KM = (0.01, 0.02, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5)
 
 # corsika-atmabs: heights 0, 1, ..., 50 km per wavelength.
@@ -64,7 +65,9 @@ def _data_lines(path: str | os.PathLike, skip_extinction: bool):
 
 
 def _check_uniform(wavelength_nm: np.ndarray, name: str) -> None:
-    if len(wavelength_nm) < 2 or not np.allclose(np.diff(wavelength_nm), STEP_NM, atol=1e-9):
+    if len(wavelength_nm) < 2 or not np.allclose(
+        np.diff(wavelength_nm), STEP_NM, rtol=0.0, atol=1e-9
+    ):
         raise ValueError(f"{name}: wavelengths must rise in steps of {STEP_NM:g} nm, at least two")
 
 
@@ -129,14 +132,22 @@ def read_legacy_table(
 
 def height_grid_km(altitude_km: np.ndarray, observation_km: float) -> np.ndarray:
     """Heights above the observation level: every source altitude, eighth steps in the lowest
-    6 km above it, and a few points within 200 m of it (tau is linear in log10 of the height)."""
+    6 km above it, and a few points within 500 m of it (tau is linear in log10 of the height).
+    Coarser steps (4, 2, 1 parts) are used if the grid would exceed ``MAX_HEIGHTS``."""
     knots = [observation_km, *(a for a in altitude_km if a > observation_km)]
-    grid: list[float] = []
-    for low, high in zip(knots[:-1], knots[1:], strict=True):
-        parts = 8 if low < observation_km + 6.0 else 1
-        grid.extend(low + (high - low) * k / parts for k in range(1, parts + 1))
-    near = [observation_km + offset for offset in NEAR_OFFSETS_KM]
-    return np.array([*(h for h in near if h < grid[0]), *grid])
+    for parts_low in (8, 4, 2, 1):
+        grid: list[float] = []
+        for low, high in zip(knots[:-1], knots[1:], strict=True):
+            parts = parts_low if low < observation_km + 6.0 else 1
+            grid.extend(low + (high - low) * k / parts for k in range(1, parts + 1))
+        near = [observation_km + offset for offset in NEAR_OFFSETS_KM if parts_low > 1]
+        grid = [*(h for h in near if h < grid[0]), *grid]
+        if len(grid) <= MAX_HEIGHTS:
+            return np.array(grid)
+    raise ValueError(
+        f"the table has {len(knots) - 1} altitudes above the observation level; "
+        f"at most {MAX_HEIGHTS} heights are supported"
+    )
 
 
 def convert_table(
@@ -187,8 +198,10 @@ def convert_table(
         np.interp(observation_km, table.altitude_km, row) for row in table.depth
     ])
     tau_source = at_heights - at_observation[:, None]
-    if tau_source.min() < -1e-9 * max(1.0, abs(table.depth).max()):
-        raise ValueError("optical depth decreases with altitude (negative depth above the site)")
+    above = table.altitude_km > observation_km
+    steps = np.diff(np.column_stack([at_observation, table.depth[:, above]]), axis=1)
+    if steps.min() < -1e-9 * max(1.0, abs(table.depth).max()):
+        raise ValueError("optical depth decreases with altitude above the observation level")
     tau_source = np.clip(tau_source, 0.0, None)
     lines = [
         "# Converted by dlufd.convert_table",

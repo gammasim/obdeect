@@ -85,7 +85,7 @@ for heights above `--observation-level` (= H2): every altitude of the source, ei
 the lowest 6 km above the observation level and points 10 m to 500 m above it. The absolute
 offset of $c$ does not matter. At the grid heights $\tau$ reproduces the source exactly; between
 them dlufd interpolates in $\log_{10} h$ instead of $h$, which differs by less than 1 % of
-$\tau$. The observation level must lie inside the altitude range of the source and above 0 m.
+$\tau$. If the grid would exceed the 100 heights a table can hold, coarser steps are used, or the table is rejected. The observation level must lie inside the altitude range of the source and above 0 m.
 
 | `--format` | layout | wavelengths |
 |---|---|---|
@@ -96,8 +96,8 @@ $\tau$. The observation level must lie inside the altitude range of the source a
 
 `--min-wavelength NM` overrides the first wavelength of the matrix formats. Comments start
 with `#`. Files that are not rectangular, contain non-finite or non-numeric values, have
-a wavelength step other than 5 nm, or whose optical depth decreases with altitude above the
-observation level are rejected with `ValueError` (command line: message and exit status 1).
+a wavelength step other than 5 nm, or whose optical depth decreases anywhere with altitude above
+the observation level are rejected with `ValueError` (command line: message and exit status 1).
 
 ## Random numbers
 
