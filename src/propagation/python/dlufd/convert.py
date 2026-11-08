@@ -199,8 +199,9 @@ def convert_table(
     ])
     tau_source = at_heights - at_observation[:, None]
     above = table.altitude_km > observation_km
-    steps = np.diff(np.column_stack([at_observation, table.depth[:, above]]), axis=1)
-    if steps.min() < -1e-9 * max(1.0, abs(table.depth).max()):
+    chain = np.column_stack([at_observation, table.depth[:, above]])
+    tolerance = 1e-9 * np.maximum(1.0, np.maximum(abs(chain[:, :-1]), abs(chain[:, 1:])))
+    if (chain[:, 1:] < chain[:, :-1] - tolerance).any():
         raise ValueError("optical depth decreases with altitude above the observation level")
     tau_source = np.clip(tau_source, 0.0, None)
     lines = [

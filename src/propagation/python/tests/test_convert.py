@@ -204,3 +204,10 @@ def test_too_many_heights_rejected_or_coarsened(tmp_path):
     convert_table(source, out, format="kascade", observation_level_m=OBSERVATION_M)
     assert len(heights_of(out)) < 100  # H2 takes one of the 100 slots
     TransmissionTable(str(out), OBSERVATION_M)
+
+
+def test_small_local_decrease_in_a_large_table_rejected(tmp_path):
+    # A drop of 1e-6 relative beside values of 1e12 is a decrease, not rounding; the tolerance
+    # follows the neighbouring values, not the largest value of the table.
+    rows = ["0 0"] * 2 + ["1e12 1e12", "2e12 2e12", "1.999999e12 1.999999e12", "3e12 3e12"]
+    bad(tmp_path, "\n".join(rows) + "\n" + "\n".join(["4e12 4e12"] * 3) + "\n")
