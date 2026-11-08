@@ -1,18 +1,17 @@
 # Atmospheric extinction
 
-Direct atmospheric transmission of Cherenkov and artificial-source photons, as in
-sim_telarray (`atmospheric_transmission2`, `sim_absorb.c`). Wavelength assignment and
-early thinning with the efficiency envelope follow sim_telarray's photon loop
-(`sim_telarray.c`).
+Direct atmospheric transmission of Cherenkov and artificial-source photons, from a table of
+optical depth against height and wavelength. Also: wavelength assignment and early thinning
+with the efficiency envelope.
 
 ## Inputs
 
 | Quantity | Unit | Source |
 |---|---|---|
-| Transmission table | nm, km a.s.l., optical depth | sim_telarray `atm_trans_*.dat` (`# H2=`, `H1=` header) |
+| Transmission table | nm, km a.s.l., optical depth | extinction-table format (`# H2=`, `H1=` header) |
 | Site altitude | m a.s.l. | must match H2 within 25 m |
 | Telescope altitude | m a.s.l. | telescope position |
-| Path inside telescope | m | optics (sim_telarray `pathlen_tel`) |
+| Path inside telescope | m | telescope optics |
 | Envelope E(lambda) | nm, [0, 1] | product of later efficiencies, upper bound |
 
 ## Formulas
@@ -39,7 +38,7 @@ $$
 $$
 
 where T is the vertical transmission $T = e^{-\tau}$. If T(400 nm, h_T) gives
-$\tau_{\text{tel}} > 1000$, both are set to 0 (sim_telarray behaviour).
+$\tau_{\text{tel}} > 1000$ (the table does not fit the site), both are set to 0.
 
 Acceptance of a photon at emission altitude z with wavelength lambda:
 
@@ -48,11 +47,11 @@ T_{\text{atm}} = \exp\!\left[-\left(\left|\tau(\lambda, z) - \tau_{\text{tel}}\r
 $$
 
 with $T_{\text{atm}} = 0$ below the observation level, for $\tau_{\text{tel}} > 1000$, or for an
-optical depth above 100. Photons with lambda >= 1000 nm get 0 (as sim_telarray skips them).
+optical depth above 100. Photons with lambda >= 1000 nm get 0.
 
 Wavelength: for photons without a wavelength, density proportional to $1/\lambda^2$ on
 [lo, hi], by inverse CDF, $\lambda = 1 / (1/\lambda_{lo} - u\,(1/\lambda_{lo} - 1/\lambda_{hi}))$
-with u uniform in (0, 1). As in sim_telarray the value is truncated to an integer nm.
+with u uniform in (0, 1). The value is truncated to an integer nm.
 The range needs finite $1 \le \lambda_{lo} < \lambda_{hi} \le 2^{24}$ nm. Input wavelengths
 must be finite, non-negative integers (0 = not assigned); other values are rejected.
 
@@ -63,7 +62,7 @@ $$
 n = \mathrm{Binomial}(\lfloor w \rfloor, p) + \mathrm{Bernoulli}\big((w - \lfloor w \rfloor)\,p\big),
 $$
 
-as sim_telarray's loop over the photons of a bunch. Thinned output has one row per surviving
+independent Bernoulli trials per photon of the bunch. Thinned output has one row per surviving
 photon with w = 1. Weighted output keeps every row with $w \leftarrow w\,p$. Both write the
 column p.
 
@@ -72,7 +71,8 @@ column p.
 Philox (gstrickd `uniform4`), key (seed, stage `DLUF`, event, telescope, photon index,
 stream). Wavelength draws use stream 1, thinning stream 2. The binomial is a sum of
 Bernoulli trials, so bunches are limited to 2048 photons (split larger bunches upstream).
-sim_telarray's own random sequence is not reproduced; the agreement is in the probabilities.
+Results are reproducible for a given seed; other generators agree in the probabilities, not
+in the individual draws.
 
 ## Example
 
@@ -90,7 +90,5 @@ out = dlufd.apply_extinction(
 
 ## References
 
-- sim_telarray: `common/sim_absorb.c` (`read_trans`, `atmospheric_transmission2`),
-  `common/rpolator.c` (`rpol`), `common/sim_telarray.c` (telescope depths, photon loop).
-- Python port used for the test reference values: `simtools/simtel/shower_transmission.py`.
+- Test reference values: `python/tests/test_extinction.py`, `cpp/tests/test_transmission.cpp`.
 - Photon stream and random numbers: gstrickd, `docs/format.md`.

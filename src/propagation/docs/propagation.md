@@ -82,7 +82,7 @@ qe.value                [0.9, 0.5]
 ```
 
 - `atmosphere`: applied; source = transmission file; `pathlen_m` = path inside each telescope [m]
-  in telescope_id order (entry 0 is telescope 1), as used for od2focus.
+  in telescope_id order (entry 0 is telescope 1), as used for the in-telescope extinction.
 - `wavelength`: applied; rows without a wavelength get one from the range.
 - `scattering`: only with scattering; applied; source = scattering table; points per photon.
 - Each envelope factor: state `envelope` (its value is part of the thinning, not applied in
@@ -118,7 +118,7 @@ dlufd-propagate: photons in <n>, out <m> (weight <w>), dropped <d>
 
 | Option | Meaning |
 |---|---|
-| `--transmission FILE` | transmission table (required, except with `--no-extinction`) |
+| `--transmission FILE` | transmission table, extinction-table format (required, except with `--no-extinction`) |
 | `--no-extinction` | geometry only, see below |
 | `--site-altitude M` | observation level [m a.s.l.] (required) |
 | `--profile FILE` | atmospheric profile (atmprof format): air delay and refraction |
@@ -183,12 +183,12 @@ $ dlufd-propagate --no-extinction --site-altitude 2000 --profile atmprof.dat --s
 
 ## In-telescope path
 
-The telescope depths of sim_telarray (`od2focus`) cover the path from the telescope sphere plane to
-the focus. With path length l (`pathlen_m`), the depth is tau(h_T + l) - tau(h_T), with h_T the
+The extinction inside the telescope covers the path from the telescope sphere plane to the focus.
+With path length l (`pathlen_m`), the optical depth is tau(h_T + l) - tau(h_T), with h_T the
 telescope altitude. `--pathlen` (`pathlen_m`) sets l for all telescopes, `--telescope-pathlen`
 (`telescope_pathlen_m`, keys 1-based telescope ids) overrides it for single telescopes. Default 0,
-so existing runs keep their result. Each telescope's l must come from its optics (sim_telarray
-`pathlen_tel`: focal length for single-mirror telescopes, `|p0-s0|+|s0-f0|` for dual-mirror ones).
+so existing runs keep their result. Each telescope's l comes from its optics: the focal length for
+single-mirror telescopes, `|p0-s0|+|s0-f0|` for dual-mirror ones (primary, secondary, focus).
 An id that the run does not have is an error.
 
 ## Limits
@@ -197,7 +197,7 @@ An id that the run does not have is an error.
 - Scattering needs sky-frame input and `telescope_r_m` in the run keys; it is not available for
   photons already in frame G.
 - The in-telescope path is not derived from the optics: it is given per telescope (default 0).
-- Wavelengths are integer nm, as in sim_telarray.
+- Wavelengths are integer nm.
 - Envelope tables must cover the wavelength range (rounded outwards).
-- The 60-degree time term of CORSIKA's ray bending is reproduced as it is; see
+- The 60-degree time term of the ray bending is a fit extrapolated to large zenith angles; see
   [](refraction.md).

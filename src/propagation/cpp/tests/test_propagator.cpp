@@ -1047,8 +1047,8 @@ void test_rejects_non_finite_input() {
   CHECK(throws_invalid([&] { propagate(only_run, config_for(zero_table())); }));
 }
 
-// sim_telarray's acceptance of one photon with od2focus taken from the table as
-// tau(h + pathlen) - tau(h) (telescope_depths), at the telescope altitude h.
+// Acceptance of one photon with od_focus taken from the table as tau(h + pathlen) - tau(h)
+// (telescope_depths), at the telescope altitude h.
 double expected_acceptance(const dlufd::TransmissionTable &table, double lambda_nm, double zem_m,
                            double cx, double cy, double h_m, double pathlen_m) {
   const double od_tel = table.optical_depth(lambda_nm, h_m);

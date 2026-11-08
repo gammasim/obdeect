@@ -72,9 +72,9 @@ struct PropagatorConfig {
   bool geometry_only{false};
   std::string transmission_source; // ledger provenance; default "transmission table"
   double site_altitude_m{};        // observation level [m a.s.l.]
-  // Optical path inside a telescope [m] (sim_telarray pathlen_tel, the od2focus part of the
-  // telescope depths). default_pathlen_m applies to every telescope; telescope_pathlen_m (key:
-  // telescope_id, 1-based) overrides it for one telescope. 0: no path inside the telescope.
+  // Optical path inside a telescope [m] (the od_focus part of the telescope depths).
+  // default_pathlen_m applies to every telescope; telescope_pathlen_m (key: telescope_id,
+  // 1-based) overrides it for one telescope. 0: no path inside the telescope.
   double default_pathlen_m{0.0};
   std::map<std::uint32_t, double> telescope_pathlen_m;
   // Optional: air delay for sky photons, and refraction (bending) unless the run says that

@@ -1,9 +1,8 @@
 # Refraction and timing
 
-dlufd reads an atmospheric table in the CORSIKA / sim_telarray `atmprof` format and
-reproduces the interpolation and ray-bending approximations of CORSIKA's `atmo.c`
-(IACT/atmo, K. Bernlöhr, LGPL 2.1+). Light sources and photons emitted in the air use this
-path; CORSIKA air-shower photons are already refracted by CORSIKA.
+dlufd reads an atmospheric table in the `atmprof` format and computes interpolation, ray
+bending and air delay from it. Light sources and photons emitted in the air use this path;
+photons of a run with `refraction_applied` = 1 are not refracted again.
 
 ## Input table
 
@@ -22,16 +21,15 @@ Rules (violations raise `ValueError`):
 - top thickness may be zero; the top density must be positive.
 - the density and thickness columns must agree to 5 % (integrated from the levels).
 
-## Interpolation (atmo.c)
+## Interpolation
 
-Heights are m a.s.l. Internally atmo.c uses cm.
+Heights are m a.s.l. Internally the lookups use cm.
 
 1. Each column is interpolated by a natural cubic spline in ln(value) against altitude
-   (`rpolator.c`, `set_1d_cubic_params`). Thickness uses the levels without the top one.
+   Thickness uses the levels without the top one.
 2. The spline is sampled on 40 000 equidistant heights from the bottom to the top of the
-   table (`init_fast_interpolation`, `atmo.c:553`).
-3. Lookups interpolate linearly on that grid (`rhofx_` `atmo.c:1393`, `refim1x_` `:1513`,
-   `thickx_` `:1446`).
+   table.
+3. Lookups (density, n-1, thickness) interpolate linearly on that grid.
 4. Above the last but one level, thickness is the exponential top layer
    `t(h) = rho0 cfac hscale (exp(-h/hscale) - exp(-top/hscale))`, and the grid n-1 there is
    `etadsn * rho`.
@@ -44,9 +42,9 @@ profile.density([0.0, 2180.0])        # [1.21171e-03, 9.75149e-04] g/cm^3
 profile.group_index(2180.0)           # 1.000225191893913
 ```
 
-## Ray bending (atmo.c `raybnd_`)
+## Ray bending
 
-For a photon emitted at height `h` with direction cosines `(cx, cy)` (downward), CORSIKA
+For a photon emitted at height `h` with direction cosines `(cx, cy)` (downward), dlufd
 computes the zenith angles at emission and at the observation level
 
 ```text
@@ -60,8 +58,8 @@ displacement  d = -(H^2) s / c^3                        H from the density table
 travel time   T = T0(h) - (T_a^2) s^2 / c^3 + (dz + de) / (c_vac cos(theta_em))
 ```
 
-- `T0(h)` (ns) is the altitude table of the vertical air-time excess: air time minus its straight-line estimate (`init_refraction_tables`).
-- `H` (cm) and `T_a` (ns) are density tables from the same 45 degree integration (`trace_ray_planar`, 2.5 m step).
+- `T0(h)` (ns) is the altitude table of the vertical air-time excess: air time minus its straight-line estimate.
+- `H` (cm) and `T_a` (ns) are density tables from the same 45 degree ray integration (2.5 m step).
 - `dz = |h - obs|`, `de = etadsn (thick(obs) - thick(h))`, `etadsn` is `(n-1)/rho` at the first level more than 1.5 km above the observation level.
 - The new direction is `(cx, cy) sin(theta_obs)/sin(theta_em)`; the position moves by `d (cx, cy)/sin(theta_em)`.
 
@@ -81,11 +79,10 @@ Example (ECMWF table, observation level 2180 m, photon direction purely in x):
 Vertical photons have no displacement. Their travel-time excess over vacuum equals
 `straight_path_air_delay_ns` exactly (4.02 ns from 10 km, 5.77 ns from 20 km).
 
-Caution: the 60 degree time term is CORSIKA's second-order fit to the 45 degree integration,
+Caution: the 60 degree time term is a second-order fit to the 45 degree integration,
 extrapolated. At 20 km and above it gives negative excess times, which the air delay
-(a few ns) does not explain. dlufd reproduces CORSIKA here; the term has not been checked
-against full ray tracing, so timing at large zenith angles needs a separate validation
-before it is used for physics.
+(a few ns) does not explain. The term has not been checked against full ray tracing, so
+timing at large zenith angles needs a separate validation before it is used for physics.
 
 ## Timing
 
@@ -113,8 +110,9 @@ Refraction tables depend on the observation level; build one `RefractionTables` 
 
 ## Accuracy
 
-Checked against CORSIKA's `atmo.c` (built with `-DDLUFD_CORSIKA_REFERENCE=<corsika7/bernlohr>`,
-`ctest`, test `corsika_reference`): density, thickness and n-1 agree to 1e-12 relative at
+Checked against the reference implementation of the same interpolation and ray bending (optional
+test `corsika_reference`, built with `-DDLUFD_CORSIKA_REFERENCE=<reference source directory>`):
+density, thickness and n-1 agree to 1e-12 relative at
 all tested heights, and bent positions, directions and times agree to 1e-9 m, 1e-12 and
 1e-6 ns. Lookups reproduce the table nodes to about 2e-5 relative (density), not exactly,
 because the grid is 3 m. The coarse 1 km synthetic table in the tests reproduces the
@@ -122,8 +120,5 @@ analytic thickness to 0.4 % in its top 2 km.
 
 ## References
 
-- K. Bernlöhr, `corsika7/bernlohr/atmo.c` (IACT/atmo package for CORSIKA), functions
-  `init_refraction_tables`, `trace_ray_planar`, `raybnd_`, `rhofx_`, `thickx_`, `refim1x_`.
-- `rpolator.c`, `set_1d_cubic_params` and `rpol_cspline` (cubic spline interpolation).
-- sim_telarray `cfg/CTA/atmprof_*.dat` (ECMWF profiles; column description in the file header).
+- Example profile and column description: `cpp/tests/data/atmprof_ecmwf_north_winter_fixed.dat`.
 - obdeect `python/obdeect/propagation.py` (`ambient_group_index`) and `cpp/include/obdeect/trace.hpp`.

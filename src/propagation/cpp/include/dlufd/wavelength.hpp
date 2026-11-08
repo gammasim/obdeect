@@ -1,9 +1,8 @@
 #pragma once
 
-// Wavelength assignment for photons without a wavelength (sim_telarray.c:2821):
-// density proportional to 1/lambda^2 on [lo, hi] nm, drawn by inverse CDF. As in
-// sim_telarray, the value is truncated to an integer number of nm (floor, as the value is
-// positive).
+// Wavelength assignment for photons without a wavelength: density proportional to
+// 1/lambda^2 on [lo, hi] nm, drawn by inverse CDF. The value is truncated to an integer
+// number of nm (floor, as the value is positive).
 
 #include "dlufd/streams.hpp"
 

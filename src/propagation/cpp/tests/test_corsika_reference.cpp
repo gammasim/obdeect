@@ -1,5 +1,6 @@
-// Agreement with CORSIKA's atmo.c (IACT/atmo, K. Bernloehr), built only with
-// -DDLUFD_CORSIKA_REFERENCE=<corsika7/bernlohr>. Same profile file, same observation level.
+// Agreement with a reference implementation of the profile interpolation and ray bending, built
+// only with -DDLUFD_CORSIKA_REFERENCE=<reference source directory>. Same profile file, same
+// observation level.
 #include "check.hpp"
 
 #include "dlufd/profile.hpp"
@@ -19,7 +20,7 @@ double thickx_(double *height);
 double refim1x_(double *height);
 void raybnd_(double *zem, double *u, double *v, double *w, double *dx, double *dy, double *dt);
 
-// CORSIKA 5-layer functions, referenced by atmo.c only for built-in atmospheres.
+// Built-in-atmosphere functions the reference code references; unused with a profile file.
 double rhof_(double *) { return 0.; }
 double heigh_(double *) { return 0.; }
 double thick_(double *) { return 0.; }
@@ -40,7 +41,7 @@ int main() {
     const auto profile = dlufd::AtmosphereProfile::from_file(path);
     const dlufd::RefractionTables tables(profile, kObservationM);
 
-    // Lookups in atmo.c units (cm): the same linear interpolation on the same table.
+    // Lookups in cm: the same linear interpolation on the same table.
     double worst_rho = 0., worst_thick = 0., worst_n1 = 0.;
     for (double h = 0.; h < 119.e5; h += 0.0137e5) {
       double height = h;
@@ -75,7 +76,7 @@ int main() {
       }
     }
 
-    // Vertical emission: atmo.c adds the travel time only.
+    // Vertical emission: the reference adds the travel time only.
     double zem = 1000000., cu = 0., cv = 0., cw = 1., dx = 0., dy = 0., dt = 0.;
     raybnd_(&zem, &cu, &cv, &cw, &dx, &dy, &dt);
     double cx = 0., cy = 0., x = 0., y = 0., t = 0.;

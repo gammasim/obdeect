@@ -21,7 +21,7 @@ const std::string kProfilePath =
 
 // Exponential atmosphere, 1 km levels to 10 km: rho = 1.2e-3 exp(-h/7 km) g/cm^3,
 // thickness = integral from h to 10 km = 7e5 cm * (rho - rho(10 km)), n-1 = etadsn * rho
-// (the relation atmo.c uses in the top layer).
+// (the relation of the top layer).
 std::string exponential_row(int km) {
   const double rho = 1.2e-3 * std::exp(-km / 7.);
   const double rho_top = 1.2e-3 * std::exp(-10. / 7.);
@@ -102,13 +102,13 @@ int main() {
       CHECK_NEAR(exp_profile.thickness(h) / (7e5 * (rho - rho_top)), 1., km < 7.5 ? 1e-3 : 5e-3);
     }
 
-    // The ECMWF table (CORSIKA format, 55 levels, comment header skipped).
+    // The ECMWF table (atmprof format, 55 levels, comment header skipped).
     const auto profile = dlufd::AtmosphereProfile::from_file(kProfilePath);
     CHECK(profile.levels() == 55);
     CHECK_NEAR(profile.bottom_m(), 0., 1e-9);
     CHECK_NEAR(profile.top_m(), 120000., 1e-6);
 
-    // Table nodes: CORSIKA interpolates linearly on a 3 m grid of cubic-spline values, so
+    // Table nodes: lookups interpolate linearly on a 3 m grid of cubic-spline values, so
     // the nodes are reproduced to about 2e-5 relative (density), not to rounding.
     std::ifstream file(kProfilePath);
     std::string line;
@@ -120,12 +120,12 @@ int main() {
       double km = 0., rho = 0., thick = 0., n_1 = 0.;
       row >> km >> rho >> thick >> n_1;
       if (km >= 120.)
-        continue; // The top level is outside the lookup range (CORSIKA returns 0 there).
+        continue; // The top level is outside the lookup range (the lookup returns 0 there).
       const double h = 1000. * km;
       worst_rho = std::fmax(worst_rho, std::fabs(profile.density(h) / rho - 1.));
       if (thick > 0.)
         worst_thick = std::fmax(worst_thick, std::fabs(profile.thickness(h) / thick - 1.));
-      // Above 110 km the top layer uses n-1 = etadsn * rho (atmo.c); the 115 km node then
+      // Above 110 km the top layer uses n-1 = etadsn * rho; the 115 km node then
       // differs by 1e-3 relative, at n-1 ~ 8e-12.
       if (km < 110.)
         worst_n1 = std::fmax(worst_n1, std::fabs(profile.refractive_index_minus_one(h) / n_1 - 1.));
@@ -178,7 +178,7 @@ int main() {
         CHECK(error.find("line 7") != std::string::npos);
       }
     }
-    // Trailing columns beyond the four are ignored (CORSIKA short format): they are accepted
+    // Trailing columns beyond the four are ignored: they are accepted
     // and give the same table as the four-column text, whatever they contain.
     const dlufd::AtmosphereProfile four_columns(exponential_profile());
     for (const std::string trailing : {" x", " 1e-3 2 abc", " 0.5"}) {
