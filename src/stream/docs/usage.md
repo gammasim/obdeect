@@ -87,6 +87,34 @@ Telescopes not listed are ground-frame (sim_telarray `Bypass_Optics=0`). Listed 
 converted to the bypass convention and need `Bypass_Optics=1` (class 1) or `2` (class 2) in
 sim_telarray; `ps2simtel` prints the value for each.
 
+### Efficiency ledger
+
+`ps2simtel` refuses a stream whose ledger says a factor is still to be applied and
+sim_telarray does not apply it in that frame. The error names the factor:
+
+```text
+ps2simtel: efficiency ledger of telescope 2 (camera frame): factor
+'telescope_transmission_constant' is pending, but sim_telarray does not apply it in this frame;
+apply it upstream (state applied); pass --allow-pending telescope_transmission_constant to accept it as it is
+```
+
+Use `--allow-pending FACTOR` (repeatable) only when the factor is applied elsewhere
+in the chain, for example by the camera module. Which factors sim_telarray applies in
+each frame is listed in docs/format.md ("Efficiency ledger").
+
+```console
+$ ps2simtel --camera-map cam.txt --allow-pending telescope_transmission_constant run.ps > sim.simtel
+```
+
+In Python: `gstrickd.stream_to_simtel(run.ps, sim.simtel, cam, allow_pending=["telescope_transmission_constant"])`.
+
+When the QE envelope was applied upstream (ledger state `envelope`) and the
+sim_telarray QE table is divided by that envelope, declare it:
+
+```console
+$ ps2simtel --camera-map cam.txt --scaled-factor qe run.ps > sim.simtel
+```
+
 ## CMake package
 
 `cmake --install` puts the headers and a CMake package in the install prefix; a wheel

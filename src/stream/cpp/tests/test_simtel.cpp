@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <random>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -216,9 +217,15 @@ Metadata light_source_run() {
 }
 
 // Writes records through a PsToSimtel and returns the EventIO bytes.
-std::string run_adapter(const std::vector<Record> &records, const CameraMap &camera) {
+std::string run_adapter(const std::vector<Record> &records, const CameraMap &camera,
+                        const std::set<std::string> &allow_pending = {},
+                        const std::set<std::string> &scaled = {}) {
   std::ostringstream out;
-  PsToSimtel converter{out, camera};
+  SimtelOptions options;
+  options.camera = camera;
+  options.allow_pending = allow_pending;
+  options.scaled = scaled;
+  PsToSimtel converter{out, std::move(options)};
   for (const Record &record : records) {
     converter.write(record);
   }
@@ -552,7 +559,7 @@ void test_no_warnings_with_corsika_headers() {
   std::istringstream stream_in(stream_bytes.str());
   std::ostringstream output;
   std::ostringstream warnings;
-  stream_to_simtel(stream_in, output, SimtelOptions{CameraMap{}, std::nullopt, &warnings});
+  stream_to_simtel(stream_in, output, SimtelOptions{CameraMap{}, std::nullopt, &warnings, {}, {}});
   CHECK(output.str() == input);
   CHECK(warnings.str().empty());
 }
@@ -631,6 +638,137 @@ void test_frames_rejected() {
   CHECK(throws_error([&] { run_adapter(telescope_frame, {}); }));
 }
 
+Metadata ledger_of(const std::string &factor, const std::string &state) {
+  return Metadata{{"factors", factor}, {factor + ".state", state}};
+}
+
+// One event with telescope 2 in `frame`; the ledgers come before the event (run) or
+// after the telescope record (telescope).
+std::vector<Record> ledger_run(Frame frame, const std::vector<Metadata> &run_ledgers,
+                               const std::vector<Metadata> &telescope_ledgers) {
+  std::vector<Record> records = {record_of(RecordType::run, light_source_run())};
+  for (const Metadata &ledger : run_ledgers) {
+    records.push_back(record_of(RecordType::ledger, ledger));
+  }
+  records.push_back(record_of(RecordType::event, Metadata{{"event_number", std::int64_t{1}}}));
+  records.push_back(record_of(RecordType::telescope, Metadata{{"telescope_id", std::int64_t{2}},
+                                                              {"array_index", std::int64_t{0}}}));
+  for (const Metadata &ledger : telescope_ledgers) {
+    records.push_back(record_of(RecordType::ledger, ledger));
+  }
+  records.push_back(photons_of(chunk_of(2, frame, {0.5}, {0.2}, {0.1}, {-0.2})));
+  records.push_back(
+      record_of(RecordType::telescope_end, Metadata{{"telescope_id", std::int64_t{2}}}));
+  records.push_back(record_of(RecordType::event_end));
+  records.push_back(record_of(RecordType::run_end));
+  return records;
+}
+
+// Efficiency ledger rules (docs/usage.md): which factors sim_telarray may leave to
+// itself in each frame, and which ones must be applied upstream.
+void test_ledger_rules() {
+  const CameraMap camera{{2, CameraTelescope{1, 0.0}}};
+  const std::set<std::string> constant_allowed{"telescope_transmission_constant"};
+  const std::string constant = "telescope_transmission_constant";
+
+  // Pending constant part of the telescope transmission (angular mode) in camera frame.
+  const auto constant_run = ledger_run(Frame::camera, {ledger_of(constant, "pending")}, {});
+  CHECK(throws_error([&] { run_adapter(constant_run, camera); }));
+  CHECK(!throws_error([&] { run_adapter(constant_run, camera, constant_allowed); }));
+  // Ground frame: the same factor is not in the sim_telarray list either.
+  CHECK(throws_error(
+      [&] { run_adapter(ledger_run(Frame::ground, {ledger_of(constant, "pending")}, {}), {}); }));
+
+  // sim_telarray applies the camera efficiencies in camera frame: pending is accepted.
+  CHECK(!throws_error(
+      [&] { run_adapter(ledger_run(Frame::camera, {ledger_of("qe", "pending")}, {}), camera); }));
+  // An envelope on a factor sim_telarray applies in full would make the result too dim.
+  CHECK(throws_error(
+      [&] { run_adapter(ledger_run(Frame::camera, {ledger_of("qe", "envelope")}, {}), camera); }));
+  // Ground frame: atmosphere is accepted in any state (sim_telarray's table must then be zero).
+  CHECK(!throws_error([&] {
+    run_adapter(ledger_run(Frame::ground, {ledger_of("atmosphere", "applied")}, {}), {});
+  }));
+  CHECK(!throws_error([&] {
+    run_adapter(ledger_run(Frame::ground, {ledger_of("atmosphere", "pending")}, {}), {});
+  }));
+  // Mirror reflectivity is applied by sim_telarray in ground frame only.
+  CHECK(!throws_error([&] {
+    run_adapter(ledger_run(Frame::ground, {ledger_of("mirror_reflectivity", "pending")}, {}), {});
+  }));
+  CHECK(throws_error([&] {
+    run_adapter(ledger_run(Frame::camera, {ledger_of("mirror_reflectivity", "pending")}, {}),
+                camera);
+  }));
+
+  // Applied upstream and not applied by sim_telarray in the frame: accepted.
+  CHECK(!throws_error([&] {
+    run_adapter(ledger_run(Frame::camera, {ledger_of("atmosphere", "applied")}, {}), camera);
+  }));
+  // Applied upstream and applied again by sim_telarray: rejected.
+  CHECK(throws_error(
+      [&] { run_adapter(ledger_run(Frame::camera, {ledger_of("qe", "applied")}, {}), camera); }));
+  // Atmosphere pending is not applied by sim_telarray: rejected.
+  CHECK(throws_error([&] {
+    run_adapter(ledger_run(Frame::camera, {ledger_of("atmosphere", "pending")}, {}), camera);
+  }));
+
+  // Unknown factor names are rejected, also when applied; --allow-pending accepts them.
+  CHECK(throws_error([&] {
+    run_adapter(ledger_run(Frame::camera, {ledger_of("made_up", "applied")}, {}), camera);
+  }));
+  CHECK(!throws_error([&] {
+    run_adapter(ledger_run(Frame::camera, {ledger_of("made_up", "applied")}, {}), camera,
+                {"made_up"});
+  }));
+
+  // Scaled factors (sim_telarray table holds f/f_env): only the envelope state of a factor
+  // that sim_telarray applies in the frame is accepted.
+  CHECK(throws_error(
+      [&] { run_adapter(ledger_run(Frame::camera, {ledger_of("qe", "envelope")}, {}), camera); }));
+  CHECK(!throws_error([&] {
+    run_adapter(ledger_run(Frame::camera, {ledger_of("qe", "envelope")}, {}), camera, {}, {"qe"});
+  }));
+  CHECK(throws_error([&] {
+    run_adapter(ledger_run(Frame::camera, {ledger_of("qe", "pending")}, {}), camera, {}, {"qe"});
+  }));
+  CHECK(throws_error([&] {
+    run_adapter(ledger_run(Frame::camera, {ledger_of("mirror_reflectivity", "envelope")}, {}),
+                camera, {}, {"mirror_reflectivity"});
+  }));
+  // Ground frame: the atmosphere cannot be a scaled factor, in any state, although the
+  // unscaled atmosphere is accepted in any state.
+  for (const char *state : {"applied", "pending", "envelope"}) {
+    CHECK(throws_error([&] {
+      run_adapter(ledger_run(Frame::ground, {ledger_of("atmosphere", state)}, {}), {}, {},
+                  {"atmosphere"});
+    }));
+  }
+
+  // Malformed ledgers: no factors list, no state, unknown state.
+  CHECK(throws_error([&] {
+    run_adapter(ledger_run(Frame::camera, {Metadata{{"qe.state", std::string("pending")}}}, {}),
+                camera);
+  }));
+  CHECK(throws_error([&] {
+    run_adapter(ledger_run(Frame::camera, {Metadata{{"factors", std::string("qe")}}}, {}), camera);
+  }));
+  CHECK(throws_error(
+      [&] { run_adapter(ledger_run(Frame::camera, {ledger_of("qe", "maybe")}, {}), camera); }));
+
+  // A telescope ledger overrides the run ledger for its factor.
+  CHECK(!throws_error([&] {
+    run_adapter(ledger_run(Frame::camera, {ledger_of(constant, "pending")},
+                           {ledger_of(constant, "applied")}),
+                camera);
+  }));
+
+  // A telescope ledger after the photons of its telescope is rejected.
+  std::vector<Record> late = ledger_run(Frame::camera, {}, {});
+  late.insert(late.end() - 3, record_of(RecordType::ledger, ledger_of("qe", "pending")));
+  CHECK(throws_error([&] { run_adapter(late, camera); }));
+}
+
 // CORSIKA-style file -> corsika_to_records -> Writer -> Reader -> SimtelWriter gives the
 // input back byte for byte, for positions that round-trip cm -> m -> cm.
 void test_round_trip_byte_identical() {
@@ -679,6 +817,7 @@ int main() {
     test_synthesised_headers();
     test_missing_metadata_rejected();
     test_frames_rejected();
+    test_ledger_rules();
     test_round_trip_byte_identical();
     test_atmprof_text();
     test_atmprof_synthesised();

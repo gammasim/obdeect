@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <fstream>
 #include <iostream>
+#include <set>
 #include <string>
 #include <vector>
 #ifdef _WIN32
@@ -19,8 +20,9 @@ namespace {
 constexpr std::size_t buffer_size = std::size_t{1} << 20;
 
 void usage() {
-  std::fprintf(stderr,
-               "usage: ps2simtel [--camera-map FILE] [--atmprof FILE] [-o FILE|-] [input|-]\n");
+  std::fprintf(stderr, "usage: ps2simtel [--camera-map FILE] [--atmprof FILE] "
+                       "[--allow-pending FACTOR]... [--scaled-factor FACTOR]... [-o FILE|-] "
+                       "[input|-]\n");
 }
 
 void set_binary_stdio() {
@@ -50,6 +52,8 @@ int main(int argc, char **argv) {
   std::string output = "-";
   std::string camera_path;
   std::string atmprof_path;
+  std::set<std::string> allow_pending;
+  std::set<std::string> scaled;
   bool have_input = false;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -61,7 +65,8 @@ int main(int argc, char **argv) {
       usage();
       return 0;
     }
-    if (arg == "--camera-map" || arg == "--atmprof" || arg == "-o") {
+    if (arg == "--camera-map" || arg == "--atmprof" || arg == "-o" || arg == "--allow-pending" ||
+        arg == "--scaled-factor") {
       if (i + 1 >= argc) {
         std::fprintf(stderr, "ps2simtel: %s needs an argument\n", arg.c_str());
         usage();
@@ -69,6 +74,10 @@ int main(int argc, char **argv) {
       }
       if (arg == "-o") {
         output = argv[++i];
+      } else if (arg == "--allow-pending") {
+        allow_pending.insert(argv[++i]);
+      } else if (arg == "--scaled-factor") {
+        scaled.insert(argv[++i]);
       } else if (arg == "--atmprof") {
         atmprof_path = argv[++i];
       } else {
@@ -93,6 +102,8 @@ int main(int argc, char **argv) {
   try {
     gstrickd::SimtelOptions options;
     options.warnings = &std::cerr;
+    options.allow_pending = std::move(allow_pending);
+    options.scaled = std::move(scaled);
     if (!camera_path.empty()) {
       std::ifstream map_file(camera_path);
       if (!map_file) {

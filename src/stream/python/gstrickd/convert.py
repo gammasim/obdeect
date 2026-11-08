@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 
 from gstrickd import _core
 
@@ -37,6 +37,8 @@ def stream_to_simtel(
     input_path: str | os.PathLike,
     output_path: str | os.PathLike,
     camera_map: Mapping[int, tuple[int, float]] | str | os.PathLike | None = None,
+    allow_pending: Iterable[str] = (),
+    scaled_factors: Iterable[str] = (),
 ) -> None:
     """Convert a photon stream file to sim_telarray input (EventIO).
 
@@ -44,7 +46,23 @@ def stream_to_simtel(
     ``(mirror_class, camera_rotation_deg)``, or the path of a text file with one line
     ``telescope_id mirror_class camera_rotation_deg`` per telescope. Telescopes not listed are
     ground-frame telescopes (Bypass_Optics=0 in sim_telarray).
+
+    The efficiency ledger is checked per telescope against the frame of its photons
+    (docs/format.md): a factor is valid as ``applied`` when sim_telarray does not apply it in
+    that frame (e.g. ``atmosphere`` for camera-frame photons), and as ``pending`` when
+    sim_telarray applies it (e.g. ``qe``). ``envelope`` is never valid for factors sim_telarray
+    applies. With ground-frame photons ``atmosphere`` is valid in any state. Anything else, and
+    unknown factor names, raise ``RuntimeError``; ``allow_pending`` names factors to accept as
+    they are. ``scaled_factors`` names factors whose sim_telarray table holds f/f_env (e.g. a
+    QE table divided by the QE envelope): they must be in state ``envelope``.
     """
+    for name, value in (("allow_pending", allow_pending), ("scaled_factors", scaled_factors)):
+        if isinstance(value, str):
+            raise TypeError(f"{name} must be a sequence of factor names, not a string")
     _core.stream_to_simtel(
-        os.fspath(input_path), os.fspath(output_path), _camera_entries(camera_map)
+        os.fspath(input_path),
+        os.fspath(output_path),
+        _camera_entries(camera_map),
+        [str(name) for name in allow_pending],
+        [str(name) for name in scaled_factors],
     )
