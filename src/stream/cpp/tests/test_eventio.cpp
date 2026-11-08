@@ -371,6 +371,77 @@ void photon_block_indices_are_range_checked() {
 
 } // namespace
 
+// Variable-length counts: eventio.c byte layout at the branch boundaries, and round trips.
+void count_encoding() {
+  Bytes out;
+  ByteWriter w{out};
+  put_count(w, 128);
+  CHECK(out == Bytes({0x80, 0x80}));
+  out.clear();
+  put_count(w, 16384);
+  CHECK(out == Bytes({0xC0, 0x40, 0x00}));
+  for (const std::uint64_t n :
+       {std::uint64_t{0}, std::uint64_t{127}, std::uint64_t{128}, std::uint64_t{16383},
+        std::uint64_t{16384}, (std::uint64_t{1} << 21) - 1, std::uint64_t{1} << 21,
+        (std::uint64_t{1} << 28) - 1, std::uint64_t{1} << 28, (std::uint64_t{1} << 32) - 1}) {
+    out.clear();
+    put_count(w, n);
+    ByteReader r{out};
+    CHECK(take_count(r) == n);
+    CHECK(r.remaining() == 0);
+  }
+  out.clear();
+  CHECK(throws([&] { put_count(w, std::uint64_t{1} << 32); }));
+}
+
+// ATMPROF (1216) block: layout, file round trip through EventioReader, and a rejected 5-layer
+// block (the writer never produces one).
+void atmprof_round_trip() {
+  AtmosphereTable table;
+  table.profile_id = 99;
+  table.file_name = "atmprof1.dat";
+  table.observation_level_cm = 220000.0;
+  table.alt_km = {0.0, 1.0, 5.0};
+  table.rho = {1.2, 1.0, 0.5};
+  table.thick = {1000.0, 900.0, 500.0};
+  table.refidx_m1 = {2.9e-4, 2.7e-4, 2.2e-4};
+  const EventioBlock block = make_atmprof_block(table);
+  CHECK(block.type == iact::atmprof);
+  CHECK(block.version == 1);
+  CHECK(block.ident == 99);
+  CHECK(block.body.size() == 120); // 13 (name) + 8 (level) + 1 (count) + 96 (levels) + 1 + 1 pad
+  CHECK(block.body[0] == 12);      // name length, then the name
+  CHECK(block.body[21] == 3);      // level count after the level
+
+  std::ostringstream out;
+  write_block(out, block);
+  std::istringstream in(out.str());
+  EventioReader reader{in};
+  EventioBlock read;
+  CHECK(reader.next(read));
+  const AtmosphereTable back = decode_atmprof(read);
+  CHECK(back.profile_id == 99);
+  CHECK(back.file_name == table.file_name);
+  CHECK(back.observation_level_cm == table.observation_level_cm);
+  CHECK(back.alt_km == table.alt_km);
+  CHECK(back.rho == table.rho);
+  CHECK(back.thick == table.thick);
+  CHECK(back.refidx_m1 == table.refidx_m1);
+
+  AtmosphereTable bad = table;
+  bad.rho.pop_back();
+  CHECK(throws([&] { make_atmprof_block(bad); }));
+
+  Bytes layers;
+  ByteWriter w{layers};
+  put_count(w, 0);
+  w.f64(1.0);
+  put_count(w, 0);
+  put_count(w, 5); // 5-layer parameters: not read
+  CHECK(throws([&] { decode_atmprof(make_block(iact::atmprof, 1, 99, layers)); }));
+  CHECK(throws([&] { decode_atmprof(make_block(iact::atmprof, 0, 99, layers)); }));
+}
+
 int main() {
   return run_checks([] {
     header_round_trip();
@@ -388,5 +459,7 @@ int main() {
     photons3d_decoding();
     photon_count_is_checked();
     photon_block_indices_are_range_checked();
+    count_encoding();
+    atmprof_round_trip();
   });
 }

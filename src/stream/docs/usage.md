@@ -67,6 +67,7 @@ $ ps-cat --summary all.ps                # records per type, photons and weight 
 $ ps-cat run.ps | ps-tee copy.ps > out.ps  # copy.ps and out.ps get the same records
 $ corsika2ps run.iact > run.ps           # CORSIKA IACT EventIO to a photon stream
 $ ps2simtel --camera-map cam.txt run.ps > sim.simtel   # stream to sim_telarray input
+$ ps2simtel --atmprof atmprof1.dat light.ps > sim.simtel  # table for streams without CORSIKA input
 $ corsika2ps < run.iact | ps2simtel > sim.simtel       # pipe; "-" reads stdin
 ```
 
@@ -76,6 +77,10 @@ The camera map lists the camera-frame telescopes, one per line:
 # telescope_id mirror_class(1 single | 2 dual) camera_rotation_deg
 2 1 0.0
 ```
+
+`--atmprof FILE` reads a CORSIKA/sim_telarray atmospheric table (altitude [km], density, thickness, n-1
+per line, `#` comments). It is written as ATMPROF (1216) before the first event, with the profile number
+that EVTH names (99 for synthesised headers). A stream with its own ATMPROF block rejects the option.
 
 Telescopes not listed are ground-frame (sim_telarray `Bypass_Optics=0`). Listed telescopes are
 converted to the bypass convention and need `Bypass_Optics=1` (class 1) or `2` (class 2) in

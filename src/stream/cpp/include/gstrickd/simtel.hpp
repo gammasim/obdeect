@@ -26,8 +26,11 @@
 // Streams without CORSIKA blobs (e.g. from light sources) get the sim_telarray
 // headers RUNH, TELPOS, EVTH, TELOFF, EVTE and RUNE synthesised from the run and
 // event metadata with the words simtools photon_bunch_file.py fills
-// (write_photon_bunches, :379-466; _EVENT_WORDS :49-98). ATMPROF is not written:
-// the stream does not carry an atmospheric profile.
+// (write_photon_bunches, :379-466; _EVENT_WORDS :49-98). Each synthesised header
+// is reported as a warning. ATMPROF (1216) is written only when a table is given
+// (ps2simtel --atmprof): before the first EVTH, with the profile number that EVTH
+// names (99 for synthesised headers). sim_telarray takes the table over the
+// profile number only when the block precedes the first event.
 
 #include "gstrickd/corsika.hpp"
 #include "gstrickd/eventio.hpp"
@@ -35,6 +38,7 @@
 #include "gstrickd/photons.hpp"
 #include "gstrickd/stream.hpp"
 
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstddef>
@@ -43,7 +47,9 @@
 #include <limits>
 #include <map>
 #include <numbers>
+#include <optional>
 #include <ostream>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -138,6 +144,63 @@ inline CameraMap read_camera_map(std::istream &in) {
     }
   }
   return map;
+}
+
+// Profile number of the custom table (CORSIKA ATMOFILE, simtools _PROFILE_ID).
+inline constexpr std::uint32_t custom_profile_id = 99;
+
+// Parses an atmospheric table as CORSIKA and sim_telarray read it (dlufd profile.hpp):
+// '#' starts a comment, blank lines are skipped, and the first four columns are altitude
+// [km a.s.l.], density [g/cm^3], thickness [g/cm^2] and n-1. Further columns are ignored.
+// Altitudes must ascend; 2 to 120 levels (atmo.c MAX_PROFILE). The profile number is
+// custom_profile_id; the observation level is set by the caller. Throws
+// std::invalid_argument with the line number.
+inline AtmosphereTable read_atmprof_text(std::istream &in, const std::string &file_name) {
+  AtmosphereTable table;
+  table.profile_id = custom_profile_id;
+  table.file_name = file_name;
+  std::string line;
+  std::size_t number = 0;
+  const auto fail = [&number](const std::string &what) {
+    return std::invalid_argument("atmospheric table line " + std::to_string(number) + ": " + what);
+  };
+  while (std::getline(in, line)) {
+    ++number;
+    const auto first = line.find_first_not_of(" \t\r");
+    if (first == std::string::npos || line[first] == '#') {
+      continue;
+    }
+    std::istringstream fields(line);
+    std::array<std::string, 4> tokens;
+    for (std::string &token : tokens) {
+      if (!(fields >> token)) {
+        throw fail("expected 4 columns: altitude_km density thickness n_minus_1");
+      }
+    }
+    std::array<double, 4> v{};
+    for (std::size_t k = 0; k < v.size(); ++k) {
+      if (!simtel_detail::parse_real(tokens[k], v[k])) {
+        throw fail("not a finite number: " + tokens[k]);
+      }
+    }
+    if (v[1] < 0.0 || v[2] < 0.0) {
+      throw fail("density and thickness must not be negative");
+    }
+    if (!table.alt_km.empty() && !(v[0] > table.alt_km.back())) {
+      throw fail("altitudes must ascend");
+    }
+    table.alt_km.push_back(v[0]);
+    table.rho.push_back(v[1]);
+    table.thick.push_back(v[2]);
+    table.refidx_m1.push_back(v[3]);
+  }
+  if (table.alt_km.size() < 2) {
+    throw std::invalid_argument("atmospheric table needs at least 2 levels");
+  }
+  if (table.alt_km.size() > 120) {
+    throw std::invalid_argument("atmospheric table has more than 120 levels");
+  }
+  return table;
 }
 
 // Converts camera-frame positions and directions in place to the sim_telarray
@@ -300,12 +363,24 @@ inline TelPos telpos_from_metres(const std::vector<double> &x, const std::vector
 
 } // namespace simtel_detail
 
+// Options of the photon stream to sim_telarray conversion.
+struct SimtelOptions {
+  CameraMap camera;                       // camera-frame telescopes
+  std::optional<AtmosphereTable> atmprof; // atmospheric table (ATMPROF block), see the file comment
+  std::ostream *warnings{nullptr};        // reports synthesised headers; null: silent
+};
+
 // Writes a photon stream as sim_telarray input (EventIO, normal mode: one 1204
 // container per array). Records are read in stream order; see the file comment
 // for the frame and header rules.
 class PsToSimtel {
 public:
-  PsToSimtel(std::ostream &out, CameraMap camera) : writer_{out}, camera_{std::move(camera)} {
+  PsToSimtel(std::ostream &out, CameraMap camera)
+      : PsToSimtel(out, SimtelOptions{std::move(camera), std::nullopt, nullptr}) {}
+
+  PsToSimtel(std::ostream &out, SimtelOptions options)
+      : writer_{out}, camera_{std::move(options.camera)}, atmprof_{std::move(options.atmprof)},
+        warnings_{options.warnings} {
     for (const auto &[id, telescope] : camera_) {
       if (id == 0) {
         throw std::invalid_argument("camera map telescope id must be at least 1");
@@ -413,8 +488,16 @@ private:
         return;
       }
       break;
+    case iact::atmprof:
+      if (atmprof_) {
+        throw std::runtime_error("the stream has its own ATMPROF block; drop --atmprof");
+      }
+      break;
     case iact::evth:
       have_evth_ = true;
+      if (atmprof_pending_) {
+        emit_atmprof(evth_profile(record.blob));
+      }
       break;
     case iact::teloff:
       have_teloff_ = true;
@@ -441,6 +524,7 @@ private:
     run_open_ = true;
     run_metadata_ = metadata;
     run_headers_done_ = false;
+    atmprof_pending_ = atmprof_.has_value();
     have_runh_ = have_telpos_ = have_rune_ = false;
     events_ = 0;
   }
@@ -463,9 +547,11 @@ private:
     }
     run_headers_done_ = true;
     if (!have_runh_) {
+      note_synthesised("RUNH");
       emit(run_header());
     }
     if (!have_telpos_) {
+      note_synthesised("TELPOS");
       emit(telescope_positions());
     }
   }
@@ -478,9 +564,16 @@ private:
     }
     event_headers_done_ = true;
     if (!have_evth_) {
+      // Without a table the EVTH profile is not in the stream: say so.
+      note_synthesised("EVTH");
+      if (!atmprof_) {
+        note_missing_atmprof();
+      }
+      emit_atmprof(custom_profile_id);
       emit(event_header());
     }
     if (!have_teloff_) {
+      note_synthesised("TELOFF");
       emit(array_offsets());
     }
   }
@@ -491,6 +584,7 @@ private:
     }
     ensure_event_headers();
     if (!have_evte_) {
+      note_synthesised("EVTE");
       emit(event_end_block());
     }
     event_open_ = false;
@@ -503,9 +597,51 @@ private:
     end_event();
     ensure_run_headers();
     if (!have_rune_) {
+      note_synthesised("RUNE");
       emit(run_end_block());
     }
     run_open_ = false;
+  }
+
+  void note_synthesised(const char *name) {
+    if (warnings_ == nullptr || !warned_.insert(name).second) {
+      return;
+    }
+    *warnings_ << "ps2simtel: warning: no CORSIKA " << name
+               << " block in the stream; synthesised it from the run metadata\n";
+  }
+
+  void note_missing_atmprof() {
+    if (warnings_ == nullptr || !warned_.insert("ATMPROF").second) {
+      return;
+    }
+    *warnings_ << "ps2simtel: warning: no atmospheric table; sim_telarray cannot find profile "
+               << custom_profile_id << " (use --atmprof FILE)\n";
+  }
+
+  // Profile number of an EVTH block (CORSIKA word 77, bits 10-19).
+  static std::uint32_t evth_profile(const std::vector<std::uint8_t> &raw) {
+    const std::vector<float> words = decode_float_block(simtel_detail::parse_block(raw));
+    if (words.size() < corsika_word::evth_flags + 1) {
+      throw std::runtime_error("EVTH block too short for its profile word");
+    }
+    const auto flags = static_cast<std::int64_t>(std::llround(words[corsika_word::evth_flags]));
+    return static_cast<std::uint32_t>((flags >> corsika_word::evth_flag_atmosphere_shift) &
+                                      corsika_word::evth_flag_atmosphere_mask);
+  }
+
+  // Writes the ATMPROF block once per run, when a table was given, with `profile`
+  // as its number and the run's observation level.
+  void emit_atmprof(std::uint32_t profile) {
+    if (!atmprof_pending_) {
+      return;
+    }
+    atmprof_pending_ = false;
+    AtmosphereTable table = *atmprof_;
+    table.profile_id = profile;
+    table.observation_level_cm =
+        100.0 * simtel_detail::number_field(run_metadata_, "observation_level_m");
+    emit(make_atmprof_block(table));
   }
 
   void emit(const EventioBlock &block) {
@@ -596,6 +732,10 @@ private:
 
   SimtelWriter writer_;
   CameraMap camera_;
+  std::optional<AtmosphereTable> atmprof_;
+  std::ostream *warnings_{};
+  std::set<std::string> warned_;
+  bool atmprof_pending_{};
   Metadata run_metadata_;
   std::int64_t event_number_{};
   std::uint64_t events_{};
@@ -621,8 +761,8 @@ inline void corsika_to_stream(std::istream &in, std::ostream &out, const std::st
 
 // Photon stream from `in` to sim_telarray EventIO on `out`. Throws on a truncated
 // stream or on a record the adapter cannot convert.
-inline void stream_to_simtel(std::istream &in, std::ostream &out, CameraMap camera) {
-  PsToSimtel converter{out, std::move(camera)};
+inline void stream_to_simtel(std::istream &in, std::ostream &out, SimtelOptions options) {
+  PsToSimtel converter{out, std::move(options)};
   Reader reader{in};
   Record record;
   while (reader.next(record)) {
@@ -635,6 +775,10 @@ inline void stream_to_simtel(std::istream &in, std::ostream &out, CameraMap came
     throw std::runtime_error("gstrickd: data after stream_end");
   }
   converter.finish();
+}
+
+inline void stream_to_simtel(std::istream &in, std::ostream &out, CameraMap camera) {
+  stream_to_simtel(in, out, SimtelOptions{std::move(camera), std::nullopt, nullptr});
 }
 
 } // namespace gstrickd

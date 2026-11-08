@@ -18,7 +18,8 @@ namespace {
 constexpr std::size_t buffer_size = std::size_t{1} << 20;
 
 void usage() {
-  std::fprintf(stderr, "usage: ps2simtel [--camera-map FILE] [-o FILE|-] [input|-]\n");
+  std::fprintf(stderr,
+               "usage: ps2simtel [--camera-map FILE] [--atmprof FILE] [-o FILE|-] [input|-]\n");
 }
 
 void set_binary_stdio() {
@@ -47,6 +48,7 @@ int main(int argc, char **argv) {
   std::string input = "-";
   std::string output = "-";
   std::string camera_path;
+  std::string atmprof_path;
   bool have_input = false;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -54,13 +56,19 @@ int main(int argc, char **argv) {
       usage();
       return 0;
     }
-    if (arg == "--camera-map" || arg == "-o") {
+    if (arg == "--camera-map" || arg == "--atmprof" || arg == "-o") {
       if (i + 1 >= argc) {
         std::fprintf(stderr, "ps2simtel: %s needs an argument\n", arg.c_str());
         usage();
         return 2;
       }
-      (arg == "-o" ? output : camera_path) = argv[++i];
+      if (arg == "-o") {
+        output = argv[++i];
+      } else if (arg == "--atmprof") {
+        atmprof_path = argv[++i];
+      } else {
+        camera_path = argv[++i];
+      }
       continue;
     }
     if (arg.size() > 1 && arg[0] == '-') {
@@ -78,14 +86,22 @@ int main(int argc, char **argv) {
   }
 
   try {
-    gstrickd::CameraMap camera;
+    gstrickd::SimtelOptions options;
+    options.warnings = &std::cerr;
     if (!camera_path.empty()) {
       std::ifstream map_file(camera_path);
       if (!map_file) {
         throw std::runtime_error("cannot open camera map " + camera_path);
       }
-      camera = gstrickd::read_camera_map(map_file);
-      report_bypass(camera);
+      options.camera = gstrickd::read_camera_map(map_file);
+      report_bypass(options.camera);
+    }
+    if (!atmprof_path.empty()) {
+      std::ifstream table_file(atmprof_path);
+      if (!table_file) {
+        throw std::runtime_error("cannot open atmospheric table " + atmprof_path);
+      }
+      options.atmprof = gstrickd::read_atmprof_text(table_file, atmprof_path);
     }
 
     static std::vector<char> in_buffer(buffer_size);
@@ -118,7 +134,7 @@ int main(int argc, char **argv) {
       out = &out_file;
     }
 
-    gstrickd::stream_to_simtel(*in, *out, std::move(camera));
+    gstrickd::stream_to_simtel(*in, *out, std::move(options));
     out->flush();
     if (!*out) {
       throw std::runtime_error("write error on output");
