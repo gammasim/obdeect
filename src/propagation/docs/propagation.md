@@ -118,7 +118,8 @@ dlufd-propagate: photons in <n>, out <m> (weight <w>), dropped <d>
 
 | Option | Meaning |
 |---|---|
-| `--transmission FILE` | transmission table, extinction-table format (required) |
+| `--transmission FILE` | transmission table, extinction-table format (required, except with `--no-extinction`) |
+| `--no-extinction` | geometry only, see below |
 | `--site-altitude M` | observation level [m a.s.l.] (required) |
 | `--profile FILE` | atmospheric profile (atmprof format): air delay and refraction |
 | `--envelope NAME=FILE` | envelope factor, two-column text (nm, value); repeatable |
@@ -158,6 +159,27 @@ summary = dlufd.propagate(
 
 `summary` is a dict with `photons_in`, `photons_out`, `dropped`, `weight_out`.
 Files are paths only (no `-`).
+
+## Geometry only
+
+`--no-extinction` (Python: `extinction=False`) moves sky photons to the ground frame G and
+assigns wavelengths, and does nothing else: no extinction, no envelope, no thinning. Use it
+when a later program applies the atmospheric transmission itself, for example a light source
+(dlamb) feeding the camera simulation directly.
+
+```console
+$ dlufd-propagate --no-extinction --site-altitude 2000 --profile atmprof.dat --seed 1 \
+    -i dlamb.ps -o ground.ps
+```
+
+- Positions, directions and times are those of the normal run (same refraction and air delay).
+- Every photon that reaches the telescope plane is kept with its weight w; photons that do not
+  reach it (w = 0) are removed as in weighted mode. There is no column p.
+- The ledger records `atmosphere.state` as `pending` (no source, no `pathlen_m`), so a later
+  stage applies it; `wavelength` is `applied`.
+- No transmission table is needed. `zem` is not needed either.
+- Rejected with a clear error: `--transmission`, `--envelope`, `--mode thinned`, `--scattering`,
+  `--scattering-points`, `--store-p`, `--pathlen`, `--telescope-pathlen`. `--mode weighted` is accepted.
 
 ## In-telescope path
 

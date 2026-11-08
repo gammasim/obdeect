@@ -63,8 +63,13 @@ struct EnvelopeFactor {
 };
 
 struct PropagatorConfig {
-  // Required. Its H2 must match site_altitude_m (within 25 m).
+  // Required unless geometry_only. Its H2 must match site_altitude_m (within 25 m).
   std::optional<TransmissionTable> transmission;
+  // Geometry only: sky to G (refraction, air delay) and wavelength assignment, but no
+  // extinction, envelope or thinning. All rows keep their weight; the ledger records
+  // `atmosphere` as pending. Needs weighted mode, no transmission table, no envelope, no
+  // scattering, no store_p and no in-telescope path.
+  bool geometry_only{false};
   std::string transmission_source; // ledger provenance; default "transmission table"
   double site_altitude_m{};        // observation level [m a.s.l.]
   // Optical path inside a telescope [m] (the od_focus part of the telescope depths).
@@ -157,14 +162,16 @@ inline bool same_file(const std::string &a, const std::string &b) {
 class Propagator {
 public:
   explicit Propagator(PropagatorConfig config) : config_(std::move(config)) {
-    if (!config_.transmission) {
+    if (config_.geometry_only) {
+      check_geometry_only();
+    } else if (!config_.transmission) {
       throw std::invalid_argument("propagator needs a transmission table");
     }
     if (!std::isfinite(config_.site_altitude_m)) {
       throw std::invalid_argument("site altitude must be finite");
     }
-    if (std::abs(config_.transmission->observation_level_m() - config_.site_altitude_m) >
-        altitude_tolerance_m) {
+    if (config_.transmission && std::abs(config_.transmission->observation_level_m() -
+                                         config_.site_altitude_m) > altitude_tolerance_m) {
       throw std::invalid_argument("transmission table H2 does not match the site altitude");
     }
     if (config_.wavelength_range) {
@@ -324,6 +331,28 @@ private:
     std::uint64_t out_index{};       // output rows so far (first_index of the next chunk)
     double weight_out{};
   };
+
+  // Geometry-only runs apply no extinction: reject every setting that belongs to it.
+  void check_geometry_only() const {
+    if (config_.transmission) {
+      throw std::invalid_argument("geometry-only run takes no transmission table");
+    }
+    if (!config_.envelope.empty()) {
+      throw std::invalid_argument("geometry-only run takes no envelope (no thinning)");
+    }
+    if (config_.mode != OutputMode::weighted) {
+      throw std::invalid_argument("geometry-only run keeps all photons: mode must be weighted");
+    }
+    if (config_.scattering.enabled || config_.scattering_table) {
+      throw std::invalid_argument("geometry-only run cannot be combined with scattering");
+    }
+    if (config_.store_p) {
+      throw std::invalid_argument("geometry-only run has no acceptance column p to store");
+    }
+    if (config_.default_pathlen_m != 0.0 || !config_.telescope_pathlen_m.empty()) {
+      throw std::invalid_argument("geometry-only run takes no in-telescope path");
+    }
+  }
 
   static void check_pathlen(double pathlen_m) {
     if (!std::isfinite(pathlen_m) || pathlen_m < 0.0) {
@@ -494,11 +523,15 @@ private:
                                                const std::vector<double> &pathlen_m) const {
     gstrickd::Metadata ledger;
     std::string factors = "atmosphere,wavelength";
-    ledger["atmosphere.state"] = std::string("applied");
-    ledger["atmosphere.source"] = config_.transmission_source.empty()
-                                      ? std::string("transmission table")
-                                      : config_.transmission_source;
-    ledger["atmosphere.pathlen_m"] = pathlen_m;
+    if (config_.geometry_only) {
+      ledger["atmosphere.state"] = std::string("pending"); // applied by a later stage
+    } else {
+      ledger["atmosphere.state"] = std::string("applied");
+      ledger["atmosphere.source"] = config_.transmission_source.empty()
+                                        ? std::string("transmission table")
+                                        : config_.transmission_source;
+      ledger["atmosphere.pathlen_m"] = pathlen_m;
+    }
     if (config_.profile) {
       ledger["atmosphere.profile_source"] = config_.profile_source.empty()
                                                 ? std::string("atmospheric profile")
@@ -562,15 +595,19 @@ private:
     telescope_.z_m = run_->z_m[index];
     telescope_.altitude_m = run_->observation_m + telescope_.z_m; // the run's observation level
     telescope_.pathlen_m = run_->pathlen_m[index];
-    const auto key = std::make_pair(telescope_.altitude_m, telescope_.pathlen_m);
-    auto cached = depths_cache_.find(key);
-    if (cached == depths_cache_.end()) {
-      cached = depths_cache_
-                   .emplace(key, config_.transmission->telescope_depths(telescope_.altitude_m,
-                                                                        telescope_.pathlen_m))
-                   .first;
+    if (config_.geometry_only) {
+      telescope_.depths = nullptr;
+    } else {
+      const auto key = std::make_pair(telescope_.altitude_m, telescope_.pathlen_m);
+      auto cached = depths_cache_.find(key);
+      if (cached == depths_cache_.end()) {
+        cached = depths_cache_
+                     .emplace(key, config_.transmission->telescope_depths(telescope_.altitude_m,
+                                                                          telescope_.pathlen_m))
+                     .first;
+      }
+      telescope_.depths = &cached->second;
     }
-    telescope_.depths = &cached->second;
     telescope_.out_index = 0;
     telescope_.weight_out = 0.0;
     out["frame"] = static_cast<std::int64_t>(gstrickd::Frame::ground);
@@ -826,6 +863,14 @@ private:
     chunk_ = input;
     if (input.frame == gstrickd::Frame::sky) {
       summary_.dropped += sky_to_ground(chunk_, sky_plane());
+    }
+
+    if (config_.geometry_only) {
+      for (auto &out : assign_wavelength_chunk(std::move(chunk_), run_->wavelengths, config_.seed,
+                                               event_number_, telescope_.id)) {
+        emit(out, sink);
+      }
+      return;
     }
 
     // Ground steps (see the header comment). Wavelength assignment, extinction and
