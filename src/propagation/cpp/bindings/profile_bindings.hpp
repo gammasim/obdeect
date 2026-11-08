@@ -82,8 +82,7 @@ inline void bind_profile(nb::module_ &module) {
           [](const AtmosphereProfile &p, double observation_level_m) {
             return dlufd::ambient_group_index(p, observation_level_m);
           },
-          nb::arg("observation_level_m"),
-          "Refractive index at the observation level (obdeect ambient_group_index).");
+          nb::arg("observation_level_m"), "Refractive index n at the observation level.");
 
   nb::class_<RefractionTables>(module, "RefractionTables")
       .def(nb::init<AtmosphereProfile, double>(), nb::arg("profile"),

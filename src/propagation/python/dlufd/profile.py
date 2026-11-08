@@ -50,7 +50,7 @@ class AtmosphereProfile:
         return self._apply(self._core.refractive_index_minus_one, height_m)
 
     def group_index(self, observation_level_m: float) -> float:
-        """Refractive index at the observation level (obdeect ambient_group_index)."""
+        """Refractive index n at the observation level."""
         return self._core.group_index(float(observation_level_m))
 
     @staticmethod

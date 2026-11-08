@@ -1,262 +1,233 @@
 #pragma once
 
-#include "dlufd/profile.hpp"
+// Ray bending and travel time in a plane-parallel atmosphere with n(h) = 1 + nu(h). See
+// docs/refraction.md for the derivation.
+//
+// Snell's law n(h) sin(theta(h)) = n_e sin(theta_e) fixes the ray. With delta = n_e / n - 1,
+// sin(theta) = s_e (1 + delta) and, expanded about the emission angle,
+//   tan(theta) - tan(theta_e) = sum_k f_k (s_e delta)^k,
+//   n / cos(theta)            = (1 + nu) sum_k g_k (s_e delta)^k,
+// with Taylor coefficients f_k, g_k of s/sqrt(1-s^2) and 1/sqrt(1-s^2). delta^k is a
+// polynomial in nu_e and nu, so each term reduces to products of nu_e^a and the profile
+// moments M_b(h) = integral of nu^b dh, which are tabulated once per profile.
 
-#include <algorithm>
+#include "dlufd/profile.hpp"
+#include "dlufd/timing.hpp"
+
+#include <array>
 #include <cmath>
 #include <cstddef>
-#include <span>
 #include <stdexcept>
 #include <utility>
-#include <vector>
 
 namespace dlufd {
 
-// Refraction tables for one profile and observation level: air-time excess and ray-bending
-// coefficients from planar ray integration (see docs/refraction.md).
-// Units inside: cm and ns. Public heights are m a.s.l.
+class RefractionTables;
+template <class T>
+[[nodiscard]] bool bend(const RefractionTables &tables, T height_m, T &cx, T &cy, T &x, T &y, T &t);
+
 class RefractionTables {
 public:
-  static constexpr double vacuum_speed_cm_per_ns = 29.9792458; // speed of light in vacuum
-  static constexpr double pi = 3.14159265358979323846;
+  static constexpr int terms = 6; // order of the expansion in s_e * delta
 
   RefractionTables(AtmosphereProfile profile, double observation_level_m)
-      : profile_(std::move(profile)), obs_cm_(100. * observation_level_m) {
-    require_finite(obs_cm_, "observation level");
-    if (!(obs_cm_ >= profile_.bottom_cm() && obs_cm_ < profile_.top_cm()))
-      throw std::invalid_argument("observation level must lie inside the atmospheric table");
-    const auto &alt = profile_.alt_cm_;
-    const auto &rho = profile_.rho_;
-    const auto &n_1 = profile_.n_1_;
-    const std::size_t n = alt.size();
-
-    // etadsn: n-1 per density at the first level more than 1.5 km above the observation level.
+      : profile_(std::move(profile)) {
+    if (!std::isfinite(observation_level_m) || observation_level_m < profile_.bottom_m() ||
+        observation_level_m >= profile_.top_m()) {
+      throw std::invalid_argument("observation level must lie inside the atmospheric profile");
+    }
+    obs_cm_ = 100. * observation_level_m;
+    nu_obs_ = profile_.index_minus_one_cm(obs_cm_);
+    for (int power = 0; power <= AtmosphereProfile::max_moment; ++power) {
+      moment_obs_[static_cast<std::size_t>(power)] = profile_.index_moment_cm(obs_cm_, power);
+    }
+    // Gladstone-Dale ratio at the first level more than 1.5 km above the observation level.
+    const auto &z = profile_.table_altitude_cm();
+    // Without such a level the default is kept.
     etadsn_ = AtmosphereProfile::default_etadsn;
-    for (std::size_t i = 0; i < n; ++i) {
-      if (alt[i] > obs_cm_ + 1.5e5) {
-        etadsn_ = n_1[i] / rho[i];
+    for (std::size_t i = 0; i < z.size(); ++i) {
+      if (z[i] > obs_cm_ + 1.5e5) {
+        etadsn_ = profile_.table_index_minus_one()[i] / profile_.table_density()[i];
         break;
       }
     }
-    obs_refidx_ = 1. + profile_.index_minus_one_cm(obs_cm_);
-    obs_thick_ = profile_.thickness_cm(obs_cm_);
-
-    // Bending coefficients per table level, from a 45 degree ray integrated numerically.
-    const double theta0 = 45. * (pi / 180.);
-    std::vector<double> hori_a(n), time_a(n);
-    table_time0_.resize(n);
-    table_alt_ = alt;
-    for (std::size_t ialt = 0; ialt < n; ++ialt) {
-      const double n_sint0 = (1. + profile_.index_minus_one_cm(alt[ialt])) * std::sin(theta0);
-      double x0 = 0., t_vt = 0., s0 = 0.;
-      double x_45 = 0., t_45 = 0., s45 = 0.;
-      const double theta1 = std::asin(n_sint0 / obs_refidx_);
-      const double c = std::cos(theta0 + 0.28 * (theta1 - theta0));
-      const double s = std::sin(theta0 + 0.28 * (theta1 - theta0));
-      const double vci = 1. / vacuum_speed_cm_per_ns;
-      const double airmass = 1. / std::cos(theta0);
-      const double zem = alt[ialt];
-      const double dz = zem - obs_cm_;
-      const double de = etadsn_ * (obs_thick_ - profile_.thickness_cm(zem));
-      const double t0_vt = (dz + de) * vci;
-      const double t0_45 = t0_vt * airmass;
-      trace_ray_planar(zem, obs_cm_, 0., 2.5e2, x0, t_vt, s0);
-      trace_ray_planar(zem, obs_cm_, theta0, 2.5e2, x_45, t_45, s45);
-      if (zem < obs_cm_) {
-        t_vt *= -1.;
-        t_45 *= -1.;
-        x_45 *= -1.;
-      }
-      table_time0_[ialt] = t_vt - t0_vt;
-      // Density-indexed coefficients are stored in order of increasing density.
-      const std::size_t rev = n - 1 - ialt;
-      hori_a[rev] =
-          x_45 >= 0. ? std::sqrt(x_45 * (c * c * c) / s) : -std::sqrt(-x_45 * (c * c * c) / s);
-      if (((t_45 - t0_45) - (t_vt - t0_vt)) < 0.)
-        time_a[rev] = std::sqrt(((t0_45 - t_45) - (t0_vt - t_vt)) * (c * c * c) / (s * s));
-      else
-        time_a[rev] = std::sqrt(-((t0_45 - t_45) - (t0_vt - t_vt)) * (c * c * c) / (s * s));
-    }
-
-    // Cubic splines of the coefficients, resampled on the equidistant tables.
-    std::vector<double> rho_rev(n);
-    for (std::size_t i = 0; i < n; ++i)
-      rho_rev[i] = rho[n - 1 - i];
-    const CubicSpline spline_hori(rho_rev, hori_a);
-    const CubicSpline spline_time_a(rho_rev, time_a);
-    const CubicSpline spline_time0(alt, table_time0_);
-    fast_rho_fac_ = static_cast<double>(AtmosphereProfile::fast_points - 1) / rho.front();
-    fast_rho_rev_.resize(AtmosphereProfile::fast_points);
-    fast_hori_a_.resize(AtmosphereProfile::fast_points);
-    fast_time_a_.resize(AtmosphereProfile::fast_points);
-    fast_time0_.resize(AtmosphereProfile::fast_points);
-    const auto fast_alt = profile_.fast_altitude_cm();
-    for (std::size_t i = 0; i < AtmosphereProfile::fast_points; ++i) {
-      const double r = i < AtmosphereProfile::fast_points - 1
-                           ? static_cast<double>(i) / fast_rho_fac_
-                           : rho.front();
-      fast_rho_rev_[i] = r;
-      fast_hori_a_[i] = spline_hori.value(r);
-      fast_time_a_[i] = spline_time_a.value(r);
-      fast_time0_[i] = spline_time0.value(fast_alt[i]);
-    }
+    build_coefficients();
   }
 
-  const AtmosphereProfile &profile() const { return profile_; }
-  double observation_level_cm() const { return obs_cm_; }
-  double etadsn() const { return etadsn_; }
-  double observation_refractive_index() const { return obs_refidx_; }
-  double observation_thickness() const { return obs_thick_; }
-  double fast_density_factor() const { return fast_rho_fac_; }
-  // Density at the equidistant grid of fast_density_factor(), increasing.
-  std::span<const double> fast_density() const { return fast_rho_rev_; }
-  std::span<const double> fast_horizontal() const { return fast_hori_a_; }
-  std::span<const double> fast_time_coefficient() const { return fast_time_a_; }
-  std::span<const double> fast_time0() const { return fast_time0_; }
+  [[nodiscard]] double etadsn() const noexcept { return etadsn_; }
+  [[nodiscard]] double observation_level_cm() const noexcept { return obs_cm_; }
+  [[nodiscard]] const AtmosphereProfile &profile() const noexcept { return profile_; }
+  [[nodiscard]] double index_minus_one_at_observation() const noexcept { return nu_obs_; }
 
-  // Linear interpolation in altitude on the table levels, used for vertical rays.
-  double vertical_time0_cm(double zem) const {
-    require_finite(zem, "height");
-    const std::size_t n = table_alt_.size();
-    if (zem <= table_alt_.front())
-      return table_time0_.front();
-    if (zem >= table_alt_.back())
-      return table_time0_.back();
-    std::size_t k = 0;
-    while (k + 2 < n && table_alt_[k + 1] <= zem)
-      ++k;
-    const double f = (zem - table_alt_[k]) / (table_alt_[k + 1] - table_alt_[k]);
-    return table_time0_[k] * (1. - f) + table_time0_[k + 1] * f;
+  // Air travel time of a vertical ray from the observation level to height h [cm], in
+  // excess of the vacuum time [ns].
+  double vertical_time0_cm(double h) const {
+    if (!std::isfinite(h)) {
+      throw std::invalid_argument("height must be finite");
+    }
+    return (moment(h, 1)) / (100. * speed_of_light_m_per_ns);
+  }
+
+  // Integral of nu^power from the observation level to h [cm].
+  [[nodiscard]] double moment(double h_cm, int power) const {
+    if (power < 0 || power > AtmosphereProfile::max_moment) {
+      throw std::invalid_argument("moment order must be in [0, max_moment]");
+    }
+    return profile_.index_moment_cm(h_cm, power) - moment_obs_[static_cast<std::size_t>(power)];
   }
 
 private:
-  // Planar ray from emlev down to olev, step in cm.
-  // Outputs: horizontal displacement xo [cm], time to via [ns] and path length so [cm].
-  void trace_ray_planar(double emlev, double olev, double za, double step, double &xo, double &to,
-                        double &so) const {
-    double ss = 0., t = 0.;
-    const double vci = 1. / vacuum_speed_cm_per_ns;
-    double cz = std::cos(za);
-    double sz = std::sin(za);
-    if (emlev < olev)
-      std::swap(emlev, olev);
-    double h = emlev >= olev ? emlev - olev : 0.;
-    double y = olev + h;
-    double x = h * std::tan(za);
-    double n1 = 1. + profile_.index_minus_one_cm(y);
-    const double p = n1 * sz; // Snell invariant
-    while (h > 0.) {
-      const double nstep = (h > step * cz) ? step : h / cz;
-      const double y2 = y - nstep * cz;
-      const double h2 = y2 - olev;
-      const double n2 = 1. + profile_.index_minus_one_cm(y2);
-      const double sz2 = p / n2;
-      const double cz2 = std::sqrt(1. - sz2 * sz2);
-      const double dx = nstep * 0.5 * (sz + sz2);
-      const double x2 = x - dx;
-      ss += nstep;
-      const double dt = nstep * 0.5 * (n1 + n2) * vci;
-      t += dt;
-      sz = sz2;
-      cz = cz2;
-      x = x2;
-      y = y2;
-      h = h2;
-      n1 = n2;
+  template <class T> friend bool bend(const RefractionTables &, T, T &, T &, T &, T &, T &);
+
+  // Coefficient of nu_e^a * M_b in the expansion of (nu_e - nu)^k (1 + nu)^m, m = -k (position)
+  // or 1 - k (time), truncated at total degree `terms`.
+  [[nodiscard]] double position_coefficient(int k, int a, int b) const {
+    return position_[static_cast<std::size_t>(k)][static_cast<std::size_t>(a)]
+                    [static_cast<std::size_t>(b)];
+  }
+  [[nodiscard]] double time_coefficient(int k, int a, int b) const {
+    return time_[static_cast<std::size_t>(k)][static_cast<std::size_t>(a)]
+                [static_cast<std::size_t>(b)];
+  }
+
+  static constexpr std::size_t dim = terms + 1;
+  using Table = std::array<std::array<std::array<double, dim>, dim>, dim>;
+
+  // Binomial coefficient of x^i in (1 + x)^m for integer m (also negative).
+  static double binomial(int m, int i) {
+    double value = 1.;
+    for (int j = 0; j < i; ++j) {
+      value *= double(m - j) / double(j + 1);
     }
-    xo = x;
-    to = t;
-    so = ss;
+    return value;
+  }
+
+  static void fill(Table &table, int shift) {
+    for (auto &a : table)
+      for (auto &b : a)
+        b.fill(0.);
+    for (int k = 1; k <= terms; ++k) {
+      const int m = shift - k;
+      for (int j = 0; j <= k; ++j) {
+        // (nu_e - nu)^k contributes C(k, j) nu_e^(k-j) (-nu)^j
+        double c = 1.;
+        for (int q = 0; q < j; ++q) {
+          c *= double(k - q) / double(q + 1);
+        }
+        c *= (j % 2 == 0) ? 1. : -1.;
+        for (int i = 0; k + i <= terms; ++i) {
+          table[static_cast<std::size_t>(k)][static_cast<std::size_t>(k - j)]
+               [static_cast<std::size_t>(j + i)] += c * binomial(m, i);
+        }
+      }
+    }
+  }
+
+  void build_coefficients() {
+    fill(position_, 0);
+    fill(time_, 1);
   }
 
   AtmosphereProfile profile_;
-  double obs_cm_ = 0., etadsn_ = 0., obs_refidx_ = 1., obs_thick_ = 0.;
-  std::vector<double> table_alt_, table_time0_;
-  double fast_rho_fac_ = 0.;
-  std::vector<double> fast_rho_rev_, fast_hori_a_, fast_time_a_, fast_time0_;
+  double obs_cm_{};
+  double nu_obs_{};
+  double etadsn_{};
+  std::array<double, AtmosphereProfile::max_moment + 1> moment_obs_{};
+  Table position_{};
+  Table time_{};
 };
 
-// Per-photon ray bending for a photon emitted at height
-// h_emission_m (m a.s.l.) with direction cosines (cx, cy) (downward, cz > 0), the straight-line
-// position (x_m, y_m) at the observation level, and time t_ns.
+// Bends a photon emitted at height_m [m a.s.l.] with direction cosines (cx, cy) (downward)
+// to the observation level of the tables. On input (x, y) is the straight-line position at the
+// observation level and t the time at emission; on output the position is displaced by the
+// bending, (cx, cy) is the direction at the observation level and t has the travel time added
+// (the straight vacuum path along the emission direction plus the air excess).
 //
-// On return the direction is the observed one, the position is displaced horizontally, and
-// the time includes the light travel time to the observation level. Returns false and leaves
-// the photon unchanged when the direction is outside the unit circle (upward or horizontal
-// rays, which are not bent) or when any input (or the height in cm) is not finite.
-// Rejection is a return value, not an exception, so the per-photon kernel stays allocation-free.
-//
-// Template on the scalar type of the photon state; table lookups are evaluated in double.
-template <class Scalar>
-bool bend(const RefractionTables &tables, Scalar h_emission_m, Scalar &cx, Scalar &cy, Scalar &x_m,
-          Scalar &y_m, Scalar &t_ns) {
-  using std::asin;
-  using std::cos;
-  using std::sin;
-  using std::sqrt;
-  const auto finite = [](Scalar value) { return std::isfinite(static_cast<double>(value)); };
-  if (!(finite(h_emission_m) && finite(cx) && finite(cy) && finite(x_m) && finite(y_m) &&
-        finite(t_ns)))
+// Returns false and leaves every argument unchanged if an input is not finite, the direction
+// is not strictly inside the unit circle, the emission is below the observation level, or the
+// ray is too close to the horizon for the expansion (s_e (nu_obs - nu_e) / cos^2 > 0.1).
+// Arithmetic is done in double.
+template <class T>
+[[nodiscard]] bool bend(const RefractionTables &tables, T height_m, T &cx, T &cy, T &x, T &y,
+                        T &t) {
+  const double h_m = static_cast<double>(height_m);
+  const double ux = static_cast<double>(cx), uy = static_cast<double>(cy);
+  if (!std::isfinite(h_m) || !std::isfinite(ux) || !std::isfinite(uy) ||
+      !std::isfinite(static_cast<double>(x)) || !std::isfinite(static_cast<double>(y)) ||
+      !std::isfinite(static_cast<double>(t))) {
     return false;
-  const AtmosphereProfile &profile = tables.profile();
-  const double zem = 100. * static_cast<double>(h_emission_m);
-  if (!std::isfinite(zem))
+  }
+  const double h = 100. * h_m;
+  const double s2 = ux * ux + uy * uy;
+  if (!std::isfinite(h) || !(s2 < 1.) || h < tables.observation_level_cm()) {
     return false;
-  const double rho = profile.density_cm(zem);
-  const double de =
-      tables.etadsn() * std::abs(tables.observation_thickness() - profile.thickness_cm(zem));
-  const double dz = std::abs(zem - tables.observation_level_cm());
-  const Scalar sin2 = cx * cx + cy * cy;
-  if (!(sin2 < Scalar(1)))
+  }
+  const double s_e = std::sqrt(s2);
+  const double c_e = std::sqrt(1. - s2);
+  const double nu_e = tables.profile().index_minus_one_cm(h);
+  const double nu_obs = tables.index_minus_one_at_observation();
+  const double height = h - tables.observation_level_cm(); // cm
+  if (s_e * std::fabs(nu_obs - nu_e) > 0.1 * c_e * c_e) {
     return false;
-  const Scalar airmass = Scalar(1) / sqrt(Scalar(1) - sin2);
-  const Scalar straight_ns =
-      Scalar(dz + de) * airmass * Scalar(1. / RefractionTables::vacuum_speed_cm_per_ns);
-
-  const auto last = static_cast<long long>(AtmosphereProfile::fast_points) - 2;
-  const auto alt = tables.profile().fast_altitude_cm();
-  const double fac_h = profile.fast_height_factor();
-  const auto ialt = static_cast<std::size_t>(
-      std::clamp(static_cast<long long>(fac_h * (zem - profile.bottom_cm())), 0LL, last));
-  const double ralt = fac_h * (zem - alt[ialt]);
-  const auto time0 = tables.fast_time0();
-  const double time0_fast = ralt * (time0[ialt + 1] - time0[ialt]) + time0[ialt];
-
-  const Scalar sin_em = sqrt(sin2);
-  if (sin_em <= Scalar(0)) {
-    // Vertical: no bending, travel time only.
-    t_ns += straight_ns + Scalar(tables.vertical_time0_cm(zem));
-    return true;
+  }
+  const double s_obs = s_e * (1. + nu_e) / (1. + nu_obs);
+  if (!(s_obs < 1.)) {
+    return false; // total internal reflection
   }
 
-  const double fac_rho = tables.fast_density_factor();
-  const auto irho =
-      static_cast<std::size_t>(std::clamp(static_cast<long long>(fac_rho * rho), 0LL, last));
-  const double rrho = fac_rho * (rho - tables.fast_density()[irho]);
-  const auto hori = tables.fast_horizontal();
-  const auto tca = tables.fast_time_coefficient();
-  const double hori_cm = rrho * (hori[irho + 1] - hori[irho]) + hori[irho];
-  const double time_cm = rrho * (tca[irho + 1] - tca[irho]) + tca[irho];
+  // Moments M_b = integral of nu^b over [obs, h], b = 0 is the height.
+  std::array<double, AtmosphereProfile::max_moment + 1> m{};
+  m[0] = height;
+  for (int b = 1; b <= AtmosphereProfile::max_moment; ++b) {
+    m[static_cast<std::size_t>(b)] = tables.moment(h, b);
+  }
+  std::array<double, RefractionTables::terms + 1> nu_power{};
+  nu_power[0] = 1.;
+  for (std::size_t a = 1; a < nu_power.size(); ++a) {
+    nu_power[a] = nu_power[a - 1] * nu_e;
+  }
 
-  const Scalar sin_obs = sin_em * Scalar(1. + profile.index_minus_one_cm(zem)) /
-                         Scalar(tables.observation_refractive_index());
-  if (sin_obs > Scalar(1))
-    return false;
-  const Scalar theta_em = asin(sin_em);
-  const Scalar theta_obs = asin(sin_obs);
-  const Scalar c = cos(theta_em + Scalar(0.28) * (theta_obs - theta_em));
-  const Scalar s = sin(theta_em + Scalar(0.28) * (theta_obs - theta_em));
-  const Scalar c3 = c * c * c;
-  const Scalar hori_off_cm = -(Scalar(hori_cm) * Scalar(hori_cm)) * s / c3;
-  const Scalar travel_ns =
-      Scalar(time0_fast) - (Scalar(time_cm) * Scalar(time_cm)) * (s * s) / c3 + straight_ns;
+  // Taylor coefficients g_k (of 1/sqrt(1-s^2)) and f_k = s_e g_k + g_(k-1) at s_e.
+  std::array<double, RefractionTables::terms + 1> g{};
+  g[0] = 1. / c_e;
+  double previous = 0.;
+  for (int k = 0; k < RefractionTables::terms; ++k) {
+    const double next =
+        (s_e * double(2 * k + 1) * g[static_cast<std::size_t>(k)] + double(k) * previous) /
+        (double(k + 1) * c_e * c_e);
+    previous = g[static_cast<std::size_t>(k)];
+    g[static_cast<std::size_t>(k + 1)] = next;
+  }
 
-  // Displacement along the horizontal direction of the photon.
-  x_m += hori_off_cm / Scalar(100) * cx / sin_em;
-  y_m += hori_off_cm / Scalar(100) * cy / sin_em;
-  cx = cx * sin_obs / sin_em;
-  cy = cy * sin_obs / sin_em;
-  t_ns += travel_ns;
+  double displacement = 0.;    // integral of (tan(theta) - tan(theta_e)) dh [cm]
+  double excess = m[1] * g[0]; // integral of nu g_0 dh [cm]
+  double s_power = 1.;
+  for (int k = 1; k <= RefractionTables::terms; ++k) {
+    s_power *= s_e;
+    const double f_k = s_e * g[static_cast<std::size_t>(k)] + g[static_cast<std::size_t>(k - 1)];
+    double position_sum = 0., time_sum = 0.;
+    for (int a = 0; a <= k; ++a) {
+      for (int b = 0; a + b <= RefractionTables::terms; ++b) {
+        const double mb = m[static_cast<std::size_t>(b)];
+        position_sum +=
+            tables.position_coefficient(k, a, b) * nu_power[static_cast<std::size_t>(a)] * mb;
+        time_sum += tables.time_coefficient(k, a, b) * nu_power[static_cast<std::size_t>(a)] * mb;
+      }
+    }
+    displacement += f_k * s_power * position_sum;
+    excess += g[static_cast<std::size_t>(k)] * s_power * time_sum;
+  }
+
+  const double travel_ns = (height * g[0] + excess) / (100. * speed_of_light_m_per_ns);
+  if (s_e > 0.) {
+    const double shift_m = displacement / 100.;
+    x = static_cast<T>(static_cast<double>(x) + shift_m * ux / s_e);
+    y = static_cast<T>(static_cast<double>(y) + shift_m * uy / s_e);
+    const double scale = s_obs / s_e;
+    cx = static_cast<T>(ux * scale);
+    cy = static_cast<T>(uy * scale);
+  }
+  t = static_cast<T>(static_cast<double>(t) + travel_ns);
   return true;
 }
 

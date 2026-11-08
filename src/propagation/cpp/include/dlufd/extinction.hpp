@@ -1,64 +1,54 @@
 #pragma once
 
-// Atmospheric acceptance of photons in frame ground (G): plane-parallel airmass 1/|cz| and the
-// transmission with telescope optical depths (TransmissionTable::transmission2) at the photon's
-// integer wavelength.
+// Atmospheric acceptance of photons in frame ground: airmass and transmission per photon.
 
 #include "dlufd/transmission.hpp"
 
 #include "gstrickd/photons.hpp"
 
 #include <cmath>
-#include <concepts>
 #include <cstddef>
+#include <limits>
 #include <span>
 #include <stdexcept>
+#include <vector>
 
 namespace dlufd {
 
-// Airmass 1/|cz| for direction cosines cx, cy of a downward photon, cz = -sqrt(1 - cx^2 -
-// cy^2). Requires cx^2 + cy^2 <= 1. cz = 0 gives unlimited_airmass.
-template <std::floating_point T> [[nodiscard]] T airmass(T cx, T cy) {
-  const T cz = -std::sqrt(T{1} - cx * cx - cy * cy);
-  return cz == T{0} ? T{unlimited_airmass} : T{1} / -cz;
-}
-
-// Throw unless lambda_nm is a finite, non-negative integer (nm), the form of photon wavelengths.
-inline void check_wavelength(double lambda_nm) {
-  if (!std::isfinite(lambda_nm) || lambda_nm < 0.0 || lambda_nm != std::floor(lambda_nm)) {
-    throw std::invalid_argument("wavelength must be a finite, non-negative integer (nm)");
+// Plane-parallel airmass 1 / |cz| of a downward photon; unlimited_airmass for a horizontal one.
+template <class T> [[nodiscard]] T airmass(T cx, T cy) {
+  const T cz2 = T(1) - cx * cx - cy * cy;
+  if (!std::isfinite(cz2) || cz2 < -T(4) * std::numeric_limits<T>::epsilon()) {
+    throw std::invalid_argument("direction cosines must satisfy cx^2 + cy^2 <= 1");
   }
+  return cz2 > T(0) ? T(1) / std::sqrt(cz2) : static_cast<T>(unlimited_airmass);
 }
 
-// Integer wavelength of a photon row for the table lookups, or -1 at or above max_lambda_nm
-// (such photons are dropped). The value is checked in floating point before the conversion
-// to int.
-[[nodiscard]] inline int table_wavelength(double lambda_nm) {
-  check_wavelength(lambda_nm);
-  return lambda_nm >= max_lambda_nm ? -1 : static_cast<int>(lambda_nm);
-}
-
-// Atmospheric transmission p_atm of each row, without the detector envelope and without
-// the fraction of a bunch (applied in thinning). Rows need an integer wavelength in nm
-// (check_wavelength); rows at or above max_lambda_nm get 0.
-// Requires the columns cx, cy, zem and wavelength; out.size() >= rows.
-template <std::floating_point T>
+// p[row] = atmospheric transmission of every row; 0 for wavelengths at or above max_lambda.
+template <class T>
 void atmospheric_acceptance(const gstrickd::PhotonChunk &chunk, const TransmissionTable &table,
-                            const TelescopeDepths &depths, std::span<T> out) {
-  const auto &cx = chunk[gstrickd::Column::cx];
-  const auto &cy = chunk[gstrickd::Column::cy];
-  const auto &zem = chunk[gstrickd::Column::zem];
-  const auto &wavelength = chunk[gstrickd::Column::wavelength];
-  for (std::size_t row = 0; row < chunk.rows(); ++row) {
+                            const TelescopeDepths &depths, std::span<T> p) {
+  using gstrickd::Column;
+  const std::size_t rows = chunk.rows();
+  if (p.size() != rows) {
+    throw std::invalid_argument("acceptance vector must have one entry per row");
+  }
+  const auto &cx = chunk[Column::cx];
+  const auto &cy = chunk[Column::cy];
+  const auto &zem = chunk[Column::zem];
+  const auto &wavelength = chunk[Column::wavelength];
+  for (std::size_t row = 0; row < rows; ++row) {
+    check_wavelength(static_cast<double>(wavelength[row]));
     const int iwl = table_wavelength(static_cast<double>(wavelength[row]));
     if (iwl < 0) {
-      out[row] = T{0};
+      p[row] = T(0);
       continue;
     }
-    const T a = airmass<T>(static_cast<T>(cx[row]), static_cast<T>(cy[row]));
-    out[row] = table.transmission2<T>(static_cast<double>(iwl), static_cast<T>(zem[row]), a,
-                                      static_cast<T>(depths.od_tel[iwl]),
-                                      static_cast<T>(depths.od_focus[iwl]));
+    const auto index = static_cast<std::size_t>(iwl);
+    p[row] = table.transmission2<T>(static_cast<T>(wavelength[row]), static_cast<T>(zem[row]),
+                                    airmass<T>(static_cast<T>(cx[row]), static_cast<T>(cy[row])),
+                                    static_cast<T>(depths.od_tel[index]),
+                                    static_cast<T>(depths.od_focus[index]));
   }
 }
 
