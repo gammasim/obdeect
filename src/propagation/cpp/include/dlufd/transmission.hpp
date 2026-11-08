@@ -24,6 +24,7 @@ inline constexpr double unlimited_airmass = 1e10;
 inline constexpr double altitude_tolerance_m = 25.0;
 inline constexpr double max_telescope_depth = 1000.0;
 inline constexpr double max_total_depth = 100.0;
+inline constexpr std::size_t max_table_heights = 100;
 
 // Throws unless the wavelength is a finite, non-negative integer.
 inline void check_wavelength(double wavelength_nm) {
@@ -268,6 +269,9 @@ private:
                                     ": number of values differs from the number of heights");
       }
       ++rows_;
+    }
+    if (heights_km.size() > max_table_heights) {
+      throw std::invalid_argument("transmission table: at most 100 heights are supported");
     }
     if (!have_header || heights_km.empty() || rows_ == 0) {
       throw std::invalid_argument("transmission table needs a header with H2 and H1 and data rows");

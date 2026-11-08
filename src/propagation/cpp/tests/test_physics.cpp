@@ -309,6 +309,13 @@ void test_table_header_comments() {
   const dlufd::TransmissionTable table(
       "# H2= 2.000, H1= 3.000 4.000 # heights\n400 0.1 0.2 # first row\n401 0.1 0.2\n", 2000.0);
   CHECK(table.last_wavelength_nm() == 401);
+  // At most 100 heights.
+  std::string header = "# H2= 2.000, H1=", row = "400";
+  for (int i = 1; i <= 101; ++i) {
+    header += " " + std::to_string(2.0 + 0.1 * i);
+    row += " 0.5";
+  }
+  CHECK(throws_invalid([&] { dlufd::TransmissionTable(header + "\n" + row + "\n", 2000.0); }));
   CHECK_NEAR(table.optical_depth<double>(400., 4000.), 0.2, 1e-14);
 }
 

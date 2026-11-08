@@ -32,7 +32,7 @@ $$
 $$
 
 Wavelengths are truncated to integer nm and clamped to the first and last table row. The
-table rows are consecutive integer wavelengths below 1000 nm; the heights must rise above H2.
+table rows are consecutive integer wavelengths below 1000 nm; there are at most 100 heights, rising above H2.
 
 Telescope optical depths, with h_T the telescope altitude and l the path inside the
 telescope:
