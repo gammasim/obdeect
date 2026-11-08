@@ -21,6 +21,7 @@ _EXPORTS = {
     "max_chunk_rows": "gstrickd._core",
     "METADATA_RECORDS": "gstrickd.stream",
     "REQUIRED_COLUMNS": "gstrickd.stream",
+    "stream_to_grisu": "gstrickd.convert",
     "stream_to_simtel": "gstrickd.convert",
     "Reader": "gstrickd.stream",
     "Writer": "gstrickd.stream",

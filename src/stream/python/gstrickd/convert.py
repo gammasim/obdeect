@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import warnings
 from collections.abc import Iterable, Mapping
 
 from gstrickd import _core
@@ -66,3 +67,34 @@ def stream_to_simtel(
         [str(name) for name in allow_pending],
         [str(name) for name in scaled_factors],
     )
+
+
+def stream_to_grisu(
+    input_path: str | os.PathLike,
+    output_path: str | os.PathLike,
+    telescope_config: str | os.PathLike | None = None,
+    qe: float = 1.0,
+    expand_bunches: bool = False,
+    event_details: bool = False,
+) -> None:
+    """Convert a ground-frame photon stream file to GrISU/GrOptics photon text input.
+
+    ``telescope_config`` is a file with ``* TLLOC id x y z offset px py`` lines (x east, y
+    north, metres): stream telescopes map to the GrISU id of the line within 0.5 m of their
+    position; unmatched telescopes are skipped with a warning. Without it the GrISU id is the
+    stream telescope id. ``qe`` is written as the global QE factor (``R`` line) and not
+    applied. Photon bunches with weight above 1 raise ``RuntimeError`` unless
+    ``expand_bunches`` writes ``round(w)`` copies. The wavelength must be assigned and the
+    ledger factor ``atmosphere`` must be ``applied``; otherwise ``RuntimeError`` is raised.
+    ``event_details`` adds a ``C`` line after each ``S`` line.
+    """
+    text = _core.stream_to_grisu(
+        os.fspath(input_path),
+        os.fspath(output_path),
+        "" if telescope_config is None else os.fspath(telescope_config),
+        float(qe),
+        bool(expand_bunches),
+        bool(event_details),
+    )
+    if text:
+        warnings.warn(text.strip(), stacklevel=2)
