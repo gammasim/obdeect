@@ -18,7 +18,7 @@ import numpy as np
 
 from obdeect import __version__
 from obdeect.formats import ModelError
-from obdeect.model import OpticalModel, ThreadPool
+from obdeect.model import OpticalModel, ThreadPool, _obscurer_support
 
 FRAME_GROUND = 1
 FRAME_TELESCOPE = 2
@@ -75,22 +75,24 @@ def ground_to_telescope_rotation(theta_deg: float, phi_deg: float) -> np.ndarray
     return _rotation(phi, -theta).T
 
 
-def minimum_input_plane_height_m(model: OpticalModel, theta_deg: float) -> float:
+def minimum_input_plane_height_m(
+    model: OpticalModel, theta_deg: float, phi_deg: float = 0.0
+) -> float:
     """Height [m] of the ground-frame input plane above the telescope sphere centre.
 
-    The plane must lie above every incoming obscurer (see ``trace_bunches``). The
-    height is the top of the highest incoming obscurer plus a margin, plus the
-    height that the axes offset adds, divided by cos(theta) (as simtools does).
+    The plane lies above every incoming obscurer in the pointing direction,
+    with the axes offset and a margin included (see ``trace_bunches``).
     """
     if not 0.0 <= theta_deg < 90.0:
         raise ModelError(f"telescope zenith angle {theta_deg} deg must lie in [0, 90)")
-    top = model.max_incoming_obscurer_z_m()
-    top = 0.0 if top is None else float(top)
-    theta = math.radians(theta_deg)
-    offset_x, offset_y, offset_z = model.axes_offset_m
-    offset_height = math.hypot(offset_x, offset_y) * abs(math.sin(theta))
-    offset_height += abs(offset_z * math.cos(theta))
-    return (top + INPUT_PLANE_MARGIN_M + offset_height) / math.cos(theta)
+    normal = ground_to_telescope_rotation(theta_deg, phi_deg)[:, 2]
+    supports = [
+        _obscurer_support(obscurer, normal)
+        for obscurer in model.document["optics"]["obscurers"]
+        if "incoming" in obscurer.get("legs", [])
+    ]
+    support = max(supports, default=0.0)
+    return max(0.0, support + float(np.dot(normal, model.axes_offset_m))) + INPUT_PLANE_MARGIN_M
 
 
 def _run_pointing(metadata: Mapping[str, Any]) -> tuple[float, float] | None:
@@ -149,14 +151,26 @@ def _transmission(model: OpticalModel, part: str) -> _Transmission:
 
 def _own_ledger(model: OpticalModel, transmission: _Transmission) -> dict[str, Any]:
     """The ledger record that marks the factors obdeect applies as applied."""
-    return _ledger_with_applied({"factors": ",".join(OWN_FACTORS)}, model, transmission)
+    return _ledger_with_applied({"factors": ",".join(_own_factors(model))}, model, transmission)
+
+
+def _own_factors(model: OpticalModel) -> tuple[str, ...]:
+    if (
+        model.has_structure
+        or model.document.get("optics", {}).get("telescope_transmission") is not None
+    ):
+        return OWN_FACTORS
+    return ("mirror_reflectivity",)
 
 
 def _ledger_with_applied(
     metadata: Mapping[str, Any], model: OpticalModel, transmission: _Transmission
 ) -> Mapping[str, Any]:
     """The ledger record with the factors obdeect applies marked applied; others unchanged."""
-    names = [name for name in _names(metadata.get("factors", "")) if name in OWN_FACTORS]
+    all_names = _names(metadata.get("factors", ""))
+    if transmission.normalise and CONSTANT_FACTOR in all_names:
+        raise ModelError(f"the ledger already names {CONSTANT_FACTOR}")
+    names = [name for name in all_names if name in _own_factors(model)]
     if not names:
         return metadata
     updated = dict(metadata)
@@ -166,8 +180,6 @@ def _ledger_with_applied(
     if "telescope_transmission" in names:
         updated["telescope_transmission.part"] = transmission.part
         if transmission.normalise:
-            if CONSTANT_FACTOR in _names(metadata.get("factors", "")):
-                raise ModelError(f"the ledger already names {CONSTANT_FACTOR}")
             updated[f"{CONSTANT_FACTOR}.state"] = "pending"
             updated[f"{CONSTANT_FACTOR}.value"] = transmission.on_axis
             updated["factors"] = ",".join([*_names(updated["factors"]), CONSTANT_FACTOR])
@@ -312,12 +324,16 @@ class _Tracer:
         self.geometry: tuple[np.ndarray, float] | None = None
         self.telescope: _Telescope | None = None
         self.counts = {"events": 0, "photons_in": 0, "photons_out": 0}
+        self.run_status_pending = False
         top = model.max_incoming_obscurer_z_m()
         # Input plane of telescope-frame photons (telescope frame, no tilt).
         self.telescope_plane_m = (0.0 if top is None else float(top)) + INPUT_PLANE_MARGIN_M
 
     def handle(self, record: dict[str, Any]) -> None:
         kind = record["type"]
+        if self.run_status_pending and kind in ("event", "run_end"):
+            self.writer.write("efficiency_status", _own_ledger(self.model, self.transmission))
+            self.run_status_pending = False
         if kind == "run":
             self._run(record["metadata"])
         elif kind == "efficiency_status":
@@ -346,11 +362,17 @@ class _Tracer:
         self.run_pointing = _run_pointing(metadata)
         self.event = None
         self.writer.write("run", metadata)
-        self.writer.write("efficiency_status", _own_ledger(self.model, self.transmission))
+        self.run_status_pending = True
 
     def _ledger(self, metadata: Mapping[str, Any]) -> None:
         if self.telescope is None:
             self.run_factors = {**self.run_factors, **_ledger_factors(metadata)}
+            if self.transmission.normalise and CONSTANT_FACTOR in _names(
+                metadata.get("factors", "")
+            ):
+                raise ModelError(f"the ledger already names {CONSTANT_FACTOR}")
+            self.writer.write("efficiency_status", metadata)
+            return
         else:
             telescope = self.telescope
             if telescope.photons_seen:
@@ -375,7 +397,7 @@ class _Tracer:
         kept = self.telescopes is None or telescope_id in self.telescopes
         self.telescope = _Telescope(telescope_id, kept)
         if kept:
-            self.writer.write("telescope", metadata)
+            self.writer.write("telescope", {**metadata, "frame": 3})
 
     def _telescope_end(self, metadata: Mapping[str, Any]) -> None:
         telescope = self.telescope
@@ -393,7 +415,7 @@ class _Tracer:
         if telescope.config is None:
             factors = {**self.run_factors, **telescope.factors}
             tables = []
-            for name in OWN_FACTORS:
+            for name in _own_factors(self.model):
                 factor = factors.get(name)
                 if factor is None or factor.state == "pending":
                     continue
@@ -411,7 +433,7 @@ class _Tracer:
             zenith_deg, azimuth_deg = self._pointing()
             self.geometry = (
                 ground_to_telescope_rotation(zenith_deg, azimuth_deg),
-                minimum_input_plane_height_m(self.model, zenith_deg),
+                minimum_input_plane_height_m(self.model, zenith_deg, azimuth_deg),
             )
         return self.geometry
 

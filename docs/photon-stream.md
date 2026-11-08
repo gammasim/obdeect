@@ -28,7 +28,7 @@ column must agree with `cx` and `cy`. Column `p` (acceptance already applied) is
 rejected, because the stage does not reweight by it.
 
 Each photon moves along its direction to an input plane above the incoming
-obscurers, at the height `top + 1 m` (divided by cos(zenith) for G). Its time
+obscurers, using their directional support for the telescope pointing. Its time
 advances by the path length over the speed of light. The G rotation is the
 ground-to-telescope rotation of simtools, so a shower that comes from the
 optical axis maps to direction (0, 0, -1). For example, a telescope at zenith 20°
@@ -60,8 +60,8 @@ output does not depend on the chunking or the number of threads.
 
 ## Efficiency ledger
 
-The optical model applies two factors: `mirror_reflectivity` and
-`telescope_transmission` (for a model with structure, the structure shadowing).
+The optical model applies `mirror_reflectivity` and, when present,
+`telescope_transmission` (or structure shadowing).
 Their states are carried in gstrickd `efficiency_status` records.
 The stage reads each factor's state from the ledger, run level or telescope level
 (the telescope level overrides the run level):
@@ -73,7 +73,8 @@ The stage reads each factor's state from the ledger, run level or telescope leve
 | `applied` | An error: the trace would apply the factor again. |
 
 Other factors (for example `qe`) pass on unchanged. After the run record, the
-stage writes a ledger record that marks the two factors `applied`, with
+stage writes a ledger record after the incoming run statuses, marking the factors it applies
+`applied`, with
 `source` set to obdeect and the model hash. Input ledgers that name these
 factors are rewritten the same way. For example, a run ledger with
 `mirror_reflectivity.state = envelope` (table over 300 to 600 nm) becomes:

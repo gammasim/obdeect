@@ -147,9 +147,21 @@ def test_rotation_maps_the_optical_axis_to_minus_z():
 def test_input_plane_is_above_the_incoming_obscurers(model):
     top = model.max_incoming_obscurer_z_m()
     assert minimum_input_plane_height_m(model, 0.0) == pytest.approx(top + 1.0)
-    assert minimum_input_plane_height_m(model, 60.0) == pytest.approx(2.0 * (top + 1.0))
+    normal = ground_to_telescope_rotation(60.0, 0.0)[:, 2]
+    height = minimum_input_plane_height_m(model, 60.0)
+    for obscurer in model.document["optics"]["obscurers"]:
+        if "incoming" in obscurer.get("legs", []):
+            assert height - np.dot(normal, model.axes_offset_m) > stream_module._obscurer_support(
+                obscurer, normal
+            )
     with pytest.raises(ModelError):
         minimum_input_plane_height_m(model, 90.0)
+
+
+def test_output_telescope_frame_is_camera(model, tmp_path, gstrickd):
+    _, _, output = focus(model, tmp_path, gstrickd, beam(10, (0, 0)), pointing=(0, 0))
+    telescope = next(r for r in read_records(output, gstrickd) if r["type"] == "telescope")
+    assert telescope["metadata"]["frame"] == 3
 
 
 def test_on_axis_beam_focuses_at_the_centre(model, tmp_path, gstrickd):
@@ -383,11 +395,11 @@ def test_ledger_output_marks_own_factors_and_keeps_others(model, tmp_path, gstri
     types = [r["type"] for r in records]
     run_index = types.index("run")
     assert types[run_index + 1] == "efficiency_status"
-    own = records[run_index + 1]["metadata"]
+    rewritten = records[run_index + 1]["metadata"]
+    own = records[run_index + 2]["metadata"]
     assert own["mirror_reflectivity.state"] == "applied"
     assert own["telescope_transmission.state"] == "applied"
-    rewritten = [r["metadata"] for r in records if r["type"] == "efficiency_status"][1]
-    assert rewritten["mirror_reflectivity.state"] == "applied"
+    assert rewritten["mirror_reflectivity.state"] == "pending"
     assert rewritten["qe.state"] == "envelope"
     assert np.array_equal(rewritten["qe.value"], np.array([0.3, 0.4]))
     assert rewritten["qe.source"] == "sim_telarray"
@@ -645,7 +657,11 @@ def test_angular_transmission_needs_a_model_with_transmission(model, tmp_path, g
             telescope_transmission="angular",
         )
     # The full transmission has nothing to apply here and still runs.
-    focus(bare, tmp_path, gstrickd, beam(10, (0, 0)), pointing=(0, 0), name="bare-full")
+    _, _, output = focus(
+        bare, tmp_path, gstrickd, beam(10, (0, 0)), pointing=(0, 0), name="bare-full"
+    )
+    if not bare.has_structure:
+        assert "telescope_transmission" not in ledger_of(output, gstrickd)[0]["factors"]
 
 
 def test_unknown_transmission_part_and_existing_constant_are_rejected(model, tmp_path, gstrickd):
@@ -665,6 +681,18 @@ def test_unknown_transmission_part_and_existing_constant_are_rejected(model, tmp
         f"{CONSTANT_FACTOR}.state": "pending",
         f"{CONSTANT_FACTOR}.value": 0.5,
     }
+    constant_only = {"factors": CONSTANT_FACTOR, f"{CONSTANT_FACTOR}.state": "pending"}
+    with pytest.raises(ModelError, match="already names"):
+        focus(
+            model,
+            tmp_path,
+            gstrickd,
+            beam(10, (0, 0)),
+            pointing=(0, 0),
+            run_ledgers=[constant_only],
+            telescope_transmission="angular",
+            name="constant-only",
+        )
     with pytest.raises(ModelError, match="already names"):
         focus(
             model,
