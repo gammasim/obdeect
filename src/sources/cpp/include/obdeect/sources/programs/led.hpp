@@ -190,7 +190,7 @@ namespace detail {
 
 inline void check_options(const Options &o) {
   if (o.camera.pixels.empty())
-    throw std::invalid_argument("the camera definition has no pixels");
+    throw std::runtime_error("the camera definition has no pixels");
   if (o.events < 0)
     throw std::invalid_argument("--events must be >= 0");
   if (o.require < 0)

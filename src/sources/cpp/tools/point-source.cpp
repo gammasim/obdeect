@@ -87,8 +87,10 @@ int main(int argc, char **argv) {
     if (!telescope_option.empty()) {
       std::ifstream file(telpos);
       if (!file)
-        throw std::invalid_argument(telescope_option + ": cannot open telescope file " + telpos);
-      o.telescopes = cli::read_telpos(file, telescope_option, telescope_option != "--telpos-file");
+        throw std::runtime_error(telescope_option + ": cannot open telescope file " + telpos);
+      o.telescopes = cli::read_input([&] {
+        return cli::read_telpos(file, telescope_option, telescope_option != "--telpos-file");
+      });
     }
     cli::Output out(output);
     programs::write_point_source(out.stream(), o);

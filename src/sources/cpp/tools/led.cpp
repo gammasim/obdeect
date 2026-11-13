@@ -125,7 +125,7 @@ int main(int argc, char **argv) {
     std::ifstream file(camera_file);
     if (!file)
       throw std::runtime_error("cannot open camera configuration file " + camera_file);
-    o.camera = programs::led::read_camera(file, o.slaves);
+    o.camera = cli::read_input([&] { return programs::led::read_camera(file, o.slaves); });
     if (list_only) {
       std::cout << programs::led::label_lines(programs::led::build_sources(o));
       return 0;
