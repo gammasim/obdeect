@@ -10,7 +10,7 @@ are currently available for the MST.
 
 ## Large-Sized Telescope (LST)
 
-```{figure} _static/figures/telescope_lst.png
+```{figure} ../_static/figures/telescope_lst.png
 :alt: LST mirror facets and camera housing, viewed from the sky and the side.
 
 LSTN-01: a single segmented primary mirror and the camera at its focus. [1](#figure-provenance)
@@ -22,7 +22,7 @@ LSTN-01: a single segmented primary mirror and the camera at its focus. [1](#fig
 
 :::{tab-item} NectarCam
 
-```{figure} _static/figures/telescope_mst_nectarcam.png
+```{figure} ../_static/figures/telescope_mst_nectarcam.png
 :alt: MST with NectarCam, viewed from the sky and the side.
 
 MSTN-01: the segmented primary mirror and NectarCam housing. [2](#figure-provenance)
@@ -32,7 +32,7 @@ MSTN-01: the segmented primary mirror and NectarCam housing. [2](#figure-provena
 
 :::{tab-item} FlashCam
 
-```{figure} _static/figures/telescope_mst_flashcam.png
+```{figure} ../_static/figures/telescope_mst_flashcam.png
 :alt: MST with FlashCam and its support structure, viewed from the sky and the side.
 
 MSTS-01: the segmented primary mirror, FlashCam housing and telescope structure. [3](#figure-provenance)
@@ -44,7 +44,7 @@ MSTS-01: the segmented primary mirror, FlashCam housing and telescope structure.
 
 ## Small-Sized Telescope (SST)
 
-```{figure} _static/figures/telescope_sst.png
+```{figure} ../_static/figures/telescope_sst.png
 :alt: SST primary and secondary mirrors, baffle and camera, viewed from the sky and the side.
 
 SSTS-01: a dual-mirror optical layout with a curved focal surface. [4](#figure-provenance)
@@ -52,7 +52,7 @@ SSTS-01: a dual-mirror optical layout with a curved focal surface. [4](#figure-p
 
 ## Schwarzschild-Couder Telescope (SCT)
 
-```{figure} _static/figures/telescope_sct.png
+```{figure} ../_static/figures/telescope_sct.png
 :alt: SCT primary and secondary mirrors, baffle and camera, viewed from the sky and the side.
 
 SCTS-design: the dual-mirror SCT design model. [5](#figure-provenance)
@@ -60,8 +60,8 @@ SCTS-design: the dual-mirror SCT design model. [5](#figure-provenance)
 
 ## Figure provenance
 
-1. [LSTN-01](_static/figures/telescopes-provenance.json)
-2. [MSTN-01](_static/figures/telescopes-provenance.json)
-3. [MSTS-01](_static/figures/telescopes-provenance.json)
-4. [SSTS-01](_static/figures/telescopes-provenance.json)
-5. [SCTS-design](_static/figures/telescopes-provenance.json)
+1. [LSTN-01](../_static/figures/telescopes-provenance.json)
+2. [MSTN-01](../_static/figures/telescopes-provenance.json)
+3. [MSTS-01](../_static/figures/telescopes-provenance.json)
+4. [SSTS-01](../_static/figures/telescopes-provenance.json)
+5. [SCTS-design](../_static/figures/telescopes-provenance.json)

@@ -1,7 +1,7 @@
 # Usage
 
 A stream is written and read record by record. See [](format.md) for the record
-types and fields.
+types and fields. Installation is described in [](../installation.md).
 
 ## C++
 
@@ -34,7 +34,7 @@ while (reader.next(record)) {
 
 ```python
 import numpy as np
-import obdeect stream
+import obdeect.stream
 
 with obdeect.stream.Writer("run.ps", "my-module") as writer:
     writer.write("run", {"run_number": 1, "telescope_x_m": [0.0, 10.0]})
@@ -131,7 +131,7 @@ The efficiency status of such a telescope is checked as for camera frame.
 ### GrISU photon input
 
 `obdeect stream to-grisu` writes ground-frame photons as GrISU/GrOptics photon text. The atmosphere
-must be applied upstream and the wavelength assigned, for example by `obdeect propagation run`:
+must be applied upstream and the wavelength assigned, for example by [`obdeect propagation run`](../propagation/propagation.md):
 
 ```console
 $ zstd -dc run.corsika.zst | obdeect stream from-corsika \
@@ -199,7 +199,7 @@ apply it upstream (state applied); pass --allow-pending telescope_transmission_c
 
 Use `--allow-pending FACTOR` (repeatable) only when the factor is applied elsewhere
 in the chain, for example by the camera module. Which factors sim_telarray applies in
-each frame is listed in docs/format.md ("Efficiency status").
+each frame is listed in [](format.md).
 
 ```console
 $ obdeect stream to-simtel --camera-map cam.txt --allow-pending telescope_transmission_constant run.ps > sim.simtel
@@ -233,7 +233,7 @@ $ python -m obdeect.stream --cmake-dir      # directory of obdeect_stream-config
 $ python -m obdeect.stream --include-dir    # directory of the obdeect/stream/ headers
 ```
 
-A consumer (e.g. obdeect propagation or obdeect sources) links the header-only core:
+A consumer (e.g. [](../propagation/propagation.md) or [](../sources/sources.md)) links the header-only core:
 
 ```cmake
 find_package(obdeect stream 0.1 CONFIG REQUIRED)   # SameMinorVersion: any 0.1.x
@@ -241,7 +241,7 @@ target_link_libraries(<target> PRIVATE obdeect::stream)
 ```
 
 Configure with `-Dobdeect_stream_DIR=$(python -m obdeect.stream --cmake-dir)`, or with
-`-Dobdeect_stream_DIR=<prefix>/lib/cmake/obdeect_stream` for a `cmake --install` prefix.
+`-Dobdeect_stream_DIR=<prefix>/lib/cmake/obdeect_stream` for a `cmake --install` prefix (see [](../installation.md) for the other components).
 
 The version is defined once. Wheels and sdists take it from the git tag (setuptools-scm,
 passed by scikit-build-core as `SKBUILD_PROJECT_VERSION`). Other builds take the newest
@@ -257,7 +257,9 @@ pointer, including the photon columns, belongs to the reader and is valid until 
 `obdeect_stream_last_error()`. Build scripts find the files with `python -m obdeect.stream --include-dir`,
 `--lib-dir` and `--cmake-dir`.
 
-A ray tracer in Python reads ground-frame photons and writes camera-frame photons:
+The optics step, which turns ground-frame photons into camera-frame photons, is
+`obdeect ray-tracing trace-stream` ([](../ray-tracing/photon-stream.md)). A ray tracer in Python
+has the same role:
 
 ```python
 import numpy as np

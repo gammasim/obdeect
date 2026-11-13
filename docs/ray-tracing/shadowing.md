@@ -7,7 +7,7 @@ or `after_secondary` legs. A blocked photon records the obscurer's id in
 
 ## MST structure
 
-```{figure} _static/figures/mst_shadowing.png
+```{figure} ../_static/figures/mst_shadowing.png
 :alt: MST structure coloured by the fraction of light each element alone blocks.
 
 MSTS-01 (FlashCam), simulation models 7.0.0: an on-axis star at infinity,
@@ -53,4 +53,4 @@ section describes the structure table.
 
 ## Figure provenance
 
-[1] [MST shadowing figure](_static/figures/telescopes-provenance.json).
+[1] [MST shadowing figure](../_static/figures/telescopes-provenance.json).

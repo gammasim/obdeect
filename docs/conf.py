@@ -1,24 +1,22 @@
-"""Sphinx configuration of the obdeect documentation (layout as in simtools)."""
+"""Sphinx configuration of the obdeect documentation (all components; layout as in simtools)."""
 
 import os
-import tomllib
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import yaml
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[1]  # repository root
 
 project = "obdeect"
 copyright = "2026, obdeect developers"  # noqa: A001
-with open(ROOT.parents[1] / "CITATION.cff", encoding="utf-8") as file:
+with open(ROOT / "CITATION.cff", encoding="utf-8") as file:
     author = ", ".join(
         f"{a['given-names']} {a['family-names']}" for a in yaml.safe_load(file)["authors"]
     )
-with open(ROOT / "pyproject.toml", "rb") as file:
-    distribution = tomllib.load(file)["project"]["name"]
+# All components share one version; obdeect-stream is installed with every component.
 try:
-    release = version(distribution)
+    release = version("obdeect-stream")
 except PackageNotFoundError:
     release = "unknown"
 version = release
@@ -33,7 +31,7 @@ extensions = [
 ]
 source_suffix = {".md": "markdown"}
 root_doc = "index"
-exclude_patterns = ["_build", "changes", "figures", "USER_GUIDE.md", "PHYSICS.md"]
+exclude_patterns = ["_build", "changes", "figures"]
 myst_heading_anchors = 3
 myst_enable_extensions = ["colon_fence", "dollarmath"]
 nitpicky = False

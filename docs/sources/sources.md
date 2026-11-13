@@ -16,7 +16,7 @@ Its photons are written as photon stream chunks, in the frame of the source.
 
 Profiles are relative: an emitter with profile `P` emits all `photons` with the
 directions distributed as `P`. Times are emission times at the source; a star's
-times are the wavefront arrival at the disc centre (obdeect ray tracing convention).
+times are the wavefront arrival at the disc centre (obdeect [ray-tracing light sources](../ray-tracing/light-sources.md) convention).
 
 ```python
 from obdeect.sources.source import emit
@@ -47,7 +47,7 @@ Use `iter_chunks` for large counts (at most 2^16 rows per chunk) and
 - Lengths in metres, times in ns, wavelengths in nm, angles in degrees (in the
   dictionary; the core takes `u = 1 - cos(theta)`).
 - Directions are unit vectors of the propagation direction. `cz < 0` is downward,
-  as in obdeect ray tracing and obdeect stream. Without a target, `w = 1` for every photon.
+  as in obdeect [ray tracing](../ray-tracing/light-sources.md) and obdeect [stream](../stream/format.md). Without a target, `w = 1` for every photon.
 
 ## Targets (importance sampling)
 

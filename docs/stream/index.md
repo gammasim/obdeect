@@ -1,4 +1,4 @@
-# obdeect stream
+# Photon stream
 
 A versioned, columnar photon-stream format with a standard-library-only C++20 reader/writer, a Python API, and adapters from CORSIKA IACT output and to sim_telarray input, connecting the modules of a Cherenkov-telescope simulation chain.
 
@@ -7,5 +7,4 @@ A versioned, columnar photon-stream format with a standard-library-only C++20 re
 
 format
 usage
-changelog
 ```

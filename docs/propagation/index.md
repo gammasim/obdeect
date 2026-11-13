@@ -1,4 +1,4 @@
-# obdeect propagation
+# Atmospheric propagation
 
 Atmospheric propagation for Cherenkov-telescope simulations: extinction, refraction and timing from the refractive-index profile, optional single scattering, and early photon thinning, as a standard-library-only C++20 core with a Python API, working on photon streams.
 
@@ -7,8 +7,6 @@ Status: alpha; the APIs may change before version 1.0. Extinction (with waveleng
 ```{toctree}
 :maxdepth: 1
 
-changelog
-installation
 extinction
 refraction
 propagation

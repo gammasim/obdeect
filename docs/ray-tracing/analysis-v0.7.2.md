@@ -1,5 +1,7 @@
 # obdeect project analysis
 
+Analysis of obdeect v0.7.2 (ray tracing only), kept for reference; names are those of v0.7.2.
+
 Analysis of obdeect v0.7.2 (`main` at `e4ade6a`, 2026-11-06), seen as a
 gamma-ray astronomer, an optics expert, a high-performance-computing (HPC)
 expert and a release manager. Goal: the most precise and fastest code that is

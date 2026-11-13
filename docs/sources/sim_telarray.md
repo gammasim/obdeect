@@ -1,6 +1,6 @@
 # Using obdeect sources with sim_telarray
 
-obdeect sources writes photon streams. `obdeect stream to-simtel` (obdeect stream) converts a stream into
+obdeect sources writes photon streams. `obdeect stream to-simtel` ([obdeect stream](../stream/usage.md)) converts a stream into
 sim_telarray input, so obdeect sources replaces the light-emission package of sim_telarray. The frame of
 the stream decides which steps lie between obdeect sources and `obdeect stream to-simtel`.
 
@@ -8,7 +8,7 @@ the stream decides which steps lie between obdeect sources and `obdeect stream t
 | --- | --- | --- |
 | camera (C) | `obdeect sources led`, `obdeect sources flasher --type dish --frame camera` | nothing; `--camera-map` lists the telescope |
 | telescope (T) | `obdeect sources flasher --type secondary` | nothing; needs the telescope-frame input of `obdeect stream to-simtel` |
-| sky | `obdeect sources flasher --type dish` (default), `obdeect sources point-source`, `obdeect sources beam-scan`, `obdeect sources laser-beam`, `obdeect sources night-sky`, `obdeect sources muon-track` | `obdeect propagation run` |
+| sky | `obdeect sources flasher --type dish` (default), `obdeect sources point-source`, `obdeect sources beam-scan`, `obdeect sources laser-beam`, `obdeect sources night-sky`, `obdeect sources muon-track` | [`obdeect propagation run`](../propagation/index.md) |
 
 `obdeect stream to-simtel` prints the sim_telarray option that each telescope needs.
 

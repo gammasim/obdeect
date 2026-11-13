@@ -154,7 +154,7 @@ given to `obdeect stream to-simtel --allow-pending FACTOR` or `allow_pending=` i
 table of the factor then holds f/f_env, e.g. the QE table divided by the QE envelope
 applied upstream. Every `--scaled-factor` must have a matching efficiency status in state
 `envelope`; a missing status or a scaled factor in any other state is an error.
-Usage: docs/usage.md.
+Usage: [](usage.md).
 
 ## Random numbers
 

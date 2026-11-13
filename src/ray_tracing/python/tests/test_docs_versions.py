@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[2] / "docs" / "build_versions.py"
+SCRIPT = Path(__file__).resolve().parents[4] / "docs" / "build_versions.py"
 spec = importlib.util.spec_from_file_location("build_versions", SCRIPT)
 versions = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(versions)

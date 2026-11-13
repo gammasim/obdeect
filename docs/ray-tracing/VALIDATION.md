@@ -13,7 +13,7 @@ comparisons with sim_telarray:
 3. **Equivalence with sim_telarray** (below): the same simtools applications
    run with both backends on the same simulation models.
 
-![Deviation of obdeect ray tracing from sim_telarray](_static/figures/validation_psf_area.png)
+![Deviation of obdeect ray tracing from sim_telarray](../_static/figures/validation_psf_area.png)
 
 ## How to repeat the comparison
 
@@ -143,7 +143,7 @@ keyword `secondary_baffle`). The container's sim_telarray build allows at most
 2368 pixels, so its SCT runs use a one-pixel camera. Scripts:
 `val/baffle/run_baffle.sh` and `with_changes.py` (obdeect-validation).
 
-![Effective area with and without the baffle](_static/figures/baffle_area.png)
+![Effective area with and without the baffle](../_static/figures/baffle_area.png)
 
 Effective area with the baffle divided by that without it:
 
