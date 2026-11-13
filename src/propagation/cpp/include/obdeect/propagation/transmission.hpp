@@ -3,6 +3,7 @@
 // Optical-depth table of the atmosphere (extinction-table format) and the transmission of a
 // photon from its emission height to the telescope. See docs/extinction.md.
 
+#include "obdeect/stream/parse.hpp"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -18,7 +19,7 @@
 
 namespace obdeect::propagation {
 
-// Wavelengths are integer nm in [0, max_lambda).
+// Tables are indexed by integer nm in [0, max_lambda); a wavelength looks up its floor.
 inline constexpr int max_lambda = 1000;
 inline constexpr double unlimited_airmass = 1e10;
 inline constexpr double altitude_tolerance_m = 25.0;
@@ -26,15 +27,14 @@ inline constexpr double max_telescope_depth = 1000.0;
 inline constexpr double max_total_depth = 100.0;
 inline constexpr std::size_t max_table_heights = 100;
 
-// Throws unless the wavelength is a finite, non-negative integer.
+// Throws unless the wavelength is finite and non-negative.
 inline void check_wavelength(double wavelength_nm) {
-  if (!std::isfinite(wavelength_nm) || wavelength_nm < 0.0 ||
-      wavelength_nm != std::floor(wavelength_nm)) {
-    throw std::invalid_argument("wavelength must be a finite non-negative integer (nm)");
+  if (!std::isfinite(wavelength_nm) || wavelength_nm < 0.0) {
+    throw std::invalid_argument("wavelength must be finite and non-negative (nm)");
   }
 }
 
-// Integer wavelength for table lookups, or -1 at or above max_lambda (no transmission).
+// Floor of the wavelength for table lookups, or -1 at or above max_lambda (no transmission).
 [[nodiscard]] inline int table_wavelength(double wavelength_nm) {
   check_wavelength(wavelength_nm);
   if (wavelength_nm >= max_lambda) {
@@ -70,11 +70,10 @@ namespace detail {
 
 // A finite number filling the whole token.
 [[nodiscard]] inline double parse_number(std::string_view token, const char *what) {
-  const std::string copy(token);
-  char *end = nullptr;
-  const double value = std::strtod(copy.c_str(), &end);
-  if (copy.empty() || end != copy.c_str() + copy.size() || !std::isfinite(value)) {
-    throw std::invalid_argument(std::string(what) + " '" + copy + "' is not a finite number");
+  double value = 0.0;
+  if (!obdeect::stream::parse::finite_number(token, value)) {
+    throw std::invalid_argument(std::string(what) + " '" + std::string(token) +
+                                "' is not a finite number");
   }
   return value;
 }
@@ -204,9 +203,8 @@ private:
   }
 
   static double number(const std::string &token, std::size_t line, const char *what) {
-    char *end = nullptr;
-    const double value = std::strtod(token.c_str(), &end);
-    if (token.empty() || end != token.c_str() + token.size() || !std::isfinite(value)) {
+    double value = 0.0;
+    if (!obdeect::stream::parse::finite_number(token, value)) {
       throw std::invalid_argument("transmission table line " + std::to_string(line) + ": " + what +
                                   " '" + token + "' is not a finite number");
     }

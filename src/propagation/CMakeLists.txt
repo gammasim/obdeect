@@ -61,6 +61,11 @@ if(OBDEECT_PROPAGATION_BUILD_TOOLS)
   add_executable(obdeect-propagation-run cpp/tools/propagate.cpp)
   target_link_libraries(obdeect-propagation-run PRIVATE obdeect_propagation_core)
   obdeect_propagation_enable_warnings(obdeect-propagation-run)
+  if(OBDEECT_PROPAGATION_BUILD_TESTING)
+    add_test(NAME run_version COMMAND obdeect-propagation-run --version)
+    set_tests_properties(run_version PROPERTIES PASS_REGULAR_EXPRESSION
+      "^obdeect propagation run [0-9]+\\.[0-9]+\\.[0-9]+ \\(photon-stream format [0-9]+\\.[0-9]+\\)")
+  endif()
   # Wheels: inside the package, run through `obdeect propagation run`.
   if(DEFINED SKBUILD_PLATLIB_DIR)
     install(TARGETS obdeect-propagation-run RUNTIME DESTINATION obdeect/propagation/bin)

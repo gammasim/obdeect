@@ -17,6 +17,7 @@
 #include "obdeect/propagation/thinning.hpp"
 #include "obdeect/propagation/timing.hpp"
 #include "obdeect/propagation/transmission.hpp"
+#include "obdeect/stream/parse.hpp"
 
 #include "obdeect/stream/format.hpp"
 #include "obdeect/stream/photons.hpp"
@@ -256,12 +257,10 @@ private:
   }
 
   static double parse_number(std::string_view token, const char *what) {
-    const std::string text(token);
-    char *end = nullptr;
-    const double value = std::strtod(text.c_str(), &end);
-    if (text.empty() || end != text.c_str() + text.size() || !std::isfinite(value)) {
-      throw std::invalid_argument(std::string("scattering table: invalid ") + what + " '" + text +
-                                  "'");
+    double value = 0.0;
+    if (!obdeect::stream::parse::finite_number(token, value)) {
+      throw std::invalid_argument(std::string("scattering table: invalid ") + what + " '" +
+                                  std::string(token) + "'");
     }
     return value;
   }
@@ -574,9 +573,8 @@ inline void scatter_chunk(const ScatteringConfig &config, const ScatteringTable 
       throw std::invalid_argument("weights, positions and times must be finite, weights >= 0");
     }
     const double lambda = wavelength[row];
-    if (lambda != std::floor(lambda) || lambda < table.first_wavelength_nm() ||
-        lambda > table.last_wavelength_nm()) {
-      throw std::invalid_argument("wavelength must be an integer nm within the scattering table");
+    if (!(lambda >= table.first_wavelength_nm() && lambda < table.last_wavelength_nm() + 1.0)) {
+      throw std::invalid_argument("wavelength must lie within the scattering table (nm)");
     }
   }
 

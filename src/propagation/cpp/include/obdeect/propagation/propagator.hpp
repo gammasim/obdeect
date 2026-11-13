@@ -539,7 +539,7 @@ private:
                                                 : config_.profile_source;
     }
     ledger["wavelength.state"] = std::string("applied");
-    ledger["wavelength.source"] = std::string("density 1/lambda^2, integer nm");
+    ledger["wavelength.source"] = std::string("density 1/lambda^2, continuous");
     ledger["wavelength.range_nm"] = std::vector<double>{range.lo_nm, range.hi_nm};
     if (config_.scattering.enabled) {
       factors += ",scattering";

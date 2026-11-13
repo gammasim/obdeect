@@ -1,6 +1,7 @@
 #pragma once
 
 #include "obdeect/stream/constants.hpp"
+#include "obdeect/stream/vec3.hpp"
 
 #include <cmath>
 
@@ -12,24 +13,13 @@ inline constexpr double kSpeedOfLightMPerNs = obdeect::stream::speed_of_light_m_
 // point a ray left.
 constexpr double kMinDistanceM = 1e-9;
 
-struct Vec3 {
-  double x{}, y{}, z{};
-
-  constexpr Vec3 operator+(const Vec3 &o) const { return {x + o.x, y + o.y, z + o.z}; }
-  constexpr Vec3 operator-(const Vec3 &o) const { return {x - o.x, y - o.y, z - o.z}; }
-  constexpr Vec3 operator-() const { return {-x, -y, -z}; }
-  constexpr Vec3 operator*(double s) const { return {x * s, y * s, z * s}; }
-};
-
-constexpr double dot(const Vec3 &a, const Vec3 &b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
-constexpr Vec3 cross(const Vec3 &a, const Vec3 &b) {
-  return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
-}
-inline double norm(const Vec3 &a) { return std::sqrt(dot(a, a)); }
-inline Vec3 normalized(const Vec3 &a) { return a * (1.0 / norm(a)); }
-inline bool finite(const Vec3 &a) {
-  return std::isfinite(a.x) && std::isfinite(a.y) && std::isfinite(a.z);
-}
+// The vector type is shared with the other components.
+using obdeect::stream::cross;
+using obdeect::stream::dot;
+using obdeect::stream::norm;
+using obdeect::stream::Vec3;
+inline Vec3 normalized(const Vec3 &a) { return obdeect::stream::normalised(a); }
+inline bool finite(const Vec3 &a) { return obdeect::stream::is_finite(a); }
 
 // Ray with a unit direction.
 struct Ray {

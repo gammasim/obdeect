@@ -1,7 +1,7 @@
 #pragma once
 
 // Plumbing shared by the tool executables: argument cursor, output file, seed text, and the
-// top-level error handling (one line to stderr, exit 1).
+// top-level error handling (see stream/cli.hpp: usage error 2, other failure 1).
 
 #include "obdeect/sources/cli.hpp"
 
@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <exception>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <ostream>
@@ -26,29 +27,7 @@ inline std::uint64_t parse_seed(const std::string &text, const std::string &opti
   return std::strtoull(text.c_str(), nullptr, 10);
 }
 
-// Walks argv; value() takes the argument after an option or fails with `<arg>: missing value`.
-class ArgCursor {
-public:
-  ArgCursor(int argc, char **argv) {
-    for (int i = 1; i < argc; ++i)
-      args_.emplace_back(argv[i]);
-  }
-  bool next(std::string &arg) {
-    if (i_ >= args_.size())
-      return false;
-    arg = args_[i_++];
-    return true;
-  }
-  std::string value(const std::string &arg) {
-    if (i_ >= args_.size())
-      throw std::invalid_argument(arg + ": missing value");
-    return args_[i_++];
-  }
-
-private:
-  std::vector<std::string> args_;
-  std::size_t i_{0};
-};
+using stream::cli::Args;
 
 // Output to a file (opened, truncated, at construction) or to stdout.
 class Output {
@@ -58,7 +37,7 @@ public:
       return;
     file_ = std::make_unique<std::ofstream>(path, std::ios::binary | std::ios::trunc);
     if (!*file_)
-      throw std::invalid_argument("cannot open output file " + path);
+      throw std::runtime_error("cannot open output file " + path);
   }
   std::ostream &stream() { return file_ ? static_cast<std::ostream &>(*file_) : std::cout; }
   void close() {
@@ -72,14 +51,20 @@ private:
   std::unique_ptr<std::ofstream> file_;
 };
 
-// Runs a tool body; an exception prints `<prefix>: <message>` and gives exit status 1.
-template <class Body> int run_tool(const std::string &prefix, Body body) {
-  try {
-    return body();
-  } catch (const std::exception &error) {
-    std::cerr << prefix << ": " << error.what() << '\n';
-    return 1;
-  }
+// Runs a tool body (stream::cli::run_tool). Option validation in the sources core throws
+// std::invalid_argument; here it is a usage error (exit status 2).
+template <class Body>
+int run_tool(const std::string &prefix, int argc, char **argv, Body body,
+             const std::function<void()> &usage = {}) {
+  return stream::cli::run_tool(prefix, stream::cli::core_version(), argc, argv, usage, [&] {
+    try {
+      return body();
+    } catch (const UsageError &) {
+      throw;
+    } catch (const std::invalid_argument &error) {
+      throw UsageError(error.what());
+    }
+  });
 }
 
 } // namespace obdeect::sources::cli

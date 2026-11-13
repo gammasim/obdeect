@@ -26,8 +26,7 @@ const char *usage =
 
 int main(int argc, char **argv) {
   using namespace obdeect::sources;
-  const std::string prefix = argc > 0 ? argv[0] : "obdeect sources led";
-  return cli::run_tool(prefix, [&] {
+  return cli::run_tool("obdeect sources led", argc, argv, [&] {
     programs::led::Options o;
     std::string camera_file, output;
     bool list_only = false;
@@ -125,7 +124,7 @@ int main(int argc, char **argv) {
       throw std::invalid_argument("no camera definition file defined (--camera-file)");
     std::ifstream file(camera_file);
     if (!file)
-      throw std::invalid_argument("cannot open camera configuration file " + camera_file);
+      throw std::runtime_error("cannot open camera configuration file " + camera_file);
     o.camera = programs::led::read_camera(file, o.slaves);
     if (list_only) {
       std::cout << programs::led::label_lines(programs::led::build_sources(o));

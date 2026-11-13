@@ -27,8 +27,8 @@ double mathematical_azimuth(double astronomical) {
 
 int main(int argc, char **argv) {
   using namespace obdeect::sources;
-  return cli::run_tool("obdeect sources laser-beam", [&] {
-    cli::ArgCursor cursor(argc, argv);
+  return cli::run_tool("obdeect sources laser-beam", argc, argv, [&] {
+    cli::Args cursor(argc, argv);
     programs::LsBeamOptions o;
     std::string spectrum = "355", pulse = "Simple:0", output, arg;
     while (cursor.next(arg)) {
@@ -40,11 +40,11 @@ int main(int argc, char **argv) {
       if (arg == "--events")
         o.events = cli::to_count(value(), arg);
       else if (arg == "--step" || arg == "--steplength")
-        o.step_m = cli::to_double(value(), arg);
+        o.step_m = cli::parse_number(value(), arg);
       else if (arg == "--bunchsize")
-        o.bunch_size = cli::to_double(value(), arg);
+        o.bunch_size = cli::parse_number(value(), arg);
       else if (arg == "--primary-per-m")
-        o.primary_photons_per_m = cli::to_double(value(), arg);
+        o.primary_photons_per_m = cli::parse_number(value(), arg);
       else if (arg == "--brightness")
         throw std::invalid_argument("--brightness is replaced by --primary-per-m");
       else if (arg == "--spectrum")
@@ -56,7 +56,7 @@ int main(int argc, char **argv) {
       else if (arg == "--run")
         o.run_number = cli::parse_integer(value(), arg);
       else if (arg == "--altitude")
-        o.altitude_m = cli::to_double(value(), arg);
+        o.altitude_m = cli::parse_number(value(), arg);
       else if (arg == "--atmosphere")
         o.atmosphere = cli::parse_integer(value(), arg);
       else if (arg == "--laser-position") {
@@ -67,17 +67,17 @@ int main(int argc, char **argv) {
         o.laser_position_m = {cli::parse_number(items[0], arg), cli::parse_number(items[1], arg),
                               items.size() == 3 ? cli::parse_number(items[2], arg) : 0.0};
       } else if (arg == "--laser-theta")
-        o.laser_theta_deg = cli::to_double(value(), arg);
+        o.laser_theta_deg = cli::parse_number(value(), arg);
       else if (arg == "--laser-phi")
-        o.laser_phi_deg = mathematical_azimuth(cli::to_double(value(), arg));
+        o.laser_phi_deg = mathematical_azimuth(cli::parse_number(value(), arg));
       else if (arg == "--telescope-theta")
-        o.telescope_theta_deg = cli::to_double(value(), arg);
+        o.telescope_theta_deg = cli::parse_number(value(), arg);
       else if (arg == "--telescope-phi")
-        o.telescope_phi_deg = mathematical_azimuth(cli::to_double(value(), arg));
+        o.telescope_phi_deg = mathematical_azimuth(cli::parse_number(value(), arg));
       else if (arg == "--telescope-radius")
-        o.telescope_radius_m = cli::to_double(value(), arg);
+        o.telescope_radius_m = cli::parse_number(value(), arg);
       else if (arg == "--fov")
-        o.fov_deg = cli::to_double(value(), arg);
+        o.fov_deg = cli::parse_number(value(), arg);
       else if (arg == "--seed")
         o.seed = cli::parse_seed(value(), arg);
       else if (arg == "-o")

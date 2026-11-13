@@ -7,6 +7,7 @@
 
 #include <cstdio>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <set>
 #include <string>
@@ -26,58 +27,41 @@ void usage() {
 
 int main(int argc, char **argv) {
   std::ios::sync_with_stdio(false);
-  std::string input = "-";
-  std::string output = "-";
-  std::string camera_path;
-  std::string atmprof_path;
-  std::set<std::string> allow_pending;
-  std::set<std::string> scaled;
-  bool have_input = false;
-  for (int i = 1; i < argc; ++i) {
-    const std::string arg = argv[i];
-    if (arg == "--version") {
-      print_version("obdeect stream to-simtel");
-      return 0;
-    }
-    if (arg == "-h" || arg == "--help") {
-      usage();
-      return 0;
-    }
-    if (arg == "--camera-map" || arg == "--atmprof" || arg == "-o" || arg == "--allow-pending" ||
-        arg == "--scaled-factor") {
-      if (i + 1 >= argc) {
-        std::fprintf(stderr, "obdeect stream to-simtel: %s needs an argument\n", arg.c_str());
+  return run_stream_tool("obdeect stream to-simtel", argc, argv, usage, [&] {
+    obdeect::stream::cli::Args args(argc, argv);
+    std::string input = "-";
+    std::string output = "-";
+    std::string camera_path;
+    std::string atmprof_path;
+    std::set<std::string> allow_pending;
+    std::set<std::string> scaled;
+    bool have_input = false;
+    std::string arg;
+    while (args.next(arg)) {
+      if (arg == "-h" || arg == "--help") {
         usage();
-        return 2;
+        return 0;
       }
       if (arg == "-o") {
-        output = argv[++i];
+        output = args.value(arg);
       } else if (arg == "--allow-pending") {
-        allow_pending.insert(argv[++i]);
+        allow_pending.insert(args.value(arg));
       } else if (arg == "--scaled-factor") {
-        scaled.insert(argv[++i]);
+        scaled.insert(args.value(arg));
       } else if (arg == "--atmprof") {
-        atmprof_path = argv[++i];
+        atmprof_path = args.value(arg);
+      } else if (arg == "--camera-map") {
+        camera_path = args.value(arg);
+      } else if (arg.size() > 1 && arg[0] == '-') {
+        throw obdeect::stream::cli::UsageError("unknown option " + arg);
+      } else if (have_input) {
+        throw obdeect::stream::cli::UsageError("only one input is accepted");
       } else {
-        camera_path = argv[++i];
+        input = arg;
+        have_input = true;
       }
-      continue;
     }
-    if (arg.size() > 1 && arg[0] == '-') {
-      std::fprintf(stderr, "obdeect stream to-simtel: unknown option %s\n", arg.c_str());
-      usage();
-      return 2;
-    }
-    if (have_input) {
-      std::fprintf(stderr, "obdeect stream to-simtel: only one input is accepted\n");
-      usage();
-      return 2;
-    }
-    input = arg;
-    have_input = true;
-  }
 
-  try {
     obdeect::stream::SimtelOptions options;
     options.warnings = &std::cerr;
     options.allow_pending = std::move(allow_pending);
@@ -135,9 +119,6 @@ int main(int argc, char **argv) {
     if (out_file.is_open()) {
       out_file.close();
     }
-  } catch (const std::exception &error) {
-    std::fprintf(stderr, "obdeect stream to-simtel: %s\n", error.what());
-    return 1;
-  }
-  return 0;
+    return 0;
+  });
 }

@@ -2,12 +2,14 @@
 // on stdout or -o FILE.
 
 #include "obdeect/stream/grisu.hpp"
+#include "obdeect/stream/parse.hpp"
 #include "obdeect/stream/stdin_buffer.hpp"
 #include "tool_version.hpp"
 
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -25,68 +27,41 @@ void usage() {
 
 int main(int argc, char **argv) {
   std::ios::sync_with_stdio(false);
-  std::string input = "-";
-  std::string output = "-";
-  std::string config_path;
-  obdeect::stream::GrisuOptions options;
-  options.producer = std::string("obdeect stream to-grisu ") + OBDEECT_STREAM_PACKAGE_VERSION;
-  options.warnings = &std::cerr;
-  bool have_input = false;
-  for (int i = 1; i < argc; ++i) {
-    const std::string arg = argv[i];
-    if (arg == "--version") {
-      print_version("obdeect stream to-grisu");
-      return 0;
-    }
-    if (arg == "-h" || arg == "--help") {
-      usage();
-      return 0;
-    }
-    if (arg == "--expand-bunches") {
-      options.expand_bunches = true;
-      continue;
-    }
-    if (arg == "--event-details") {
-      options.event_details = true;
-      continue;
-    }
-    if (arg == "--telescope-config" || arg == "--qe" || arg == "-o") {
-      if (i + 1 >= argc) {
-        std::fprintf(stderr, "obdeect stream to-grisu: %s needs an argument\n", arg.c_str());
+  return run_stream_tool("obdeect stream to-grisu", argc, argv, usage, [&] {
+    obdeect::stream::cli::Args args(argc, argv);
+    std::string input = "-";
+    std::string output = "-";
+    std::string config_path;
+    obdeect::stream::GrisuOptions options;
+    options.producer = std::string("obdeect stream to-grisu ") + OBDEECT_STREAM_PACKAGE_VERSION;
+    options.warnings = &std::cerr;
+    bool have_input = false;
+    std::string arg;
+    while (args.next(arg)) {
+      if (arg == "-h" || arg == "--help") {
         usage();
-        return 2;
+        return 0;
       }
-      const std::string value = argv[++i];
-      if (arg == "-o") {
-        output = value;
+      if (arg == "--expand-bunches") {
+        options.expand_bunches = true;
+      } else if (arg == "--event-details") {
+        options.event_details = true;
+      } else if (arg == "-o") {
+        output = args.value(arg);
       } else if (arg == "--telescope-config") {
-        config_path = value;
+        config_path = args.value(arg);
+      } else if (arg == "--qe") {
+        options.qe = obdeect::stream::cli::number(args.value(arg), arg);
+      } else if (arg.size() > 1 && arg[0] == '-') {
+        throw obdeect::stream::cli::UsageError("unknown option " + arg);
+      } else if (have_input) {
+        throw obdeect::stream::cli::UsageError("only one input is accepted");
       } else {
-        char *end = nullptr;
-        options.qe = std::strtod(value.c_str(), &end);
-        if (value.empty() || end != value.c_str() + value.size()) {
-          std::fprintf(stderr, "obdeect stream to-grisu: invalid number for --qe: %s\n",
-                       value.c_str());
-          return 2;
-        }
+        input = arg;
+        have_input = true;
       }
-      continue;
     }
-    if (arg.size() > 1 && arg[0] == '-') {
-      std::fprintf(stderr, "obdeect stream to-grisu: unknown option %s\n", arg.c_str());
-      usage();
-      return 2;
-    }
-    if (have_input) {
-      std::fprintf(stderr, "obdeect stream to-grisu: only one input is accepted\n");
-      usage();
-      return 2;
-    }
-    input = arg;
-    have_input = true;
-  }
 
-  try {
     if (!config_path.empty()) {
       std::ifstream config(config_path);
       if (!config) {
@@ -133,9 +108,6 @@ int main(int argc, char **argv) {
     if (out_file.is_open()) {
       out_file.close();
     }
-  } catch (const std::exception &error) {
-    std::fprintf(stderr, "obdeect stream to-grisu: %s\n", error.what());
-    return 1;
-  }
-  return 0;
+    return 0;
+  });
 }

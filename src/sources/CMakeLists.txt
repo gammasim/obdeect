@@ -91,6 +91,11 @@ if(OBDEECT_SOURCES_BUILD_TOOLS)
     add_executable(obdeect-sources-${tool} cpp/tools/${tool}.cpp)
     target_link_libraries(obdeect-sources-${tool} PRIVATE obdeect_sources_core)
     obdeect_sources_enable_warnings(obdeect-sources-${tool})
+    if(OBDEECT_SOURCES_BUILD_TESTING)
+      add_test(NAME ${tool}_version COMMAND obdeect-sources-${tool} --version)
+      set_tests_properties(${tool}_version PROPERTIES PASS_REGULAR_EXPRESSION
+        "^obdeect sources ${tool} [0-9]+\\.[0-9]+\\.[0-9]+ \\(photon-stream format [0-9]+\\.[0-9]+\\)")
+    endif()
   endforeach()
   # Wheels: inside the package, run through `obdeect sources <program>`.
   if(DEFINED SKBUILD_PLATLIB_DIR)

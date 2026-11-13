@@ -328,7 +328,7 @@ void test_public_argument_validation() {
   CHECK(obdeect::propagation::airmass<double>(1., 0.) == obdeect::propagation::unlimited_airmass);
   const obdeect::propagation::TransmissionTable open("# H2= 2.000, H1= 3.000\n400 0.5\n", 2000.);
   CHECK(throws_invalid([&] { (void)open.transmission<double>(1500., nan, 1.); }));
-  CHECK(throws_invalid([&] { (void)obdeect::propagation::table_wavelength(400.5); }));
+  CHECK(obdeect::propagation::table_wavelength(400.5) == 400); // floor
   CHECK(throws_invalid([&] { (void)obdeect::propagation::table_wavelength(-1.); }));
   CHECK(obdeect::propagation::table_wavelength(1e10) == -1);
   CHECK(obdeect::propagation::table_wavelength(400.) == 400);

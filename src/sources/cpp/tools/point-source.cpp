@@ -27,8 +27,8 @@ const char *usage = R"(usage: obdeect sources point-source [options] [-o FILE]
 
 int main(int argc, char **argv) {
   using namespace obdeect::sources;
-  return cli::run_tool("obdeect sources point-source", [&] {
-    cli::ArgCursor cursor(argc, argv);
+  return cli::run_tool("obdeect sources point-source", argc, argv, [&] {
+    cli::Args cursor(argc, argv);
     programs::XyzlsOptions o;
     std::string spectrum = "400", pulse = "Gauss:0.0", angular = "isotropic", output, telpos,
                 corsika_telpos;
@@ -45,17 +45,17 @@ int main(int argc, char **argv) {
       else if (arg == "-N")
         o.events = cli::to_count(value(), arg);
       else if (arg == "-r")
-        o.telcam_radius_cm = cli::to_double(value(), arg);
+        o.telcam_radius_cm = cli::parse_number(value(), arg);
       else if (arg == "-x")
-        o.x_cm = cli::to_double(value(), arg);
+        o.x_cm = cli::parse_number(value(), arg);
       else if (arg == "-y")
-        o.y_cm = cli::to_double(value(), arg);
+        o.y_cm = cli::parse_number(value(), arg);
       else if (arg == "-z")
-        o.z_cm = cli::to_double(value(), arg);
+        o.z_cm = cli::parse_number(value(), arg);
       else if (arg == "-n")
         o.photons = cli::parse_list(value(), arg);
       else if (arg == "-b")
-        o.bunch_size = cli::to_double(value(), arg);
+        o.bunch_size = cli::parse_number(value(), arg);
       else if (arg == "-s")
         spectrum = value();
       else if (arg == "-p")
@@ -63,7 +63,7 @@ int main(int argc, char **argv) {
       else if (arg == "-a")
         angular = value();
       else if (arg == "-h")
-        o.altitude_m = cli::to_double(value(), arg);
+        o.altitude_m = cli::parse_number(value(), arg);
       else if (arg == "-A")
         o.atmosphere = cli::parse_integer(value(), arg);
       else if (arg == "-d")

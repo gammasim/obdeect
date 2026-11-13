@@ -84,7 +84,7 @@ inline void validate_ground_chunk(obdeect::stream::PhotonChunk &chunk, bool need
 
   const auto &wavelength = chunk[Column::wavelength];
   for (std::size_t row = 0; row < rows; ++row) {
-    // 0 means not assigned; any other value must be a finite, non-negative integer.
+    // 0 means not assigned; any other value must be finite and non-negative.
     if (wavelength[row] != 0.0F) {
       check_wavelength(static_cast<double>(wavelength[row]));
     }

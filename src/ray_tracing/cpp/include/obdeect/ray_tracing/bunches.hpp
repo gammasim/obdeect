@@ -3,6 +3,7 @@
 #include "obdeect/ray_tracing/bounds.hpp"
 #include "obdeect/ray_tracing/source.hpp"
 #include "obdeect/ray_tracing/trace.hpp"
+#include "obdeect/stream/wavelength.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -34,7 +35,7 @@ struct BunchFrame {
 };
 
 // Wavelength of bunches with wavelength 0: density proportional to 1/lambda^2
-// on [lo_nm, hi_nm], truncated to integer nm.
+// on [lo_nm, hi_nm], continuous.
 struct InverseSquareLaw {
   double lo_nm{};
   double hi_nm{};
@@ -193,12 +194,10 @@ public:
         const double frac = static_cast<double>(k + 1) <= size ? 1.0 : size - std::floor(size);
         if (!fixed) {
           if (options_.wavelength_law) {
-            // Inverse transform of 1/lambda^2; u in (0, 1), so the value lies in (lo, hi).
+            // Inverse transform of 1/lambda^2 (continuous), lambda in [lo, hi).
             const auto &law = *options_.wavelength_law;
             const double u = uniform4(seed_, id, Stream::wavelength, sub)[0];
-            const double exact = 1.0 / (1.0 / law.lo_nm - u * (1.0 / law.lo_nm - 1.0 / law.hi_nm));
-            // Truncation to integer nm as sim_telarray does: lambda in [floor(lo), hi).
-            lambda = std::floor(exact);
+            lambda = obdeect::stream::inverse_square_wavelength_nm(u, law.lo_nm, law.hi_nm);
           } else {
             lambda = options_.wavelength_density->sample(
                 uniform4(seed_, id, Stream::wavelength, sub)[0]);
@@ -283,7 +282,7 @@ std::size_t trace_bunches(const OpticalModel &model, const BunchBlock &in, const
     throw std::invalid_argument("bunch wavelength density: nodes must start above 0 nm");
   if (options.wavelength_law) {
     const auto &law = *options.wavelength_law;
-    // lo_nm >= 1 keeps floor(lambda) >= 1 for every sample, so no photon is at wavelength 0.
+    // lo_nm >= 1 keeps the wavelength positive and 1 / lo_nm finite.
     if (!std::isfinite(law.lo_nm) || !std::isfinite(law.hi_nm) || !(law.lo_nm >= 1.0) ||
         !(law.hi_nm > law.lo_nm))
       throw std::invalid_argument("bunch wavelength law: need finite 1 <= lo_nm < hi_nm");

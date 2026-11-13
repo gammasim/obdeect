@@ -224,7 +224,6 @@ def test_wavelengths_assigned_in_range(table):
     columns = _photons(20000, np.random.default_rng(2))
     weighted = _apply(table, columns, weighted=True)
     wavelength = weighted["wavelength"]
-    assert np.all(wavelength == np.floor(wavelength))
     assert wavelength.min() >= WAVELENGTH_RANGE[0]
     assert wavelength.max() <= WAVELENGTH_RANGE[1]
 

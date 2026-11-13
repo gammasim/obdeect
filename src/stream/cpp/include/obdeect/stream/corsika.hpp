@@ -313,10 +313,10 @@ private:
       const TelPos &pos = *telpos_;
       std::vector<double> x, y, z, r;
       for (std::size_t i = 0; i < pos.x.size(); ++i) {
-        x.push_back(pos.x[i] / 100.0);
-        y.push_back(pos.y[i] / 100.0);
-        z.push_back(pos.z[i] / 100.0);
-        r.push_back(pos.r[i] / 100.0);
+        x.push_back(cm_to_m(pos.x[i]));
+        y.push_back(cm_to_m(pos.y[i]));
+        z.push_back(cm_to_m(pos.z[i]));
+        r.push_back(cm_to_m(pos.r[i]));
       }
       metadata["n_telescopes"] = static_cast<std::int64_t>(pos.x.size());
       metadata["telescope_x_m"] = std::move(x);
@@ -375,10 +375,10 @@ private:
     tel_meta["array_index"] = static_cast<std::int64_t>(p.array);
     if (telpos_ && p.tel >= 0 && static_cast<std::size_t>(p.tel) < telpos_->x.size()) {
       const auto i = static_cast<std::size_t>(p.tel);
-      tel_meta["x_m"] = telpos_->x[i] / 100.0;
-      tel_meta["y_m"] = telpos_->y[i] / 100.0;
-      tel_meta["z_m"] = telpos_->z[i] / 100.0;
-      tel_meta["r_m"] = telpos_->r[i] / 100.0;
+      tel_meta["x_m"] = cm_to_m(telpos_->x[i]);
+      tel_meta["y_m"] = cm_to_m(telpos_->y[i]);
+      tel_meta["z_m"] = cm_to_m(telpos_->z[i]);
+      tel_meta["r_m"] = cm_to_m(telpos_->r[i]);
     }
     emit(RecordType::telescope, std::move(tel_meta));
 

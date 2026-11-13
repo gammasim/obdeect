@@ -5,6 +5,7 @@
 
 #include "obdeect/sources/cli.hpp"
 #include "obdeect/sources/density.hpp"
+#include "obdeect/stream/parse.hpp"
 
 #include <cmath>
 #include <cstddef>
@@ -35,10 +36,8 @@ inline std::pair<std::vector<double>, std::vector<double>> read_table(const std:
     std::string a, b;
     if (!(words >> a >> b))
       continue;
-    char *end_a = nullptr, *end_b = nullptr;
-    const double va = std::strtod(a.c_str(), &end_a);
-    const double vb = std::strtod(b.c_str(), &end_b);
-    if (*end_a != '\0' || *end_b != '\0')
+    double va = 0.0, vb = 0.0;
+    if (!stream::parse::finite_number(a, va) || !stream::parse::finite_number(b, vb))
       continue;
     if (!x.empty() && x.back() == va) {
       y.back() += vb;

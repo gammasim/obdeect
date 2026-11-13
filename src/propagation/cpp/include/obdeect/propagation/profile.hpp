@@ -10,6 +10,7 @@
 // interpolated density: t(h) = t_upper + (t_lower - t_upper) * (mass above h in the interval)
 // / (mass of the interval).
 
+#include "obdeect/stream/atmprof.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -27,16 +28,6 @@ namespace detail {
 // (1 - exp(-y)) / y, finite at y = 0.
 inline double phi(double y) noexcept {
   return std::fabs(y) < 1e-8 ? 1.0 - 0.5 * y : -std::expm1(-y) / y;
-}
-
-inline double parse_profile_number(const std::string &token, std::size_t line) {
-  char *end = nullptr;
-  const double value = std::strtod(token.c_str(), &end);
-  if (token.empty() || end != token.c_str() + token.size() || !std::isfinite(value)) {
-    throw std::invalid_argument("atmospheric profile line " + std::to_string(line) + ": '" + token +
-                                "' is not a number");
-  }
-  return value;
 }
 
 // Natural cubic spline y(x) (zero second derivative at both ends), x strictly ascending.
@@ -89,33 +80,18 @@ public:
 
   explicit AtmosphereProfile(const std::string &text) {
     std::istringstream stream(text);
-    std::string line;
-    std::size_t line_number = 0;
-    while (std::getline(stream, line)) {
-      ++line_number;
-      std::istringstream row(line);
-      std::string token;
-      if (!(row >> token) || token[0] == '#') {
-        continue;
-      }
-      double value[4];
-      value[0] = detail::parse_profile_number(token, line_number);
-      for (int column = 1; column < 4; ++column) {
-        if (!(row >> token)) {
-          throw std::invalid_argument("atmospheric profile line " + std::to_string(line_number) +
-                                      ": needs 4 columns (altitude, density, thickness, n-1)");
-        }
-        value[column] = detail::parse_profile_number(token, line_number);
-      }
-      if (std::fabs(value[0]) > max_altitude_km) {
-        throw std::invalid_argument("atmospheric profile line " + std::to_string(line_number) +
+    // Parsing and the ascending-altitude and non-negative checks are shared with the stream
+    // adapters (obdeect/stream/atmprof.hpp).
+    const auto table = obdeect::stream::read_atmprof_text(stream, "atmospheric profile");
+    for (std::size_t i = 0; i < table.alt_km.size(); ++i) {
+      if (std::fabs(table.alt_km[i]) > max_altitude_km) {
+        throw std::invalid_argument("atmospheric profile level " + std::to_string(i + 1) +
                                     ": altitude beyond +-1000 km");
       }
-      const double altitude_cm = value[0] * 1e5;
-      z_.push_back(altitude_cm);
-      rho_.push_back(value[1]);
-      thick_.push_back(value[2]);
-      nu_.push_back(value[3]);
+      z_.push_back(table.alt_km[i] * 1e5);
+      rho_.push_back(table.rho[i]);
+      thick_.push_back(table.thick[i]);
+      nu_.push_back(table.refidx_m1[i]);
     }
     validate();
     build();

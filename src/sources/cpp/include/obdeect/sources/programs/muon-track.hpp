@@ -6,6 +6,7 @@
 #include "obdeect/sources/cli.hpp"
 #include "obdeect/sources/emission_stream.hpp"
 #include "obdeect/sources/track.hpp"
+#include "obdeect/stream/parse.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -132,9 +133,10 @@ inline IndexProfile read_index_profile(std::istream &in, const std::string &name
   std::vector<double> values;
   std::string word;
   while (in >> word) {
-    if (!cli::is_number(word))
+    double value = 0.0;
+    if (!stream::parse::finite_number(word, value))
       throw std::invalid_argument("index profile " + name + ": expected 'altitude n-1' lines");
-    values.push_back(std::strtod(word.c_str(), nullptr));
+    values.push_back(value);
   }
   if (values.empty())
     throw std::invalid_argument("index profile " + name + " has no data");
@@ -266,12 +268,7 @@ struct Parsed {
 namespace detail {
 
 inline double number(const std::string &text, const std::string &option) {
-  if (!cli::is_number(text))
-    throw std::invalid_argument("invalid number for " + option + ": '" + text + "'");
-  const double v = std::strtod(text.c_str(), nullptr);
-  if (!std::isfinite(v))
-    throw std::invalid_argument("invalid number for " + option + ": '" + text + "'");
-  return v;
+  return cli::parse_number(text, option);
 }
 
 inline long long integer(const std::string &text, const std::string &option) {
