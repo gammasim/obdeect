@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 
 import numpy as np
@@ -45,14 +46,30 @@ def _metadata_value(value):
     raise TypeError(f"unsupported metadata value of type {type(value).__name__}")
 
 
+def reject_same_file(input: object, output: object) -> None:
+    """Raise ValueError if output is the same file as input (also via links)."""
+    source, target = os.fspath(input), os.fspath(output)
+    if source == "-" or target == "-":
+        return
+    try:
+        same = os.path.samefile(source, target)
+    except OSError:
+        return  # one of them does not exist yet
+    if same:
+        raise ValueError(f"input and output are the same file: {target}")
+
+
 class Writer(_core.Writer):
-    """Writes a photon stream. Use as a context manager to write stream_end on exit."""
+    """Writes a photon stream. As a context manager it writes stream_end on a normal exit."""
 
     def __enter__(self) -> Writer:
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> None:
-        self.close()
+        if exc_type is None:
+            self.close()
+        else:
+            self.abort()  # no stream_end: the partial output is rejected as truncated
 
     def write(self, record_type: str, metadata: Mapping[str, object]) -> None:
         """Write a metadata record, e.g. write("run", {"run_number": 1})."""

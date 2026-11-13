@@ -237,6 +237,13 @@ public:
     }
   }
 
+  // Closes the file without writing stream_end, so a failed run stays an invalid stream.
+  void abort() {
+    if (file_->is_open()) {
+      file_->close();
+    }
+  }
+
 private:
   std::unique_ptr<std::ofstream> file_;
   std::unique_ptr<obdeect::stream::Writer> writer_;
@@ -405,5 +412,6 @@ NB_MODULE(_core, module) {
            nb::arg("first_index"), nb::arg("columns"))
       .def("write_blob", &PyWriter::write_blob, nb::arg("eventio_type"), nb::arg("eventio_id"),
            nb::arg("data"))
-      .def("close", &PyWriter::close);
+      .def("close", &PyWriter::close)
+      .def("abort", &PyWriter::abort);
 }

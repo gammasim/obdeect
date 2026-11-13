@@ -20,7 +20,7 @@ from obdeect.ray_tracing import __version__
 from obdeect.ray_tracing.formats import ModelError
 from obdeect.ray_tracing.model import OpticalModel, ThreadPool, _obscurer_support
 from obdeect.stream.stage import EFFICIENCY_STATUS_STATES
-from obdeect.stream.stream import FRAMES
+from obdeect.stream.stream import FRAMES, reject_same_file
 
 FRAME_GROUND = FRAMES["ground"]
 FRAME_TELESCOPE = FRAMES["telescope"]
@@ -623,6 +623,10 @@ def trace_stream(
             raise ModelError("telescopes: give at least one telescope id")
     if pointing is not None:
         pointing = (float(pointing[0]), float(pointing[1]))
+    try:
+        reject_same_file(input, output)
+    except ValueError as error:
+        raise ModelError(str(error)) from error
     records = iter(obdeect_stream.Reader(str(input)))
     head = next(records, None)
     if head is None or head["type"] != "stream":

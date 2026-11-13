@@ -12,7 +12,7 @@ from collections.abc import Callable, Mapping
 
 import numpy as np
 import obdeect.stream as obdeect_stream
-from obdeect.stream.stream import METADATA_RECORDS, Reader, Writer, _frame
+from obdeect.stream.stream import METADATA_RECORDS, Reader, Writer, _frame, reject_same_file
 
 EFFICIENCY_STATUS_STATES = ("applied", "envelope", "pending")
 _EFFICIENCY_STATUS_FIELDS = ("state", "source", "wavelength_nm", "value")
@@ -99,6 +99,7 @@ def transform(
     output_index = 0
     output_weight = 0.0
 
+    reject_same_file(input, output)
     with Writer(os.fspath(output), f"obdeect.stream.stage {stage_id:#x}") as writer:
         for record in Reader(os.fspath(input)):
             kind = record["type"]
