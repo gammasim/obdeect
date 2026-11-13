@@ -15,6 +15,7 @@
 #include <deque>
 #include <functional>
 #include <istream>
+#include <map>
 #include <optional>
 #include <ostream>
 #include <stdexcept>
@@ -270,6 +271,7 @@ private:
     }
     emit(RecordType::event, std::move(metadata));
     event_open_ = true;
+    next_photon_index_.clear();
     blob(std::move(block));
   }
 
@@ -383,7 +385,8 @@ private:
     emit(RecordType::telescope, std::move(tel_meta));
 
     const std::size_t total = p.bunches.size();
-    std::uint64_t first_index = 0;
+    // Index among all photons of this telescope and event: continues across array reuses.
+    std::uint64_t &first_index = next_photon_index_[p.tel];
     constexpr std::uint32_t mask = column_bit(Column::x) | column_bit(Column::y) |
                                    column_bit(Column::cx) | column_bit(Column::cy) |
                                    column_bit(Column::t) | column_bit(Column::zem) |
@@ -426,7 +429,8 @@ private:
   std::optional<TelPos> telpos_;
   bool run_open_{};
   bool event_open_{};
-  bool rune_seen_{}; // a RUNE block was read since the last RUNH
+  std::map<int, std::uint64_t> next_photon_index_; // per telescope, reset at each event
+  bool rune_seen_{};                               // a RUNE block was read since the last RUNH
 };
 
 } // namespace detail
@@ -479,9 +483,12 @@ public:
       // The 1205 header (12 bytes) is filled in when the telescope ends.
       bunch_bytes_.assign(photons_header_size, 0);
       photon_sum_ = 0.0;
-      next_index_ = 0;
       return;
     }
+    case RecordType::event:
+      begin_event();
+      flush_array();
+      break;
     case RecordType::photons:
       append(record.chunk);
       return;
@@ -514,6 +521,9 @@ public:
   // call this after the last record if the stream does not end with one.
   void finish() { flush_array(); }
 
+  // A new event: photon indices of each telescope start again at 0.
+  void begin_event() { next_index_.clear(); }
+
   // Photons of the open telescope record (ground frame), without a Record copy.
   void write_chunk(const PhotonChunk &chunk) { append(chunk); }
 
@@ -526,9 +536,10 @@ private:
       throw std::runtime_error("sim_telarray input needs ground-frame photons");
     }
     chunk.validate();
-    if (chunk.first_index != next_index_) {
+    std::uint64_t &next_index = next_index_[telescope_id_];
+    if (chunk.first_index != next_index) {
       throw std::runtime_error("photon chunk first_index " + std::to_string(chunk.first_index) +
-                               " where " + std::to_string(next_index_) +
+                               " where " + std::to_string(next_index) +
                                " is expected (gap, overlap or reordering)");
     }
     const std::size_t n = chunk.rows();
@@ -559,7 +570,7 @@ private:
       detail::store_f32_le(dst + 28, lambda.empty() ? 0.0F : lambda[i]);
       photon_sum_ += w[i];
     }
-    next_index_ += n;
+    next_index += n;
   }
 
   void finish_telescope(const Metadata &metadata) {
@@ -619,7 +630,9 @@ private:
   int array_{};
   int telescope_id_{};
   bool tel_open_{};
-  std::uint64_t next_index_{}; // first_index the next chunk of the open telescope must have
+  // first_index the next chunk of each telescope must have in the current event; it
+  // continues across array reuses.
+  std::map<int, std::uint64_t> next_index_;
   std::vector<std::uint8_t> bunch_bytes_; // 1205 block of the open telescope (header first)
   double photon_sum_{};                   // sum of the weights of the open telescope
   std::vector<EventioBlock> children_;
