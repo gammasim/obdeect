@@ -86,18 +86,50 @@ jobs:
           name: sdist
           path: dist/*
 
+  # One job and GitHub environment per PyPI project: a PyPI trusted publisher is
+  # registered per project, with the environment pypi-<project>.
   publish:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [wheels, sdist]
+    strategy:
+      matrix:
+        project: [obdeect-stream, obdeect-propagation, obdeect-sources, obdeect-ray-tracing]
     runs-on: ubuntu-24.04
-    environment: pypi
+    environment: pypi-${{ matrix.project }}
     permissions:
       id-token: write
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8
         with:
-          path: dist
+          path: all
           merge-multiple: true
+      - name: Select the distributions of ${{ matrix.project }}
+        env:
+          PROJECT: ${{ matrix.project }}
+        run: |
+          mkdir dist
+          mv all/"${PROJECT//-/_}"-[0-9]* dist/
+          ls dist
+      - name: Publish distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # release/v1
+
+  # The obdeect package requires all components: publish it after them.
+  publish-obdeect:
+    needs: publish
+    runs-on: ubuntu-24.04
+    environment: pypi-obdeect
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8
+        with:
+          path: all
+          merge-multiple: true
+      - name: Select the distributions of obdeect
+        run: |
+          mkdir dist
+          mv all/obdeect-[0-9]* dist/
+          ls dist
       - name: Publish distributions to PyPI
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # release/v1
 
