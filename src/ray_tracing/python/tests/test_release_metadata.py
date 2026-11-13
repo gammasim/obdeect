@@ -6,7 +6,7 @@ from pathlib import Path
 import obdeect.ray_tracing as ray_tracing
 import pytest
 
-CITATION = Path(__file__).resolve().parents[2] / "CITATION.cff"
+CITATION = Path(__file__).resolve().parents[4] / "CITATION.cff"
 
 
 def test_citation_version_matches_release():

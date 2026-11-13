@@ -27,5 +27,5 @@ jobs:
         env:
           PR_NUMBER: ${{ github.event.number }}
         run: |
-          find src/*/docs/changes -type f | \
-          grep -E "^src/[a-z_]+/docs/changes/${PR_NUMBER}\.(feature|bugfix|maintenance)\.md$"
+          find docs/changes -type f | \
+          grep -E "^docs/changes/${PR_NUMBER}\.(feature|bugfix|maintenance)\.md$"

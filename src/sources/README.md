@@ -1,42 +1,26 @@
-# obdeect sources
+# obdeect-sources
 
-Artificial light sources for Cherenkov-telescope simulations.
-
-Artificial light sources for Cherenkov-telescope simulations: flashers, illuminators, lasers, LEDs and stars, emitting photons at sky, telescope-sphere, telescope or camera level, as a standard-library-only C++20 core with a Python API writing photon streams.
-
-`obdeect sources` is one module of a modular Cherenkov-telescope simulation chain
-(CORSIKA7 or light sources, atmosphere, optics, camera). Modules exchange photons as
-[obdeect stream](https://github.com/gammasim/obdeect) photon streams;
-[simtools](https://github.com/gammasim/simtools) configures and runs the chain.
-
-## User Installation
+Artificial light sources for Cherenkov-telescope simulations: flashers, illuminators, lasers,
+LEDs and stars. Sources emit photons at sky, telescope-sphere, telescope or camera level. The
+C++20 core uses only the standard library. It has a Python API and writes photon streams.
 
 ```sh
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install obdeect-sources
+pip install obdeect-sources     # this component only (also installs obdeect-stream)
+pip install obdeect             # all obdeect components
 ```
 
-(requires python 3.14 or higher)
+Requires Python 3.14 or higher.
 
-## Developer Installation
+## Commands
 
 ```sh
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[dev]'
-cmake --preset debug
-cmake --build --preset debug
+obdeect sources flasher --type dish --photons 1e6     # also --type secondary, --frame camera
+obdeect sources led --camera-file cam.dat --photons 500
+obdeect sources point-source
+obdeect sources beam-scan
+obdeect sources laser-beam
+obdeect sources night-sky
+obdeect sources muon-track
 ```
 
-Test your installation with:
-
-```sh
-ctest --test-dir build/debug --output-on-failure
-python -m pytest python/tests
-```
-
-## License and Citation
-
-BSD 3-Clause License, see [LICENSE](LICENSE). Please cite `obdeect sources` using the
-metadata in [CITATION.cff](CITATION.cff).
+Full documentation and the repository README: https://github.com/gammasim/obdeect

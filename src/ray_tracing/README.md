@@ -1,76 +1,25 @@
-# obdeect ray tracing
+# obdeect-ray-tracing
 
-<p align="center">
-  <img src="docs/_static/images/obdeect_21ratio_small.jpg" alt="Obdeect optical ray tracing for imaging atmospheric Cherenkov telescopes" width="800">
-</p>
-
-[![DOI](https://zenodo.org/badge/1376945125.svg)](https://doi.org/10.5281/zenodo.23942573)
-
-obdeect ray tracing is a C++20 optical ray tracer for imaging atmospheric Cherenkov
-telescopes. The C++ core uses only the standard library. Python compiles
-optical models from the simulation models, traces photons, and plots results;
-simtools uses it as a ray-tracing backend.
-
-See the [user guide](docs/USER_GUIDE.md), the [physics](docs/PHYSICS.md) of the
-photon path, and the [validation](docs/VALIDATION.md) against sim_telarray.
-
-## User Installation
-
-Install from PyPI with:
+Optical ray tracer for imaging atmospheric Cherenkov telescopes. The C++20 core uses only the
+standard library. Python compiles optical models from simulation models, traces photons, and
+plots results. simtools uses it as a ray-tracing backend. Status: pre-alpha.
 
 ```sh
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install obdeect-ray-tracing
+pip install obdeect-ray-tracing  # this component only (also installs obdeect-stream)
+pip install obdeect              # all obdeect components
 ```
 
-(requires python 3.14 or higher)
+Requires Python 3.14 or higher.
 
-Verify the installation by compiling an optical model from a
-[simulation-models](https://gitlab.cta-observatory.org/cta-science/simulations/simulation-model/simulation-models)
-checkout and tracing a star:
+## Commands
 
 ```sh
 obdeect ray-tracing compile --simulation-models ../simulation-models --model MSTN-01 \
   --version 7.0.0 --seed 1 --zenith-deg 20 --output mst.json
 obdeect ray-tracing trace --model mst.json --seed 2 --photons 10000 --field-deg 0.5 0
+obdeect ray-tracing trace-stream --model mst.json --seed 7 -i ground.ps -o camera.ps
+obdeect ray-tracing obscurers ...
+obdeect ray-tracing plot ...
 ```
 
-## Developer Installation
-
-```sh
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[dev]'
-cmake --preset debug
-cmake --build --preset debug --target clean  # optional: clean the build directory before building
-cmake --build --preset debug
-```
-
-The C++ tests are in `build/debug/tests/`.
-
-Test your installation with:
-
-```sh
-ctest --test-dir build/debug --output-on-failure
-python -m pytest python/tests
-```
-
-## License and Citation
-
-BSD-3-Clause license. Citation metadata is in [CITATION.cff](CITATION.cff).
-
-## Generative AI disclosure
-
-Generative AI tools (mostly ChatGPT 5.6, Opus 5.5) were used to write the entire code of this project. All AI-assisted outputs were reviewed, validated, and, where necessary, modified by the authors to ensure accuracy and reliability.
-
-## Documentation
-
-Build the documentation locally (in the virtual environment) with:
-
-```sh
-python -m pip install -e '.[docs]'
-sphinx-build -W --keep-going -b html docs docs/_build/html
-```
-
-Open `docs/_build/html/index.html` in a browser. The figures in `docs/_static/figures/` are part of the repository; regenerate them from new validation results with `python docs/figures/make_figures.py`.
+Full documentation and the repository README: https://github.com/gammasim/obdeect

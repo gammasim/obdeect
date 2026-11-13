@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 project = "obdeect"
 copyright = "2026, obdeect propagation developers"  # noqa: A001
-with open(ROOT / "CITATION.cff", encoding="utf-8") as file:
+with open(ROOT.parents[1] / "CITATION.cff", encoding="utf-8") as file:
     author = ", ".join(
         f"{a['given-names']} {a['family-names']}" for a in yaml.safe_load(file)["authors"]
     )

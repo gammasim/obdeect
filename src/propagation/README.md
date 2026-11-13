@@ -1,42 +1,21 @@
-# obdeect propagation
+# obdeect-propagation
 
-Atmospheric propagation of Cherenkov and artificial-source photons.
-
-Atmospheric propagation for Cherenkov-telescope simulations: extinction, refraction and timing from the refractive-index profile, optional single scattering, and early photon thinning, as a standard-library-only C++20 core with a Python API, working on photon streams.
-
-`obdeect propagation` is one module of a modular Cherenkov-telescope simulation chain
-(CORSIKA7 or light sources, atmosphere, optics, camera). Modules exchange photons as
-[obdeect stream](https://github.com/gammasim/obdeect) photon streams;
-[simtools](https://github.com/gammasim/simtools) configures and runs the chain.
-
-## User Installation
+Atmospheric propagation for Cherenkov-telescope simulations: extinction, refraction and timing
+from the refractive-index profile, optional single scattering, and early photon thinning. The
+C++20 core uses only the standard library. It has a Python API and works on photon streams.
 
 ```sh
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install obdeect-propagation
+pip install obdeect-propagation  # this component only (also installs obdeect-stream)
+pip install obdeect              # all obdeect components
 ```
 
-(requires python 3.14 or higher)
+Requires Python 3.14 or higher.
 
-## Developer Installation
+## Commands
 
 ```sh
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[dev]'
-cmake --preset debug
-cmake --build --preset debug
+obdeect propagation run --transmission atm.dat --site-altitude 2156 --seed 1 -i in.ps -o out.ps
+obdeect propagation convert-table ...       # convert an atmospheric transmission table
 ```
 
-Test your installation with:
-
-```sh
-ctest --test-dir build/debug --output-on-failure
-python -m pytest python/tests
-```
-
-## License and Citation
-
-BSD 3-Clause License, see [LICENSE](LICENSE). Please cite `obdeect propagation` using the
-metadata in [CITATION.cff](CITATION.cff).
+Full documentation and the repository README: https://github.com/gammasim/obdeect

@@ -41,8 +41,14 @@ jobs:
           && cmake --build build --parallel
       - name: Run native tests
         run: ctest --test-dir build --output-on-failure
+      # One run per component: test modules of different components share file names.
       - name: Run Python tests
-        run: pytest src/stream/python/tests src/propagation/python/tests src/sources/python/tests src/ray_tracing/python/tests
+        run: |
+          status=0
+          for component in stream propagation sources ray_tracing; do
+            pytest "src/${component}/python/tests" || status=1
+          done
+          exit "${status}"
   fma:
     runs-on: ubuntu-24.04
     steps:
@@ -79,10 +85,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 0
+      # GCC 13 reports a false free-nonheap-object warning in std::vector under TSan.
       - name: Configure, build, and test with ThreadSanitizer
         run: >-
           cmake -S . -B build-tsan -DCMAKE_BUILD_TYPE=RelWithDebInfo
-          -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer"
+          -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -Wno-free-nonheap-object"
           -DCMAKE_C_FLAGS="-fsanitize=thread -fno-omit-frame-pointer"
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
           -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=thread"
@@ -96,9 +103,11 @@ jobs:
           fetch-depth: 0
       - name: Configure with the compilation database
         run: >-
-          cmake -S . -B build-tidy -DCMAKE_BUILD_TYPE=Debug -DOBDEECT_RAY_TRACING_BUILD_BENCH=ON
-          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-      - name: Run clang-tidy on ray-tracing tests and benchmarks (headers via HeaderFilterRegex)
+          cmake -S . -B build-tidy -DCMAKE_BUILD_TYPE=Debug -DOBDEECT_STREAM_BUILD_BENCH=ON
+          -DOBDEECT_RAY_TRACING_BUILD_BENCH=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+      - name: Run clang-tidy on all components' tests and benchmarks (headers via HeaderFilterRegex)
         run: >-
-          find src/ray_tracing/cpp/tests src/ray_tracing/cpp/bench -name '*.cpp' -print0
+          find src/stream/cpp/tests src/stream/cpp/bench src/propagation/cpp/tests
+          src/sources/cpp/tests src/ray_tracing/cpp/tests src/ray_tracing/cpp/bench
+          -name '*.cpp' -print0
           | xargs -0 clang-tidy -p build-tidy

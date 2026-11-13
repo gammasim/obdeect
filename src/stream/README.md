@@ -1,42 +1,25 @@
-# obdeect stream
+# obdeect-stream
 
-Photon-stream format and I/O for Cherenkov-telescope simulation chains.
-
-A versioned, columnar photon-stream format with a standard-library-only C++20 reader/writer, a Python API, and adapters from CORSIKA IACT output and to sim_telarray input, connecting the modules of a Cherenkov-telescope simulation chain.
-
-`obdeect stream` is one module of a modular Cherenkov-telescope simulation chain
-(CORSIKA7 or light sources, atmosphere, optics, camera). Modules exchange photons as
-[obdeect stream](https://github.com/gammasim/obdeect) photon streams;
-[simtools](https://github.com/gammasim/simtools) configures and runs the chain.
-
-## User Installation
+Photon-stream format and I/O for Cherenkov-telescope simulation chains. A versioned, columnar
+photon-stream format with a C++20 reader and writer (standard library only), a Python API, and
+adapters from CORSIKA IACT output and to sim_telarray input. Modules of the chain exchange
+photons as photon streams.
 
 ```sh
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install obdeect-stream
+pip install obdeect-stream      # this component only
+pip install obdeect             # all obdeect components
 ```
 
-(requires python 3.14 or higher)
+Requires Python 3.14 or higher.
 
-## Developer Installation
+## Commands
 
 ```sh
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[dev]'
-cmake --preset debug
-cmake --build --preset debug
+obdeect stream cat [FILE ...]               # concatenate streams; --summary for record counts
+obdeect stream tee FILE                     # copy a stream passing through
+obdeect stream from-corsika < run.iact      # CORSIKA IACT EventIO to photon stream
+obdeect stream to-simtel --camera-map cam.txt run.ps > sim.simtel   # photon stream to sim_telarray input
+obdeect stream to-grisu --telescope-config TLLOC.dat run.ps > run.grisu  # GrISU photon text
 ```
 
-Test your installation with:
-
-```sh
-ctest --test-dir build/debug --output-on-failure
-python -m pytest python/tests
-```
-
-## License and Citation
-
-BSD 3-Clause License, see [LICENSE](LICENSE). Please cite `obdeect stream` using the
-metadata in [CITATION.cff](CITATION.cff).
+Full documentation and the repository README: https://github.com/gammasim/obdeect
