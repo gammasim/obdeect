@@ -9,7 +9,7 @@ int main() {
     // The values are fixed by existing results; a change here changes the random numbers.
     CHECK(obdeect::stream::stage_sources == 0x444C0001U);
     CHECK(obdeect::stream::stage_programs == 0x444C0002U);
-    CHECK(obdeect::stream::stage_obdeect == 0x444C0003U);
+    CHECK(obdeect::stream::stage_ray_tracing == 0x444C0003U);
     CHECK(obdeect::stream::stage_atmosphere == 0x444C5546U);
     CHECK(obdeect::stream::stage_ids.size() == 4);
     CHECK(obdeect::stream::detail::all_distinct(obdeect::stream::stage_ids));

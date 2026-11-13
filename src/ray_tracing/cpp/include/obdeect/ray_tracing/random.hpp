@@ -1,27 +1,17 @@
 #pragma once
 
+#include "obdeect/stream/random.hpp"
+
 #include <array>
 #include <cstdint>
 
 namespace obdeect::ray_tracing {
 
-// Philox-4x32-10 (Salmon et al., SC'11): a counter-based generator. A draw
-// depends only on (seed, photon id, stream, block), never on the order in
-// which photons are processed, so results are identical for any block size
-// and thread count.
-[[nodiscard]] constexpr std::array<std::uint32_t, 4> philox4x32(std::array<std::uint32_t, 4> c,
-                                                                std::array<std::uint32_t, 2> k) {
-  constexpr std::uint32_t m0 = 0xD2511F53U, m1 = 0xCD9E8D57U;
-  constexpr std::uint32_t w0 = 0x9E3779B9U, w1 = 0xBB67AE85U;
-  for (int round = 0; round < 10; ++round) {
-    const std::uint64_t p0 = std::uint64_t{m0} * c[0];
-    const std::uint64_t p1 = std::uint64_t{m1} * c[2];
-    c = {static_cast<std::uint32_t>(p1 >> 32) ^ c[1] ^ k[0], static_cast<std::uint32_t>(p1),
-         static_cast<std::uint32_t>(p0 >> 32) ^ c[3] ^ k[1], static_cast<std::uint32_t>(p0)};
-    k = {k[0] + w0, k[1] + w1};
-  }
-  return c;
-}
+// Philox-4x32-10 (Salmon et al., SC'11), shared with the other components: a
+// counter-based generator. A draw depends only on (seed, photon id, stream,
+// block), never on the order in which photons are processed, so results are
+// identical for any block size and thread count.
+using obdeect::stream::philox4x32;
 
 // Independent random streams of one photon.
 // New values are appended; existing ones are never renumbered.

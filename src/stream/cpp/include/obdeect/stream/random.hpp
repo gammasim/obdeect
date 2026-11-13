@@ -6,7 +6,7 @@
 
 namespace obdeect::stream {
 
-// Philox-4x32-10 (Salmon et al., SC'11), as in obdeect: a counter-based
+// Philox-4x32-10 (Salmon et al., SC'11), used by all components: a counter-based
 // generator. A draw depends only on its key and counter, never on the order in
 // which photons are processed, so results are identical for any chunk size and
 // thread count.

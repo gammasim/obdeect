@@ -11,10 +11,34 @@ endif()
 option(OBDEECT_RAY_TRACING_BUILD_BENCH "Build the benchmark and replay tools (not run by ctest)" OFF)
 option(OBDEECT_RAY_TRACING_BUILD_PYTHON_API "Build the Python extension" ${OBDEECT_RAY_TRACING_BUILD_PYTHON_API_DEFAULT})
 
+# The stream component: the target of the combined build, else the stream sources next to
+# this component (builds from the repository), else an installed package (sdist builds).
+if(NOT TARGET obdeect::stream)
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../stream/CMakeLists.txt)
+    set(OBDEECT_STREAM_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    set(OBDEECT_STREAM_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    set(OBDEECT_STREAM_BUILD_CAPI OFF CACHE BOOL "" FORCE)
+    set(OBDEECT_STREAM_BUILD_PYTHON_API OFF CACHE BOOL "" FORCE)
+    set(OBDEECT_STREAM_INSTALL OFF CACHE BOOL "" FORCE)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../stream ${CMAKE_CURRENT_BINARY_DIR}/stream)
+    message(STATUS "obdeect ray_tracing: using the stream sources in ../stream")
+  else()
+    find_package(Python 3.14 COMPONENTS Interpreter)
+    if(Python_Interpreter_FOUND AND NOT obdeect_stream_DIR)
+      execute_process(COMMAND "${Python_EXECUTABLE}" -m obdeect.stream --cmake-dir
+                      OUTPUT_VARIABLE obdeect_stream_DIR OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    endif()
+    find_package(obdeect_stream CONFIG REQUIRED)
+    message(STATUS "obdeect ray_tracing: using the installed stream package ${obdeect_stream_VERSION} (${obdeect_stream_DIR})")
+  endif()
+endif()
+
 # Header-only, standard-library-only core.
 add_library(obdeect_ray_tracing_core INTERFACE)
 target_include_directories(obdeect_ray_tracing_core INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/cpp/include)
 target_compile_features(obdeect_ray_tracing_core INTERFACE cxx_std_20)
+# Philox core shared with the other components.
+target_link_libraries(obdeect_ray_tracing_core INTERFACE obdeect::stream)
 # Identical floating-point results for any thread count and block size on one
 # platform: no implicit fused multiply-add contraction. Transcendental functions
 # come from the platform's math library, so results may differ between
