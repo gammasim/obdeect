@@ -29,6 +29,7 @@ optional-dependencies.stream = [ "gstrickd==0.1" ]
 scripts.obdeect = "obdeect.cli:main"
 
 [tool.setuptools_scm]
+root = "../.."
 fallback_version = "0.1.0"
 
 [tool.scikit-build]

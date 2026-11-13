@@ -26,6 +26,7 @@ optional-dependencies.docs = [ "myst-parser", "pydata-sphinx-theme", "pyyaml", "
 optional-dependencies.plot = [ "matplotlib>=3.8" ]
 
 [tool.setuptools_scm]
+root = "../.."
 fallback_version = "0.1.0"
 
 [tool.scikit-build]

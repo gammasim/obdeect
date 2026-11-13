@@ -27,6 +27,7 @@ optional-dependencies.plot = [ "matplotlib>=3.8" ]
 scripts.dlufd-convert-table = "dlufd.convert:main"
 
 [tool.setuptools_scm]
+root = "../.."
 fallback_version = "0.1.0"
 
 [tool.scikit-build]
