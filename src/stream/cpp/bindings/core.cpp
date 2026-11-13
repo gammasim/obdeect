@@ -230,6 +230,12 @@ public:
   }
 
   void close() {
+    if (aborted_) {
+      throw std::runtime_error("obdeect stream: writer is closed");
+    }
+    if (closed_) {
+      return;
+    }
     ensure_open();
     writer_->finish();
     if (file_->is_open()) {
@@ -239,11 +245,13 @@ public:
             "obdeect stream: writing the photon stream failed (e.g. disk full)");
       }
     }
+    closed_ = true;
   }
 
   // Closes the file without writing stream_end, so a failed run stays an invalid stream.
   void abort() {
     aborted_ = true;
+    closed_ = true;
     if (file_->is_open()) {
       file_->close();
     }
@@ -257,6 +265,7 @@ private:
   }
 
   bool aborted_{false};
+  bool closed_{false};
   std::unique_ptr<std::ofstream> file_;
   std::unique_ptr<obdeect::stream::Writer> writer_;
 };
