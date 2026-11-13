@@ -107,12 +107,6 @@ def _run_pointing(metadata: Mapping[str, Any]) -> tuple[float, float] | None:
     return (math.degrees(zenith), math.degrees(azimuth))
 
 
-def _block_seed(seed: int, event_number: int, telescope_id: int) -> int:
-    """Seed of the random draws of one telescope block (as simtools' derive_seed)."""
-    entropy = [seed, event_number, telescope_id]
-    return int(np.random.SeedSequence(entropy).generate_state(1, np.uint32)[0])
-
-
 def _names(text: Any) -> list[str]:
     return [name.strip() for name in str(text).split(",") if name.strip()]
 
@@ -491,7 +485,9 @@ class _Tracer:
         bunches, placement = self._input_bunches(record, event_number)
         traced = self.model.trace_bunches(
             bunches,
-            seed=_block_seed(self.seed, event_number, telescope.telescope_id),
+            seed=self.seed,
+            event=event_number,
+            telescope=telescope.telescope_id,
             length_unit_m=1.0,
             wavelength_law=self.law,
             roulette=config.roulette,
@@ -595,7 +591,8 @@ def trace_stream(
     input, output: str or path-like
         Photon-stream files; "-" is standard input or output.
     seed: int
-        Run seed (non-negative). Each (event, telescope) block derives its own seed.
+        Run seed (non-negative). Draws are keyed on (seed, event, telescope, photon), as in the
+        other components.
     threads: int
         Worker threads (0 uses every core); results do not depend on it.
     telescopes: iterable of int or None

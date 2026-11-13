@@ -111,7 +111,7 @@ inline Vec3 rotate(const Vec3 &v, const Vec3 &k, double angle) {
 
 // Reflected direction, with the mirror's random reflection error.
 inline Vec3 reflect_at(const Mirror &mirror, const MirrorHit &mh, const Vec3 &direction,
-                       std::uint64_t photon_id, std::uint64_t seed, Stream stream,
+                       std::uint64_t photon_id, const RandomKey &seed, Stream stream,
                        std::uint32_t sub_photon = 0) {
   const Vec3 &n = mh.hit.normal;
   if (!mirror.scatter)
@@ -185,7 +185,7 @@ inline double mirror_response(const Mirror &mirror, const MirrorHit &mh, double 
 // counter's block); 0 gives the random numbers of a single photon.
 [[nodiscard]] inline TraceResult
 trace_photon(const OpticalModel &model, Ray ray, double wavelength_nm, double time_ns,
-             double weight, std::uint64_t photon_id, std::uint64_t seed,
+             double weight, std::uint64_t photon_id, const RandomKey &seed,
              bool apply_responses = true, bool direct = false, bool incidence_angles = true,
              bool classify_losses = true, std::uint32_t sub_photon = 0) {
   using namespace detail;
@@ -537,7 +537,10 @@ public:
         direct_(direct), detected_only_(detected_only), classify_losses_(classify_losses),
         wants_angles_(out.primary_incidence_deg || out.secondary_incidence_deg ||
                       out.focal_incidence_deg),
-        found_(detected_only ? (in.size + kChunkSize - 1) / kChunkSize : 0, 0) {}
+        found_(detected_only ? (in.size + kChunkSize - 1) / kChunkSize : 0, 0) {
+    for (std::size_t k = 0; k < in.size; ++k)
+      check_photon_ids(in.photon_id[k], 1);
+  }
 
   [[nodiscard]] std::size_t size() const { return in_.size; }
 
@@ -638,7 +641,7 @@ private:
 } // namespace detail
 
 // Trace a block on `threads` threads. Every photon writes only its own row,
-// and its random numbers depend only on (seed, photon_id), so results do not
+// and its random numbers depend only on (key, photon_id), so results do not
 // depend on the thread count or the order of photons. Returns the number of
 // rows written: in.size, or with `detected_only` the number of detected
 // photons, whose rows come first, in input order (the rest of the output is

@@ -172,7 +172,7 @@ numbers.
 |---|---|---|
 | `stage_sources` | `0x444C0001` | obdeect sources: light sources |
 | `stage_programs` | `0x444C0002` | obdeect sources: calibration programs |
-| `stage_ray_tracing` | `0x444C0003` | obdeect ray tracing, reserved: obdeect ray tracing still keys its draws on (seed, photon, stream, block); it uses this id once it uses `obdeect::stream::DrawKey` |
+| `stage_ray_tracing` | `0x444C0003` | obdeect ray tracing |
 | `stage_atmosphere` | `0x444C5546` | obdeect propagation: atmosphere ("DLUF") |
 
 A new module takes the next free value and is added to `stage_ids`.

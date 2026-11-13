@@ -197,7 +197,8 @@ public:
   trace_bunches(In1<float> x, In1<float> y, In1<float> cx, In1<float> cy, In1<float> time_ns,
                 In1<float> zem, In1<float> size, In1<float> wavelength_nm,
                 In1<std::uint64_t> bunch_id, In1<double> rotation, In1<double> offset_m,
-                double length_unit_m, double plane_z, std::uint64_t seed,
+                double length_unit_m, double plane_z, std::uint64_t seed, std::uint32_t event,
+                std::uint32_t telescope,
                 const std::optional<std::tuple<In1<double>, In1<double>, In1<double>>> &acceptance,
                 const std::optional<std::tuple<In1<double>, In1<double>>> &density,
                 const std::optional<std::tuple<double, double>> &wavelength_law, bool roulette,
@@ -262,7 +263,7 @@ public:
     try {
       nb::gil_scoped_release release;
       count = obdeect::ray_tracing::trace_bunches(
-          model_, block, frame, options, seed, pool, [&](std::size_t rows) {
+          model_, block, frame, options, {seed, event, telescope}, pool, [&](std::size_t rows) {
             nb::gil_scoped_acquire acquire; // The arrays are Python objects.
             const auto position = owned_array<double>(rows, 3);
             const auto direction = owned_array<double>(rows, 3);
@@ -336,6 +337,7 @@ private:
 template <class Photon>
 nb::dict photon_arrays(std::size_t count, std::uint64_t first_id, double wavelength_nm,
                        const Photon &photon) {
+  obdeect::ray_tracing::check_photon_ids(first_id, count);
   const auto position = owned_array<double>(count, 3), direction = owned_array<double>(count, 3);
   const auto time = owned_array<double>(count), wavelength = owned_array<double>(count);
   const auto weight = owned_array<double>(count);
@@ -516,10 +518,10 @@ NB_MODULE(_core, module) {
            "detected_only"_a = false, "classify_losses"_a = true, "pool"_a = nb::none())
       .def("trace_bunches", &Model::trace_bunches, "x"_a, "y"_a, "cx"_a, "cy"_a, "time_ns"_a,
            "zem"_a, "size"_a, "wavelength_nm"_a, "bunch_id"_a, "rotation"_a, "offset_m"_a,
-           "length_unit_m"_a, "plane_z"_a, nb::kw_only(), "seed"_a, "acceptance"_a = nb::none(),
-           "wavelength_density"_a = nb::none(), "wavelength_law"_a = nb::none(),
-           "roulette"_a = true, "classify_losses"_a = true, "normalise_transmission"_a = false,
-           "pool"_a)
+           "length_unit_m"_a, "plane_z"_a, nb::kw_only(), "seed"_a, "event"_a = 0,
+           "telescope"_a = 0, "acceptance"_a = nb::none(), "wavelength_density"_a = nb::none(),
+           "wavelength_law"_a = nb::none(), "roulette"_a = true, "classify_losses"_a = true,
+           "normalise_transmission"_a = false, "pool"_a)
       .def("obscurer_crossings", &Model::obscurer_crossings, "start"_a, "end"_a, "leg"_a);
   module.def("trace_many", &trace_many, "items"_a, nb::kw_only(), "seed"_a, "pool"_a);
   nb::class_<Emitter>(module, "Emitter")

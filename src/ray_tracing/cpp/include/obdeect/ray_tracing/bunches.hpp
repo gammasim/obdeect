@@ -102,8 +102,11 @@ inline constexpr double kMaxBunchSize = 4.0e9;
 class BunchTask {
 public:
   BunchTask(const OpticalModel &model, const BunchBlock &in, const BunchFrame &frame,
-            const BunchOptions &options, std::uint64_t seed)
-      : model_(model), in_(in), frame_(frame), options_(options), seed_(seed) {}
+            const BunchOptions &options, const RandomKey &seed)
+      : model_(model), in_(in), frame_(frame), options_(options), seed_(seed) {
+    for (std::size_t k = 0; k < in.n; ++k)
+      check_photon_ids(in.bunch_id[k], 1);
+  }
 
   // Rows that chunk c can write at most (ceil of the sizes); sets `bad` for an
   // invalid bunch.
@@ -247,7 +250,7 @@ private:
   BunchBlock in_;
   BunchFrame frame_;
   BunchOptions options_;
-  std::uint64_t seed_;
+  RandomKey seed_;
 };
 
 } // namespace detail
@@ -271,7 +274,7 @@ private:
 // bunch and sub-photon by sub-photon.
 template <class Allocate>
 std::size_t trace_bunches(const OpticalModel &model, const BunchBlock &in, const BunchFrame &frame,
-                          const BunchOptions &options, std::uint64_t seed, ThreadPool &pool,
+                          const BunchOptions &options, const RandomKey &seed, ThreadPool &pool,
                           Allocate &&allocate) {
   detail::validate_frame(frame);
   if (options.acceptance)

@@ -411,6 +411,8 @@ class OpticalModel:
         bunches: Mapping[str, np.ndarray],
         *,
         seed: int,
+        event: int = 0,
+        telescope: int = 0,
         frame_rotation: np.ndarray,
         frame_offset_m: Sequence[float],
         length_unit_m: float,
@@ -429,7 +431,8 @@ class OpticalModel:
         `bunches` holds x, y, cx, cy, time_ns, zem, size, wavelength_nm (all
         float32; wavelength 0 means "sample one from `wavelength_density` or
         `wavelength_law`") and bunch_id (uint64, unique per bunch for one
-        `seed`). `frame_rotation` (3 x 3, input to telescope frame),
+        `seed`). The random draws are keyed on (`seed`, `event`, `telescope`, bunch,
+        sub-photon), as in the other components. `frame_rotation` (3 x 3, input to telescope frame),
         `frame_offset_m`, `length_unit_m` (metres per input length unit) and
         `plane_z` (input units) place the input plane in the telescope frame. The
         native tracer applies the model's `axes_offset_m` O_t (telescope frame): with zero
@@ -535,6 +538,8 @@ class OpticalModel:
             float(length_unit_m),
             float(plane_z),
             seed=seed,
+            event=event,
+            telescope=telescope,
             acceptance=acceptance,
             wavelength_density=wavelength_density,
             wavelength_law=None

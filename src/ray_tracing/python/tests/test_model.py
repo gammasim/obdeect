@@ -174,7 +174,7 @@ def test_traced_emitter_light_does_not_depend_on_blocks():
         "position_m": (0.05, 0.0, 0.0),
         "intensity": ([0.0, 2.0, 2.001], [1.0, 1.0, 0.0]),  # Lights part of the disk.
         "disk": ((0.0, 0.0, camera), (0.0, 0.0, 1.0), 0.5),
-        "first_id": 1 << 40,
+        "first_id": (1 << 40) - 100_000_000,  # Near the top of the 40-bit photon key.
         "direct": True,
     }
     photons = model.emitter_photons(2e6, **{k: v for k, v in emitter.items() if k != "direct"})
@@ -193,6 +193,9 @@ def test_traced_emitter_light_does_not_depend_on_blocks():
     assert len(model.trace_emitter(0.0, **emitter)["weight"]) == 0
     with pytest.raises(ValueError, match="block_size"):
         next(model.trace_emitter_blocks(1.0, block_size=0, **emitter))
+    with pytest.raises(IndexError, match="2\\^40"):
+        options = {k: v for k, v in emitter.items() if k != "direct"}
+        model.emitter_photons(2e6, **(options | {"first_id": 1 << 40}))
 
 
 def test_off_axis_image_moves_by_the_plate_scale():
