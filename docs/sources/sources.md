@@ -1,22 +1,22 @@
 # Light sources
 
-A source emits photons from a point (an emitter) or as a parallel beam (a star).
-Its photons are written as photon stream chunks, in the frame of the source.
+A source emits photons from a point (an emitter) or as a parallel beam (a star). Photons
+are written as photon stream chunks in the frame of the source.
 
 ## Model
 
 | Part | Choices |
 | --- | --- |
-| Geometry | `emitter`: position, unit `pointing`, angular profile. `star`: parallel beam (infinite distance) or point source at a finite distance, on a disc |
+| Geometry | `emitter`: position, pointing, angular profile. `star`: parallel beam (infinite distance) or point source at finite distance, on a disc |
 | Angular profile | `isotropic`, `cone` (one angle), `filled_cone`, `lambertian` (cos theta), `gauss` (sigma in deg), `rayleigh`, `table` (angle in deg, value) |
 | Spectrum | `fixed` (nm), `uniform`, `inverse_square` (1/lambda^2, Cherenkov), `table` |
 | Pulse | `fixed` (ns), `tophat` (full width, delay), `gauss` (sigma, mean), `exponential` (decay, mean), `complex` (flat, Gauss r.m.s., decay, delay), `table` |
-| Count | `photons`: mean number of photons emitted into 4 pi (emitter) or on the disc (star) |
-| Target | optional, emitters only: `disc` (weighted) or `sphere` (cone), see below |
+| Count | `photons`: mean number emitted into 4 pi (emitter) or on the disc (star) |
+| Target | optional, emitters only: `disc` (weighted) or `sphere` (cone) |
 
-Profiles are relative: an emitter with profile `P` emits all `photons` with the
-directions distributed as `P`. Times are emission times at the source; a star's
-times are the wavefront arrival at the disc centre (obdeect [ray-tracing light sources](../ray-tracing/light-sources.md) convention).
+Profiles are relative: an emitter with profile `P` emits all `photons` with directions
+distributed as `P`. Times are emission times at the source. A star's times are the wavefront
+arrival at the disc centre ([ray-tracing convention](../ray-tracing/light-sources.md)).
 
 ```python
 from obdeect.sources.source import emit
@@ -37,52 +37,52 @@ flasher = {
 photons = emit(flasher, seed=3)   # float32 arrays: x y z cx cy cz t w wavelength
 ```
 
-Use `iter_chunks` for large counts (at most 2^16 rows per chunk) and
-`emit_chunk(..., first_index=, rows=)` to emit any slice of the photons.
+`iter_chunks` emits large counts (at most 2^16 rows per chunk); `emit_chunk(..., first_index=,
+rows=)` emits any slice.
 
 ## Frames and units
 
-- Frames: `sky` (absolute), `telescope` (T, telescope-local, z along the optical axis),
-  `camera` (C). Ground (G) is not a source frame. The frame is stored in the chunk.
-- Lengths in metres, times in ns, wavelengths in nm, angles in degrees (in the
-  dictionary; the core takes `u = 1 - cos(theta)`).
-- Directions are unit vectors of the propagation direction. `cz < 0` is downward,
-  as in obdeect [ray tracing](../ray-tracing/light-sources.md) and obdeect [stream](../stream/format.md). Without a target, `w = 1` for every photon.
+- Frames: `sky` (absolute), `telescope` (T, z along the optical axis), `camera` (C). Ground is
+  not a source frame. The frame is stored in the chunk.
+- Lengths in metres, times in ns, wavelengths in nm, angles in degrees (the core takes
+  `u = 1 - cos(theta)`).
+- Directions are unit vectors of the propagation direction. `cz < 0` is downward, as in
+  [ray tracing](../ray-tracing/light-sources.md) and [stream format](../stream/format.md).
+- Without a target, `w = 1` for every photon.
 
 ## Targets (importance sampling)
 
-Most photons of a calibration lamp miss the telescope. A target generates only
-photons that can reach it:
+Most photons of a calibration lamp miss the telescope. A target generates only photons that
+can reach it.
 
-- `disc` (obdeect `Emitter` method): candidates are uniform points on the disc. Each
-  candidate has weight `w = I(theta) / I_max * (h / r)^3`, the probability that the
-  emitted photon reaches the disc (`h` distance from emitter to the disc plane, `r`
-  to the point). The number of candidates is `photons * R^2 / (4 h^2)` for an isotropic
-  emitter (general: `I_max / (2 pi integral(I du)) * pi R^2 / h^2`). Sum of weights
-  = expected photons on the disc. Efficient when the profile covers the disc.
-  Narrow cones off the disc give mostly `w = 0`.
-- `sphere`: directions sampled in the cone that contains the
-  sphere, `w = 1`, count `photons * (1 - cos theta_max) / 2`. Isotropic emitters only.
+- `disc`: candidates are uniform points on the disc. Weight
+  `w = I(theta) / I_max (h / r)^3`, the probability that the emitted photon reaches the disc
+  (`h` distance from emitter to disc plane, `r` to the point). Candidate count
+  `photons R^2 / (4 h^2)` for an isotropic emitter (general: `I_max / (2 pi integral(I du)) x
+  pi R^2 / h^2`). Sum of weights = expected photons on the disc. Efficient when the profile
+  covers the disc; narrow cones off the disc give mostly `w = 0`.
+- `sphere`: directions sampled in the cone containing the sphere, `w = 1`, count
+  `photons (1 - cos theta_max) / 2`. Isotropic emitters only.
 
 ## Random numbers
 
-Each photon draws from Philox (obdeect stream `uniform4`) keyed on
-`(seed, stage, event, telescope, photon index, stream)`, with stage
-`obdeect::sources::stage_sources` (alias of `obdeect::stream::stage_sources`, `0x444C0001`) and streams in
-`cpp/include/obdeect/sources/streams.hpp`. Results do not depend on chunk size or order. Two sources
-with the same seed, event and telescope use the same draws: give each independent source
-its own seed.
+Each photon draws from Philox (obdeect stream `uniform4`) keyed on `(seed, stage, event,
+telescope, photon index, stream)`, stage `obdeect::sources::stage_sources` (alias of
+`obdeect::stream::stage_sources`, `0x444C0001`). Stream ids are in
+`cpp/include/obdeect/sources/streams.hpp`. Results do not depend on chunk size or order.
+Sources with the same seed, event and telescope share draws: give each independent source its
+own seed.
 
 ## Conventions
 
-- The emitter count is `floor(mean)` plus one with probability equal to the fraction,
-  not a Poisson draw. The mean is the same; the weights are not thinned.
-- Units are SI-like (m, ns, nm, deg). Every photon has weight 1 except for disc targets
-  and bunches (`bunch_size` photons per row in the tools).
-- Gaussian pulse parameters are sigma: convert FWHM with `sigma = FWHM / 2.35482`.
-- Tool option spellings map to the dictionary kinds: `Cone:` is `cone`, `FilledCone:` is
-  `filled_cone`, `Parallel` is `cone` with 0 deg, `Gauss-rms:` is `gauss`, `Rayleigh` is
-  `rayleigh`, `Cherenkov:a:b` is `inverse_square`, and `Simple:`, `Gauss:`, `Exp:`,
-  `Complex:` are the pulse kinds.
+- Emitter count: `floor(mean)` plus one with probability equal to the fraction (not Poisson).
+  The mean is the same; weights are not thinned.
+- Units are SI-like (m, ns, nm, deg). Every photon has weight 1, except disc targets and
+  bunches (`bunch_size` photons per row in the tools).
+- Gaussian pulse parameters are sigma: `sigma = FWHM / 2.35482`.
+- Tool spellings map to dictionary kinds: `Cone:` = `cone`, `FilledCone:` = `filled_cone`,
+  `Parallel` = `cone` at 0 deg, `Gauss-rms:` = `gauss`, `Rayleigh` = `rayleigh`,
+  `Cherenkov:a:b` = `inverse_square`; `Simple:`, `Gauss:`, `Exp:`, `Complex:` are pulse kinds.
 - Tables are passed as arrays, not read from files.
-- Refraction and airlight belong to obdeect propagation. The Gaussian spectrum is not available.
+- Refraction and airlight belong to [obdeect propagation](../propagation/index.md). The
+  Gaussian spectrum is not available.

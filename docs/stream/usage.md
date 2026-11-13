@@ -1,7 +1,6 @@
 # Usage
 
-A stream is written and read record by record. See [](format.md) for the record
-types and fields. Installation is described in [](../installation.md).
+Record types and fields: [](format.md). Installation: [](../installation.md).
 
 ## C++
 
@@ -54,24 +53,25 @@ for record in obdeect.stream.Reader("run.ps"):
         w = record["columns"]["w"]                    # numpy float32 array
 ```
 
-Metadata values: `int`, `float`, `str`, or a list or array of floats. Photon columns
-must be float32 arrays; the names are `obdeect.stream.COLUMNS`, the frames are `obdeect.stream.FRAMES`.
-
-`Reader("-")` reads from stdin.
+Metadata values: `int`, `float`, `str`, or a list or array of floats. Photon columns must be
+float32 arrays. Names: `obdeect.stream.COLUMNS`, `obdeect.stream.FRAMES`. `Reader("-")` reads
+stdin.
 
 ## Command line
 
 ```console
-$ obdeect stream cat run1.ps run2.ps > all.ps        # one stream: one stream and one stream_end record
-$ obdeect stream cat --summary all.ps                # records per type, photons and weight per telescope
-$ obdeect stream cat run.ps | obdeect stream tee copy.ps > out.ps  # copy.ps and out.ps get the same records
-$ obdeect stream from-corsika run.iact > run.ps           # CORSIKA IACT EventIO to a photon stream
-$ obdeect stream to-simtel --camera-map cam.txt run.ps > sim.simtel   # stream to sim_telarray input
-$ obdeect stream to-simtel --atmprof atmprof1.dat light.ps > sim.simtel  # table for streams without CORSIKA input
-$ obdeect stream from-corsika < run.iact | obdeect stream to-simtel > sim.simtel       # pipe; "-" reads stdin
+$ obdeect stream cat run1.ps run2.ps > all.ps          # one stream, one stream and one stream_end record
+$ obdeect stream cat --summary all.ps                  # records per type, photons and weight per telescope
+$ obdeect stream cat run.ps | obdeect stream tee copy.ps > out.ps   # copy.ps and out.ps get the same records
+$ obdeect stream from-corsika run.iact > run.ps        # CORSIKA IACT EventIO to a photon stream
+$ obdeect stream to-simtel --camera-map cam.txt run.ps > sim.simtel  # sim_telarray input
+$ obdeect stream to-simtel --atmprof atmprof1.dat light.ps > sim.simtel  # streams without CORSIKA input
+$ obdeect stream from-corsika < run.iact | obdeect stream to-simtel > sim.simtel  # pipe; "-" is stdin
 $ obdeect stream to-grisu --telescope-config TLLOC.dat run.ps > run.grisu  # GrISU photon text
-$ obdeect stream cat --version                       # obdeect stream cat <package version> (photon-stream format 1.0)
+$ obdeect stream cat --version                         # package version (photon-stream format 1.0)
 ```
+
+### Camera map and telescope frames
 
 The camera map lists the camera-frame telescopes, one per line:
 
@@ -80,42 +80,43 @@ The camera map lists the camera-frame telescopes, one per line:
 2 1 0.0
 ```
 
-`--atmprof FILE` reads a CORSIKA/sim_telarray atmospheric table (altitude [km], density, thickness, n-1
-per line, `#` comments). It is written as ATMPROF (1216) before the first event, with the profile number
-that EVTH names (99 for synthesised headers). A stream with its own ATMPROF block rejects the option.
+Telescopes not listed are ground-frame (sim_telarray `Bypass_Optics=0`). Listed telescopes with
+camera-frame photons are converted to the bypass convention and need `Bypass_Optics=1` (class 1)
+or `2` (class 2). `obdeect stream to-simtel` prints the value for each telescope.
 
-A stream without CORSIKA blocks gets synthesised headers. The run end (RUNE) and the input
-block (INPUTCFG, one line `NSHOW <n>`) carry the number of events written, so that
-sim_telarray reports the run as complete:
+### ATMPROF and synthesised headers
+
+`--atmprof FILE` reads a CORSIKA/sim_telarray atmospheric table (altitude [km], density, thickness,
+n-1 per line, `#` comments). It is written as ATMPROF (1216) before the first event, with the
+profile number that EVTH names (99 for synthesised headers). A stream with its own ATMPROF block
+rejects the option.
+
+A stream without CORSIKA blocks gets synthesised headers. The run end (RUNE) and the input block
+(INPUTCFG, one line `NSHOW <n>`) carry the number of events written, so sim_telarray reports the
+run as complete:
 
 ```text
 Run(s) completed as expected after 3 events (3 showers).
 ```
 
-Telescopes not listed are ground-frame (sim_telarray `Bypass_Optics=0`). Listed telescopes with
-camera-frame photons are converted to the bypass convention and need `Bypass_Optics=1` (class 1) or
-`2` (class 2) in sim_telarray; `obdeect stream to-simtel` prints the value for each. Listed dual-mirror telescopes
-may instead carry telescope-frame photons (next section).
-
 ### Telescope-frame photons (dual-mirror telescopes)
 
-A dual-mirror telescope listed with `mirror_class` 2 may carry telescope-frame (T) photons
-instead of camera-frame photons, for example four flashers at the camera firing onto the
-secondary mirror. The T frame has its origin at the secondary centre and z along the optical
-axis towards the sky; each photon is an emission point (`x`, `y`, `z`) with direction
-(`cx`, `cy`, `cz`) and emission time `t`. `obdeect stream to-simtel` writes one bunch per photon at the
-plane z = 0 of that frame, and sim_telarray needs `Bypass_Optics=1`:
+A telescope listed with `mirror_class` 2 may carry telescope-frame (T) photons instead of
+camera-frame photons, for example four flashers at the camera firing onto the secondary mirror.
+The T frame has its origin at the secondary centre and z along the optical axis towards the sky.
+Each photon is an emission point (`x`, `y`, `z`) with direction (`cx`, `cy`, `cz`) and emission
+time `t`. `obdeect stream to-simtel` writes one bunch per photon at the plane z = 0 of that frame,
+and sim_telarray needs `Bypass_Optics=1`:
 
 ```text
 photon:  x, y, z = 0.1, 0.2, 0.5 m   c = (0.6, 0, -0.8)   t = 3 ns   observation level 2200 m
 bunch:   x, y = 47.5, 20.0 cm   cx, cy = 0.6, 0   time = 5.085 ns   zem = 220050 cm
 ```
 
-The bunch position is where the photon's line crosses z = 0 (path 0.625 m here, also for a
-photon moving away from the plane), the time is `t` plus that path length over the speed of
-light, and `zem` is the observation level plus `z`. Without a `cz` column the photon moves
-towards the plane. The camera rotation of the map is not used, and TELPOS z is set to 0 as for
-camera-frame telescopes. `obdeect stream to-simtel` reports the value when it sees the first photons:
+The bunch position is where the photon's line crosses z = 0 (path 0.625 m here, also for a photon
+moving away from the plane). The time is `t` plus that path over the speed of light; `zem` is the
+observation level plus `z`. Without a `cz` column the photon moves towards the plane. The camera
+rotation is not used, and TELPOS z is set to 0 as for camera-frame telescopes.
 
 ```console
 $ cat cam.txt
@@ -124,14 +125,15 @@ $ obdeect sources flasher --type secondary --photons 1e6 | obdeect stream to-sim
 obdeect stream to-simtel: telescope 1: telescope frame, mirror class 2, Bypass_Optics=1
 ```
 
-Errors: T photons for a telescope without map entry or with `mirror_class` 1, a photon with
-cz = 0, and camera-frame and T photons for the same telescope in one run.
-The efficiency status of such a telescope is checked as for camera frame.
+Errors: T photons for a telescope without map entry or with `mirror_class` 1; a photon with
+cz = 0; camera-frame and T photons for the same telescope in one run. The efficiency status of
+such a telescope is checked as for camera frame.
 
-### GrISU photon input
+### GrISU photon text
 
-`obdeect stream to-grisu` writes ground-frame photons as GrISU/GrOptics photon text. The atmosphere
-must be applied upstream and the wavelength assigned, for example by [`obdeect propagation run`](../propagation/propagation.md):
+`obdeect stream to-grisu` writes ground-frame photons as GrISU/GrOptics photon text. The
+atmosphere must be applied upstream and the wavelength assigned, for example by
+[`obdeect propagation run`](../propagation/propagation.md):
 
 ```console
 $ zstd -dc run.corsika.zst | obdeect stream from-corsika \
@@ -160,36 +162,33 @@ P -20.5 -11.5 -0.5 +0 +20000 +12.5 400 3 7
 ```
 
 - `R` is the global QE factor (`--qe`, default 1). It is written, not applied.
-- `S E_TeV x y dcos dsin h_first -1 -1 -1`: one line per shower position (per array
-  reuse), with core position [m] and primary direction cosines in the GrISU frame.
-  `h_first` is the first interaction height in metres above sea level, as stored in the
-  event key `first_interaction_m`. `--event-details` adds `C h_first X_first shower_id`;
-  `X_first` is -1 (the stream does not carry it) and `shower_id` is the event number.
-- `P x y dcx dcy zem t lambda 3 tel`: one line per photon. `x`, `y` [m] are the
-  telescope position plus the photon position, `zem` the emission height [m], `t` the
-  arrival time [ns] as in the stream, `lambda` the wavelength in nm (integer), `3` the
-  emitter type (unknown) and `tel` the GrISU telescope id (1-based).
-- A photon bunch with weight above 1 is an error unless `--expand-bunches` writes
-  `round(w)` copies. A weight below 1 is an error: thin the photons upstream.
+- `S E_TeV x y dcos dsin h_first -1 -1 -1`: one line per shower position (per array reuse), with
+  core position [m] and primary direction cosines in the GrISU frame. `h_first` is the event key
+  `first_interaction_m` [m a.s.l.]. `--event-details` adds `C h_first X_first shower_id`;
+  `X_first` is -1 (not carried by the stream) and `shower_id` is the event number.
+- `P x y dcx dcy zem t lambda 3 tel`: one line per photon. `x`, `y` [m] are the telescope position
+  plus the photon position; `zem` the emission height [m]; `t` the arrival time [ns]; `lambda` the
+  wavelength [nm, integer]; `3` the emitter type (unknown); `tel` the GrISU telescope id (1-based).
+- A bunch with weight above 1 is an error unless `--expand-bunches` writes `round(w)` copies. A
+  weight below 1 is an error: thin the photons upstream.
 - Numbers use 9 significant digits. Values below 1e-8 in magnitude are written as 0.
 
-Frames: the CORSIKA ground frame (x north, y west) maps to GrISU by `x_g = -y_c`,
-`y_g = -x_c`. Azimuths map by `az_g = (3 pi / 2 - az_c) mod 2 pi`, with
-`az_c = atan2(cy, cx)` for photons; the direction cosines written are
-`sin(ze) cos(az_g)` and `sin(ze) sin(az_g)` with `sin(ze) = sqrt(cx^2 + cy^2)`. The primary
-uses the event zenith and azimuth in the same way.
+Frames: the CORSIKA ground frame (x north, y west) maps to GrISU by `x_g = -y_c`, `y_g = -x_c`.
+Azimuths map by `az_g = (3 pi / 2 - az_c) mod 2 pi`, with `az_c = atan2(cy, cx)` for photons; the
+written direction cosines are `sin(ze) cos(az_g)` and `sin(ze) sin(az_g)`, with
+`sin(ze) = sqrt(cx^2 + cy^2)`. The primary uses the event zenith and azimuth the same way.
 
-`--telescope-config FILE` reads `* TLLOC id x y z offset px py` lines (x east, y north
-[m]; other lines are comments). A stream telescope gets the `id` of the closest line
-within 0.5 m of its position (transformed as above); other telescopes are skipped and
-their number is reported on stderr. Without the file, `tel` is the stream telescope id.
+`--telescope-config FILE` reads `* TLLOC id x y z offset px py` lines (x east, y north [m]; other
+lines are comments). A stream telescope gets the `id` of the closest line within 0.5 m of its
+position (transformed as above). Other telescopes are skipped and reported on stderr. Without the
+file, `tel` is the stream telescope id.
 
 In Python: `obdeect.stream.stream_to_grisu(run.ps, run.grisu, telescope_config="TLLOC.dat")`.
 
 ### Efficiency status
 
-`obdeect stream to-simtel` refuses a stream whose efficiency status says a factor is still to be applied and
-sim_telarray does not apply it in that frame. The error names the factor:
+`obdeect stream to-simtel` refuses a stream whose efficiency status says a factor is still to be
+applied when sim_telarray does not apply it in that frame. The error names the factor:
 
 ```text
 obdeect stream to-simtel: efficiency status of telescope 2 (camera frame): factor
@@ -197,9 +196,8 @@ obdeect stream to-simtel: efficiency status of telescope 2 (camera frame): facto
 apply it upstream (state applied); pass --allow-pending telescope_transmission_constant to accept it as it is
 ```
 
-Use `--allow-pending FACTOR` (repeatable) only when the factor is applied elsewhere
-in the chain, for example by the camera module. Which factors sim_telarray applies in
-each frame is listed in [](format.md).
+Use `--allow-pending FACTOR` (repeatable) only when the factor is applied elsewhere in the chain,
+for example by the camera module. Factors per frame: [](format.md).
 
 ```console
 $ obdeect stream to-simtel --camera-map cam.txt --allow-pending telescope_transmission_constant run.ps > sim.simtel
@@ -207,8 +205,8 @@ $ obdeect stream to-simtel --camera-map cam.txt --allow-pending telescope_transm
 
 In Python: `obdeect.stream.stream_to_simtel(run.ps, sim.simtel, cam, allow_pending=["telescope_transmission_constant"])`.
 
-When the QE envelope was applied upstream (efficiency status state `envelope`) and the
-sim_telarray QE table is divided by that envelope, declare it:
+If the QE envelope was applied upstream (state `envelope`) and the sim_telarray QE table is divided
+by that envelope, declare it:
 
 ```console
 $ obdeect stream to-simtel --camera-map cam.txt --scaled-factor qe run.ps > sim.simtel
@@ -218,22 +216,22 @@ $ obdeect stream to-simtel --camera-map cam.txt --scaled-factor qe run.ps > sim.
 
 `validation/stream/validate_container.sh OUTDIR` is a manual end-to-end check of the codec. In the
 `ghcr.io/gammasim/simtools-dev` container it runs CORSIKA, then
-`obdeect stream from-corsika | obdeect stream to-simtel`, and compares the EventIO file written by CORSIKA with the
-round-trip file. It then runs sim_telarray on both files with the same configuration and
+`obdeect stream from-corsika | obdeect stream to-simtel`, and compares the CORSIKA EventIO file
+with the round-trip file. It then runs sim_telarray on both files with the same configuration and
 seed and compares the outputs. The container, CORSIKA and sim_telarray are not part of the
 automated tests.
 
 ## CMake package
 
-`cmake --install` puts the headers and a CMake package in the install prefix; a wheel
-carries the same files under `obdeect/stream/include` and `obdeect/stream/cmake`:
+`cmake --install` puts the headers and a CMake package in the install prefix. A wheel carries the
+same files under `obdeect/stream/include` and `obdeect/stream/cmake`:
 
 ```console
 $ python -m obdeect.stream --cmake-dir      # directory of obdeect_stream-config.cmake
 $ python -m obdeect.stream --include-dir    # directory of the obdeect/stream/ headers
 ```
 
-A consumer (e.g. [](../propagation/propagation.md) or [](../sources/sources.md)) links the header-only core:
+A consumer links the header-only core:
 
 ```cmake
 find_package(obdeect stream 0.1 CONFIG REQUIRED)   # SameMinorVersion: any 0.1.x
@@ -241,25 +239,23 @@ target_link_libraries(<target> PRIVATE obdeect::stream)
 ```
 
 Configure with `-Dobdeect_stream_DIR=$(python -m obdeect.stream --cmake-dir)`, or with
-`-Dobdeect_stream_DIR=<prefix>/lib/cmake/obdeect_stream` for a `cmake --install` prefix (see [](../installation.md) for the other components).
+`-Dobdeect_stream_DIR=<prefix>/lib/cmake/obdeect_stream` for a `cmake --install` prefix. Other
+consumers and build options: [](../installation.md).
 
-The version is defined once. Wheels and sdists take it from the git tag (setuptools-scm,
-passed by scikit-build-core as `SKBUILD_PROJECT_VERSION`). Other builds take the newest
-`v*` tag, or 0.0.0 without one. CMake derives `project()` and the C++ `version.hpp` from it.
+The version comes from the git tag (setuptools-scm, passed by scikit-build-core as
+`SKBUILD_PROJECT_VERSION`). Other builds take the newest `v*` tag, or 0.0.0 without one.
 
-## Using obdeect stream from other languages
+## Other languages
 
 `libobdeect_stream_c` exposes the reader and writer through a plain C ABI
-(`obdeect/stream/obdeect_stream.h`, `obdeect::stream_c` in the CMake package), so Rust (`bindgen`
-or hand-written `extern "C"`), Julia (`ccall`) or Go (cgo) can use it. Every returned
-pointer, including the photon columns, belongs to the reader and is valid until the next
-`obdeect_stream_reader_next()`; nothing is copied. Errors are negative codes with a message in
-`obdeect_stream_last_error()`. Build scripts find the files with `python -m obdeect.stream --include-dir`,
-`--lib-dir` and `--cmake-dir`.
+(`obdeect/stream/obdeect_stream.h`, `obdeect::stream_c` in the CMake package). Rust (`bindgen` or
+`extern "C"`), Julia (`ccall`) and Go (cgo) can use it. Returned pointers, including photon
+columns, belong to the reader and are valid until the next `obdeect_stream_reader_next()`; nothing
+is copied. Errors are negative codes with a message in `obdeect_stream_last_error()`.
 
 The optics step, which turns ground-frame photons into camera-frame photons, is
-`obdeect ray-tracing trace-stream` ([](../ray-tracing/photon-stream.md)). A ray tracer in Python
-has the same role:
+`obdeect ray-tracing trace-stream` ([](../ray-tracing/photon-stream.md)). A Python ray tracer
+uses the same stage interface:
 
 ```python
 import numpy as np
@@ -277,9 +273,9 @@ transform("ground.ps", "camera.ps", trace, stage_id=0x444C0010, frame_out="camer
           efficiency_status={"mirror": {"state": "applied", "source": "my-model-v1"}})
 ```
 
-`transform` copies all other records unchanged (records of unknown type are dropped), sets the frame of the output chunks and
-telescope records, and appends one `efficiency_status` record per run (it refuses a factor that is
-`applied` in any input efficiency status).
+`transform` copies all other records unchanged (records of unknown type are dropped), sets the
+frame of the output chunks and telescope records, and appends one `efficiency_status` record per
+run. It refuses a factor that is `applied` in any input efficiency status.
 
 The same in C (error handling shortened):
 
@@ -303,14 +299,13 @@ while (obdeect_stream_reader_next(in, &type) == OBDEECT_STREAM_OK) {
 obdeect_stream_writer_close(out);  obdeect_stream_reader_close(in);
 ```
 
-Link with `-L$(python -m obdeect.stream --lib-dir) -lobdeect_stream_c` or, in CMake,
+Link with `-L$(python -m obdeect.stream --lib-dir) -lobdeect_stream_c`, or in CMake with
 `target_link_libraries(tracer PRIVATE obdeect::stream_c)`.
 
-### Conformance streams
+## Conformance streams
 
-`cpp/tests/data/conformance/` holds `valid.ps` (every record type, plus a record of unknown
-type that must be skipped), four invalid streams (bad magic, unknown major version,
-truncated chunk, more than 2^16 rows) and `expected.json` with the decoded content and the
-expected error. `make_conformance.py` regenerates them with the standard library only. An
-independent implementation of [](format.md) should decode `valid.ps` to `expected.json` and
-reject the other files.
+`cpp/tests/data/conformance/` holds `valid.ps` (every record type, plus a record of unknown type
+that must be skipped), four invalid streams (bad magic, unknown major version, truncated chunk,
+more than 2^16 rows) and `expected.json` with the decoded content and the expected error.
+`make_conformance.py` regenerates them with the standard library only. An independent
+implementation of [](format.md) should decode `valid.ps` to `expected.json` and reject the others.

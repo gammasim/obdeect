@@ -12,12 +12,11 @@ image = arrivals["position_m"][arrivals["status"] == DETECTED]
 ```
 
 `OpticalModel.from_records(records, read_file, ...)` compiles parameter records
-held in memory; `save`/`load` store the optical model as JSON.
+held in memory. `save` and `load` store the model as JSON.
 
 `trace` takes photons as arrays: `position_m` (n, 3), `direction` (n, 3, unit
-vectors), `wavelength_nm`, `time_ns`, `weight` and `photon_id` (uint64; the
-random numbers of a photon depend only on the seed and its id). It returns, per
-photon:
+vectors), `wavelength_nm`, `time_ns`, `weight` and `photon_id` (uint64; a photon's
+random numbers depend only on the seed and its id). It returns, per photon:
 
 | Array | Meaning |
 | --- | --- |
@@ -30,8 +29,7 @@ photon:
 | `secondary_point_m`, `secondary_surface`, `secondary_incidence_deg` | reflection on the secondary (NaN for single-mirror telescopes) |
 | `focal_incidence_deg` | angle to the focal-surface normal |
 
-By default `trace` returns every array above for every photon. Writing 14
-arrays costs memory bandwidth, so ask for what you use:
+`trace` returns all 14 arrays by default. Request only what you use:
 
 ```python
 detected = model.trace(
@@ -42,13 +40,10 @@ detected = model.trace(
 )
 ```
 
-`outputs` lists the arrays to compute and return (an unknown name raises
-`ValueError` and lists the valid ones). With `detected_only=True` only photons
-with status `detected` are returned, in input order; the additional array
-`index` (valid only with `detected_only`) gives the row of each in the input.
-The values are those of the full trace, for any `threads`.
+`outputs` lists the arrays to return; an unknown name raises `ValueError`. With
+`detected_only=True`, only detected photons are returned, in input order, and `index`
+gives each one's row in the input. Values match the full trace for any `threads`.
 
-`classify_losses=False` (default `True`) reports a photon that misses the
-primary mirror as `missed_primary`, even where an obscurer on the incoming leg
-would have blocked it first; the search for such obscurers is then skipped.
-Detected photons are the same either way.
+`classify_losses=False` (default `True`) reports a photon missing the primary as
+`missed_primary`, even if an incoming obscurer would have blocked it first. This skips
+the obscurer search; detected photons are the same either way.

@@ -2,16 +2,13 @@
 
 ## Units and frames
 
-- Lengths m, times ns, wavelengths nm, angles deg at every user interface (tool options may
-  use cm where stated). Internally angles are rad; speed of light `c = 0.299792458 m/ns`.
-- Stream frames (obdeect stream codes): sky 0, ground 1, telescope (T) 2, camera (C) 3. Sources may
-  emit in sky, T or C only.
-- Directions are unit propagation directions; `cz < 0` is downward. Sky frame: origin at the
-  observation level above the telescope, z up. All z values in the sky frame are heights above
-  the observation level; the column `zem` is `observation_level_m + z`.
-- Angular profiles use `u = 1 - cos(theta)`, theta measured from the pointing axis, so
-  `dOmega = 2 pi du`, `u in [0, 2]`.
-- FWHM to sigma: `sigma = FWHM / 2.35482004503095`.
+User-facing units are in [sources](../sources.md#frames-and-units). Here:
+
+- Stream frame codes: sky 0, ground 1, telescope (T) 2, camera (C) 3. Sources emit in sky, T or C only.
+- Sky frame: origin at the observation level above the telescope, z up. Sky z values are
+  heights above the observation level; the column `zem` is `observation_level_m + z`.
+- Angular profiles use `u = 1 - cos(theta)`, so `dOmega = 2 pi du`, `u in [0, 2]`.
+- Internally angles are rad; `c = 0.299792458 m/ns`. FWHM to sigma: `sigma = FWHM / 2.35482004503095`.
 
 ## Random numbers (contract)
 

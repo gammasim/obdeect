@@ -1,8 +1,8 @@
 # Ray tracing
 
-Optical ray tracing for gamma-ray astronomy, with a C++20 core, a Python
-interface and a command line. Trace photons through mirrors and telescope
-structure to the camera entrance, using a compiled optical model.
+Optical ray tracing for gamma-ray astronomy. It traces photons through mirrors and
+telescope structure to the camera entrance, using a compiled optical model. The
+core is C++20, with a Python module and a command line.
 
 ::::{grid} 1 2 2 2
 :gutter: 3
@@ -12,7 +12,7 @@ structure to the camera entrance, using a compiled optical model.
 :link-type: doc
 :class-card: sd-shadow-sm
 
-Install the ray-tracing package and run your first trace from the command line or Python.
+Install, compile an optical model and trace your first photons.
 :::
 
 :::{grid-item-card} {fas}`eye;pst-color-primary` Optics
@@ -20,7 +20,7 @@ Install the ray-tracing package and run your first trace from the command line o
 :link-type: doc
 :class-card: sd-shadow-sm
 
-Understand mirrors, photon paths, optical responses and shadowing.
+Mirrors, photon paths, optical responses and shadowing.
 :::
 
 :::{grid-item-card} {fas}`check-circle;pst-color-primary` Validation
@@ -28,7 +28,7 @@ Understand mirrors, photon paths, optical responses and shadowing.
 :link-type: doc
 :class-card: sd-shadow-sm
 
-Explore accuracy checks, comparisons with other codes, and measured performance.
+Accuracy checks, comparisons with sim_telarray and measured performance.
 :::
 
 :::{grid-item-card} {fas}`book;pst-color-primary` Python API
@@ -36,7 +36,7 @@ Explore accuracy checks, comparisons with other codes, and measured performance.
 :link-type: doc
 :class-card: sd-shadow-sm
 
-Look up optical-model methods, compilation and analysis helpers.
+Optical-model methods, compilation and analysis helpers.
 :::
 
 ::::

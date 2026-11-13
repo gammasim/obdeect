@@ -1,8 +1,8 @@
 # Python API
 
 The package exports the optical model and the helpers below; everything else is
-internal. Units are metres, nanoseconds and nanometres; frames are described in
-the [user guide](optical-models.md#frames-and-units).
+internal. Units are metres, nanoseconds and nanometres. For frames, see
+[Optical models](optical-models.md#frames-and-units).
 
 ## Optical models
 

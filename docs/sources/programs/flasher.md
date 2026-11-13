@@ -1,16 +1,18 @@
 # flasher
 
-One tool for two flasher types, chosen with `--type`. Replaces the earlier ff-1m and ff-gct
-programs; options keep their names. Command: `obdeect sources flasher [--type dish|secondary]
-[options] > out.gst`.
+Flasher photon stream: a light flasher in front of a telescope.
 
-- `--type dish` (default): a flasher on the axis of a single-reflector telescope, in front of
+```console
+$ obdeect sources flasher --type dish > flasher.gst
+$ obdeect sources flasher --type secondary --fire all --delays 0,0,0,0 > secondary.gst
+```
+
+- `--type dish` (default): flasher on the axis of a single-reflector telescope, in front of
   the camera. Frame `sky`.
-- `--type secondary`: four flashers at the corners of the camera of a dual-mirror telescope,
-  firing down onto the secondary mirror. Frame `telescope` (T).
+- `--type secondary`: four flashers at the camera corners of a dual-mirror telescope, firing
+  onto the secondary mirror. Frame `telescope` (T).
 
-Options that belong to one type are rejected with the other type, e.g.
-`--delays applies only to --type secondary`.
+An option of the other type is rejected, e.g. `--delays applies only to --type secondary`.
 
 ## Options
 
@@ -28,7 +30,7 @@ Options that belong to one type are rejected with the other type, e.g.
 | `--seed N` | both | `1` | Philox seed |
 | `-o FILE` | both | stdout | output file |
 | `--events N[,...]` | dish | `1` | events per photon level; a short list repeats its last value |
-| `--frame sky\|camera` | dish | `sky` | `camera`: photons on the camera plane z = 0, see below |
+| `--frame sky\|camera` | dish | `sky` | `camera`: photons on the camera plane z = 0 (see below) |
 | `--xy X,Y` (`--flasher-xy X,Y`) | dish | `0,0` | flasher offset from the axis [cm] |
 | `--distance D` (`-z D`) | dish | `1600` | flasher distance above the telescope centre [cm] |
 | `--camera-radius R` (`-r R`) | dish | `120` | fiducial camera radius [cm] |
@@ -37,29 +39,30 @@ Options that belong to one type are rejected with the other type, e.g.
 | `--flasher-depth D` (`-z D`, `--z D`) | secondary | `2.46` | flasher depth behind the camera front [cm] |
 | `--flasher-inclination A` (`--inclination A`) | secondary | `0` | outward inclination [deg] |
 | `--mirror-camera-distance D` (`--mirror-distance D`) | secondary | `51.06949` | focal front to secondary [cm] |
-| `--delays T1,..,T4[,T5]` | secondary | `0,0,0,0,0` | flasher delays and the common-flash delay [ns] |
+| `--delays T1,..,T4[,T5]` | secondary | `0,0,0,0,0` | flasher delays and common-flash delay [ns] |
 | `--fire all\|alternate\|demo\|1..4` | secondary | `all` | which flashers fire |
 
-## Geometry
+## Dish: notes
 
-- dish: the emitter sits at `(x, y, distance)` above the telescope centre, which is the
-  origin at observation level. Emitter pointing `(0, 0, -1)`. Photon count
-  `photons / bunchsize`. For isotropic emission beyond `1.02 R` the source uses a
-  `SphereTarget` of radius R (cone with `sin(theta) = R / d`). Fixed-angle profiles keep all
-  photons. Other profiles use a `DiscTarget` on the sphere's plane (weights).
-- secondary: origin at the secondary centre, z along the optical axis. Flashers at
-  `(+-xy, +-xy, mirror distance + depth)` (flashers 1 to 4), pointing
-  `DirectionVect(-90 deg + inclination, atan2(y, x))`. Count `photons / bunchsize` per
-  flasher. The flashers lie inside the fiducial sphere (120 cm), so no target: 4 pi emission.
-- secondary fire modes: `all` (four emissions), `alternate` (flasher `event mod 4`), `demo`
-  (four individual flashes, then all with `delays[4]`), `n` (one flasher). `demo` with
-  all-zero delays uses the demo values `0,10,20,30,50` ns.
+- The emitter sits at `(x, y, distance)` above the telescope centre. Pointing `(0, 0, -1)`.
+- Photon count `photons / bunchsize`.
+- Isotropic emission beyond `1.02 R` uses a sphere target of radius R (cone with
+  `sin(theta) = R / d`). Fixed-angle profiles keep all photons. Other profiles use a disc
+  target on the sphere's plane (weights).
+- `--frame camera`: the photons run in a straight line from the flasher to the plane z = 0
+  of the camera, without atmosphere. Time is emission time plus path / c. Count and directions
+  equal the sky-frame output for the same seed; positions lie in a disc of radius
+  `R / sqrt(1 - (R / d)^2)`. A photon that does not travel towards the plane is an error.
+  Pipeline: see [sim_telarray](../sim_telarray.md).
 
-`--frame camera` (dish): frame C. The photons run in a straight line from the flasher to the
-plane z = 0 of the camera, without atmosphere. Time is emission time plus path / c. Count and
-directions equal the sky-frame output for the same seed; positions lie in a disc of radius
-`R / sqrt(1 - (R / d)^2)`. A photon that does not travel towards the plane is an error.
-Pipeline: see [Using obdeect sources with sim_telarray](../sim_telarray.md).
+## Secondary: notes
+
+- Flashers at `(+-xy, +-xy, mirror distance + depth)` (flashers 1 to 4), pointing towards the
+  secondary. The flashers lie inside the fiducial sphere (120 cm), so no target: 4 pi emission.
+- `--fire`: `all` fires four emissions, `alternate` fires flasher `event mod 4`, `1`..`4` fires
+  one flasher, `demo` fires the four flashers singly and then all with `delays[4]`.
+  `demo` with all-zero delays uses `0,10,20,30,50` ns.
+- Times are emission times plus the delay.
 
 ## Times and frames
 
@@ -67,19 +70,17 @@ Pipeline: see [Using obdeect sources with sim_telarray](../sim_telarray.md).
   delays.
 - Positions are emission points, not impacts on a plane. No refraction (applied by the
   atmosphere stage). Output is a photon stream.
-- `--delays` with fewer than 4 values is an error.
-- `--xy` and `--flasher-xy` are both accepted for both types, with the meaning of the type
-  (a pair for dish, one value for secondary).
 
 ## Checks
 
 - `ctest`: `test_flasher` (dish: count, cone and direction moments, zem, non-default spectrum,
   pulse, bunch size, event repeats; secondary: flasher positions, direction moments, counts,
   delays, fire patterns, alternate events; type rules).
-- dish reference run (default options, 20 events; `validation/sources/compare_flasher-dish.sh`): photons
-  per event 3519.7 (reference) vs 3520.5 (obdeect sources); cz mean -0.998593 +- 3e-6 vs -0.998583 +- 3e-6
-  (2.2 sigma); wavelength 400 nm both; reference time 53.45 ns is the flight time.
-- secondary reference run (`--photons 1e5 --events 1`; `validation/sources/compare_flasher-secondary.sh`):
-  399939 bunches (reference) vs 400000 (obdeect sources). The reference cz is always negative (sign
-  lost), so the cz comparison is not valid for this isotropic emitter; cx, cy agree within
+- Dish reference run (default options, 20 events; `validation/sources/compare_flasher-dish.sh`):
+  photons per event 3519.7 (reference) vs 3520.5 (obdeect sources); cz mean -0.998593 +- 3e-6
+  vs -0.998583 +- 3e-6 (2.2 sigma); wavelength 400 nm both; reference time 53.45 ns is the
+  flight time.
+- Secondary reference run (`--photons 1e5 --events 1`; `validation/sources/compare_flasher-secondary.sh`):
+  399939 bunches (reference) vs 400000 (obdeect sources). The reference cz is always negative
+  (sign lost), so the cz comparison is not valid for this isotropic emitter; cx, cy agree within
   1 sigma.

@@ -1,12 +1,9 @@
 # Telescopes
 
-Nominal optical layouts of the CTAO telescope models. Each drawing shows the view from the sky
-and the side, with distances in metres. Mirrors are blue, camera housings dark
-grey, and other structures light grey.
-
-These are optical-model drawings, not complete engineering models. Only
-components present in the input data are shown; detailed support structures
-are currently available for the MST.
+Nominal optical layouts of the CTAO telescope models, seen from the sky and from the side.
+Distances are in metres. Mirrors are blue, camera housings dark grey, other structures light
+grey. These are optical-model drawings, not complete engineering models. Only components in
+the input data are shown; detailed support structures are available for the MST only.
 
 ## Large-Sized Telescope (LST)
 

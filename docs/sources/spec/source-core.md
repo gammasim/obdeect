@@ -1,5 +1,7 @@
 # Source core
 
+User view: [sources](../sources.md). This page lists types, validation and sampling.
+
 Headers `obdeect/sources/source.hpp`, `streams.hpp`, `vec3.hpp`. Namespace `obdeect sources`.
 
 ## Types

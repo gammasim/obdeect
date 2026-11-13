@@ -1,8 +1,7 @@
 # Photon-stream format
 
-This page defines format version 1.0. A photon stream is a sequence of records. All integers and floats are
-little-endian. Lengths are in metres, times in nanoseconds, wavelengths in
-nanometres, altitudes in metres above sea level.
+Format version 1.0. Integers and floats are little-endian. Lengths in metres, times in
+nanoseconds, wavelengths in nanometres, altitudes in metres above sea level.
 
 ## Record
 
@@ -14,8 +13,8 @@ nanometres, altitudes in metres above sea level.
 | length | u64 | payload length in bytes |
 | payload | bytes | `length` bytes |
 
-Readers skip records of unknown type. A stream starts with one `stream`
-record and ends with `stream_end`.
+Readers skip records of unknown type. A stream starts with one `stream` record and ends with
+`stream_end`.
 
 | Type | Name | Payload |
 |---|---|---|
@@ -32,18 +31,16 @@ record and ends with `stream_end`.
 | 15 | `stream_end` | empty |
 
 Nesting: `stream` (`run` (`efficiency_status`* (`event` (`telescope` `photons`*
-`telescope_end`)* `event_end`)* `run_end`)*) `stream_end`, with `blob`
-records allowed anywhere between `run` and `run_end`. Blobs keep the order
-of the input (CORSIKA: RUNH and TELPOS after `run`, EVTH and TELOFF before
-the telescopes, EVTE after them, RUNE before `run_end`); writers of EventIO
-output emit them in that order. CORSIKA split-mode markers (1213, 1214) are
-blobs too, between the telescopes of an event. `obdeect stream to-simtel` does not write
-them.
-An `efficiency_status` record may also follow a `telescope` record and then applies to
+`telescope_end`)* `event_end`)* `run_end`)*) `stream_end`. `blob` records may appear anywhere
+between `run` and `run_end`. An `efficiency_status` record after a `telescope` record applies to
 that telescope only.
 
-Readers reject a stream whose `format_major` differs from theirs and accept
-any `format_minor`.
+Blobs keep the input order (CORSIKA: RUNH and TELPOS after `run`; EVTH and TELOFF before the
+telescopes; EVTE after them; RUNE before `run_end`). Writers of EventIO output emit them in that
+order. CORSIKA split-mode markers (1213, 1214) are blobs between the telescopes of an event;
+`obdeect stream to-simtel` does not write them.
+
+Readers reject a stream whose `format_major` differs from theirs and accept any `format_minor`.
 
 ## Metadata
 
@@ -56,7 +53,7 @@ A metadata payload is a u32 entry count followed by entries:
 | value type | u8: 1 = int (i64), 2 = float (f64), 3 = string, 4 = float array |
 | value | i64 / f64 / (u32 length + bytes) / (u32 count + f64 values) |
 
-Keys are unique within one payload. Unknown keys are kept, not dropped.
+Keys are unique within one payload. Unknown keys are kept.
 
 Run keys (from CORSIKA RUNH and TELPOS, or from obdeect sources): `run_number`,
 `observation_level_m`, `energy_min_gev`, `energy_max_gev`, `spectral_index`,
@@ -95,47 +92,44 @@ Event keys (from CORSIKA EVTH and TELOFF): `event_number`,
 | 9 | `wavelength` | wavelength [nm]; 0 = not yet assigned |
 | 10 | `p` | acceptance probability already applied (for reweighting) |
 
-Columns `x y cx cy t w` are required; the others are optional. A chunk
-with 0 rows has column mask 0.
+Columns `x y cx cy t w` are required; the others are optional. A chunk with 0 rows has column
+mask 0.
 
 Frames:
 
-- sky: absolute emission position (x north, y west, z up, origin at the array
-  centre on the observation level, as CORSIKA) and direction.
-- G: horizontal plane through the telescope sphere centre, x and y relative
-  to the centre, CORSIKA axes.
+- sky: absolute emission position (x north, y west, z up, origin at the array centre on the
+  observation level, as CORSIKA) and direction.
+- G: horizontal plane through the telescope sphere centre; x and y relative to the centre,
+  CORSIKA axes.
 - T: telescope-local 3D frame (z along the optical axis towards the sky).
-- C: camera-neutral focal-plane frame (x, y on the camera entrance, telescope
-  axes, z = 0); conversion to sim_telarray conventions only in `obdeect stream to-simtel`.
+- C: camera-neutral focal-plane frame (x, y on the camera entrance, telescope axes, z = 0).
+  Conversion to sim_telarray conventions happens only in `obdeect stream to-simtel`.
 
 ## Efficiency status
 
-Metadata of a `efficiency_status` record:
+Metadata of an `efficiency_status` record:
 
 - `factors` (string): comma-separated factor names, e.g.
   `atmosphere,qe,mirror_reflectivity,telescope_transmission`.
-- per factor `<name>.state` (string): `applied`, `envelope` (only the
-  envelope f^env was applied), or `pending`.
+- per factor `<name>.state` (string): `applied`, `envelope` (only the envelope f^env was
+  applied), or `pending`.
 - per factor `<name>.source` (string): provenance (file name, model version).
-- per factor with a λ table: `<name>.wavelength_nm` and `<name>.value`
-  (float arrays) of the applied (envelope) values.
+- per factor with a λ table: `<name>.wavelength_nm` and `<name>.value` (float arrays) of the
+  applied (envelope) values.
 
-A module applying factor k with an envelope in the efficiency status applies
-f_k / f_k^env and sets `<name>.state` to `applied`. A module never applies a
-factor whose state is `applied`.
+A module applying factor k with an envelope in the efficiency status applies f_k / f_k^env and
+sets `<name>.state` to `applied`. A module never applies a factor whose state is `applied`.
 
-Run efficiency status records (before the first event) apply to all telescopes; a telescope
-efficiency status (after its `telescope` record, before its photons) applies to that
-telescope and overrides the run efficiency status per factor.
-Within either scope, repeated status records may advance a factor only from `pending` to
-`envelope` to `applied`; a repeated or backward state is invalid. Telescope updates are checked
-separately from run updates before the telescope status overrides the run status.
+Run status records (before the first event) apply to all telescopes. A telescope status (after
+its `telescope` record, before its photons) applies to that telescope and overrides the run
+status per factor. Within either scope, a factor may only advance `pending` → `envelope` →
+`applied`; a repeated or backward state is invalid. Telescope updates are checked separately from
+run updates before the telescope status overrides the run status.
 
-`obdeect stream to-simtel` checks the efficiency status of each telescope against the frame of its
-photons. It accepts a factor that is `applied` upstream unless sim_telarray
-applies it again in that frame. It accepts `pending` only for factors that
-sim_telarray applies in that frame. `envelope` is always an error for those
-factors: sim_telarray applies the full factor, not f/f_env.
+`obdeect stream to-simtel` checks the efficiency status of each telescope against the frame of
+its photons. It accepts a factor that is `applied` upstream unless sim_telarray applies it again
+in that frame. It accepts `pending` only for factors that sim_telarray applies in that frame.
+`envelope` is always an error for those factors: sim_telarray applies the full factor, not f/f_env.
 
 | Factor | Camera frame (C) | Ground frame (G) |
 |---|---|---|
@@ -146,27 +140,26 @@ factors: sim_telarray applies the full factor, not f/f_env.
 | `telescope_transmission_constant` | not applied by sim_telarray: error | not applied by sim_telarray: error |
 | any other name | error | error |
 
-Any other factor (or unknown name) raises an error that names it, unless it is
-given to `obdeect stream to-simtel --allow-pending FACTOR` or `allow_pending=` in Python.
+Any other factor (or unknown name) raises an error that names it, unless it is given to
+`obdeect stream to-simtel --allow-pending FACTOR` or `allow_pending=` in Python.
 
 `envelope` for a factor that sim_telarray applies is valid only with
 `obdeect stream to-simtel --scaled-factor FACTOR` (`scaled_factors=` in Python): the sim_telarray
-table of the factor then holds f/f_env, e.g. the QE table divided by the QE envelope
-applied upstream. Every `--scaled-factor` must have a matching efficiency status in state
-`envelope`; a missing status or a scaled factor in any other state is an error.
+table of the factor then holds f/f_env, e.g. the QE table divided by the QE envelope applied
+upstream. Every `--scaled-factor` needs a matching efficiency status in state `envelope`; a
+missing status or any other state is an error.
+
 Usage: [](usage.md).
 
 ## Random numbers
 
-Philox-4x32-10 (`obdeect/stream/random.hpp`), keyed on (seed, stage id) with a
-counter of disjoint bit fields: photon index (40 bits), block (24 bits),
-telescope (16 bits), stream (16 bits), event (32 bits). Out-of-range fields
-are rejected. Results do not depend on chunk size, photon order or thread
-count.
+Philox-4x32-10 (`obdeect/stream/random.hpp`), keyed on (seed, stage id) with a counter of disjoint
+bit fields: photon index (40 bits), block (24 bits), telescope (16 bits), stream (16 bits), event
+(32 bits). Out-of-range fields are rejected. Results do not depend on chunk size, photon order or
+thread count.
 
-Stage ids are defined once in `obdeect/stream/stages.hpp` (a `static_assert` checks
-that they are distinct). The values are fixed: changing one changes the random
-numbers.
+Stage ids are defined once in `obdeect/stream/stages.hpp` (a `static_assert` checks that they are
+distinct). The values are fixed: changing one changes the random numbers.
 
 | Constant | Value | Module |
 |---|---|---|
