@@ -1,12 +1,8 @@
 """obdeect propagation: atmospheric propagation of Cherenkov and artificial-source photons."""
 
-import importlib
-from importlib.metadata import PackageNotFoundError, version
+from obdeect.stream._package import lazy_exports, package_version
 
-try:
-    __version__ = version("obdeect-propagation")
-except PackageNotFoundError:
-    __version__ = "0.0.0"
+__version__ = package_version("obdeect-propagation")
 
 # Imported on first use, so that reading the version needs neither NumPy nor the extension.
 _EXPORTS = {
@@ -24,8 +20,4 @@ _EXPORTS = {
 }
 __all__ = [*_EXPORTS, "__version__"]
 
-
-def __getattr__(name: str):
-    if name in _EXPORTS:
-        return getattr(importlib.import_module(_EXPORTS[name]), name)
-    raise AttributeError(f"module 'obdeect.propagation' has no attribute {name!r}")
+__getattr__ = lazy_exports("obdeect.propagation", _EXPORTS)

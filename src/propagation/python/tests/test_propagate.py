@@ -1,159 +1,21 @@
 """Atmosphere stage through the Python API and the obdeect propagation run executable."""
 
-import io
-import struct
 import subprocess
 import tempfile
 from pathlib import Path
 
 import numpy as np
 import obdeect.propagation as obdeect_propagation
+import obdeect.stream as obdeect_stream
 import pytest
-from obdeect.stream.cli import program_path
-
-try:
-    import obdeect.stream as obdeect_stream
-except ImportError:
-    obdeect_stream = None
-
-# obdeect stream's own Reader and Writer are used when importable; the local codec below is only a
-# fallback. TODO: remove the local codec once obdeect stream >= 0.1 is on PyPI.
-USE_GSTRICKD_CODEC = all(hasattr(obdeect_stream, name) for name in ("Reader", "Writer"))
+from obdeect.stream.cli import find_program
 
 DATA = Path(__file__).resolve().parents[2] / "cpp" / "tests" / "data"
 TABLE_PATH = DATA / "atm_trans_2000_1_10_0_0_2000.dat"
 SITE_M = 2000.0
-MAGIC = 0x52545347
-RECORD_TYPES = {
-    "stream": 1,
-    "run": 2,
-    "event": 3,
-    "telescope": 4,
-    "photons": 5,
-    "telescope_end": 6,
-    "event_end": 7,
-    "run_end": 8,
-    "blob": 9,
-    "efficiency_status": 10,
-    "stream_end": 15,
-}
-NAMES = {value: key for key, value in RECORD_TYPES.items()}
-COLUMNS = ["x", "y", "z", "cx", "cy", "cz", "t", "zem", "w", "wavelength", "p"]
 
 
-# Local writer and reader of the photon stream format (docs/format.md of obdeect stream);
-# fallback only.
-def _metadata(values):
-    out = [struct.pack("<I", len(values))]
-    for key, value in values.items():
-        encoded = key.encode()
-        out.append(struct.pack("<H", len(encoded)) + encoded)
-        if isinstance(value, int):
-            out.append(struct.pack("<Bq", 1, value))
-        elif isinstance(value, float):
-            out.append(struct.pack("<Bd", 2, value))
-        elif isinstance(value, str):
-            raw = value.encode()
-            out.append(struct.pack("<BI", 3, len(raw)) + raw)
-        else:
-            array = np.asarray(value, dtype="<f8")
-            out.append(struct.pack("<BI", 4, array.size) + array.tobytes())
-    return b"".join(out)
-
-
-def _record(kind, payload):
-    return struct.pack("<IHHQ", MAGIC, RECORD_TYPES[kind], 0, len(payload)) + payload
-
-
-class _LocalStreamWriter:
-    def __init__(self):
-        self.buffer = io.BytesIO()
-        self.buffer.write(
-            _record(
-                "stream",
-                _metadata({"format_major": 1, "format_minor": 0, "producer": "test"}),
-            )
-        )
-
-    def metadata(self, kind, values=None):
-        self.buffer.write(_record(kind, _metadata(values or {})))
-
-    def photons(self, telescope_id, frame, columns, first_index=0):
-        rows = len(next(iter(columns.values())))
-        mask = sum(1 << COLUMNS.index(name) for name in columns)
-        header = struct.pack("<IIIIQ", telescope_id, frame, mask, rows, first_index)
-        body = b"".join(
-            np.asarray(columns[name], dtype="<f4").tobytes() for name in COLUMNS if name in columns
-        )
-        self.buffer.write(_record("photons", header + body))
-
-    def getvalue(self):
-        self.buffer.write(_record("stream_end", b""))
-        return self.buffer.getvalue()
-
-
-def _read_records_local(data):
-    records = []
-    pos = 0
-    while pos < len(data):
-        magic, kind, _, length = struct.unpack_from("<IHHQ", data, pos)
-        assert magic == MAGIC
-        payload = data[pos + 16 : pos + 16 + length]
-        pos += 16 + length
-        name = NAMES[kind]
-        if name == "stream_end":
-            break
-        if name == "photons":
-            telescope_id, frame, mask, rows, first_index = struct.unpack_from("<IIIIQ", payload)
-            offset = 24
-            columns = {}
-            for bit, column in enumerate(COLUMNS):
-                if mask >> bit & 1:
-                    columns[column] = np.frombuffer(payload, "<f4", rows, offset)
-                    offset += 4 * rows
-            records.append({
-                "type": name,
-                "telescope_id": telescope_id,
-                "frame": frame,
-                "first_index": first_index,
-                "columns": columns,
-            })
-        elif name in ("blob", "stream"):
-            records.append({"type": name})
-        else:
-            records.append({"type": name, "metadata": _decode_metadata(payload)})
-    return records
-
-
-def _decode_metadata(payload):
-    (count,) = struct.unpack_from("<I", payload, 0)
-    pos = 4
-    values = {}
-    for _ in range(count):
-        (key_size,) = struct.unpack_from("<H", payload, pos)
-        key = payload[pos + 2 : pos + 2 + key_size].decode()
-        pos += 2 + key_size
-        (kind,) = struct.unpack_from("<B", payload, pos)
-        pos += 1
-        if kind == 1:
-            (value,) = struct.unpack_from("<q", payload, pos)
-            pos += 8
-        elif kind == 2:
-            (value,) = struct.unpack_from("<d", payload, pos)
-            pos += 8
-        elif kind == 3:
-            (size,) = struct.unpack_from("<I", payload, pos)
-            value = payload[pos + 4 : pos + 4 + size].decode()
-            pos += 4 + size
-        else:
-            (size,) = struct.unpack_from("<I", payload, pos)
-            value = np.frombuffer(payload, "<f8", size, pos + 4).tolist()
-            pos += 4 + 8 * size
-        values[key] = value
-    return values
-
-
-class _GstrickdStreamWriter:
+class StreamWriter:
     """Writes through obdeect.stream.Writer into a temporary file; getvalue() returns its bytes."""
 
     def __init__(self):
@@ -176,25 +38,18 @@ class _GstrickdStreamWriter:
             self._directory.cleanup()
 
 
-def _program():
-    try:
-        return program_path("obdeect.propagation", "obdeect-propagation-run")
-    except FileNotFoundError:
-        return ""
-
-
-def _read_records_gstrickd(data):
+def read_records(data):
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "stream.ps"
         path.write_bytes(data)
         return list(obdeect_stream.Reader(str(path)))
 
 
-StreamWriter = _GstrickdStreamWriter if USE_GSTRICKD_CODEC else _LocalStreamWriter
-
-
-def read_records(data):
-    return _read_records_gstrickd(data) if USE_GSTRICKD_CODEC else _read_records_local(data)
+def _executable():
+    exe = find_program("obdeect.propagation", "obdeect-propagation-run")
+    if exe is None:
+        pytest.skip("obdeect propagation run not installed")
+    return exe
 
 
 def ground_stream(n, seed, telescopes=(1, 2), chunk_rows=65536):
@@ -332,9 +187,7 @@ def test_input_ledger_showing_atmosphere_applied_is_rejected(tmp_path):
 
 
 def test_executable_matches_api(tmp_path, envelope_files):
-    exe = _program()
-    if not Path(exe).exists():
-        pytest.skip("obdeect propagation run not installed")
+    exe = _executable()
     source = tmp_path / "in.ps"
     source.write_bytes(ground_stream(5000, seed=2, chunk_rows=2048))
     api_out = tmp_path / "api.ps"
@@ -514,9 +367,7 @@ def test_scattering_rejects_invalid_settings(tmp_path):
 
 
 def test_executable_matches_api_with_scattering(tmp_path):
-    exe = _program()
-    if not Path(exe).exists():
-        pytest.skip("obdeect propagation run not installed")
+    exe = _executable()
     source = tmp_path / "beam.ps"
     source.write_bytes(beam_stream(300))
     api_out = tmp_path / "api.ps"
@@ -570,9 +421,7 @@ def test_rejects_identical_paths(tmp_path):
 
 
 def test_executable_rejects_identical_paths(tmp_path):
-    exe = _program()
-    if not Path(exe).exists():
-        pytest.skip("obdeect propagation run not installed")
+    exe = _executable()
     source = tmp_path / "same.ps"
     original = ground_stream(100, seed=3, chunk_rows=64)
     source.write_bytes(original)
@@ -593,13 +442,6 @@ def test_executable_rejects_identical_paths(tmp_path):
     assert result.returncode == 2, result.stderr
     assert "same file" in result.stderr
     assert source.read_bytes() == original
-
-
-def _executable():
-    exe = _program()
-    if not Path(exe).exists():
-        pytest.skip("obdeect propagation run not installed")
-    return exe
 
 
 def _photon_block(records, telescope, name):

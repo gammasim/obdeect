@@ -1,12 +1,8 @@
 """obdeect: optical ray tracing for imaging atmospheric Cherenkov telescopes."""
 
-import importlib
-from importlib.metadata import PackageNotFoundError, version
+from obdeect.stream._package import lazy_exports, package_version
 
-try:
-    __version__ = version("obdeect-ray-tracing")
-except PackageNotFoundError:
-    __version__ = "0.0.0"
+__version__ = package_version("obdeect-ray-tracing")
 
 # Imported on first use, so that reading the version needs no NumPy.
 _EXPORTS = {
@@ -19,8 +15,4 @@ _EXPORTS = {
 }
 __all__ = list(_EXPORTS)
 
-
-def __getattr__(name: str):
-    if name in _EXPORTS:
-        return getattr(importlib.import_module(_EXPORTS[name]), name)
-    raise AttributeError(f"module 'obdeect' has no attribute {name!r}")
+__getattr__ = lazy_exports("obdeect", _EXPORTS)

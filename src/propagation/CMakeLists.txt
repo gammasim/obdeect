@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(obdeect_propagation VERSION 0.1.0 LANGUAGES CXX)
+project(obdeect_propagation LANGUAGES CXX)
 
 option(OBDEECT_PROPAGATION_BUILD_TESTING "Build the C++ tests" ON)
 if(DEFINED SKBUILD_PLATLIB_DIR)
@@ -73,6 +73,8 @@ if(OBDEECT_PROPAGATION_BUILD_TESTING)
                     propagator scattering stream_contract physics)
     add_executable(obdeect_propagation_test_${test_name} cpp/tests/test_${test_name}.cpp)
     target_link_libraries(obdeect_propagation_test_${test_name} PRIVATE obdeect_propagation_core)
+    # check.hpp lives with the stream tests; tests are built from the repository only, never from an sdist.
+    target_include_directories(obdeect_propagation_test_${test_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../stream/cpp/tests)
     # Reference data: cpp/tests/data (see test_transmission.cpp).
     target_compile_definitions(obdeect_propagation_test_${test_name}
                                PRIVATE OBDEECT_PROPAGATION_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/cpp/tests/data")

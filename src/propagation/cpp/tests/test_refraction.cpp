@@ -3,6 +3,7 @@
 #include "obdeect/propagation/profile.hpp"
 #include "obdeect/propagation/refraction.hpp"
 #include "obdeect/propagation/timing.hpp"
+#include "obdeect/stream/constants.hpp"
 
 #include <array>
 #include <cmath>
@@ -16,7 +17,7 @@
 
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
+constexpr double kPi = obdeect::stream::pi;
 constexpr double kObservationM = 2180.;
 
 struct Photon {

@@ -1,8 +1,5 @@
 """obdeect sources: artificial light sources for Cherenkov-telescope simulations."""
 
-from importlib.metadata import PackageNotFoundError, version
+from obdeect.stream._package import package_version
 
-try:
-    __version__ = version("obdeect-sources")
-except PackageNotFoundError:
-    __version__ = "0.0.0"
+__version__ = package_version("obdeect-sources")

@@ -2,6 +2,7 @@
 #include "program_stream.hpp"
 
 #include "obdeect/sources/programs/flasher.hpp"
+#include "obdeect/stream/constants.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -338,7 +339,7 @@ void dish_camera_frame() {
     }
   }
 
-  const double speed = 0.299792458; // m/ns
+  const double speed = obdeect::stream::speed_of_light_m_per_ns; // m/ns
   for (std::size_t i = 0; i < a.rows.size(); ++i) {
     const Row &s = a.rows[i];
     const Row &c = b.rows[i];

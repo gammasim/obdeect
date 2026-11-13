@@ -8,6 +8,7 @@
 #include "obdeect/propagation/refraction.hpp"
 #include "obdeect/propagation/timing.hpp"
 #include "obdeect/propagation/transmission.hpp"
+#include "obdeect/stream/constants.hpp"
 
 #include <cmath>
 #include <functional>
@@ -22,7 +23,7 @@
 
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
+constexpr double kPi = obdeect::stream::pi;
 constexpr double kScaleHeightKm = 8.0;
 constexpr double kNu0 = 2.9e-4;
 constexpr double kRho0 = 1.25e-3;

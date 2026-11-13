@@ -2,6 +2,7 @@
 
 #include "obdeect/ray_tracing/json.hpp"
 #include "obdeect/ray_tracing/model.hpp"
+#include "obdeect/stream/constants.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -223,7 +224,7 @@ inline Asphere asphere(const Node &node, std::uint32_t id) {
 }
 
 inline Segment segment(const Node &node) {
-  constexpr double degree = 3.14159265358979323846 / 180.0;
+  constexpr double degree = obdeect::stream::pi / 180.0;
   Segment s;
   const auto shape = node["shape"].string();
   if (shape == "annular_sector") {

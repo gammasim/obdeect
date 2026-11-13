@@ -48,6 +48,7 @@
 // an error, unless it is listed in `allow_pending`. Streams without an efficiency status are
 // converted as before.
 
+#include "obdeect/stream/constants.hpp"
 #include "obdeect/stream/corsika.hpp"
 #include "obdeect/stream/eventio.hpp"
 #include "obdeect/stream/format.hpp"
@@ -273,7 +274,6 @@ inline void telescope_to_bypass_convention(PhotonChunk &chunk, double observatio
   if (!std::isfinite(observation_level_m)) {
     throw std::invalid_argument("observation level must be finite");
   }
-  constexpr double speed_of_light_m_per_ns = 0.299792458;
   const std::size_t n = chunk.rows();
   const std::vector<float> &x = chunk[Column::x];
   const std::vector<float> &y = chunk[Column::y];

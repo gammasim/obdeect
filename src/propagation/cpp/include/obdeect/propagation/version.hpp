@@ -1,10 +1,13 @@
 #pragma once
 
+// Version of the C++ core: the obdeect stream package version (one version for all components).
+
+#include "obdeect/stream/version.hpp"
+
 namespace obdeect::propagation {
 
-// Version of the C++ core; the Python package version comes from the git tag.
-inline constexpr int version_major = 0;
-inline constexpr int version_minor = 1;
-inline constexpr int version_patch = 0;
+inline constexpr int version_major = obdeect::stream::version_major;
+inline constexpr int version_minor = obdeect::stream::version_minor;
+inline constexpr int version_patch = obdeect::stream::version_patch;
 
 } // namespace obdeect::propagation

@@ -529,12 +529,6 @@ def test_records_pass_through(model, tmp_path, obdeect_stream):
     assert event["energy_gev"] == 1.5
 
 
-def test_stream_without_gstrickd_is_a_clear_error(model, tmp_path, monkeypatch):
-    monkeypatch.setitem(__import__("sys").modules, "obdeect.stream", None)
-    with pytest.raises(ModelError, match="obdeect-stream"):
-        trace_stream(model, tmp_path / "x.ps", tmp_path / "y.ps", seed=SEED)
-
-
 def test_cli_trace_stream(model, tmp_path, obdeect_stream, capsys):
     model_path = tmp_path / "model.json"
     model.save(model_path)

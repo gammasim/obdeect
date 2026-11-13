@@ -22,6 +22,7 @@
 #include "obdeect/ray_tracing/model_json.hpp"
 #include "obdeect/ray_tracing/source.hpp"
 #include "obdeect/ray_tracing/trace.hpp"
+#include "obdeect/stream/constants.hpp"
 
 #include <algorithm>
 #include <array>
@@ -81,7 +82,7 @@ int write_command(const char *model_path, const char *out_path) {
   std::vector<char> buffer;
   for (const double distance : kDistancesM)
     for (const double degrees : kOffAxisDeg) {
-      const double theta = degrees * 3.14159265358979323846 / 180.0;
+      const double theta = degrees * obdeect::stream::pi / 180.0;
       const PointSource source{
           {std::sin(theta), 0.0, std::cos(theta)}, distance, radius, disk_z, start_z, 400.0};
       buffer.clear();

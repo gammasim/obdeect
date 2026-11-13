@@ -3,7 +3,7 @@
 Ground-frame (G) or telescope-frame (T) photons go in; camera-frame (C) photons
 come out. Records pass through unchanged, except that telescopes not selected
 are dropped and the efficiency ledger is updated. The stream component
-(obdeect-stream) is always installed and is imported only when a stream is traced.
+(obdeect-stream) is a required dependency; its frame and chunk constants are used here.
 The frames and the ledger rules are described in docs/photon-stream.md.
 """
 
@@ -15,14 +15,18 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
+import obdeect.stream as obdeect_stream
 from obdeect.ray_tracing import __version__
 from obdeect.ray_tracing.formats import ModelError
 from obdeect.ray_tracing.model import OpticalModel, ThreadPool, _obscurer_support
+from obdeect.stream.stage import EFFICIENCY_STATUS_STATES
+from obdeect.stream.stream import FRAMES
 
-FRAME_GROUND = 1
-FRAME_TELESCOPE = 2
+FRAME_GROUND = FRAMES["ground"]
+FRAME_TELESCOPE = FRAMES["telescope"]
+FRAME_CAMERA = FRAMES["camera"]
 # Largest photon chunk written (photon stream format limit).
-MAX_CHUNK_ROWS = 2**16
+MAX_CHUNK_ROWS = obdeect_stream.max_chunk_rows
 SPEED_OF_LIGHT_M_PER_NS = 0.299792458
 # Margin above the highest incoming obscurer for the input plane [m] (as simtools).
 INPUT_PLANE_MARGIN_M = 1.0
@@ -30,25 +34,13 @@ INPUT_PLANE_MARGIN_M = 1.0
 CZ_TOLERANCE = 1e-5
 # Ledger factors that the optical model applies, in full, in its trace.
 OWN_FACTORS = ("mirror_reflectivity", "telescope_transmission")
-LEDGER_STATES = ("applied", "envelope", "pending")
+LEDGER_STATES = EFFICIENCY_STATUS_STATES
 # Parts of the telescope transmission: all of it, or t(theta) / t0 only.
 TRANSMISSION_PARTS = ("full", "angular")
 # Ledger factor left for a downstream module when only the angular part is applied.
 CONSTANT_FACTOR = "telescope_transmission_constant"
 # Run-record keys with the telescope pointing [rad]: zenith and azimuth in the array frame.
 RUN_POINTING_KEYS = ("telescope_pointing_zenith_rad", "telescope_pointing_azimuth_rad")
-
-
-def _import_gstrickd():
-    try:
-        import obdeect.stream as obdeect_stream
-    except ModuleNotFoundError as error:
-        if error.name != "obdeect.stream":
-            raise
-        raise ModelError(
-            "trace-stream needs the obdeect stream component: pip install obdeect-stream"
-        ) from error
-    return obdeect_stream
 
 
 def _rotation(alpha: float, beta: float) -> np.ndarray:
@@ -395,7 +387,7 @@ class _Tracer:
         kept = self.telescopes is None or telescope_id in self.telescopes
         self.telescope = _Telescope(telescope_id, kept)
         if kept:
-            self.writer.write("telescope", {**metadata, "frame": 3})
+            self.writer.write("telescope", {**metadata, "frame": FRAME_CAMERA})
 
     def _telescope_end(self, metadata: Mapping[str, Any]) -> None:
         telescope = self.telescope
@@ -622,7 +614,6 @@ def trace_stream(
         or a ledger that says a factor is already applied, and for an unknown
         telescope_transmission or "angular" with a model that has none.
     """
-    obdeect_stream = _import_gstrickd()
     transmission = _transmission(model, telescope_transmission)
     if seed < 0:
         raise ModelError("seed must not be negative")

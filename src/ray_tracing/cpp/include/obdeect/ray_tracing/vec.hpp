@@ -1,11 +1,13 @@
 #pragma once
 
+#include "obdeect/stream/constants.hpp"
+
 #include <cmath>
 
 namespace obdeect::ray_tracing {
 
 // Speed of light in vacuum, metres per nanosecond.
-constexpr double kSpeedOfLightMPerNs = 0.299792458;
+inline constexpr double kSpeedOfLightMPerNs = obdeect::stream::speed_of_light_m_per_ns;
 // Smallest accepted propagation distance; rejects self-intersections at the
 // point a ray left.
 constexpr double kMinDistanceM = 1e-9;

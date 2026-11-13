@@ -3,15 +3,15 @@
 // Three-component vectors and the orthonormal basis used for azimuths. Templated on the scalar
 // type so that kernels built on them can later run on other scalar types.
 
+#include "obdeect/stream/constants.hpp"
+
 #include <cmath>
 
 namespace obdeect::sources {
 
-inline constexpr double pi = 3.14159265358979323846;
-inline constexpr double two_pi = 2.0 * pi;
-
-// Speed of light in vacuum [m/ns].
-inline constexpr double speed_of_light_m_per_ns = 0.299792458;
+inline constexpr double pi = obdeect::stream::pi;
+inline constexpr double two_pi = obdeect::stream::two_pi;
+inline constexpr double speed_of_light_m_per_ns = obdeect::stream::speed_of_light_m_per_ns;
 
 template <class T> struct BasicVec3 {
   T x{}, y{}, z{};

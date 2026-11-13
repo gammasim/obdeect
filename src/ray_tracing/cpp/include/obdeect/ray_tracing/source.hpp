@@ -2,6 +2,7 @@
 
 #include "obdeect/ray_tracing/random.hpp"
 #include "obdeect/ray_tracing/vec.hpp"
+#include "obdeect/stream/constants.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -144,7 +145,7 @@ struct Emitter {
     const double per_steradian =
         intensity.maximum() / (6.283185307179586476925 * intensity.integral());
     const double h = disk_distance_m();
-    return per_steradian * 3.141592653589793238463 * disk_radius_m * disk_radius_m / (h * h);
+    return per_steradian * obdeect::stream::pi * disk_radius_m * disk_radius_m / (h * h);
   }
 };
 

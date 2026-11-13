@@ -49,6 +49,14 @@ def program_path(package: str, program: str) -> str:
     return str(path)
 
 
+def find_program(package: str, program: str) -> str | None:
+    """Path of a native program in ``<package>/bin``, or None if it is not installed."""
+    try:
+        return program_path(package, program)
+    except FileNotFoundError:
+        return None
+
+
 def run_command(group: Group, name: str, command: Command, argv: list[str]) -> int:
     prog = f"obdeect {name}"
     if command.program is not None:

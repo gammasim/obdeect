@@ -23,7 +23,7 @@ def _expected_format_major():
     return int(match.group(1))
 
 
-def test_gstrickd_format_major_matches_dlufd():
+def test_stream_format_major_matches_dlufd():
     obdeect_stream = pytest.importorskip("obdeect.stream")
     if not hasattr(obdeect_stream, "format_major"):
         pytest.skip("installed obdeect stream has no format_major")

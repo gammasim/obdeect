@@ -5,15 +5,7 @@ import subprocess
 import numpy as np
 import obdeect.stream as obdeect_stream
 import pytest
-from obdeect.stream.cli import program_path
-
-
-def _executable(name):
-    """Native program installed in the component package; None if absent."""
-    try:
-        return program_path("obdeect." + name.split("-")[1], name)
-    except FileNotFoundError:
-        return None
+from obdeect.stream.cli import find_program
 
 
 def _write_stream(path, weight=1.0, atmosphere="applied", wavelength=400.0):
@@ -118,7 +110,7 @@ def test_expand_bunches(tmp_path):
 
 
 @pytest.mark.skipif(
-    _executable("obdeect-stream-to-grisu") is None,
+    find_program("obdeect.stream", "obdeect-stream-to-grisu") is None,
     reason="obdeect stream to-grisu is not installed",
 )
 def test_cli_matches_python(tmp_path):
@@ -126,7 +118,7 @@ def test_cli_matches_python(tmp_path):
     _write_stream(stream)
     obdeect_stream.stream_to_grisu(stream, tmp_path / "py.grisu")
     result = subprocess.run(
-        [_executable("obdeect-stream-to-grisu"), str(stream)],
+        [find_program("obdeect.stream", "obdeect-stream-to-grisu"), str(stream)],
         capture_output=True,
         check=True,
         text=True,
@@ -135,7 +127,7 @@ def test_cli_matches_python(tmp_path):
     assert _body(result.stdout) == _body((tmp_path / "py.grisu").read_text())
     failure = subprocess.run(
         [
-            _executable("obdeect-stream-to-grisu"),
+            find_program("obdeect.stream", "obdeect-stream-to-grisu"),
             "--telescope-config",
             str(tmp_path / "missing"),
             str(stream),

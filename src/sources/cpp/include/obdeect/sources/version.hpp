@@ -1,10 +1,13 @@
 #pragma once
 
+// Version of the C++ core: the obdeect stream package version (one version for all components).
+
+#include "obdeect/stream/version.hpp"
+
 namespace obdeect::sources {
 
-// Version of the C++ core; equals the project version in CMakeLists.txt.
-inline constexpr int version_major = 0;
-inline constexpr int version_minor = 1;
-inline constexpr int version_patch = 0;
+inline constexpr int version_major = obdeect::stream::version_major;
+inline constexpr int version_minor = obdeect::stream::version_minor;
+inline constexpr int version_patch = obdeect::stream::version_patch;
 
 } // namespace obdeect::sources

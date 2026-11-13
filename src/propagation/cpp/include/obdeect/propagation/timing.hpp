@@ -3,6 +3,7 @@
 // Light travel time and the refractive index at the observation level. See docs/refraction.md.
 
 #include "obdeect/propagation/profile.hpp"
+#include "obdeect/stream/constants.hpp"
 
 #include <cmath>
 #include <cstddef>
@@ -11,7 +12,7 @@
 
 namespace obdeect::propagation {
 
-inline constexpr double speed_of_light_m_per_ns = 0.299792458;
+inline constexpr double speed_of_light_m_per_ns = obdeect::stream::speed_of_light_m_per_ns;
 
 namespace detail {
 

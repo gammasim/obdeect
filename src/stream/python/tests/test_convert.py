@@ -8,17 +8,9 @@ from pathlib import Path
 import numpy as np
 import obdeect.stream as obdeect_stream
 import pytest
-from obdeect.stream.cli import program_path
+from obdeect.stream.cli import find_program
 
 COLUMNS = ("x", "y", "cx", "cy", "t", "w", "zem", "wavelength")
-
-
-def _executable(name):
-    """Native program installed in the component package; None if absent."""
-    try:
-        return program_path("obdeect." + name.split("-")[1], name)
-    except FileNotFoundError:
-        return None
 
 
 def _photons(rows, telescope_offset=0.0):
@@ -329,8 +321,8 @@ def test_rejects_truncated_stream(tmp_path):
 
 
 @pytest.mark.skipif(
-    _executable("obdeect-stream-to-simtel") is None
-    or _executable("obdeect-stream-from-corsika") is None,
+    find_program("obdeect.stream", "obdeect-stream-to-simtel") is None
+    or find_program("obdeect.stream", "obdeect-stream-from-corsika") is None,
     reason="obdeect stream from-corsika and obdeect stream to-simtel are not installed",
 )
 def test_cli_matches_python_api(tmp_path):
@@ -343,7 +335,7 @@ def test_cli_matches_python_api(tmp_path):
     obdeect_stream.stream_to_simtel(stream, api_out, {2: (1, 0.0)})
     subprocess.run(
         [
-            _executable("obdeect-stream-to-simtel"),
+            find_program("obdeect.stream", "obdeect-stream-to-simtel"),
             "--camera-map",
             str(camera),
             "-o",
@@ -359,7 +351,7 @@ def test_cli_matches_python_api(tmp_path):
     # pipe it back.
     with cli_out.open("rb") as source:
         piped = subprocess.run(
-            [_executable("obdeect-stream-from-corsika")],
+            [find_program("obdeect.stream", "obdeect-stream-from-corsika")],
             stdin=source,
             check=True,
             capture_output=True,
@@ -372,7 +364,7 @@ def test_cli_matches_python_api(tmp_path):
 
 
 @pytest.mark.skipif(
-    _executable("obdeect-stream-to-simtel") is None,
+    find_program("obdeect.stream", "obdeect-stream-to-simtel") is None,
     reason="obdeect stream to-simtel is not installed",
 )
 def test_cli_allow_pending_option(tmp_path):
@@ -382,7 +374,7 @@ def test_cli_allow_pending_option(tmp_path):
     constant = _efficiency_status("telescope_transmission_constant", "pending")
     _write_light_source_stream(stream, telescope_efficiency_status=constant)
     base = [
-        _executable("obdeect-stream-to-simtel"),
+        find_program("obdeect.stream", "obdeect-stream-to-simtel"),
         "--camera-map",
         str(camera),
         "-o",
@@ -463,7 +455,7 @@ sys.exit(1)
 
 
 @pytest.mark.skipif(
-    _executable("obdeect-stream-to-simtel") is None,
+    find_program("obdeect.stream", "obdeect-stream-to-simtel") is None,
     reason="obdeect stream to-simtel is not installed",
 )
 def test_cli_scaled_factor_option(tmp_path):
@@ -476,7 +468,13 @@ def test_cli_scaled_factor_option(tmp_path):
         telescope_efficiency_status=_efficiency_status("qe", "envelope"),
     )
     out = tmp_path / "ok.simtel"
-    base = [_executable("obdeect-stream-to-simtel"), "--camera-map", str(camera), "-o", str(out)]
+    base = [
+        find_program("obdeect.stream", "obdeect-stream-to-simtel"),
+        "--camera-map",
+        str(camera),
+        "-o",
+        str(out),
+    ]
     failed = subprocess.run([*base, str(stream)], capture_output=True)
     assert failed.returncode != 0
     assert b"--scaled-factor qe" in failed.stderr
