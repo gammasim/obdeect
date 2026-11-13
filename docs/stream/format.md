@@ -75,7 +75,7 @@ Event keys (from CORSIKA EVTH and TELOFF): `event_number`,
 | frame | u32 | 0 = sky, 1 = ground (G), 2 = telescope (T), 3 = camera (C) |
 | columns | u32 | bit mask of present columns (table below) |
 | rows | u32 | number of photons, at most 2^16 |
-| first_index | u64 | index of the first row among all photons of this telescope and event |
+| first_index | u64 | index of the first row among all photons of this telescope and event; continues across array reuses (same `telescope_id`, different `array_index`) |
 | data | f32 | one contiguous column of `rows` values per set bit, in bit order |
 
 | Bit | Column | Meaning |

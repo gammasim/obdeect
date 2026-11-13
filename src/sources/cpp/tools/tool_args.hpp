@@ -51,20 +51,23 @@ private:
   std::unique_ptr<std::ofstream> file_;
 };
 
+// Calls f, which reads an input file: malformed contents are a runtime failure (exit status 1),
+// not a usage error, so std::invalid_argument from the parser becomes std::runtime_error.
+template <class F> auto read_input(F &&f) -> decltype(f()) {
+  try {
+    return f();
+  } catch (const std::invalid_argument &error) {
+    throw std::runtime_error(error.what());
+  }
+}
+
 // Runs a tool body (stream::cli::run_tool). Option validation in the sources core throws
 // std::invalid_argument; here it is a usage error (exit status 2).
 template <class Body>
 int run_tool(const std::string &prefix, int argc, char **argv, Body body,
              const std::function<void()> &usage = {}) {
-  return stream::cli::run_tool(prefix, stream::cli::core_version(), argc, argv, usage, [&] {
-    try {
-      return body();
-    } catch (const UsageError &) {
-      throw;
-    } catch (const std::invalid_argument &error) {
-      throw UsageError(error.what());
-    }
-  });
+  return stream::cli::run_tool(prefix, stream::cli::core_version(), argc, argv, usage,
+                               std::forward<Body>(body));
 }
 
 } // namespace obdeect::sources::cli

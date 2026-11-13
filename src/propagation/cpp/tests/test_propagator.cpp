@@ -1072,6 +1072,39 @@ double expected_acceptance(const obdeect::propagation::TransmissionTable &table,
 
 // Telescope 1 gets the default path (28 m), telescope 2 its override (0 m). The acceptance p of
 // every output row matches the formula with that telescope's path, and the ledger lists both.
+// A CORSIKA array reuse is another record of the same telescope in the event: the output
+// first_index continues across the records and starts again at 0 in the next event.
+void test_output_index_continues_across_array_reuses() {
+  const std::size_t n = 100;
+  const auto input = make_stream([&](obdeect::stream::Writer &writer) {
+    writer.write_metadata(RecordType::run, run_keys(0));
+    for (const std::int64_t event : {7, 8}) {
+      auto event_meta = event_keys();
+      event_meta["event_number"] = i64(event);
+      writer.write_metadata(RecordType::event, event_meta);
+      for (const std::int64_t array :
+           event == 7 ? std::vector<std::int64_t>{0, 1} : std::vector<std::int64_t>{0}) {
+        auto telescope = telescope_keys(1, Frame::ground);
+        telescope["array_index"] = i64(array);
+        writer.write_metadata(RecordType::telescope, telescope);
+        writer.write_chunk(make_chunk(Frame::ground, 1, array * n, n, ground_row));
+        writer.write_metadata(RecordType::telescope_end, telescope_end_keys(1));
+      }
+      writer.write_metadata(RecordType::event_end, {});
+    }
+    writer.write_metadata(RecordType::run_end, {});
+  });
+  auto config = config_for(zero_table());
+  config.mode = obdeect::propagation::OutputMode::weighted;
+  std::vector<std::uint64_t> firsts;
+  for (const auto &record : records_of(propagate(input, config).bytes)) {
+    if (record.type == RecordType::photons) {
+      firsts.push_back(record.chunk.first_index);
+    }
+  }
+  CHECK(firsts == std::vector<std::uint64_t>({0, n, 0}));
+}
+
 void test_pathlen_per_telescope() {
   const auto table = real_table();
   const auto input = ground_stream(3000, 3000);
@@ -1225,6 +1258,7 @@ void test_pathlen_rejects() {
 
 int main() {
   return run_checks([] {
+    test_output_index_continues_across_array_reuses();
     test_pathlen_per_telescope();
     test_scattered_pathlen();
     test_pathlen_rejects();
