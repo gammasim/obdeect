@@ -6,12 +6,12 @@ requires = [ "scikit-build-core>=0.11", "setuptools-scm>=8" ]
 name = "obdeect"
 description = "Cherenkov-telescope light simulation: all obdeect components"
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "BSD-3-Clause"
+license-files = [ "LICENSE" ]
 authors = [ { name = "obdeect contributors" } ]
 requires-python = ">=3.14"
 classifiers = [
   "Development Status :: 3 - Alpha",
-  "License :: OSI Approved :: BSD License",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.14",
   "Programming Language :: Python :: 3.15",
@@ -19,7 +19,6 @@ classifiers = [
 dynamic = [ "dependencies", "version" ]
 
 [tool.setuptools_scm]
-root = ".."
 fallback_version = "0.1.0"
 
 [tool.scikit-build]
@@ -36,5 +35,34 @@ metadata.dependencies.result = [
 ]
 metadata.version.provider = "scikit_build_core.metadata.setuptools_scm"
 
+# Settings shared by all components (src/*/pyproject.toml).
+
+[tool.cibuildwheel]
+# Oldest macOS release supported by the binary wheels.
+macos.environment = { MACOSX_DEPLOYMENT_TARGET = "13.3" }
+# The plot tests need matplotlib, which has no musllinux wheels (a source build
+# needs network downloads); they are skipped there.
+test-requires = [ "matplotlib", "pytest" ]
+overrides = [ { select = "*-musllinux_*", test-requires = [ "pytest" ] } ]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+preview = true
+lint.select = [ "E", "F", "I", "UP" ]
+
 [tool.pyproject-fmt]
 max_supported_python = "3.15"
+
+[tool.towncrier]
+directory = "docs/changes"
+filename = "CHANGELOG.md"
+start_string = "<!-- towncrier release notes start -->\n"
+title_format = "## [{version}] - {project_date}"
+issue_format = "#{issue}"
+underlines = [ "", "", "" ]
+type = [
+  { directory = "feature", name = "Added", showcontent = true },
+  { directory = "bugfix", name = "Fixed", showcontent = true },
+  { directory = "maintenance", name = "Maintenance", showcontent = true },
+]

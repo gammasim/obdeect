@@ -1,6 +1,6 @@
 ---
 name: Build and publish obdeect
-# One tag vX.Y.Z releases all components and the obdeect meta-package at version X.Y.Z.
+# One tag vX.Y.Z releases all components and the obdeect package at version X.Y.Z.
 
 on:
   pull_request:
@@ -9,7 +9,7 @@ on:
       - "src/*/python/**"
       - "src/*/CMakeLists.txt"
       - "src/*/pyproject.toml"
-      - "meta/**"
+      - "pyproject.toml"
       - ".github/workflows/pypi.yml"
   push:
     tags:
@@ -54,9 +54,11 @@ jobs:
           # PyPI yet: install it from the same checkout before the tests.
           CIBW_BEFORE_TEST: >-
             ${{ matrix.component != 'stream' && 'pip install {project}/src/stream' || '' }}
-          CIBW_TEST_REQUIRES: "pytest matplotlib"
           CIBW_TEST_COMMAND: python -m pytest {package}/python/tests -q
-        run: python -m cibuildwheel src/${{ matrix.component }} --output-dir wheelhouse
+        # Shared settings: [tool.cibuildwheel] in the root pyproject.toml.
+        run: >-
+          python -m cibuildwheel src/${{ matrix.component }} --config-file pyproject.toml
+          --output-dir wheelhouse
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: wheels-${{ matrix.component }}-${{ matrix.os }}
@@ -72,13 +74,13 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7
         with:
           python-version: "3.14"
-      - name: Build source distributions and the meta-package
+      - name: Build the component source distributions and the obdeect package
         run: |
           python -m pip install --upgrade build
           for component in stream propagation sources ray_tracing; do
             python -m build --sdist --outdir dist "src/${component}"
           done
-          python -m build --outdir dist meta
+          python -m build --outdir dist .
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: sdist
