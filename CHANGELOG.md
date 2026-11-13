@@ -4,6 +4,24 @@ All components are released together with one version (tags `vX.Y.Z`); the secti
 
 <!-- towncrier release notes start -->
 
+## [0.8.0] - 2026-11-13
+
+### Added
+
+- Added `obdeect ray-tracing trace-stream`: traces a photon stream (G or T photons) through an optical model and writes camera-frame (C) photons, applying the mirror-reflectivity and telescope-transmission factors of the efficiency ledger (see photon-stream docs). With `--telescope-transmission angular`, only the angular part t(θ)/t0 is applied and the on-axis value is left as the pending ledger factor `telescope_transmission_constant`. (#36)
+- obdeect now contains the photon stream, atmospheric propagation, light sources and ray tracing as components. Install all of them with `pip install obdeect`, or one by one (`obdeect-stream`, `obdeect-propagation`, `obdeect-sources`, `obdeect-ray-tracing`); run them with one command, `obdeect <component> <command>`. (#37)
+
+### Fixed
+
+- Orthonormalise the rotation axes of the facet mirror scatter against the normal at the hit point. On curved facets the vertex tangent is not perpendicular to it, which shrank and skewed the scattered-ray width; results with `mirror_reflection_random_angle` change at the 1e-4 level for typical facets. Parse numbers in optical-model files independent of the process locale (`std::from_chars`, or the classic locale where unavailable); a decimal-comma locale no longer truncates `1.5` to `1`. (#35)
+- Ray tracing draws its random numbers with the generator key shared by all components (seed, event, telescope, photon, stream); traced photons differ from earlier releases for the same seed. Photon ids must lie below 2^40. A single-wavelength light source (equal minimum and maximum wavelength) no longer stops `obdeect ray-tracing trace-stream`. (#37)
+
+### Maintenance
+
+- Document the mirror scatter conventions (facet rotations and polynomial-mirror slope perturbations) in the optics page. Compact the columns of `detected_only` results in parallel (the serial copy made it slower than writing every row) and compile with `-fno-math-errno` on GCC and Clang; results are unchanged. Pin all GitHub Actions by commit SHA and update them with Dependabot, take the version from the git tag only (drop the stale CMake version), bring `CITATION.cff` to the released version and test that it matches releases. Run the native tests under ThreadSanitizer and clang-tidy on tests and benchmarks in CI; the benchmark tools no longer let exceptions escape `main`. (#35)
+- One repository, one version and one set of workflows: the gstrickd, dlufd and dlamb repositories are merged here with their history. (#37)
+
+
 ## Ray tracing (released as obdeect up to v0.7.2)
 
 ### [v0.7.2] - 2026-11-06
