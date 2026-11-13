@@ -107,9 +107,10 @@ jobs:
         run: >-
           cmake -S . -B build-tidy -DCMAKE_BUILD_TYPE=Debug -DOBDEECT_STREAM_BUILD_BENCH=ON
           -DOBDEECT_RAY_TRACING_BUILD_BENCH=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+      # The compilation database comes from GCC; clang-tidy ignores GCC-only warning options.
       - name: Run clang-tidy on all components' tests and benchmarks (headers via HeaderFilterRegex)
         run: >-
           find src/stream/cpp/tests src/stream/cpp/bench src/propagation/cpp/tests
           src/sources/cpp/tests src/ray_tracing/cpp/tests src/ray_tracing/cpp/bench
           -name '*.cpp' -print0
-          | xargs -0 clang-tidy -p build-tidy
+          | xargs -0 clang-tidy -p build-tidy --extra-arg=-Wno-unknown-warning-option

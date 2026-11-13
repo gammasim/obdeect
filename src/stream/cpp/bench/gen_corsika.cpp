@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <fstream>
 #include <random>
 #include <string>
@@ -18,7 +19,7 @@ std::vector<float> words273() { return std::vector<float>(273, 0.0F); }
 
 } // namespace
 
-int main(int argc, char **argv) {
+static int run(int argc, char **argv) {
   if (argc < 2) {
     std::fprintf(stderr, "usage: gen_corsika OUTPUT [BUNCHES] [TELESCOPES] [BUNCHES_PER_BLOCK]\n");
     return 2;
@@ -125,4 +126,13 @@ int main(int argc, char **argv) {
               static_cast<unsigned long long>(events), static_cast<unsigned long long>(telescopes),
               static_cast<unsigned long long>(events * per_event));
   return 0;
+}
+
+int main(int argc, char **argv) {
+  try {
+    return run(argc, argv);
+  } catch (const std::exception &error) {
+    std::fprintf(stderr, "gen_corsika: %s\n", error.what());
+    return 1;
+  }
 }

@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -23,7 +24,7 @@ double seconds_since(std::chrono::steady_clock::time_point start) {
 
 } // namespace
 
-int main(int argc, char **argv) {
+static int run(int argc, char **argv) {
   const std::uint64_t photons = argc > 1 ? std::strtoull(argv[1], nullptr, 10) : 100000000ULL;
   const std::filesystem::path path =
       argc > 2 ? std::filesystem::path(argv[2])
@@ -106,4 +107,13 @@ int main(int argc, char **argv) {
   std::printf("read:  %.2f s, %.0f MB/s (read %llu photons, weight sum %.6g)\n", read_seconds,
               mb / read_seconds, static_cast<unsigned long long>(read_photons), weight_sum);
   return read_photons == photons ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+
+int main(int argc, char **argv) {
+  try {
+    return run(argc, argv);
+  } catch (const std::exception &error) {
+    std::fprintf(stderr, "bench_stream: %s\n", error.what());
+    return 1;
+  }
 }

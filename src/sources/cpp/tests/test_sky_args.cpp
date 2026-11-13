@@ -24,6 +24,7 @@ template <class Fn> std::string message_of(Fn fn) {
   } catch (const std::invalid_argument &error) {
     return error.what();
   } catch (...) {
+    return "<other exception>"; // Not the expected std::invalid_argument.
   }
   return "";
 }
