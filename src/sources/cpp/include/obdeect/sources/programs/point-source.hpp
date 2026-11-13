@@ -3,6 +3,7 @@
 // Point light source above the observation level, sky frame (docs/spec/tool-point-source.md).
 
 #include "obdeect/sources/sky_sources.hpp"
+#include "obdeect/stream/telpos.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -12,10 +13,8 @@
 
 namespace obdeect::sources::programs {
 
-// A telescope as listed in a telescope file: position and radius in cm.
-struct TelposCm {
-  double x{}, y{}, z{}, r{};
-};
+using obdeect::stream::cm_to_m;
+using obdeect::stream::TelposCm;
 
 struct XyzlsOptions {
   std::int64_t run_number{1};
@@ -58,7 +57,8 @@ inline SkyPlan<SourceEmission> plan_point_source(const XyzlsOptions &o) {
   } else {
     std::uint32_t id = 1;
     for (const auto &t : o.telescopes)
-      plan.run.telescopes.push_back({id++, {t.x / 100.0, t.y / 100.0, t.z / 100.0}, t.r / 100.0});
+      plan.run.telescopes.push_back(
+          {id++, {cm_to_m(t.x), cm_to_m(t.y), cm_to_m(t.z)}, cm_to_m(t.r)});
   }
   plan.events_per_case = o.events;
 

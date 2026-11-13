@@ -235,6 +235,22 @@ def test_run_pointing_needs_both_keys(model, tmp_path, obdeect_stream):
         trace_stream(model, source, tmp_path / "out.ps", seed=SEED)
 
 
+@pytest.mark.parametrize("alias", ["same", "symlink", "hardlink"])
+def test_trace_stream_rejects_input_aliases(model, tmp_path, obdeect_stream, alias):
+    source = write_stream(tmp_path / "input.ps", {1: beam(10, (0.0, 0.0))})
+    if alias == "same":
+        output = source
+    elif alias == "symlink":
+        output = tmp_path / "alias.ps"
+        output.symlink_to(source)
+    else:
+        output = tmp_path / "alias.ps"
+        output.hardlink_to(source)
+
+    with pytest.raises(ModelError, match="same file"):
+        trace_stream(model, source, output, seed=SEED, pointing=(0.0, 0.0))
+
+
 def test_ground_photons_need_a_pointing(model, tmp_path, obdeect_stream):
     # The event header carries no telescope pointing: its CORSIKA azimuth is ignored.
     event = {"event_number": 1, "zenith_rad": 0.3, "azimuth_rad": 1.0}

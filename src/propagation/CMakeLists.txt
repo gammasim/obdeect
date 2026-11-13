@@ -11,16 +11,22 @@ option(OBDEECT_PROPAGATION_BUILD_PYTHON_API "Build the Python extension" ${OBDEE
 option(OBDEECT_PROPAGATION_BUILD_TOOLS "Build the obdeect propagation run command-line tool" ON)
 
 # The stream component: the target of the combined build, else the stream sources next to
-# this component (builds from the repository), else an installed package (sdist builds).
+# this component (builds from the repository), else the copy bundled into the sdist
+# (stream-src, staged at release time), else an installed package.
 if(NOT TARGET obdeect::stream)
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../stream/CMakeLists.txt)
+    set(OBDEECT_STREAM_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../stream)
+  elseif(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/stream-src/CMakeLists.txt)
+    set(OBDEECT_STREAM_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/stream-src)
+  endif()
+  if(OBDEECT_STREAM_SOURCE_DIR)
     set(OBDEECT_STREAM_BUILD_TESTING OFF CACHE BOOL "" FORCE)
     set(OBDEECT_STREAM_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
     set(OBDEECT_STREAM_BUILD_CAPI OFF CACHE BOOL "" FORCE)
     set(OBDEECT_STREAM_BUILD_PYTHON_API OFF CACHE BOOL "" FORCE)
     set(OBDEECT_STREAM_INSTALL OFF CACHE BOOL "" FORCE)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../stream ${CMAKE_CURRENT_BINARY_DIR}/stream)
-    message(STATUS "obdeect propagation: using the stream sources in ../stream")
+    add_subdirectory(${OBDEECT_STREAM_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/stream)
+    message(STATUS "obdeect propagation: using the stream sources in ${OBDEECT_STREAM_SOURCE_DIR}")
   else()
     find_package(Python 3.14 COMPONENTS Interpreter)
     if(Python_Interpreter_FOUND AND NOT obdeect_stream_DIR)
@@ -61,6 +67,11 @@ if(OBDEECT_PROPAGATION_BUILD_TOOLS)
   add_executable(obdeect-propagation-run cpp/tools/propagate.cpp)
   target_link_libraries(obdeect-propagation-run PRIVATE obdeect_propagation_core)
   obdeect_propagation_enable_warnings(obdeect-propagation-run)
+  if(OBDEECT_PROPAGATION_BUILD_TESTING)
+    add_test(NAME run_version COMMAND obdeect-propagation-run --version)
+    set_tests_properties(run_version PROPERTIES PASS_REGULAR_EXPRESSION
+      "^obdeect propagation run [0-9]+\\.[0-9]+\\.[0-9]+ \\(photon-stream format [0-9]+\\.[0-9]+\\)")
+  endif()
   # Wheels: inside the package, run through `obdeect propagation run`.
   if(DEFINED SKBUILD_PLATLIB_DIR)
     install(TARGETS obdeect-propagation-run RUNTIME DESTINATION obdeect/propagation/bin)

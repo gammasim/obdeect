@@ -70,12 +70,7 @@ struct RunSetup {
 // Parsers of option text (messages are `<option>: ...`).
 
 inline double parse_real(const std::string &text, const std::string &option) {
-  if (!cli::is_number(text))
-    throw std::invalid_argument(option + ": not a number: '" + text + "'");
-  const double value = std::strtod(text.c_str(), nullptr);
-  if (!std::isfinite(value))
-    throw std::invalid_argument(option + ": number out of range: '" + text + "'");
-  return value;
+  return cli::parse_number(text, option);
 }
 
 inline long long parse_integer_value(const std::string &text, const std::string &option) {

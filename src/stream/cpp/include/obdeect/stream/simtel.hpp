@@ -48,10 +48,12 @@
 // an error, unless it is listed in `allow_pending`. Streams without an efficiency status are
 // converted as before.
 
+#include "obdeect/stream/atmprof.hpp"
 #include "obdeect/stream/constants.hpp"
 #include "obdeect/stream/corsika.hpp"
 #include "obdeect/stream/eventio.hpp"
 #include "obdeect/stream/format.hpp"
+#include "obdeect/stream/parse.hpp"
 #include "obdeect/stream/photons.hpp"
 #include "obdeect/stream/stream.hpp"
 
@@ -100,23 +102,11 @@ namespace simtel_detail {
 
 // Whole-string number parsers; false instead of an exception.
 inline bool parse_integer(const std::string &text, long long &value) {
-  try {
-    std::size_t used = 0;
-    value = std::stoll(text, &used);
-    return used == text.size();
-  } catch (const std::exception &) {
-    return false;
-  }
+  return parse::integer(text, value);
 }
 
 inline bool parse_real(const std::string &text, double &value) {
-  try {
-    std::size_t used = 0;
-    value = std::stod(text, &used);
-    return used == text.size() && std::isfinite(value);
-  } catch (const std::exception &) {
-    return false;
-  }
+  return parse::finite_number(text, value);
 }
 
 } // namespace simtel_detail
@@ -162,63 +152,6 @@ inline CameraMap read_camera_map(std::istream &in) {
     }
   }
   return map;
-}
-
-// Profile number of the custom table (CORSIKA ATMOFILE).
-inline constexpr std::uint32_t custom_profile_id = 99;
-
-// Parses an atmospheric table as CORSIKA and sim_telarray read it:
-// '#' starts a comment, blank lines are skipped, and the first four columns are altitude
-// [km a.s.l.], density [g/cm^3], thickness [g/cm^2] and n-1. Further columns are ignored.
-// Altitudes must ascend; 2 to 120 levels. The profile number is
-// custom_profile_id; the observation level is set by the caller. Throws
-// std::invalid_argument with the line number.
-inline AtmosphereTable read_atmprof_text(std::istream &in, const std::string &file_name) {
-  AtmosphereTable table;
-  table.profile_id = custom_profile_id;
-  table.file_name = file_name;
-  std::string line;
-  std::size_t number = 0;
-  const auto fail = [&number](const std::string &what) {
-    return std::invalid_argument("atmospheric table line " + std::to_string(number) + ": " + what);
-  };
-  while (std::getline(in, line)) {
-    ++number;
-    const auto first = line.find_first_not_of(" \t\r");
-    if (first == std::string::npos || line[first] == '#') {
-      continue;
-    }
-    std::istringstream fields(line);
-    std::array<std::string, 4> tokens;
-    for (std::string &token : tokens) {
-      if (!(fields >> token)) {
-        throw fail("expected 4 columns: altitude_km density thickness n_minus_1");
-      }
-    }
-    std::array<double, 4> v{};
-    for (std::size_t k = 0; k < v.size(); ++k) {
-      if (!simtel_detail::parse_real(tokens[k], v[k])) {
-        throw fail("not a finite number: " + tokens[k]);
-      }
-    }
-    if (v[1] < 0.0 || v[2] < 0.0) {
-      throw fail("density and thickness must not be negative");
-    }
-    if (!table.alt_km.empty() && !(v[0] > table.alt_km.back())) {
-      throw fail("altitudes must ascend");
-    }
-    table.alt_km.push_back(v[0]);
-    table.rho.push_back(v[1]);
-    table.thick.push_back(v[2]);
-    table.refidx_m1.push_back(v[3]);
-  }
-  if (table.alt_km.size() < 2) {
-    throw std::invalid_argument("atmospheric table needs at least 2 levels");
-  }
-  if (table.alt_km.size() > 120) {
-    throw std::invalid_argument("atmospheric table has more than 120 levels");
-  }
-  return table;
 }
 
 // Converts camera-frame positions and directions in place to the sim_telarray
@@ -434,10 +367,10 @@ inline TelPos telpos_from_metres(const std::vector<double> &x, const std::vector
   }
   TelPos pos;
   for (std::size_t i = 0; i < n; ++i) {
-    pos.x.push_back(100.0 * x[i]);
-    pos.y.push_back(100.0 * y[i]);
-    pos.z.push_back(100.0 * z[i]);
-    pos.r.push_back(100.0 * r[i]);
+    pos.x.push_back(m_to_cm(x[i]));
+    pos.y.push_back(m_to_cm(y[i]));
+    pos.z.push_back(m_to_cm(z[i]));
+    pos.r.push_back(m_to_cm(r[i]));
   }
   return pos;
 }
@@ -879,6 +812,7 @@ private:
   }
 
   void begin_event(const Metadata &metadata) {
+    writer_.begin_event();
     event_open_ = true;
     event_headers_done_ = false;
     have_evth_ = have_teloff_ = have_evte_ = false;

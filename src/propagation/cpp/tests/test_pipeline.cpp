@@ -102,22 +102,22 @@ void test_cz_column_must_be_finite() {
   }
 }
 
-// Wavelengths are finite, non-negative integers (0 means not assigned). 400.5, NaN, inf and
-// negative values are rejected before any conversion to int.
-void test_wavelength_must_be_integer() {
+// Wavelengths are finite and non-negative (0 means not assigned). NaN, inf and negative values
+// are rejected before any conversion to int.
+void test_wavelength_must_be_finite() {
   const auto table = constant_table();
   const auto depths = table.telescope_depths(2030.0, 28.0);
   const obdeect::propagation::Envelope envelope({200.0, 800.0}, {0.9, 0.3});
   const auto settings = settings_for(table, depths, envelope, true);
 
-  for (const float bad : {400.5F, std::numeric_limits<float>::quiet_NaN(),
-                          std::numeric_limits<float>::infinity(), -1.0F}) {
+  for (const float bad :
+       {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(), -1.0F}) {
     auto chunk = photons(3, 400.0F);
     chunk[Column::wavelength][1] = bad;
     CHECK(throws_invalid(
         [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
   }
-  // Integer wavelengths and unassigned rows are accepted.
+  // Finite wavelengths and unassigned rows are accepted.
   auto valid = photons(3, 400.0F);
   valid[Column::wavelength][1] = 0.0F;
   CHECK(!throws_invalid(
@@ -163,10 +163,10 @@ void test_atmospheric_acceptance_wavelength() {
   CHECK(p[0] > 0.0 && p[0] < 1.0);
   CHECK(p[1] == 0.0);
 
+  // A non-integer wavelength looks up the table at its floor.
   chunk[Column::wavelength][1] = 400.5F;
-  CHECK(throws_invalid([&] {
-    (void)obdeect::propagation::atmospheric_acceptance<double>(chunk, table, depths, p);
-  }));
+  obdeect::propagation::atmospheric_acceptance<double>(chunk, table, depths, p);
+  CHECK(p[1] == p[0]);
   chunk[Column::wavelength][1] = std::numeric_limits<float>::quiet_NaN();
   CHECK(throws_invalid([&] {
     (void)obdeect::propagation::atmospheric_acceptance<double>(chunk, table, depths, p);
@@ -178,7 +178,7 @@ void test_atmospheric_acceptance_wavelength() {
 int main() {
   return run_checks([] {
     test_cz_column_must_be_finite();
-    test_wavelength_must_be_integer();
+    test_wavelength_must_be_finite();
     test_wavelength_above_max_is_dropped();
     test_atmospheric_acceptance_wavelength();
   });

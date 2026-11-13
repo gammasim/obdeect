@@ -23,8 +23,7 @@ const char *usage = R"(usage: obdeect sources flasher [--type dish|secondary] [o
 int main(int argc, char **argv) {
   using namespace obdeect::sources;
   using programs::flasher::Type;
-  const std::string prefix = argc > 0 ? argv[0] : "obdeect sources flasher";
-  return cli::run_tool(prefix, [&] {
+  return cli::run_tool("obdeect sources flasher", argc, argv, [&] {
     std::vector<std::pair<std::string, std::string>> pairs;
     for (int i = 1; i < argc; ++i) {
       const std::string arg = argv[i];

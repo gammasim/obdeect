@@ -165,6 +165,14 @@ def test_write_after_close_rejected(tmp_path):
         writer.write("run", {})
 
 
+def test_abort_is_terminal(tmp_path):
+    writer = obdeect_stream.Writer(str(tmp_path / "aborted.ps"), "pytest")
+    writer.abort()
+    for operation in (lambda: writer.write("run", {}), writer.close):
+        with pytest.raises(RuntimeError, match="closed"):
+            operation()
+
+
 @pytest.mark.skipif(
     find_program("obdeect.stream", "obdeect-stream-cat") is None,
     reason="obdeect stream cat not installed",

@@ -1,17 +1,16 @@
 #pragma once
 
-// --version output shared by the command-line tools.
+// run_tool for the stream tools: the version line carries the CMake package version.
 
-#include "obdeect/stream/format.hpp"
-
-#include <cstdio>
+#include "obdeect/stream/cli.hpp"
 
 #ifndef OBDEECT_STREAM_PACKAGE_VERSION
 #error "OBDEECT_STREAM_PACKAGE_VERSION is defined by CMake for each tool"
 #endif
 
-// Prints "<tool> <package version> (photon-stream format <major>.<minor>)".
-inline void print_version(const char *tool) {
-  std::printf("%s %s (photon-stream format %d.%d)\n", tool, OBDEECT_STREAM_PACKAGE_VERSION,
-              obdeect::stream::format_major, obdeect::stream::format_minor);
+template <class Body>
+int run_stream_tool(const char *tool, int argc, char **argv, const std::function<void()> &usage,
+                    Body body) {
+  return obdeect::stream::cli::run_tool(tool, OBDEECT_STREAM_PACKAGE_VERSION, argc, argv, usage,
+                                        body);
 }

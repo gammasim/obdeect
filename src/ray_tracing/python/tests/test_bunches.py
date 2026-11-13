@@ -361,27 +361,24 @@ def test_sampled_wavelengths_follow_the_density():
     assert out["wavelength_nm"].min() >= 300.0 and out["wavelength_nm"].max() <= 600.0
 
 
-def test_inverse_square_law_gives_integer_wavelengths_in_range():
+def test_inverse_square_law_gives_wavelengths_in_range():
     model = edited(compiled(telescope_transmission=None), constant_reflectivity(1.0))
     bunches, plane_z = star_bunches(model, 20000, wavelength_nm=0.0)
     out = trace_bunches(model, bunches, plane_z, wavelength_law=(300.0, 600.0), roulette=False)
     w = out["wavelength_nm"]
     assert len(w) > 1000
-    assert np.all(w == np.floor(w))
-    assert np.all((w >= 300.0) & (w < 600.0))
+    assert np.all((w >= 300.0) & (w <= 600.0))
 
 
 def test_inverse_square_law_follows_the_law():
     # Density p(l) = (1/l^2) / (1/lo - 1/hi) on [lo, hi] has E[l] = ln(hi/lo) / (1/lo - 1/hi).
-    # Truncating to integer nm lowers each wavelength by its fractional part, which is
-    # uniform to good accuracy, so the mean of the floored values is E[l] - 0.5.
     lo, hi = 300.0, 600.0
     model = edited(compiled(telescope_transmission=None), constant_reflectivity(1.0))
     n = 200_000
     bunches, plane_z = star_bunches(model, n, wavelength_nm=0.0)
     out = trace_bunches(model, bunches, plane_z, wavelength_law=(lo, hi), roulette=False)
     w = out["wavelength_nm"]
-    expected = math.log(hi / lo) / (1.0 / lo - 1.0 / hi) - 0.5
+    expected = math.log(hi / lo) / (1.0 / lo - 1.0 / hi)
     sd = w.std(ddof=1)
     print(
         f"wavelength mean {w.mean():.4f} vs {expected:.4f}, limit {5 * sd / math.sqrt(len(w)):.4f}"
@@ -393,7 +390,7 @@ def test_inverse_square_law_follows_the_law():
 def test_wavelength_law_rejects_invalid_limits():
     model = compiled(telescope_transmission=None)
     bunches, plane_z = star_bunches(model, 100, wavelength_nm=0.0)
-    # lo below 1 nm would let floor(lambda) reach 0, which the tracer rejects photon by photon.
+    # lo below 1 nm is rejected.
     for law in (
         (0.0, 600.0),
         (0.5, 0.75),

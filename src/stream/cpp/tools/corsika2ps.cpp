@@ -7,6 +7,7 @@
 
 #include <cstdio>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -24,33 +25,24 @@ void usage() {
 
 int main(int argc, char **argv) {
   std::ios::sync_with_stdio(false);
-  std::string input = "-";
-  bool have_input = false;
-  for (int i = 1; i < argc; ++i) {
-    const std::string arg = argv[i];
-    if (arg == "--version") {
-      print_version("obdeect stream from-corsika");
-      return 0;
+  return run_stream_tool("obdeect stream from-corsika", argc, argv, usage, [&] {
+    obdeect::stream::cli::Args args(argc, argv);
+    std::string input = "-";
+    bool have_input = false;
+    std::string arg;
+    while (args.next(arg)) {
+      if (arg == "-h" || arg == "--help") {
+        usage();
+        return 0;
+      }
+      if (arg.size() > 1 && arg[0] == '-')
+        throw obdeect::stream::cli::UsageError("unknown option " + arg);
+      if (have_input)
+        throw obdeect::stream::cli::UsageError("only one input is accepted");
+      input = arg;
+      have_input = true;
     }
-    if (arg == "-h" || arg == "--help") {
-      usage();
-      return 0;
-    }
-    if (arg.size() > 1 && arg[0] == '-') {
-      std::fprintf(stderr, "obdeect stream from-corsika: unknown option %s\n", arg.c_str());
-      usage();
-      return 2;
-    }
-    if (have_input) {
-      std::fprintf(stderr, "obdeect stream from-corsika: only one input is accepted\n");
-      usage();
-      return 2;
-    }
-    input = arg;
-    have_input = true;
-  }
 
-  try {
     static std::vector<char> out_buffer(buffer_size);
     std::cout.rdbuf()->pubsetbuf(out_buffer.data(),
                                  static_cast<std::streamsize>(out_buffer.size()));
@@ -76,9 +68,6 @@ int main(int argc, char **argv) {
     if (!std::cout) {
       throw std::runtime_error("write error on stdout");
     }
-  } catch (const std::exception &error) {
-    std::fprintf(stderr, "obdeect stream from-corsika: %s\n", error.what());
-    return 1;
-  }
-  return 0;
+    return 0;
+  });
 }

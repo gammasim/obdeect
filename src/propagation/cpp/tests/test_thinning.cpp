@@ -54,7 +54,7 @@ void test_envelope() {
   CHECK(throws_invalid([] { obdeect::propagation::Envelope bad({300.0, 400.0}, {0.1, 1.5}); }));
 }
 
-// The wavelength range must be finite, with 1 <= lo < hi <= 2^24 (exact integers in float32).
+// The wavelength range must be finite, with 1 <= lo < hi <= 2^24.
 void test_wavelength_range_validation() {
   obdeect::propagation::WavelengthRange{250.0, 700.0}.validate();
   obdeect::propagation::WavelengthRange{1.0, obdeect::propagation::max_exact_wavelength_nm}
@@ -70,7 +70,7 @@ void test_wavelength_range_validation() {
       throws_invalid([] { (void)obdeect::propagation::WavelengthRange{700.0, 700.0}.validate(); }));
   CHECK(
       throws_invalid([] { (void)obdeect::propagation::WavelengthRange{250.0, 1e10}.validate(); }));
-  // The largest allowed range draws exact, non-negative integers below 2^24.
+  // The largest allowed range draws wavelengths in [1, 2^24).
   obdeect::stream::PhotonChunk chunk;
   chunk.resize(4096, mask_of({Column::x, Column::y, Column::cx, Column::cy, Column::t, Column::w,
                               Column::wavelength}));
@@ -78,7 +78,7 @@ void test_wavelength_range_validation() {
       chunk, {1.0, obdeect::propagation::max_exact_wavelength_nm}, seed, 0, 0);
   bool exact = true;
   for (const float lambda : chunk[Column::wavelength]) {
-    exact = exact && lambda == std::floor(lambda) && lambda >= 1.0F &&
+    exact = exact && lambda >= 1.0F &&
             lambda < static_cast<float>(obdeect::propagation::max_exact_wavelength_nm);
   }
   CHECK(exact);
@@ -141,14 +141,11 @@ void test_wavelength_distribution() {
                            Column::wavelength}));
   obdeect::propagation::assign_wavelengths(chunk, range, seed, 1, 2);
   std::size_t below = 0;
-  bool integral = true;
   bool inside = true;
   for (const float lambda : chunk[Column::wavelength]) {
-    integral = integral && lambda == std::floor(lambda);
     inside = inside && lambda >= 200.0F && lambda <= 700.0F;
     below += lambda < 300.0F ? 1U : 0U;
   }
-  CHECK(integral);
   CHECK(inside);
   const double p = (1.0 / 200.0 - 1.0 / 300.0) / (1.0 / 200.0 - 1.0 / 700.0);
   const double sigma = std::sqrt(p * (1.0 - p) / static_cast<double>(n));

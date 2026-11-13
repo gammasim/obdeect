@@ -12,7 +12,7 @@ from collections.abc import Callable, Mapping
 
 import numpy as np
 import obdeect.stream as obdeect_stream
-from obdeect.stream.stream import METADATA_RECORDS, Reader, Writer, _frame
+from obdeect.stream.stream import METADATA_RECORDS, Reader, Writer, _frame, reject_same_file
 
 EFFICIENCY_STATUS_STATES = ("applied", "envelope", "pending")
 _EFFICIENCY_STATUS_FIELDS = ("state", "source", "wavelength_nm", "value")
@@ -96,9 +96,10 @@ def transform(
     context: dict[str, dict[str, object]] = {"run": {}, "event": {}, "telescope": {}}
     entry_applied = _applied(entry) if entry else set()
     efficiency_status_pending = False
-    output_index = 0
+    output_index: dict[int, int] = {}  # per telescope; continues across array reuses
     output_weight = 0.0
 
+    reject_same_file(input, output)
     with Writer(os.fspath(output), f"obdeect.stream.stage {stage_id:#x}") as writer:
         for record in Reader(os.fspath(input)):
             kind = record["type"]
@@ -111,8 +112,9 @@ def transform(
                 metadata = dict(record["metadata"])
                 if kind in context:
                     context[kind] = metadata
-                if kind == "telescope":
-                    output_index = 0
+                if kind == "event":
+                    output_index = {}
+                elif kind == "telescope":
                     output_weight = 0.0
                 elif kind == "telescope_end":
                     metadata["photons"] = output_weight
@@ -135,6 +137,7 @@ def transform(
                     "stage_id": stage_id,
                 }
                 result = func(record["telescope_id"], record["columns"], info)
-                writer.write_photons(record["telescope_id"], frame_code, output_index, result)
-                output_index += len(result.get("x", ()))
+                telescope = record["telescope_id"]
+                writer.write_photons(telescope, frame_code, output_index.get(telescope, 0), result)
+                output_index[telescope] = output_index.get(telescope, 0) + len(result.get("x", ()))
                 output_weight += float(np.sum(result.get("w", ()), dtype=np.float64))

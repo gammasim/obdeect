@@ -3,6 +3,8 @@
 // EventIO block container and the IACT payloads of CORSIKA output (types
 // 1200-1217). Own little-endian code; only the formats needed by obdeect.stream.
 
+#include "obdeect/stream/telpos.hpp"
+
 #include <algorithm>
 #include <bit>
 #include <cmath>

@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -100,31 +101,27 @@ void for_each_input(const std::vector<std::string> &inputs, std::istream &stdin_
 
 int main(int argc, char **argv) {
   std::ios::sync_with_stdio(false);
-  bool summary = false;
-  std::vector<std::string> inputs;
-  for (int i = 1; i < argc; ++i) {
-    const std::string arg = argv[i];
-    if (arg == "--summary") {
-      summary = true;
-    } else if (arg == "--version") {
-      print_version("obdeect stream cat");
-      return 0;
-    } else if (arg == "-h" || arg == "--help") {
-      usage();
-      return 0;
-    } else if (arg.size() > 1 && arg[0] == '-') {
-      std::fprintf(stderr, "obdeect stream cat: unknown option %s\n", arg.c_str());
-      usage();
-      return 2;
-    } else {
-      inputs.push_back(arg);
+  return run_stream_tool("obdeect stream cat", argc, argv, usage, [&] {
+    obdeect::stream::cli::Args args(argc, argv);
+    bool summary = false;
+    std::vector<std::string> inputs;
+    std::string arg;
+    while (args.next(arg)) {
+      if (arg == "--summary") {
+        summary = true;
+      } else if (arg == "-h" || arg == "--help") {
+        usage();
+        return 0;
+      } else if (arg.size() > 1 && arg[0] == '-') {
+        throw obdeect::stream::cli::UsageError("unknown option " + arg);
+      } else {
+        inputs.push_back(arg);
+      }
     }
-  }
-  if (inputs.empty()) {
-    inputs.emplace_back("-");
-  }
 
-  try {
+    if (inputs.empty()) {
+      inputs.emplace_back("-");
+    }
     obdeect::stream::StdinBuffer stdin_buffer;
     std::istream stdin_stream(&stdin_buffer);
     if (summary) {
@@ -166,9 +163,6 @@ int main(int argc, char **argv) {
     if (!std::cout) {
       throw std::runtime_error("write error on stdout");
     }
-  } catch (const std::exception &error) {
-    std::fprintf(stderr, "obdeect stream cat: %s\n", error.what());
-    return 1;
-  }
-  return 0;
+    return 0;
+  });
 }

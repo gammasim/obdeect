@@ -174,7 +174,7 @@ int main() {
       for (const std::string token : {"x", "2e-4x"}) {
         const std::string error =
             parse_error(exponential_profile("", 5, with_column(5, column, token)));
-        CHECK(error.find("not a number") != std::string::npos);
+        CHECK(error.find("not a finite number") != std::string::npos);
         CHECK(error.find("line 7") != std::string::npos);
       }
     }

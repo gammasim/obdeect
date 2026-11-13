@@ -24,8 +24,8 @@ const char *usage = R"(usage: obdeect sources night-sky [options] [-o FILE]
 
 int main(int argc, char **argv) {
   using namespace obdeect::sources;
-  return cli::run_tool("obdeect sources night-sky", [&] {
-    cli::ArgCursor cursor(argc, argv);
+  return cli::run_tool("obdeect sources night-sky", argc, argv, [&] {
+    cli::Args cursor(argc, argv);
     programs::NsbOptions o;
     std::string spectrum = "Benn_LaPalma_sky_converted.lis", output, arg;
     while (cursor.next(arg)) {
@@ -35,20 +35,20 @@ int main(int argc, char **argv) {
       }
       const auto value = [&] { return cursor.value(arg); };
       if (arg == "-r" || arg == "--radius" || arg == "--telescope-radius")
-        o.telescope_radius_m = cli::to_double(value(), arg);
+        o.telescope_radius_m = cli::parse_number(value(), arg);
       else if (arg == "-v" || arg == "--viewcone")
-        o.viewcone_deg = cli::to_double(value(), arg);
+        o.viewcone_deg = cli::parse_number(value(), arg);
       else if (arg == "-a" || arg == "--altitude" || arg == "--obslev" ||
                arg == "--observation-level")
-        o.altitude_m = cli::to_double(value(), arg);
+        o.altitude_m = cli::parse_number(value(), arg);
       else if (arg == "-A" || arg == "--atmosphere") {
         o.atmosphere = cli::parse_integer(value(), arg);
         if (o.atmosphere < -1)
           throw std::invalid_argument("--atmosphere: profile number (or -1 for none)");
       } else if (arg == "--photons")
-        o.photons = cli::to_double(value(), arg);
+        o.photons = cli::parse_number(value(), arg);
       else if (arg == "-b" || arg == "--bs" || arg == "--bunch-size")
-        o.bunch_size = cli::to_double(value(), arg);
+        o.bunch_size = cli::parse_number(value(), arg);
       else if (arg == "--events")
         o.events = cli::to_count(value(), arg);
       else if (arg == "--run")
@@ -56,9 +56,9 @@ int main(int argc, char **argv) {
       else if (arg == "-s" || arg == "--spectrum")
         spectrum = value();
       else if (arg == "-w" || arg == "--pulse-width")
-        o.pulse_width_ns = cli::to_double(value(), arg);
+        o.pulse_width_ns = cli::parse_number(value(), arg);
       else if (arg == "-d" || arg == "--pulse-delay")
-        o.pulse_delay_ns = cli::to_double(value(), arg);
+        o.pulse_delay_ns = cli::parse_number(value(), arg);
       else if (arg == "--seed")
         o.seed = cli::parse_seed(value(), arg);
       else if (arg == "-o" || arg == "--output")

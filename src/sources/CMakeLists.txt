@@ -10,16 +10,22 @@ endif()
 option(OBDEECT_SOURCES_BUILD_PYTHON_API "Build the Python extension" ${OBDEECT_SOURCES_BUILD_PYTHON_API_DEFAULT})
 
 # The stream component: the target of the combined build, else the stream sources next to
-# this component (builds from the repository), else an installed package (sdist builds).
+# this component (builds from the repository), else the copy bundled into the sdist
+# (stream-src, staged at release time), else an installed package.
 if(NOT TARGET obdeect::stream)
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../stream/CMakeLists.txt)
+    set(OBDEECT_STREAM_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../stream)
+  elseif(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/stream-src/CMakeLists.txt)
+    set(OBDEECT_STREAM_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/stream-src)
+  endif()
+  if(OBDEECT_STREAM_SOURCE_DIR)
     set(OBDEECT_STREAM_BUILD_TESTING OFF CACHE BOOL "" FORCE)
     set(OBDEECT_STREAM_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
     set(OBDEECT_STREAM_BUILD_CAPI OFF CACHE BOOL "" FORCE)
     set(OBDEECT_STREAM_BUILD_PYTHON_API OFF CACHE BOOL "" FORCE)
     set(OBDEECT_STREAM_INSTALL OFF CACHE BOOL "" FORCE)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../stream ${CMAKE_CURRENT_BINARY_DIR}/stream)
-    message(STATUS "obdeect sources: using the stream sources in ../stream")
+    add_subdirectory(${OBDEECT_STREAM_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/stream)
+    message(STATUS "obdeect sources: using the stream sources in ${OBDEECT_STREAM_SOURCE_DIR}")
   else()
     find_package(Python 3.14 COMPONENTS Interpreter)
     if(Python_Interpreter_FOUND AND NOT obdeect_stream_DIR)
@@ -91,6 +97,11 @@ if(OBDEECT_SOURCES_BUILD_TOOLS)
     add_executable(obdeect-sources-${tool} cpp/tools/${tool}.cpp)
     target_link_libraries(obdeect-sources-${tool} PRIVATE obdeect_sources_core)
     obdeect_sources_enable_warnings(obdeect-sources-${tool})
+    if(OBDEECT_SOURCES_BUILD_TESTING)
+      add_test(NAME ${tool}_version COMMAND obdeect-sources-${tool} --version)
+      set_tests_properties(${tool}_version PROPERTIES PASS_REGULAR_EXPRESSION
+        "^obdeect sources ${tool} [0-9]+\\.[0-9]+\\.[0-9]+ \\(photon-stream format [0-9]+\\.[0-9]+\\)")
+    endif()
   endforeach()
   # Wheels: inside the package, run through `obdeect sources <program>`.
   if(DEFINED SKBUILD_PLATLIB_DIR)

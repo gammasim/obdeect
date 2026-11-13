@@ -19,8 +19,8 @@ const char *usage = R"(usage: obdeect sources beam-scan [options] [-o FILE]
 
 int main(int argc, char **argv) {
   using namespace obdeect::sources;
-  return cli::run_tool("obdeect sources beam-scan", [&] {
-    cli::ArgCursor cursor(argc, argv);
+  return cli::run_tool("obdeect sources beam-scan", argc, argv, [&] {
+    cli::Args cursor(argc, argv);
     programs::XylsOptions o;
     std::string output, arg;
     while (cursor.next(arg)) {
@@ -30,13 +30,13 @@ int main(int argc, char **argv) {
       }
       const auto value = [&] { return cursor.value(arg); };
       if (arg == "-r")
-        o.radius_cm = cli::to_double(value(), arg);
+        o.radius_cm = cli::parse_number(value(), arg);
       else if (arg == "-x")
-        o.x_cm = cli::to_double(value(), arg);
+        o.x_cm = cli::parse_number(value(), arg);
       else if (arg == "-y")
-        o.y_cm = cli::to_double(value(), arg);
+        o.y_cm = cli::parse_number(value(), arg);
       else if (arg == "-h")
-        o.height_cm = cli::to_double(value(), arg);
+        o.height_cm = cli::parse_number(value(), arg);
       else if (arg == "--seed")
         o.seed = cli::parse_seed(value(), arg);
       else if (arg == "-o")

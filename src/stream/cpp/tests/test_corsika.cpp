@@ -440,6 +440,23 @@ void feed_writer(const std::vector<Record> &records) {
   writer.finish();
 }
 
+// An array reuse is another telescope record of the same telescope and event: its photon
+// indices continue, so (event, telescope, index) stays unique.
+void chunk_indices_continue_across_array_reuses() {
+  Record reuse = telescope_record(1);
+  reuse.metadata["array_index"] = std::int64_t{1};
+  CHECK(!throws_error([&] {
+    feed_writer({telescope_record(1), photons_record(photon_chunk(1, 0, 2)),
+                 telescope_end_record(1), reuse, photons_record(photon_chunk(1, 2, 3)),
+                 telescope_end_record(1)});
+  }));
+  CHECK(throws_error([&] {
+    feed_writer({telescope_record(1), photons_record(photon_chunk(1, 0, 2)),
+                 telescope_end_record(1), reuse, photons_record(photon_chunk(1, 0, 3)),
+                 telescope_end_record(1)});
+  }));
+}
+
 // Chunk indices continue per telescope; gaps, overlaps and reordering throw.
 void chunk_indices_must_be_contiguous() {
   const Record tel = telescope_record(1);
@@ -511,6 +528,7 @@ int main() {
     truncated_input_throws();
     negative_photon_indices_are_rejected();
     chunk_indices_must_be_contiguous();
+    chunk_indices_continue_across_array_reuses();
     telescope_end_must_match_open_telescope();
     open_telescope_blocks_array_flush();
   });

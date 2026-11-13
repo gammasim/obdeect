@@ -283,6 +283,7 @@ private:
       event_number_ =
           static_cast<std::uint32_t>(checked_integer(record.metadata, "event_number", max_u32));
       have_event_ = true;
+      out_index_.clear();
       sink(record);
       break;
     case RecordType::telescope: {
@@ -302,6 +303,7 @@ private:
       }
       obdeect::stream::Record out = record;
       out.metadata["photons"] = telescope_.weight_out;
+      out_index_[telescope_.id] = telescope_.out_index;
       telescope_.open = false;
       sink(out);
       break;
@@ -539,7 +541,7 @@ private:
                                                 : config_.profile_source;
     }
     ledger["wavelength.state"] = std::string("applied");
-    ledger["wavelength.source"] = std::string("density 1/lambda^2, integer nm");
+    ledger["wavelength.source"] = std::string("density 1/lambda^2, continuous");
     ledger["wavelength.range_nm"] = std::vector<double>{range.lo_nm, range.hi_nm};
     if (config_.scattering.enabled) {
       factors += ",scattering";
@@ -609,7 +611,8 @@ private:
       }
       telescope_.depths = &cached->second;
     }
-    telescope_.out_index = 0;
+    // Output rows continue across array reuses of the same telescope and event.
+    telescope_.out_index = out_index_[telescope_.id];
     telescope_.weight_out = 0.0;
     out["frame"] = static_cast<std::int64_t>(obdeect::stream::Frame::ground);
   }
@@ -903,6 +906,7 @@ private:
   std::optional<Run> run_;
   Telescope telescope_;
   bool have_event_{};
+  std::map<std::uint32_t, std::uint64_t> out_index_; // per telescope, reset at each event
   std::uint32_t event_number_{};
   bool ledger_pending_{};
   // Caches: telescope depths per (altitude, pathlen) (the table is fixed), refraction tables of

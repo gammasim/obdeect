@@ -4,6 +4,8 @@
 
 #include "obdeect/sources/vec3.hpp"
 
+#include "obdeect/stream/wavelength.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -193,12 +195,12 @@ struct ComplexPulse {
   }
 };
 
-// Density proportional to 1 / lambda^2 on [low, high].
+// Density proportional to 1 / lambda^2 on [low, high] (continuous; the draw is shared with
+// propagation and ray tracing).
 struct InverseSquare {
   double low{}, high{};
   [[nodiscard]] double sample(const Uniforms &u) const {
-    const double a = 1.0 / low, b = 1.0 / high;
-    return 1.0 / (a - u[0] * (a - b));
+    return obdeect::stream::inverse_square_wavelength_nm(u[0], low, high);
   }
   [[nodiscard]] double mean() const { return std::log(high / low) / (1.0 / low - 1.0 / high); }
   [[nodiscard]] double variance() const {

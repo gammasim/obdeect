@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -52,30 +53,29 @@ private:
   bool ended_{false};
 };
 
+void usage() {
+  std::fprintf(stderr,
+               "usage: obdeect stream tee file...  (copies stdin to stdout and to each file)\n");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
   std::ios::sync_with_stdio(false);
-  std::vector<std::string> names;
-  for (int i = 1; i < argc; ++i) {
-    const std::string arg = argv[i];
-    if (arg == "--version") {
-      print_version("obdeect stream tee");
-      return 0;
+  return run_stream_tool("obdeect stream tee", argc, argv, usage, [&] {
+    obdeect::stream::cli::Args args(argc, argv);
+    std::vector<std::string> names;
+    std::string arg;
+    while (args.next(arg)) {
+      if (arg == "-h" || arg == "--help") {
+        usage();
+        return 0;
+      }
+      if (arg.size() > 1 && arg[0] == '-')
+        throw obdeect::stream::cli::UsageError("unknown option " + arg);
+      names.push_back(arg);
     }
-    if (arg == "-h" || arg == "--help") {
-      std::fprintf(
-          stderr, "usage: obdeect stream tee file...  (copies stdin to stdout and to each file)\n");
-      return 0;
-    }
-    if (arg.size() > 1 && arg[0] == '-') {
-      std::fprintf(stderr, "obdeect stream tee: unknown option %s\n", arg.c_str());
-      return 2;
-    }
-    names.push_back(arg);
-  }
 
-  try {
     static std::vector<char> out_buffer(buffer_size);
     obdeect::stream::StdinBuffer stdin_buffer;
     std::istream in(&stdin_buffer);
@@ -117,9 +117,6 @@ int main(int argc, char **argv) {
       }
     }
     order.finish();
-  } catch (const std::exception &error) {
-    std::fprintf(stderr, "obdeect stream tee: %s\n", error.what());
-    return 1;
-  }
-  return 0;
+    return 0;
+  });
 }
