@@ -44,6 +44,7 @@ file.
 cmake -S . -B build && cmake --build build && ctest --test-dir build
 pip install ./src/stream ./src/propagation ./src/sources ./src/ray_tracing
 for c in stream propagation sources ray_tracing; do pytest src/$c/python/tests; done
+pytest validation   # end-to-end chain
 ```
 
 Requires Python 3.14 or higher, a C++20 compiler, and CMake 3.20 or higher.

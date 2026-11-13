@@ -12,7 +12,7 @@ import pytest
     ("corsika_status", "adapter_status", "expected"), [(42, 0, 42), (0, 43, 43)]
 )
 def test_required_commands_propagate_failure(tmp_path, corsika_status, adapter_status, expected):
-    script = (Path(__file__).parents[2] / "scripts/validate_container.sh").read_text()
+    script = (Path(__file__).parents[4] / "validation/stream/validate_container.sh").read_text()
     fragment = script.split("start=$(date +%s)", 1)[1].split("cmp -l run.iact", 1)[0]
     corsika = tmp_path / "corsika"
     corsika.write_text(f"#!/bin/sh\nprintf partial > run.iact\nexit {corsika_status}\n")

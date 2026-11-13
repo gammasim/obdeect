@@ -41,13 +41,15 @@ jobs:
           && cmake --build build --parallel
       - name: Run native tests
         run: ctest --test-dir build --output-on-failure
-      # One run per component: test modules of different components share file names.
+      # One run per component (test modules of different components share file names),
+      # then the end-to-end chain.
       - name: Run Python tests
         run: |
           status=0
           for component in stream propagation sources ray_tracing; do
             pytest "src/${component}/python/tests" || status=1
           done
+          pytest validation || status=1
           exit "${status}"
   fma:
     runs-on: ubuntu-24.04

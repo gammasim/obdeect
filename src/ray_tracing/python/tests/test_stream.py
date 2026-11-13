@@ -770,3 +770,17 @@ def test_cli_telescope_transmission_option(model, tmp_path, obdeect_stream, caps
         main([*base, str(tmp_path / "bad.ps"), "--telescope-transmission", "partial"])
     assert error.value.code == 2
     assert "invalid choice" in capsys.readouterr().err
+
+
+def test_single_wavelength_run_keys_give_that_wavelength():
+    law = stream_module._wavelength_law({"wavelength_min_nm": 400.0, "wavelength_max_nm": 400.0})
+    assert law == (400.0, 401.0)
+    # Any draw of the 1/lambda^2 law over [400, 401) truncates to 400 nm.
+    lo, hi = law
+    for u in (1e-9, 0.5, 1 - 1e-9):
+        assert math.floor(1.0 / (1.0 / lo - u * (1.0 / lo - 1.0 / hi))) == 400
+    assert stream_module._wavelength_law({"wavelength_min_nm": 300, "wavelength_max_nm": 550}) == (
+        300.0,
+        550.0,
+    )
+    assert stream_module._wavelength_law({}) is None

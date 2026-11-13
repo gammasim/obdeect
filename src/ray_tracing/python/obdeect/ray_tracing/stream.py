@@ -272,7 +272,10 @@ class _Telescope:
 
 def _wavelength_law(metadata: Mapping[str, Any]) -> tuple[float, float] | None:
     if "wavelength_min_nm" in metadata and "wavelength_max_nm" in metadata:
-        return float(metadata["wavelength_min_nm"]), float(metadata["wavelength_max_nm"])
+        lo, hi = float(metadata["wavelength_min_nm"]), float(metadata["wavelength_max_nm"])
+        # One wavelength (monochromatic light sources): the 1/lambda^2 law over
+        # [lo, lo + 1) truncates every draw to floor(lo), as sim_telarray does.
+        return (lo, lo + 1.0) if hi == lo else (lo, hi)
     return None
 
 

@@ -50,5 +50,5 @@ combinations instead.
 
 - `ctest`: `test_led` (camera-plane positions and directions, combinations, slaves,
   trigger groups, random pixels, errors).
-- Reference-program run (`scripts/compare_led.sh`, 3 events of 2 pixels, 10 photons each):
+- Reference-program run (`validation/sources/compare_led.sh`, 3 events of 2 pixels, 10 photons each):
   20 photons per event in both; direction (0, 0, -1) and time 0 in both.

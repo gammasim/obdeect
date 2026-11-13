@@ -24,7 +24,7 @@ std::string stream_bytes(const flasher::Options &options) {
 }
 
 // u = 1 - cos(theta) of the fiducial cone: sin(theta) = R / d (agrees with the reference
-// program, scripts/compare_flasher-dish.sh).
+// program, validation/sources/compare_flasher-dish.sh).
 double cone_umax(double distance_m, double radius_m) {
   const double sine = radius_m / distance_m;
   return 1.0 - std::sqrt(1.0 - sine * sine);

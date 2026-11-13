@@ -9,19 +9,19 @@
 #   4. sim_telarray (image binary, CTA-PROD6 LST configuration from the host checkout) runs on
 #      both files with the same configuration and seed; the outputs are compared.
 #
-# Usage: scripts/validate_container.sh OUTDIR
+# Usage: validation/stream/validate_container.sh OUTDIR
 #   OUTDIR  host directory for the data, logs and summary (large files; keep outside Git)
-#   ROOT    checkout root with corsika7/ and sim_telarray/ (default: two levels above WORKDIR)
+#   ROOT    checkout root with corsika7/ and sim_telarray/ (default: repository root)
 #   IMAGE   container image (default ghcr.io/gammasim/simtools-dev:latest)
 #
 # Steps 1-3 must succeed; step 4 is reported and does not stop the script.
 
 set -euo pipefail
 
-WORKDIR=$(cd "$(dirname "$0")/.." && pwd)
-ROOT=${ROOT:-$(cd "$WORKDIR/../.." && pwd)}
+WORKDIR=$(cd "$(dirname "$0")/../.." && pwd)
+ROOT=${ROOT:-$WORKDIR}
 IMAGE=${IMAGE:-ghcr.io/gammasim/simtools-dev:latest}
-OUT=${1:?usage: scripts/validate_container.sh OUTDIR}
+OUT=${1:?usage: validation/stream/validate_container.sh OUTDIR}
 mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
 
@@ -48,12 +48,12 @@ fi
 # generates obdeect/stream/version.hpp and defines OBDEECT_STREAM_PACKAGE_VERSION; do the same here.
 mkdir -p /out/gen/obdeect/stream
 sed -e 's/@PROJECT_VERSION_MAJOR@/0/' -e 's/@PROJECT_VERSION_MINOR@/0/' \
-    -e 's/@PROJECT_VERSION_PATCH@/0/' /src/cmake/version.hpp.in > /out/gen/obdeect/stream/version.hpp
+    -e 's/@PROJECT_VERSION_PATCH@/0/' /src/src/stream/cmake/version.hpp.in > /out/gen/obdeect/stream/version.hpp
 for pair in corsika2ps:obdeect-stream-from-corsika ps2simtel:obdeect-stream-to-simtel; do
   src=${pair%%:*}; out=${pair##*:}
   g++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror -ffp-contract=off \
-      -DOBDEECT_STREAM_PACKAGE_VERSION='"0.0.0+validation"' -I/out/gen -I/src/cpp/include \
-      "/src/cpp/tools/$src.cpp" -o "/out/bin/$out" || exit 1
+      -DOBDEECT_STREAM_PACKAGE_VERSION='"0.0.0+validation"' -I/out/gen -I/src/src/stream/cpp/include \
+      "/src/src/stream/cpp/tools/$src.cpp" -o "/out/bin/$out" || exit 1
 done
 echo "== built: $(/out/bin/obdeect-stream-from-corsika --help 2>&1 | head -1)"
 

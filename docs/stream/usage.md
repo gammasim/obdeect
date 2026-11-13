@@ -216,7 +216,7 @@ $ obdeect stream to-simtel --camera-map cam.txt --scaled-factor qe run.ps > sim.
 
 ### Developer checks
 
-`scripts/validate_container.sh OUTDIR` is a manual end-to-end check of the codec. In the
+`validation/stream/validate_container.sh OUTDIR` is a manual end-to-end check of the codec. In the
 `ghcr.io/gammasim/simtools-dev` container it runs CORSIKA, then
 `obdeect stream from-corsika | obdeect stream to-simtel`, and compares the EventIO file written by CORSIKA with the
 round-trip file. It then runs sim_telarray on both files with the same configuration and
