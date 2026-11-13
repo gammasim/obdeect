@@ -28,6 +28,7 @@ include(CMakePackageConfigHelpers)
 option(GSTRICKD_BUILD_TESTING "Build the C++ tests" ON)
 option(GSTRICKD_BUILD_TOOLS "Build the command-line tools (ps-cat, ps-tee, corsika2ps, ps2simtel, ps2grisu)" ON)
 option(GSTRICKD_BUILD_CAPI "Build the C API shared library libgstrickd_c" ON)
+option(GSTRICKD_INSTALL "Install the headers and the CMake package (OFF when another component embeds the stream sources)" ON)
 option(GSTRICKD_BUILD_BENCH "Build the photon-stream benchmark" OFF)
 if(DEFINED SKBUILD_PLATLIB_DIR)
   set(GSTRICKD_BUILD_PYTHON_API_DEFAULT ON)
@@ -71,10 +72,12 @@ function(gstrickd_enable_warnings target)
 endfunction()
 
 # Headers and the package config for consumers (find_package(gstrickd CONFIG)).
-install(DIRECTORY cpp/include/gstrickd DESTINATION ${GSTRICKD_INCLUDE_INSTALL_DIR})
-install(FILES ${GSTRICKD_GENERATED_DIR}/gstrickd/version.hpp
-        DESTINATION ${GSTRICKD_INCLUDE_INSTALL_DIR}/gstrickd)
-install(TARGETS gstrickd_core EXPORT gstrickd-targets)
+if(GSTRICKD_INSTALL)
+  install(DIRECTORY cpp/include/gstrickd DESTINATION ${GSTRICKD_INCLUDE_INSTALL_DIR})
+  install(FILES ${GSTRICKD_GENERATED_DIR}/gstrickd/version.hpp
+          DESTINATION ${GSTRICKD_INCLUDE_INSTALL_DIR}/gstrickd)
+  install(TARGETS gstrickd_core EXPORT gstrickd-targets)
+endif()
 
 # C API: stable ABI for non-C++ programs (cpp/include/gstrickd/gstrickd.h), exported as
 # gstrickd::gstrickd_c.
@@ -98,15 +101,17 @@ if(GSTRICKD_BUILD_CAPI)
           RUNTIME DESTINATION ${GSTRICKD_LIB_INSTALL_DIR}
           ARCHIVE DESTINATION ${GSTRICKD_LIB_INSTALL_DIR})
 endif()
-install(EXPORT gstrickd-targets NAMESPACE gstrickd:: DESTINATION ${GSTRICKD_CMAKE_INSTALL_DIR})
-configure_package_config_file(${CMAKE_CURRENT_SOURCE_DIR}/cmake/gstrickd-config.cmake.in
-                              ${CMAKE_CURRENT_BINARY_DIR}/gstrickd-config.cmake
-                              INSTALL_DESTINATION ${GSTRICKD_CMAKE_INSTALL_DIR})
-write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/gstrickd-config-version.cmake
-                                 VERSION ${PROJECT_VERSION} COMPATIBILITY SameMinorVersion)
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/gstrickd-config.cmake
-              ${CMAKE_CURRENT_BINARY_DIR}/gstrickd-config-version.cmake
-        DESTINATION ${GSTRICKD_CMAKE_INSTALL_DIR})
+if(GSTRICKD_INSTALL)
+  install(EXPORT gstrickd-targets NAMESPACE gstrickd:: DESTINATION ${GSTRICKD_CMAKE_INSTALL_DIR})
+  configure_package_config_file(${CMAKE_CURRENT_SOURCE_DIR}/cmake/gstrickd-config.cmake.in
+                                ${CMAKE_CURRENT_BINARY_DIR}/gstrickd-config.cmake
+                                INSTALL_DESTINATION ${GSTRICKD_CMAKE_INSTALL_DIR})
+  write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/gstrickd-config-version.cmake
+                                   VERSION ${PROJECT_VERSION} COMPATIBILITY SameMinorVersion)
+  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/gstrickd-config.cmake
+                ${CMAKE_CURRENT_BINARY_DIR}/gstrickd-config-version.cmake
+          DESTINATION ${GSTRICKD_CMAKE_INSTALL_DIR})
+endif()
 
 if(GSTRICKD_BUILD_PYTHON_API)
   find_package(Python 3.14 COMPONENTS Interpreter Development.Module REQUIRED)

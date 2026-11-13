@@ -10,55 +10,26 @@ endif()
 option(DLUFD_BUILD_PYTHON_API "Build the Python extension" ${DLUFD_BUILD_PYTHON_API_DEFAULT})
 option(DLUFD_BUILD_TOOLS "Build the dlufd-propagate command-line tool" ON)
 
-file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml" dlufd_gstrickd_version_line
-     REGEX "^gstrickd-version = ")
-if(NOT dlufd_gstrickd_version_line MATCHES "^gstrickd-version = \"([^\"]+)\"$")
-  message(FATAL_ERROR "pyproject.toml must define [tool.dlufd] gstrickd-version")
-endif()
-set(DLUFD_GSTRICKD_VERSION "${CMAKE_MATCH_1}")
-set(DLUFD_GSTRICKD_GIT_TAG "v${DLUFD_GSTRICKD_VERSION}")
-
-# gstrickd: an installed package first (find_package, then the gstrickd of the Python
-# environment that runs CMake), FetchContent at a pinned tag only as a fallback.
-option(DLUFD_REQUIRE_INSTALLED_GSTRICKD
-       "Require an installed gstrickd package and never fetch it (offline and sdist builds)" OFF)
-# Combined obdeect build: the stream component is already a target.
-if(TARGET gstrickd::gstrickd_core)
-  message(STATUS "dlufd: using the in-tree stream component")
-else()
-find_package(gstrickd ${DLUFD_GSTRICKD_VERSION} EXACT CONFIG QUIET)
-if(NOT gstrickd_FOUND AND NOT gstrickd_DIR)
-  find_package(Python 3.14 COMPONENTS Interpreter)
-  if(Python_Interpreter_FOUND)
-    execute_process(COMMAND "${Python_EXECUTABLE}" -m gstrickd --cmake-dir
-                    OUTPUT_VARIABLE dlufd_gstrickd_cmake_dir OUTPUT_STRIP_TRAILING_WHITESPACE
-                    ERROR_QUIET RESULT_VARIABLE dlufd_gstrickd_probe)
-    if(dlufd_gstrickd_probe EQUAL 0 AND EXISTS "${dlufd_gstrickd_cmake_dir}/gstrickd-config.cmake")
-      set(gstrickd_DIR "${dlufd_gstrickd_cmake_dir}")
-      find_package(gstrickd ${DLUFD_GSTRICKD_VERSION} EXACT CONFIG QUIET)
+# The stream component: the target of the combined build, else the stream sources next to
+# this component (builds from the repository), else an installed package (sdist builds).
+if(NOT TARGET gstrickd::gstrickd_core)
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../stream/CMakeLists.txt)
+    set(GSTRICKD_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    set(GSTRICKD_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    set(GSTRICKD_BUILD_CAPI OFF CACHE BOOL "" FORCE)
+    set(GSTRICKD_BUILD_PYTHON_API OFF CACHE BOOL "" FORCE)
+    set(GSTRICKD_INSTALL OFF CACHE BOOL "" FORCE)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../stream ${CMAKE_CURRENT_BINARY_DIR}/stream)
+    message(STATUS "dlufd: using the stream sources in ../stream")
+  else()
+    find_package(Python 3.14 COMPONENTS Interpreter)
+    if(Python_Interpreter_FOUND AND NOT gstrickd_DIR)
+      execute_process(COMMAND "${Python_EXECUTABLE}" -m gstrickd --cmake-dir
+                      OUTPUT_VARIABLE gstrickd_DIR OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
     endif()
+    find_package(gstrickd CONFIG REQUIRED)
+    message(STATUS "dlufd: using installed gstrickd ${gstrickd_VERSION} (${gstrickd_DIR})")
   endif()
-endif()
-
-if(gstrickd_FOUND)
-  message(STATUS "dlufd: using installed gstrickd ${gstrickd_VERSION} (${gstrickd_DIR})")
-else()
-  if(DLUFD_REQUIRE_INSTALLED_GSTRICKD)
-    message(FATAL_ERROR "dlufd: no installed gstrickd package. Set -Dgstrickd_DIR=<directory of "
-                        "gstrickd-config.cmake> (python -m gstrickd --cmake-dir) or pip install gstrickd.")
-  endif()
-  message(STATUS "dlufd: no installed gstrickd ${DLUFD_GSTRICKD_VERSION} package, fetching "
-                 "${DLUFD_GSTRICKD_GIT_TAG} (FetchContent)")
-  include(FetchContent)
-  # Headers only, fetched directly and not added as a subdirectory: gstrickd's install
-  # rules, tests and tools then stay out of dlufd's build, wheel and installs.
-  FetchContent_Populate(gstrickd GIT_REPOSITORY https://github.com/GernotMaier/gstrickd.git
-                        GIT_TAG ${DLUFD_GSTRICKD_GIT_TAG})
-  add_library(gstrickd_fetched INTERFACE)
-  target_include_directories(gstrickd_fetched INTERFACE "${gstrickd_SOURCE_DIR}/cpp/include")
-  target_compile_features(gstrickd_fetched INTERFACE cxx_std_20)
-  add_library(gstrickd::gstrickd_core ALIAS gstrickd_fetched)
-endif()
 endif()
 
 # Header-only, standard-library-only core.

@@ -9,64 +9,26 @@ else()
 endif()
 option(DLAMB_BUILD_PYTHON_API "Build the Python extension" ${DLAMB_BUILD_PYTHON_API_DEFAULT})
 
-include(FetchContent)
-
-# gstrickd (photon-stream format, Philox draws, stage ids). Lookup order:
-#   1. an installed package: gstrickd_DIR or CMAKE_PREFIX_PATH;
-#   2. the package of the Python interpreter: python -m gstrickd --cmake-dir;
-#   3. FetchContent of the version tag from pyproject.toml (not with
-#      DLAMB_REQUIRE_INSTALLED_GSTRICKD=ON).
-option(DLAMB_REQUIRE_INSTALLED_GSTRICKD
-       "Require an installed gstrickd package (no FetchContent fallback)" OFF)
-file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml" dlamb_gstrickd_version_line
-     REGEX "^gstrickd-version = ")
-if(NOT dlamb_gstrickd_version_line MATCHES "^gstrickd-version = \"([^\"]+)\"$")
-  message(FATAL_ERROR "pyproject.toml must define [tool.dlamb] gstrickd-version")
-endif()
-set(DLAMB_GSTRICKD_VERSION "${CMAKE_MATCH_1}")
-set(DLAMB_GSTRICKD_GIT_TAG "v${DLAMB_GSTRICKD_VERSION}")
-
-# Combined obdeect build: the stream component is already a target.
-if(TARGET gstrickd::gstrickd_core)
-  message(STATUS "dlamb: using the in-tree stream component")
-else()
-find_package(gstrickd ${DLAMB_GSTRICKD_VERSION} EXACT CONFIG QUIET)
-if(NOT gstrickd_FOUND AND NOT gstrickd_DIR)
-  find_package(Python 3.14 COMPONENTS Interpreter QUIET)
-  if(Python_EXECUTABLE)
-    execute_process(COMMAND "${Python_EXECUTABLE}" -m gstrickd --cmake-dir
-                    OUTPUT_VARIABLE dlamb_gstrickd_python_dir
-                    OUTPUT_STRIP_TRAILING_WHITESPACE
-                    RESULT_VARIABLE dlamb_gstrickd_python_result
-                    ERROR_QUIET)
-    if(dlamb_gstrickd_python_result EQUAL 0 AND
-       EXISTS "${dlamb_gstrickd_python_dir}/gstrickd-config.cmake")
-      set(gstrickd_DIR "${dlamb_gstrickd_python_dir}")
-      find_package(gstrickd ${DLAMB_GSTRICKD_VERSION} EXACT CONFIG QUIET)
+# The stream component: the target of the combined build, else the stream sources next to
+# this component (builds from the repository), else an installed package (sdist builds).
+if(NOT TARGET gstrickd::gstrickd_core)
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../stream/CMakeLists.txt)
+    set(GSTRICKD_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    set(GSTRICKD_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    set(GSTRICKD_BUILD_CAPI OFF CACHE BOOL "" FORCE)
+    set(GSTRICKD_BUILD_PYTHON_API OFF CACHE BOOL "" FORCE)
+    set(GSTRICKD_INSTALL OFF CACHE BOOL "" FORCE)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../stream ${CMAKE_CURRENT_BINARY_DIR}/stream)
+    message(STATUS "dlamb: using the stream sources in ../stream")
+  else()
+    find_package(Python 3.14 COMPONENTS Interpreter)
+    if(Python_Interpreter_FOUND AND NOT gstrickd_DIR)
+      execute_process(COMMAND "${Python_EXECUTABLE}" -m gstrickd --cmake-dir
+                      OUTPUT_VARIABLE gstrickd_DIR OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
     endif()
+    find_package(gstrickd CONFIG REQUIRED)
+    message(STATUS "dlamb: using installed gstrickd ${gstrickd_VERSION} (${gstrickd_DIR})")
   endif()
-endif()
-
-if(gstrickd_FOUND)
-  message(STATUS "gstrickd: installed package ${gstrickd_DIR} (version ${gstrickd_VERSION})")
-else()
-  if(DLAMB_REQUIRE_INSTALLED_GSTRICKD)
-    message(FATAL_ERROR "gstrickd: no installed package found. Set gstrickd_DIR to the "
-                        "directory of gstrickd-config.cmake, or install gstrickd.")
-  endif()
-  message(STATUS "gstrickd: no installed package found, fetching commit "
-                 "${DLAMB_GSTRICKD_GIT_TAG} from GitHub (headers only)")
-  # Only the source is fetched and not added as a subdirectory: the install rules, tests
-  # and tools of the fetched project then stay out of dlamb's build and install.
-  FetchContent_Populate(gstrickd
-                        GIT_REPOSITORY https://github.com/GernotMaier/gstrickd.git
-                        GIT_TAG ${DLAMB_GSTRICKD_GIT_TAG})
-  add_library(gstrickd_fetched INTERFACE)
-  target_include_directories(gstrickd_fetched INTERFACE
-                             ${gstrickd_SOURCE_DIR}/cpp/include)
-  target_compile_features(gstrickd_fetched INTERFACE cxx_std_20)
-  add_library(gstrickd::gstrickd_core ALIAS gstrickd_fetched)
-endif()
 endif()
 
 # Header-only, standard-library-only core. Photon chunks use the gstrickd headers.
