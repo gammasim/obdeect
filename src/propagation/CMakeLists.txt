@@ -22,6 +22,10 @@ set(DLUFD_GSTRICKD_GIT_TAG "v${DLUFD_GSTRICKD_VERSION}")
 # environment that runs CMake), FetchContent at a pinned tag only as a fallback.
 option(DLUFD_REQUIRE_INSTALLED_GSTRICKD
        "Require an installed gstrickd package and never fetch it (offline and sdist builds)" OFF)
+# Combined obdeect build: the stream component is already a target.
+if(TARGET gstrickd::gstrickd_core)
+  message(STATUS "dlufd: using the in-tree stream component")
+else()
 find_package(gstrickd ${DLUFD_GSTRICKD_VERSION} EXACT CONFIG QUIET)
 if(NOT gstrickd_FOUND AND NOT gstrickd_DIR)
   find_package(Python 3.14 COMPONENTS Interpreter)
@@ -54,6 +58,7 @@ else()
   target_include_directories(gstrickd_fetched INTERFACE "${gstrickd_SOURCE_DIR}/cpp/include")
   target_compile_features(gstrickd_fetched INTERFACE cxx_std_20)
   add_library(gstrickd::gstrickd_core ALIAS gstrickd_fetched)
+endif()
 endif()
 
 # Header-only, standard-library-only core.
@@ -94,12 +99,12 @@ if(DLUFD_BUILD_TESTING)
   enable_testing()
   foreach(test_name version transmission thinning pipeline profile refraction timing
                     propagator scattering gstrickd_contract physics)
-    add_executable(test_${test_name} cpp/tests/test_${test_name}.cpp)
-    target_link_libraries(test_${test_name} PRIVATE dlufd_core)
+    add_executable(dlufd_test_${test_name} cpp/tests/test_${test_name}.cpp)
+    target_link_libraries(dlufd_test_${test_name} PRIVATE dlufd_core)
     # Reference data: cpp/tests/data (see test_transmission.cpp).
-    target_compile_definitions(test_${test_name}
+    target_compile_definitions(dlufd_test_${test_name}
                                PRIVATE DLUFD_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/cpp/tests/data")
-    dlufd_enable_warnings(test_${test_name})
-    add_test(NAME ${test_name} COMMAND test_${test_name})
+    dlufd_enable_warnings(dlufd_test_${test_name})
+    add_test(NAME ${test_name} COMMAND dlufd_test_${test_name})
   endforeach()
 endif()
