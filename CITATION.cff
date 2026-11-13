@@ -1,8 +1,8 @@
 cff-version: 1.2.0
 message: "If you use obdeect, please cite it using the metadata below."
 title: "obdeect: Photon streams, atmospheric propagation, light sources and ray tracing for imaging atmospheric Cherenkov telescopes"
-version: 0.7.2
-date-released: 2026-11-06
+version: 0.8.0
+date-released: 2026-11-13
 license: BSD-3-Clause
 type: software
 repository-code: "https://github.com/gammasim/obdeect"
