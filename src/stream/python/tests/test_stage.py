@@ -198,6 +198,28 @@ def test_transform_rejects_reapplied_factor_in_telescope_efficiency_status(tmp_p
         )
 
 
+def test_transform_rejects_same_file_and_alias(tmp_path):
+    source = tmp_path / "in.ps"
+    _write(source)
+    original = source.read_bytes()
+    link = tmp_path / "link.ps"
+    link.symlink_to(source)
+    for target in (source, link):
+        with pytest.raises(ValueError, match="same file"):
+            transform(source, target, lambda tel, cols, info: cols, stage_id=1, frame_out="camera")
+    assert source.read_bytes() == original
+
+
+def test_failed_writer_has_no_stream_end(tmp_path):
+    path = tmp_path / "partial.ps"
+    with pytest.raises(RuntimeError, match="boom"):
+        with obdeect_stream.Writer(str(path), "pytest") as writer:
+            writer.write("run", {"run_number": 5})
+            raise RuntimeError("boom")
+    with pytest.raises(RuntimeError, match="truncated"):
+        list(obdeect_stream.Reader(str(path)))
+
+
 def test_transform_indices_continue_across_array_reuses(tmp_path):
     source = tmp_path / "reuse.ps"
     with obdeect_stream.Writer(str(source), "pytest") as writer:
