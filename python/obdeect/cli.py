@@ -14,6 +14,7 @@ from obdeect import __version__
 from obdeect.formats import ModelError
 from obdeect.model import STATUS_NAMES, OpticalModel
 from obdeect.psf import summary
+from obdeect.stream import TRANSMISSION_PARTS, trace_stream
 
 # Columns of `obdeect obscurers` (see OpticalModel.obscurer_hits).
 CENSUS = ("crossed", "first", "sole")
@@ -94,6 +95,44 @@ def _write(path: Path, photons: dict, arrivals: dict) -> None:
     )
 
 
+def _trace_stream(args: argparse.Namespace) -> None:
+    if (args.pointing_zenith_deg is None) != (args.pointing_azimuth_deg is None):
+        raise ModelError("give both --pointing-zenith-deg and --pointing-azimuth-deg, or neither")
+    pointing = None
+    if args.pointing_zenith_deg is not None:
+        pointing = (args.pointing_zenith_deg, args.pointing_azimuth_deg)
+    model = OpticalModel.load(args.model)
+    try:
+        counts = trace_stream(
+            model,
+            args.input,
+            args.output,
+            seed=args.seed,
+            threads=args.threads,
+            telescopes=args.telescopes,
+            pointing=pointing,
+            telescope_transmission=args.telescope_transmission,
+        )
+    except (ValueError, RuntimeError) as error:
+        raise ModelError(str(error)) from error
+    # Standard output may carry the stream, so the summary goes to standard error.
+    print(
+        f"trace-stream: {counts['events']} events, {counts['photons_in']} photons in, "
+        f"{counts['photons_out']} out",
+        file=sys.stderr,
+    )
+
+
+def _telescope_ids(text: str) -> tuple[int, ...]:
+    try:
+        ids = tuple(int(item) for item in text.split(",") if item.strip())
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(f"telescope ids must be integers: {text!r}") from error
+    if not ids:
+        raise argparse.ArgumentTypeError("give at least one telescope id")
+    return ids
+
+
 def _plot(args: argparse.Namespace) -> None:
     try:
         from obdeect.plot import plot
@@ -159,6 +198,42 @@ def main(argv: list[str] | None = None) -> int:
     )
     _source_arguments(o)
     o.set_defaults(run=_obscurers)
+
+    s = commands.add_parser(
+        "trace-stream",
+        help="trace a gstrickd photon stream (G or T photons) to camera-frame (C) photons",
+    )
+    s.add_argument("--model", type=Path, required=True)
+    s.add_argument("--seed", type=int, required=True, help="run seed of the random draws")
+    s.add_argument("--threads", type=int, default=0, help="0 uses every core")
+    s.add_argument(
+        "--telescopes",
+        type=_telescope_ids,
+        metavar="IDS",
+        help="comma-separated telescope ids to trace; other telescopes are dropped",
+    )
+    s.add_argument(
+        "--pointing-zenith-deg",
+        type=float,
+        help="telescope zenith [deg]; default: the run keys telescope_pointing_zenith_rad "
+        "and telescope_pointing_azimuth_rad",
+    )
+    s.add_argument(
+        "--pointing-azimuth-deg",
+        type=float,
+        help="telescope azimuth [deg] in the array frame (x north, y west), as simtools' "
+        "telescope phi; not the CORSIKA shower azimuth; default: the run keys",
+    )
+    s.add_argument(
+        "--telescope-transmission",
+        choices=TRANSMISSION_PARTS,
+        default="full",
+        help="full: apply the telescope transmission, including its on-axis value; angular: "
+        "only t(theta)/t0, leaving t0 pending in the ledger for the camera",
+    )
+    s.add_argument("-i", "--input", default="-", help="input stream (default: standard input)")
+    s.add_argument("-o", "--output", default="-", help="output stream (default: standard output)")
+    s.set_defaults(run=_trace_stream)
 
     p = commands.add_parser("plot", help="plot the dish layout and the focal-plane image")
     p.add_argument("--model", type=Path, required=True)

@@ -76,6 +76,7 @@ See the [changelog](changelog.md) for release history.
 user-guide
 optics
 VALIDATION
+photon-stream
 api
 changelog
 ```
