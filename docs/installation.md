@@ -35,9 +35,11 @@ for c in stream propagation sources ray_tracing; do python -m pytest src/$c/pyth
 
 The stream component installs its headers and a CMake package. Other components build
 against, in this order, the stream target of the combined build, the stream sources in
-`src/stream`, or an installed package (`obdeect_stream_DIR`, then
-`python -m obdeect.stream --cmake-dir`). A source distribution of a component does not
-contain the stream sources, so it needs the installed `obdeect-stream` package.
+`src/stream`, the copy bundled in a component's source distribution (`stream-src`), or an
+installed package (`obdeect_stream_DIR`, then `python -m obdeect.stream --cmake-dir`). A
+source distribution of a component carries the stream sources of its own version, so it
+builds in an isolated environment; `obdeect-stream` of the same version remains the runtime
+dependency.
 
 ## Documentation
 

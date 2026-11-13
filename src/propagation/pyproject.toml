@@ -30,7 +30,7 @@ fallback_version = "0.1.0"
 build-dir = "build/{wheel_tag}"
 cmake.args = [ "-DOBDEECT_PROPAGATION_BUILD_TESTING=OFF" ]
 cmake.build-type = "Release"
-sdist.include = [ "cpp/**", "CMakeLists.txt", "python/**", "README.md" ]
+sdist.include = [ "cpp/**", "CMakeLists.txt", "python/**", "README.md", "stream-src/**" ]
 wheel.packages = { "obdeect/propagation" = "python/obdeect/propagation" }
 wheel.platlib = true
 # Editable installs rebuild the extension when the C++ sources change.
