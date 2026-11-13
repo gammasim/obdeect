@@ -26,14 +26,6 @@ sdist.include = [ "README.md", "LICENSE" ]
 # No code: this package only installs all components at the same version.
 wheel.cmake = false
 wheel.packages = []
-metadata.dependencies.provider = "scikit_build_core.metadata.template"
-metadata.dependencies.result = [
-  "obdeect-propagation=={project[version]}",
-  "obdeect-ray-tracing=={project[version]}",
-  "obdeect-sources=={project[version]}",
-  "obdeect-stream=={project[version]}",
-]
-metadata.version.provider = "scikit_build_core.metadata.setuptools_scm"
 
 # Settings shared by all components (src/*/pyproject.toml).
 [tool.cibuildwheel]
@@ -61,4 +53,18 @@ type = [
   { directory = "feature", name = "Added", showcontent = true },
   { directory = "bugfix", name = "Fixed", showcontent = true },
   { directory = "maintenance", name = "Maintenance", showcontent = true },
+]
+
+[[tool.dynamic-metadata]]
+provider = "scikit_build_core.metadata.setuptools_scm"
+
+[[tool.dynamic-metadata]]
+# All components are released together with one version.
+provider = "scikit_build_core.metadata.template"
+field = "dependencies"
+result = [
+  "obdeect-propagation=={project[version]}",
+  "obdeect-ray-tracing=={project[version]}",
+  "obdeect-sources=={project[version]}",
+  "obdeect-stream=={project[version]}",
 ]
