@@ -177,11 +177,13 @@ public:
   }
 
   void write(const std::string &record_type, const nb::dict &metadata) {
+    ensure_open();
     writer_->write_metadata(metadata_type_from_name(record_type), dict_to_metadata(metadata));
   }
 
   void write_photons(std::uint32_t telescope_id, std::uint32_t frame, std::uint64_t first_index,
                      const nb::dict &columns) {
+    ensure_open();
     using Array = nb::ndarray<const float, nb::ndim<1>, nb::c_contig, nb::device::cpu>;
     obdeect::stream::PhotonChunk chunk;
     if (frame > static_cast<std::uint32_t>(obdeect::stream::Frame::camera)) {
@@ -221,12 +223,14 @@ public:
   }
 
   void write_blob(std::uint32_t eventio_type, std::uint32_t eventio_id, const nb::bytes &data) {
+    ensure_open();
     const auto *begin = reinterpret_cast<const std::uint8_t *>(data.c_str());
     writer_->write_blob(eventio_type, eventio_id,
                         std::vector<std::uint8_t>(begin, begin + data.size()));
   }
 
   void close() {
+    ensure_open();
     writer_->finish();
     if (file_->is_open()) {
       file_->close();
@@ -239,12 +243,20 @@ public:
 
   // Closes the file without writing stream_end, so a failed run stays an invalid stream.
   void abort() {
+    aborted_ = true;
     if (file_->is_open()) {
       file_->close();
     }
   }
 
 private:
+  void ensure_open() const {
+    if (aborted_ || !file_->is_open()) {
+      throw std::runtime_error("obdeect stream: writer is closed");
+    }
+  }
+
+  bool aborted_{false};
   std::unique_ptr<std::ofstream> file_;
   std::unique_ptr<obdeect::stream::Writer> writer_;
 };
