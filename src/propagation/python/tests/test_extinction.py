@@ -259,8 +259,17 @@ def test_empty_input_keeps_columns(table):
     assert all(len(values) == 0 for values in result.values())
 
 
-@pytest.mark.parametrize("bad", [400.5, np.nan, np.inf, -1.0])
-def test_non_integral_or_non_finite_wavelength_rejected(table, bad):
+def test_non_integral_wavelength_is_floored(table):
+    columns = _photons(10, np.random.default_rng(6))
+    columns["wavelength"] = np.full(10, 400.0, dtype=np.float32)
+    expected = _apply(table, columns, weighted=False)
+    columns["wavelength"][:] = np.float32(400.5)
+    result = _apply(table, columns, weighted=False)
+    np.testing.assert_array_equal(result["p"], expected["p"])
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf, -1.0])
+def test_non_finite_wavelength_rejected(table, bad):
     columns = _photons(10, np.random.default_rng(6))
     columns["wavelength"] = np.full(10, 400.0, dtype=np.float32)
     columns["wavelength"][3] = bad
