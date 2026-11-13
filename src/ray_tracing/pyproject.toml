@@ -37,7 +37,12 @@ wheel.platlib = true
 # Editable installs rebuild the extension when the C++ sources change.
 editable.rebuild = true
 editable.verbose = false
+
+[[tool.dynamic-metadata]]
+provider = "scikit_build_core.metadata.setuptools_scm"
+
+[[tool.dynamic-metadata]]
 # All components are released together with one version.
-metadata.dependencies.provider = "scikit_build_core.metadata.template"
-metadata.dependencies.result = [ "numpy>=2.3", "obdeect-stream=={project[version]}" ]
-metadata.version.provider = "scikit_build_core.metadata.setuptools_scm"
+provider = "scikit_build_core.metadata.template"
+field = "dependencies"
+result = [ "numpy>=2.3", "obdeect-stream=={project[version]}" ]
