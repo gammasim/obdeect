@@ -30,3 +30,6 @@ dist/
 
 # Documentation build
 docs/_build/
+
+# Stream sources staged into component sdists at release time
+/src/*/stream-src/

@@ -12,16 +12,22 @@ option(OBDEECT_RAY_TRACING_BUILD_BENCH "Build the benchmark and replay tools (no
 option(OBDEECT_RAY_TRACING_BUILD_PYTHON_API "Build the Python extension" ${OBDEECT_RAY_TRACING_BUILD_PYTHON_API_DEFAULT})
 
 # The stream component: the target of the combined build, else the stream sources next to
-# this component (builds from the repository), else an installed package (sdist builds).
+# this component (builds from the repository), else the copy bundled into the sdist
+# (stream-src, staged at release time), else an installed package.
 if(NOT TARGET obdeect::stream)
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../stream/CMakeLists.txt)
+    set(OBDEECT_STREAM_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../stream)
+  elseif(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/stream-src/CMakeLists.txt)
+    set(OBDEECT_STREAM_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/stream-src)
+  endif()
+  if(OBDEECT_STREAM_SOURCE_DIR)
     set(OBDEECT_STREAM_BUILD_TESTING OFF CACHE BOOL "" FORCE)
     set(OBDEECT_STREAM_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
     set(OBDEECT_STREAM_BUILD_CAPI OFF CACHE BOOL "" FORCE)
     set(OBDEECT_STREAM_BUILD_PYTHON_API OFF CACHE BOOL "" FORCE)
     set(OBDEECT_STREAM_INSTALL OFF CACHE BOOL "" FORCE)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../stream ${CMAKE_CURRENT_BINARY_DIR}/stream)
-    message(STATUS "obdeect ray_tracing: using the stream sources in ../stream")
+    add_subdirectory(${OBDEECT_STREAM_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/stream)
+    message(STATUS "obdeect ray_tracing: using the stream sources in ${OBDEECT_STREAM_SOURCE_DIR}")
   else()
     find_package(Python 3.14 COMPONENTS Interpreter)
     if(Python_Interpreter_FOUND AND NOT obdeect_stream_DIR)

@@ -73,10 +73,24 @@ jobs:
       - name: Build the component source distributions and the obdeect package
         run: |
           python -m pip install --upgrade build
-          for component in stream propagation sources ray_tracing; do
+          python -m build --sdist --outdir dist src/stream
+          # Bundle the stream sources so each component sdist builds in an isolated
+          # environment, with exactly the stream version it is released with.
+          for component in propagation sources ray_tracing; do
+            mkdir "src/${component}/stream-src"
+            cp -R src/stream/CMakeLists.txt src/stream/cmake src/stream/cpp "src/${component}/stream-src/"
             python -m build --sdist --outdir dist "src/${component}"
+            rm -rf "src/${component}/stream-src"
           done
           python -m build --outdir dist .
+      - name: Test the component sdists in a clean isolated build
+        run: |
+          python -m venv "${RUNNER_TEMP}/sdist-test"
+          for sdist in dist/obdeect_propagation-*.tar.gz dist/obdeect_sources-*.tar.gz \
+                       dist/obdeect_ray_tracing-*.tar.gz; do
+            # No obdeect-stream installed: the build must use the bundled sources.
+            "${RUNNER_TEMP}/sdist-test/bin/pip" install --no-deps "${sdist}"
+          done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: sdist
