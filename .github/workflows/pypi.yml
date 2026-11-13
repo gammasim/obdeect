@@ -34,7 +34,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
+        # Pull requests: one platform (the tests cover the others); releases: all.
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-24.04"]') || fromJSON('["ubuntu-24.04", "ubuntu-24.04-arm", "macos-15"]') }}
         component: [stream, propagation, sources, ray_tracing]
     runs-on: ${{ matrix.os }}
     steps:
@@ -49,7 +50,8 @@ jobs:
         run: python -m pip install --upgrade cibuildwheel
       - name: Build and smoke-test wheels
         env:
-          CIBW_BUILD: "cp314-* cp315-*"
+          CIBW_BUILD: >-
+            ${{ github.event_name == 'pull_request' && 'cp314-manylinux_x86_64' || 'cp314-* cp315-*' }}
           # The components require obdeect-stream of the same version, which is not on
           # PyPI yet: install it from the same checkout before the tests.
           CIBW_BEFORE_TEST: >-
@@ -65,7 +67,7 @@ jobs:
           path: wheelhouse/*.whl
 
   sdist:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
@@ -94,7 +96,7 @@ jobs:
     strategy:
       matrix:
         project: [obdeect-stream, obdeect-propagation, obdeect-sources, obdeect-ray-tracing]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     environment: pypi-${{ matrix.project }}
     permissions:
       id-token: write
@@ -116,7 +118,7 @@ jobs:
   # The obdeect package requires all components: publish it after them.
   publish-obdeect:
     needs: publish
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     environment: pypi-obdeect
     permissions:
       id-token: write
@@ -139,7 +141,7 @@ jobs:
         github.event_name == 'workflow_dispatch' && inputs.publish_testpypi
       }}
     needs: [wheels, sdist]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     environment: testpypi
     permissions:
       id-token: write
