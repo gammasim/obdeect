@@ -18,11 +18,11 @@ the [user guide](optical-models.md#frames-and-units).
 ## Photon streams
 
 ```{eval-rst}
-.. autofunction:: obdeect.stream.trace_stream
+.. autofunction:: obdeect.ray_tracing.stream.trace_stream
 
-.. autofunction:: obdeect.stream.ground_to_telescope_rotation
+.. autofunction:: obdeect.ray_tracing.stream.ground_to_telescope_rotation
 
-.. autofunction:: obdeect.stream.minimum_input_plane_height_m
+.. autofunction:: obdeect.ray_tracing.stream.minimum_input_plane_height_m
 ```
 
 ## Analysis
