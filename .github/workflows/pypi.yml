@@ -94,6 +94,8 @@ jobs:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [wheels, sdist]
     strategy:
+      # A misconfigured publisher must not cancel the uploads of the other projects.
+      fail-fast: false
       matrix:
         project: [obdeect-stream, obdeect-propagation, obdeect-sources, obdeect-ray-tracing]
     runs-on: ubuntu-slim
