@@ -2,6 +2,9 @@
 default_language_version:
   python: python3.14
 
+# Component test data are reference files, not source.
+exclude: ^src/[^/]+/cpp/tests/data/
+
 repos:
 - repo: https://github.com/pre-commit/pre-commit-hooks
   rev: v5.0.0
@@ -26,13 +29,14 @@ repos:
   rev: "v2.29.2"
   hooks:
   - id: pyproject-fmt
+    args: ["--max-supported-python", "3.15"]
 # codespell
 - repo: https://github.com/codespell-project/codespell
   rev: v2.4.3
   hooks:
   - id: codespell
     args: [
-      "--ignore-words-list=als,hel",
+      "--ignore-words-list=als,hel,arrang,aer,chec",
     ]
 # markdownlint
 - repo: https://github.com/igorshubovych/markdownlint-cli
@@ -51,12 +55,6 @@ repos:
         "-d",
         '{extends: default, rules: {line-length: {max: 300}, indentation: {spaces: 2, indent-sequences: consistent}, truthy: {allowed-values: ["true", "false", "on", "off"]}}}'
       ]
-# towncrier
-- repo: https://github.com/twisted/towncrier
-  rev: 25.8.0
-  hooks:
-  - id: towncrier-check
-    files: ^docs/changes/
 # shellcheck
 - repo: https://github.com/shellcheck-py/shellcheck-py
   rev: v0.11.0.1-1

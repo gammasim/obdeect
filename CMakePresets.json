@@ -13,7 +13,10 @@
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "OBDEECT_BUILD_TESTING": "ON"
+        "OBDEECT_STREAM_BUILD_TESTING": "ON",
+        "OBDEECT_PROPAGATION_BUILD_TESTING": "ON",
+        "OBDEECT_SOURCES_BUILD_TESTING": "ON",
+        "OBDEECT_RAY_TRACING_BUILD_TESTING": "ON"
       }
     },
     {
@@ -47,6 +50,13 @@
     {
       "name": "debug",
       "configurePreset": "debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "release",
+      "configurePreset": "release",
       "output": {
         "outputOnFailure": true
       }

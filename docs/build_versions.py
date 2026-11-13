@@ -139,6 +139,12 @@ def export_ref(ref, destination):
     return destination
 
 
+def package_paths(checkout):
+    """The components in src/ (one repository since v0.8), or the single package before."""
+    components = sorted(path.parent for path in Path(checkout).glob("src/*/pyproject.toml"))
+    return [str(path) for path in components] or [str(checkout)]
+
+
 def install_package(checkout, destination, version=None):
     # --target keeps historical APIs separate from the development installation.
     env = dict(os.environ)
@@ -153,7 +159,7 @@ def install_package(checkout, destination, version=None):
             "--no-deps",
             "--target",
             str(destination),
-            str(checkout),
+            *package_paths(checkout),
         ],
         check=True,
         env=env,

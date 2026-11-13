@@ -1,6 +1,6 @@
 # CMake and native build products
-/build/
-/out/
+build/
+out/
 /compile_commands.json
 /tmp_planning/
 *.o
@@ -21,7 +21,7 @@ __pycache__/
 .ruff_cache/
 .venv/
 *.egg-info/
-/dist/
+dist/
 
 # IDE and operating-system files
 .DS_Store
@@ -29,4 +29,4 @@ __pycache__/
 .idea/
 
 # Documentation build
-/docs/_build/
+docs/_build/

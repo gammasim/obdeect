@@ -1,50 +1,48 @@
 [build-system]
 build-backend = "scikit_build_core.build"
-requires = [ "nanobind>=3.1", "scikit-build-core>=0.10", "setuptools-scm>=8" ]
+requires = [ "scikit-build-core>=0.11", "setuptools-scm>=8" ]
 
 [project]
 name = "obdeect"
-description = "Ray tracing for imaging atmospheric Cherenkov telescopes"
+description = "Cherenkov-telescope light simulation: all obdeect components"
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "BSD-3-Clause"
+license-files = [ "LICENSE" ]
 authors = [ { name = "obdeect contributors" } ]
 requires-python = ">=3.14"
 classifiers = [
-  "Development Status :: 2 - Pre-Alpha",
-  "License :: OSI Approved :: BSD License",
-  "Programming Language :: C++",
+  "Development Status :: 3 - Alpha",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.14",
   "Programming Language :: Python :: 3.15",
 ]
-dynamic = [ "version" ]
-dependencies = [
-  "numpy>=2.3",
-]
-optional-dependencies.dev = [ "nanobind>=3.1", "pre-commit", "pytest", "ruff" ]
-optional-dependencies.docs = [ "myst-parser", "pydata-sphinx-theme", "pyyaml", "sphinx", "sphinx-design" ]
-optional-dependencies.figures = [ "astropy", "matplotlib>=3.8" ]
-optional-dependencies.plot = [ "matplotlib>=3.8" ]
-optional-dependencies.stream = [ "gstrickd==0.1" ]
-scripts.obdeect = "obdeect.cli:main"
+dynamic = [ "dependencies", "version" ]
 
 [tool.setuptools_scm]
 fallback_version = "0.1.0"
 
 [tool.scikit-build]
-build-dir = "build/{wheel_tag}"
-cmake.args = [ "-DOBDEECT_BUILD_TESTING=OFF" ]
-cmake.build-type = "Release"
-sdist.include = [ "cpp/**", "CMakeLists.txt", "python/**", "README.md", "LICENSE" ]
-wheel.packages = [ "python/obdeect" ]
-wheel.platlib = true
-# Editable installs rebuild the extension when the C++ sources change.
-editable.rebuild = true
-editable.verbose = false
+sdist.include = [ "README.md", "LICENSE" ]
+# No code: this package only installs all components at the same version.
+wheel.cmake = false
+wheel.packages = []
+metadata.dependencies.provider = "scikit_build_core.metadata.template"
+metadata.dependencies.result = [
+  "obdeect-propagation=={project[version]}",
+  "obdeect-ray-tracing=={project[version]}",
+  "obdeect-sources=={project[version]}",
+  "obdeect-stream=={project[version]}",
+]
+metadata.version.provider = "scikit_build_core.metadata.setuptools_scm"
 
+# Settings shared by all components (src/*/pyproject.toml).
 [tool.cibuildwheel]
+# The plot tests need matplotlib, which has no musllinux wheels (a source build
+# needs network downloads); they are skipped there.
+test-requires = [ "matplotlib", "pytest" ]
 # Oldest macOS release supported by the binary wheels.
 macos.environment = { MACOSX_DEPLOYMENT_TARGET = "13.3" }
+overrides = [ { select = "*-musllinux_*", test-requires = [ "pytest" ] } ]
 
 [tool.ruff]
 target-version = "py314"
@@ -52,12 +50,7 @@ line-length = 100
 preview = true
 lint.select = [ "E", "F", "I", "UP" ]
 
-[tool.pyproject-fmt]
-max_supported_python = "3.15"
-
 [tool.towncrier]
-package = "obdeect"
-package_dir = "python"
 directory = "docs/changes"
 filename = "CHANGELOG.md"
 start_string = "<!-- towncrier release notes start -->\n"
@@ -69,6 +62,3 @@ type = [
   { directory = "bugfix", name = "Fixed", showcontent = true },
   { directory = "maintenance", name = "Maintenance", showcontent = true },
 ]
-
-[[tool.dynamic-metadata]]
-provider = "scikit_build_core.metadata.setuptools_scm"

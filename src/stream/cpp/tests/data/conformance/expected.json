@@ -1,0 +1,130 @@
+{
+ "format": "records in file order; the unknown-type record is skipped; stream_end is not listed",
+ "valid": {
+  "file": "valid.ps",
+  "records": [
+   {
+    "type": "stream",
+    "metadata": {
+     "format_major": 1,
+     "format_minor": 0,
+     "producer": "conformance"
+    }
+   },
+   {
+    "type": "run",
+    "metadata": {
+     "run_number": 7,
+     "energy_min_gev": 0.25,
+     "name": "site",
+     "telescope_x_m": [
+      0.0,
+      10.5
+     ]
+    }
+   },
+   {
+    "type": "efficiency_status",
+    "metadata": {
+     "factors": "qe",
+     "qe.state": "applied",
+     "qe.source": "test"
+    }
+   },
+   {
+    "type": "event",
+    "metadata": {
+     "event_number": 3
+    }
+   },
+   {
+    "type": "telescope",
+    "metadata": {
+     "telescope_id": 2,
+     "frame": 1
+    }
+   },
+   {
+    "type": "photons",
+    "telescope_id": 2,
+    "frame": 1,
+    "first_index": 0,
+    "columns": {
+     "x": [
+      0.0,
+      1.0,
+      2.0
+     ],
+     "y": [
+      0.5,
+      1.5,
+      2.5
+     ],
+     "cx": [
+      0.0,
+      0.25,
+      0.5
+     ],
+     "cy": [
+      0.0,
+      -0.25,
+      -0.5
+     ],
+     "t": [
+      10.0,
+      11.0,
+      12.0
+     ],
+     "w": [
+      1.0,
+      1.0,
+      0.5
+     ],
+     "zem": [
+      8000.0,
+      8100.0,
+      8200.0
+     ]
+    }
+   },
+   {
+    "type": "photons",
+    "telescope_id": 2,
+    "frame": 1,
+    "first_index": 3,
+    "columns": {}
+   },
+   {
+    "type": "blob",
+    "eventio_type": 1204,
+    "eventio_id": 9,
+    "data": [
+     1,
+     2,
+     3,
+     255
+    ]
+   },
+   {
+    "type": "telescope_end",
+    "metadata": {
+     "photons": 2.5
+    }
+   },
+   {
+    "type": "event_end",
+    "metadata": {}
+   },
+   {
+    "type": "run_end",
+    "metadata": {}
+   }
+  ]
+ },
+ "invalid": {
+  "bad_magic.ps": "bad magic",
+  "unknown_major.ps": "unsupported format major version",
+  "truncated_chunk.ps": "truncated",
+  "too_many_rows.ps": "2^16 rows"
+ }
+}

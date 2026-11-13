@@ -1,0 +1,7 @@
+# test camera
+Pixel 0 0 0.0 0.0 1.0
+Pixel 1 0 1.0 0.0 1.0
+Pixel 2 0 0.0 1.0 1.0
+Pixel 3 0 1.0 1.0 1.0
+Trigger  * of 0 1 [2]
+Trigger  * of 2 3

@@ -1,12 +1,14 @@
 ---
 name: Build and publish obdeect
+# One tag vX.Y.Z releases all components and the obdeect package at version X.Y.Z.
 
 on:
   pull_request:
     paths:
-      - "cpp/**"
-      - "python/**"
-      - "CMakeLists.txt"
+      - "src/*/cpp/**"
+      - "src/*/python/**"
+      - "src/*/CMakeLists.txt"
+      - "src/*/pyproject.toml"
       - "pyproject.toml"
       - ".github/workflows/pypi.yml"
   push:
@@ -33,11 +35,13 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
+        component: [stream, propagation, sources, ray_tracing]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           ref: ${{ github.ref }}
+          fetch-depth: 0  # the version comes from the repository tags
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7
         with:
           python-version: "3.14"
@@ -46,12 +50,18 @@ jobs:
       - name: Build and smoke-test wheels
         env:
           CIBW_BUILD: "cp314-* cp315-*"
-          CIBW_TEST_REQUIRES: "pytest matplotlib"
-          CIBW_TEST_COMMAND: python -m pytest {project}/python/tests -q
-        run: python -m cibuildwheel --output-dir wheelhouse
+          # The components require obdeect-stream of the same version, which is not on
+          # PyPI yet: install it from the same checkout before the tests.
+          CIBW_BEFORE_TEST: >-
+            ${{ matrix.component != 'stream' && 'pip install {project}/src/stream' || '' }}
+          CIBW_TEST_COMMAND: python -m pytest {package}/python/tests -q
+        # Shared settings: [tool.cibuildwheel] in the root pyproject.toml.
+        run: >-
+          python -m cibuildwheel src/${{ matrix.component }} --config-file pyproject.toml
+          --output-dir wheelhouse
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
-          name: wheels-${{ matrix.os }}
+          name: wheels-${{ matrix.component }}-${{ matrix.os }}
           path: wheelhouse/*.whl
 
   sdist:
@@ -60,30 +70,66 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           ref: ${{ github.ref }}
+          fetch-depth: 0
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7
         with:
           python-version: "3.14"
-      - name: Build source distribution
+      - name: Build the component source distributions and the obdeect package
         run: |
           python -m pip install --upgrade build
-          python -m build --sdist --outdir dist
+          for component in stream propagation sources ray_tracing; do
+            python -m build --sdist --outdir dist "src/${component}"
+          done
+          python -m build --outdir dist .
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: sdist
-          path: dist/*.tar.gz
+          path: dist/*
 
+  # One job and GitHub environment per PyPI project: a PyPI trusted publisher is
+  # registered per project, with the environment pypi-<project>.
   publish:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [wheels, sdist]
+    strategy:
+      matrix:
+        project: [obdeect-stream, obdeect-propagation, obdeect-sources, obdeect-ray-tracing]
     runs-on: ubuntu-24.04
-    environment: pypi
+    environment: pypi-${{ matrix.project }}
     permissions:
       id-token: write
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8
         with:
-          path: dist
+          path: all
           merge-multiple: true
+      - name: Select the distributions of ${{ matrix.project }}
+        env:
+          PROJECT: ${{ matrix.project }}
+        run: |
+          mkdir dist
+          mv all/"${PROJECT//-/_}"-[0-9]* dist/
+          ls dist
+      - name: Publish distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # release/v1
+
+  # The obdeect package requires all components: publish it after them.
+  publish-obdeect:
+    needs: publish
+    runs-on: ubuntu-24.04
+    environment: pypi-obdeect
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8
+        with:
+          path: all
+          merge-multiple: true
+      - name: Select the distributions of obdeect
+        run: |
+          mkdir dist
+          mv all/obdeect-[0-9]* dist/
+          ls dist
       - name: Publish distributions to PyPI
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # release/v1
 

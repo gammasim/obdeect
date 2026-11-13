@@ -2,104 +2,116 @@
 
 ## Scope
 
-`obdeect` is a portable C++20 optical ray tracer with a thin Python interface.
-It traces photons from a defined entrance surface to a focal/sensor surface.
-Air-shower generation, electronics, triggers, and event writing are out of
-scope. Read the relevant code and tests first; use `docs/VALIDATION.md` and
-`docs/optical-models.md` for architectural or scientific changes.
+`obdeect` is one project with four components, released together under one version
+(tags `vX.Y.Z`). Each component is a portable C++20 core with a thin Python interface:
+
+- `src/stream`: photon-stream format, EventIO to and from CORSIKA and sim_telarray.
+- `src/propagation`: photon propagation through the atmosphere.
+- `src/sources`: artificial light sources.
+- `src/ray_tracing`: optical ray tracer for telescope optics and structure.
+
+Air-shower generation, electronics, triggers and event writing are out of scope.
+Read the relevant code and tests first. Use the component `docs/` for architecture
+and science changes.
 
 ## Layout
 
-- `cpp/include/obdeect/`: C++ core headers (kernels, optical models, public API).
-- `cpp/bindings/core.cpp`: nanobind extension; the only C++ file that may
-  depend on Python.
-- `cpp/tests/`: native tests (`test_*.cpp`), shared helpers (`check.hpp`),
-  and fixtures in `cpp/tests/data/`.
-- `cpp/bench/`: benchmarks and the replay comparison tool.
-- `python/obdeect/`: Python boundary (compile, trace, formats, plotting, CLI).
-- `python/tests/`: pytest suite; `telescopes.py` holds shared test helpers.
-- `docs/`: Sphinx sources. `docs/changes/` is towncrier input (see below).
+Per component `src/<c>/`:
+
+- `cpp/include/obdeect/<c>/`: C++ core headers.
+- `cpp/bindings/core.cpp`: nanobind extension; the only C++ file that may depend on Python.
+- `cpp/tests/`: native tests (`test_*.cpp`), helpers (`check.hpp`), fixtures in `cpp/tests/data/`.
+- `python/obdeect/<c>/`: Python boundary (API, CLI, optional plotting).
+- `python/tests/`: pytest suite.
+- `docs/`: Sphinx sources.
+
+Python packages: `obdeect.stream`, `.propagation`, `.sources`, `.ray_tracing`.
+Wheels: `obdeect-stream`, `obdeect-propagation`, `obdeect-sources`, `obdeect-ray-tracing`.
+`pip install obdeect` installs all. CLI: `obdeect <component> <command>`.
+Root `docs/changes/` is the Towncrier input for all components.
 
 ## Design rules
 
-- Never ever modify the main README.md. Suggest instead changes, don't apply them.
-- Terminology: this project is for gamma-ray astronomy. Always call the
-  compiled telescope geometry and optical-response artifact an "optical model".
-- Keep it simple, efficient, deterministic, and portable. Prefer small,
-  explicit data structures and testable physical kernels over frameworks,
-  global state, hidden defaults, or abstraction in the hot path.
-- Keep the core C++ standard-library-only. Python, plotting, file import, and
-  external-simulator dependencies belong at the boundary, never in a trace
-  kernel.
-- Use immutable compiled optical models and contiguous SoA photon buffers. After
-  output buffers are sized, the per-photon path must not allocate, perform I/O,
-  call Python, or dispatch virtually.
-- Make units, frames, random seeds, statuses, and loss accounting explicit.
+- Never modify the main `README.md`. Suggest changes instead, do not apply them.
+- Terminology: call a compiled telescope geometry and optical-response artifact an "optical model".
+- Keep it simple, efficient, deterministic and portable. Prefer small, explicit data
+  structures and testable kernels over frameworks, global state, hidden defaults or
+  abstraction in the hot path.
+- Keep the core C++20 standard-library-only. Python, plotting, file formats of other
+  programs and simulator dependencies belong at the boundary, never in a kernel.
+- Per-photon kernels are pure functions of (chunk, parameters): no allocation, I/O,
+  Python calls or virtual dispatch per photon. Use float32 SoA photon columns (or
+  immutable compiled models and contiguous buffers where stated by the component).
+  Write kernels as templates on the scalar type. The scalar version is the reference
+  for any SIMD or GPU version.
+- Random numbers: counter-based (Philox), keyed on (seed, stage id, event, telescope, photon index).
+- Make units, frames, random seeds, statuses, efficiencies and loss accounting explicit.
   Reject invalid or unsupported input; never silently discard fields.
+- Do not hardwire CTAO names, telescope geometry, model versions, file paths or physics
+  parameters into the core, the public API or defaults. Configuration comes from
+  validated input data (simtools writes it). CTAO support is an explicit importer or
+  versioned fixture only, never required and never an implicit fallback.
+- Plotting is optional (`.[plot]`); matplotlib is never a core dependency.
+- Use Python >=3.14 (as in the root `pyproject.toml`). Do not fall back to earlier versions.
+- The stream format is versioned; readers reject unknown major versions.
+- The EventIO reader and writer are this project's own code. Use sim_telarray only as a test reference.
 
-## Data, not telescope-specific code
+## Component rules
 
-- Do not hardwire CTAO names, telescope geometry, model versions, file paths,
-  or optical/physics parameters into the core, public API, or defaults.
-- Geometry, response tables, trace modes, and conventions are validated input
-  data. Model import produces a generic, provenance-recorded IR.
-- CTAO support is an explicit importer/adapter or versioned fixture only. It
-  must not be required to build, test, or run the generic engine, and it must
-  never be an implicit fallback.
-- Use Python >=3.14 (as in `pyproject.toml`). Do not fall back to earlier versions.
+- `stream`: Results must not depend on photon ordering, chunk size or thread count.
+  Record each efficiency in the stream.
+- `propagation`: Atmospheric effects are an ordered list of independent effects, each
+  recorded in the efficiency ledger of the stream. Extinction follows `docs/extinction.md`;
+  its tests hold the reference values.
+- `sources`: Sources are defined by validated input (position, direction, angular,
+  spectral and pulse profiles), never by hardwired device names. Sources emit at sky,
+  telescope-sphere (G), telescope (T) or camera (C) level.
+- `ray_tracing`: Use immutable compiled optical models and contiguous SoA buffers. After
+  output buffers are sized, the per-photon path must not allocate, do I/O, call Python or
+  dispatch virtually. Terminology: "optical model", not telescope-specific names.
+  When renaming a public concept, update implementation symbols, imports, exception
+  types, serialized keys, fixture variables and test call sites together.
+  Use `docs/VALIDATION.md` and `docs/optical-models.md` for architectural or scientific changes.
 
 ## Changes and validation
 
 - Make the narrowest complete change and preserve unrelated work.
-- Add an appropriate Towncrier fragment under `docs/changes/` for changes
-  that should appear in the release notes.
-- Add or update a focused test for every behavioural change. Establish analytic
-  kernel and primitive tests before optical-model, cross-tool, or performance tests.
-- Preserve results across photon ordering, blocks, and thread counts. Record
-  provenance for fixtures and cross-tool comparisons.
-- Do not weaken tolerances or replace golden data to hide a discrepancy. Keep
-  examples and fixtures clearly labelled and configuration-driven.
-- When renaming a public concept, update implementation symbols, imports,
-  exception types, serialized keys, fixture variables, and test call sites
-  together. Do not leave obsolete geometry terminology in optical-model tests.
+- Add a Towncrier fragment under root `docs/changes/` for changes that belong in the release notes.
+- Add or update a focused test for every behavioural change. Analytic kernel and primitive
+  tests come before optical-model, cross-tool or performance tests.
+- Results must not depend on photon ordering, block or chunk size, or thread count.
+- Do not weaken tolerances or replace reference data to hide a discrepancy. Record
+  provenance for fixtures and cross-tool comparisons. Keep examples and fixtures labelled
+  and configuration-driven.
 
-## Build, test, and lint
+## Build, test and lint
 
-Run from this directory. Configure before static analysis so the compilation
-database is current. The `debug` preset enables `OBDEECT_BUILD_TESTING` and
-writes to `build/debug/`; wheels build with `OBDEECT_BUILD_TESTING=OFF`.
+Run from the repository root. One combined build covers all components:
 
 ```bash
-python -m pip install -e '.[dev]'   # editable install; rebuilds the extension on C++ changes
-cmake --preset debug
-cmake --build --preset debug
-ctest --test-dir build/debug --output-on-failure
-python -m pytest python/tests
-ruff format --check python
-ruff check python
-find cpp -type f \( -name '*.cpp' -o -name '*.hpp' \) -print0 | \
+python -m pip install -e '.[dev]'     # editable install; rebuilds on C++ changes
+cmake -S . -B build
+cmake --build build
+ctest --test-dir build --output-on-failure
+python -m pytest src/<component>/python/tests   # e.g. src/ray_tracing
+ruff format --check src
+ruff check src
+find src -type f \( -name '*.cpp' -o -name '*.hpp' \) -print0 | \
 xargs -0 clang-format --dry-run --Werror
+pre-commit run --all-files
 ```
 
-Ruff is configured with a 100-character line limit. Run `ruff format` before
-`ruff check`, and manually wrap long strings or boolean expressions that the
-formatter leaves unchanged.
+Ruff uses a 100-character line limit (root `pyproject.toml`). Run `ruff format` before
+`ruff check`. A clean handoff needs both `ruff format --check src` and `ruff check src`.
+After renames, grep the Python files for removed symbols and run the focused tests first.
 
-After renames, search the affected Python files for removed symbols and run
-the focused tests before the full suite. A clean handoff requires both
-`ruff format --check python` and `ruff check python`; do not rely on a passing
-test run alone because stale test references can fail collection or linting.
+Run `clang-tidy -p build <changed-file>` for changed C++ files when available.
+`pre-commit run --all-files` runs ruff, codespell, markdownlint, yamllint, actionlint,
+pyproject-fmt, shellcheck and the towncrier check. Run the full checks for shared kernels,
+interfaces, configuration or tooling changes.
 
-Run `clang-tidy -p build/debug <changed-file>` for changed C++ translation units
-(`cpp/tests/`, `cpp/bench/`, `cpp/bindings/`, or `cpp/include/obdeect/` headers)
-when available, and `pre-commit run --all-files` before handoff. Pre-commit runs
-ruff, codespell, markdownlint, yamllint, actionlint, pyproject-fmt, shellcheck,
-and the towncrier check. Start with the smallest relevant test; run the full
-checks for shared kernels, interfaces, configuration, or tooling changes.
-
-CI also builds and tests a `-DOBDEECT_USE_FMA=ON` Release configuration and an
-AddressSanitizer/UBSan Debug configuration. Run those locally for changes to
-floating-point kernels or memory-handling code:
+CI also builds a `-DOBDEECT_USE_FMA=ON` Release and an AddressSanitizer/UBSan Debug build.
+Run them locally for floating-point kernel or memory-handling changes:
 
 ```bash
 cmake -S . -B build-sanitize -DCMAKE_BUILD_TYPE=Debug \
@@ -109,5 +121,6 @@ cmake --build build-sanitize --parallel
 ctest --test-dir build-sanitize --output-on-failure
 ```
 
-Docs build with warnings as errors: `sphinx-build -W --keep-going -b html docs docs/_build/html`.
-Regenerate figures only from new validation results, via `docs/figures/make_figures.py`.
+Docs build with warnings as errors, per component:
+`sphinx-build -W --keep-going -b html src/<component>/docs src/<component>/docs/_build/html`.
+Regenerate ray-tracing figures only from new validation results, via `src/ray_tracing/docs/figures/make_figures.py`.

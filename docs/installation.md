@@ -1,43 +1,47 @@
 # Installation
 
-Install the Python package and the `obdeect` command in a virtual environment:
+Install all components, or only the ones you need, in a virtual environment:
 
 ```sh
 python3.14 -m venv .venv
 source .venv/bin/activate
-python -m pip install obdeect
-obdeect --help
+python -m pip install obdeect              # all components at one version
+python -m pip install obdeect-sources      # one component (also installs obdeect-stream)
+obdeect --version                          # installed components and stream format version
 ```
 
-The package requires Python 3.14 or later. If no wheel is available for your
-platform, installation builds the extension and requires a C++20 compiler.
+| Component | Package | Python | Command |
+|---|---|---|---|
+| photon stream | `obdeect-stream` | `obdeect.stream` | `obdeect stream ...` |
+| atmospheric propagation | `obdeect-propagation` | `obdeect.propagation` | `obdeect propagation ...` |
+| light sources | `obdeect-sources` | `obdeect.sources` | `obdeect sources ...` |
+| ray tracing | `obdeect-ray-tracing` | `obdeect.ray_tracing` | `obdeect ray-tracing ...` |
 
-For plotting, install the optional Matplotlib dependency with
-`python -m pip install "obdeect[plot]"`.
+The packages require Python 3.14 or later. If no wheel is available for your platform,
+installation builds the extensions and requires a C++20 compiler and CMake 3.20 or later.
+For plots, install the `plot` extra, e.g. `python -m pip install "obdeect-ray-tracing[plot]"`.
 
-## Install from source
+## From source
 
-From an obdeect checkout, install the package in editable mode:
+From a checkout, build and test all components:
 
 ```sh
-python -m pip install -e ".[dev]"
+cmake --preset release && cmake --build --preset release && ctest --preset release
+python -m pip install -e ./src/stream -e ./src/propagation -e ./src/sources -e "./src/ray_tracing[dev]"
+for c in stream propagation sources ray_tracing; do python -m pytest src/$c/python/tests; done
 ```
 
-To build the documentation, also install the documentation dependencies:
+## C++ consumers
+
+The stream component installs its headers and a CMake package. Other components build
+against, in this order, the stream target of the combined build, the stream sources in
+`src/stream`, or an installed package (`obdeect_stream_DIR`, then
+`python -m obdeect.stream --cmake-dir`). A source distribution of a component does not
+contain the stream sources, so it needs the installed `obdeect-stream` package.
+
+## Documentation
 
 ```sh
-python -m pip install -e ".[docs]"
+python -m pip install "./src/ray_tracing[docs]"
 sphinx-build -W --keep-going -b html docs docs/_build/html
 ```
-
-To regenerate validation figures from their external inputs, install `.[figures]`.
-
-## Build options
-
-- `-DOBDEECT_USE_FMA=ON` (CMake, default OFF) evaluates the aspheric polynomials
-  with `std::fma`. Use it only on hardware with fused multiply-add: without it
-  `std::fma` is emulated and very slow. Results differ from builds without it
-  at the rounding level. It is disabled by default.
-- Results also remain platform-dependent in the last bits, because the math
-  library (`std::pow`, `std::hypot`, trigonometric functions) differs between
-  platforms; see [Validation](VALIDATION.md#rounding-level-changes).

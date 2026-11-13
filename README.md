@@ -1,76 +1,58 @@
 # obdeect
 
-<p align="center">
-  <img src="docs/_static/images/obdeect_21ratio_small.jpg" alt="Obdeect optical ray tracing for imaging atmospheric Cherenkov telescopes" width="800">
-</p>
+obdeect is a simulation chain for imaging atmospheric Cherenkov telescopes. The chain is
+made of modules that exchange photons as photon streams: light sources or CORSIKA air
+showers, the atmosphere, telescope optics, and the camera simulation in sim_telarray, which
+is reached through `obdeect stream to-simtel`. The repository [simtools](https://github.com/gammasim/simtools)
+configures and runs the chain.
 
-[![DOI](https://zenodo.org/badge/1376945125.svg)](https://doi.org/10.5281/zenodo.23942573)
+| Component | Package | Command |
+|---|---|---|
+| photon stream | `obdeect-stream` | `obdeect stream ...` |
+| atmospheric propagation | `obdeect-propagation` | `obdeect propagation ...` |
+| light sources | `obdeect-sources` | `obdeect sources ...` |
+| ray tracing | `obdeect-ray-tracing` | `obdeect ray-tracing ...` |
 
-`obdeect` is a C++20 optical ray tracer for imaging atmospheric Cherenkov
-telescopes. The C++ core uses only the standard library. Python compiles
-optical models from the simulation models, traces photons, and plots results;
-simtools uses it as a ray-tracing backend.
-
-See the [user guide](docs/USER_GUIDE.md), the [physics](docs/PHYSICS.md) of the
-photon path, and the [validation](docs/VALIDATION.md) against sim_telarray.
-
-## User Installation
-
-Install from PyPI with:
+## Install
 
 ```sh
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install obdeect
+pip install obdeect             # all components at one version
+pip install obdeect-sources     # one component (also installs obdeect-stream)
+obdeect --version               # installed components and photon-stream format version
 ```
 
-(requires python 3.14 or higher)
+Requires Python 3.14 or higher.
 
-Verify the installation by compiling an optical model from a
-[simulation-models](https://gitlab.cta-observatory.org/cta-science/simulations/simulation-model/simulation-models)
-checkout and tracing a star:
+## Example
+
+Flasher light on the dish, propagated through the atmosphere, traced through a telescope
+optical model, and written as sim_telarray input:
 
 ```sh
-obdeect compile --simulation-models ../simulation-models --model MSTN-01 \
-  --version 7.0.0 --seed 1 --zenith-deg 20 --output mst.json
-obdeect trace --model mst.json --seed 2 --photons 10000 --field-deg 0.5 0
+obdeect sources flasher --type dish --photons 1e6 \
+  | obdeect propagation run --transmission atm.dat --site-altitude 2156 --seed 1 -i - -o - \
+  | obdeect ray-tracing trace-stream --model telescope.json --seed 7 \
+  | obdeect stream to-simtel --camera-map cam.txt > sim.simtel
 ```
 
-## Developer Installation
+`obdeect stream to-simtel` prints the sim_telarray option (`Bypass_Optics`) to use for the
+file.
+
+## Build from source
 
 ```sh
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[dev]'
-cmake --preset debug
-cmake --build --preset debug --target clean  # optional: clean the build directory before building
-cmake --build --preset debug
+cmake -S . -B build && cmake --build build && ctest --test-dir build
+pip install ./src/stream ./src/propagation ./src/sources ./src/ray_tracing
+for c in stream propagation sources ray_tracing; do pytest src/$c/python/tests; done
+pytest validation   # end-to-end chain
 ```
 
-The C++ tests are in `build/debug/tests/`.
+Requires Python 3.14 or higher, a C++20 compiler, and CMake 3.20 or higher.
 
-Test your installation with:
+## Status
 
-```sh
-ctest --test-dir build/debug --output-on-failure
-python -m pytest python/tests
-```
+Alpha. The ray tracing component is pre-alpha.
 
-## License and Citation
+## License
 
-BSD-3-Clause license. Citation metadata is in [CITATION.cff](CITATION.cff).
-
-## Generative AI disclosure
-
-Generative AI tools (mostly ChatGPT 5.6, Opus 5.5) were used to write the entire code of this project. All AI-assisted outputs were reviewed, validated, and, where necessary, modified by the authors to ensure accuracy and reliability.
-
-## Documentation
-
-Build the documentation locally (in the virtual environment) with:
-
-```sh
-python -m pip install -e '.[docs]'
-sphinx-build -W --keep-going -b html docs docs/_build/html
-```
-
-Open `docs/_build/html/index.html` in a browser. The figures in `docs/_static/figures/` are part of the repository; regenerate them from new validation results with `python docs/figures/make_figures.py`.
+BSD-3-Clause. See [LICENSE](LICENSE) and [CITATION.cff](CITATION.cff).

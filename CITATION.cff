@@ -1,13 +1,22 @@
 cff-version: 1.2.0
 message: "If you use obdeect, please cite it using the metadata below."
-title: "obdeect: Ray tracing for imaging atmospheric Cherenkov telescopes"
+title: "obdeect: Photon streams, atmospheric propagation, light sources and ray tracing for imaging atmospheric Cherenkov telescopes"
 version: 0.7.2
 date-released: 2026-11-06
 license: BSD-3-Clause
 type: software
+repository-code: "https://github.com/gammasim/obdeect"
 authors:
   - given-names: Gernot
     family-names: Maier
     affiliation: DESY
     orcid: 'https://orcid.org/0000-0001-9868-4700'
-abstract: "A C++20 IACT-only prototype for tracing photons through telescope optics and structure."
+keywords:
+  - Cherenkov telescopes
+  - IACT
+  - photon streams
+  - atmospheric propagation
+  - light sources
+  - ray tracing
+  - simulation
+abstract: "Photon-level simulation for imaging atmospheric Cherenkov telescopes: a versioned photon-stream format with EventIO adapters to CORSIKA and sim_telarray, atmospheric propagation (extinction, refraction, timing, single scattering), artificial light sources, and optical ray tracing through telescope optics and structure. Standard-library-only C++20 cores with Python APIs."
