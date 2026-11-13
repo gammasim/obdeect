@@ -1,6 +1,6 @@
 // dlamb-beam-scan: parallel downward beam scanned over the camera area (sky frame).
 
-#include "dlamb/programs/beam-scan.hpp"
+#include "obdeect/sources/programs/beam-scan.hpp"
 
 #include "tool_args.hpp"
 
@@ -18,7 +18,7 @@ const char *usage = R"(usage: dlamb-beam-scan [options] [-o FILE]
 } // namespace
 
 int main(int argc, char **argv) {
-  using namespace dlamb;
+  using namespace obdeect::sources;
   return cli::run_tool("dlamb-beam-scan", [&] {
     cli::ArgCursor cursor(argc, argv);
     programs::XylsOptions o;

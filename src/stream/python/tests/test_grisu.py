@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-import gstrickd
+import obdeect.stream as obdeect_stream
 import numpy as np
 import pytest
 
@@ -31,7 +31,7 @@ def _write_stream(path, weight=1.0, atmosphere="applied", wavelength=400.0):
         "zem": np.array([20000.0], np.float32),
         "wavelength": np.array([wavelength], np.float32),
     }
-    with gstrickd.Writer(str(path), "pytest") as writer:
+    with obdeect_stream.Writer(str(path), "pytest") as writer:
         writer.write(
             "run",
             {
@@ -72,7 +72,7 @@ def test_stream_to_grisu_text(tmp_path):
     config = tmp_path / "TLLOC.dat"
     config.write_text("* a comment\n* TLLOC 4 -20.1 -10.0 0 0 0 0\n")
     out = tmp_path / "run.grisu"
-    gstrickd.stream_to_grisu(stream, out, config, qe=0.5, event_details=True)
+    obdeect_stream.stream_to_grisu(stream, out, config, qe=0.5, event_details=True)
     text = out.read_text()
     assert text.startswith("* HEADF  <-- Start of header flag\n")
     assert _body(text) == (
@@ -89,7 +89,7 @@ def test_unmatched_telescope_warns(tmp_path):
     config = tmp_path / "TLLOC.dat"
     config.write_text("* TLLOC 4 100 100 0 0 0 0\n")
     with pytest.warns(UserWarning, match="skipped 1 telescope"):
-        gstrickd.stream_to_grisu(stream, tmp_path / "run.grisu", config)
+        obdeect_stream.stream_to_grisu(stream, tmp_path / "run.grisu", config)
     assert "P " not in (tmp_path / "run.grisu").read_text()
 
 
@@ -106,13 +106,13 @@ def test_errors(tmp_path, options, message):
     stream = tmp_path / "run.ps"
     _write_stream(stream, **options)
     with pytest.raises(RuntimeError, match=message):
-        gstrickd.stream_to_grisu(stream, tmp_path / "run.grisu")
+        obdeect_stream.stream_to_grisu(stream, tmp_path / "run.grisu")
 
 
 def test_expand_bunches(tmp_path):
     stream = tmp_path / "run.ps"
     _write_stream(stream, weight=3.0)
-    gstrickd.stream_to_grisu(stream, tmp_path / "run.grisu", expand_bunches=True)
+    obdeect_stream.stream_to_grisu(stream, tmp_path / "run.grisu", expand_bunches=True)
     assert (tmp_path / "run.grisu").read_text().count("\nP ") == 3
 
 
@@ -120,7 +120,7 @@ def test_expand_bunches(tmp_path):
 def test_cli_matches_python(tmp_path):
     stream = tmp_path / "run.ps"
     _write_stream(stream)
-    gstrickd.stream_to_grisu(stream, tmp_path / "py.grisu")
+    obdeect_stream.stream_to_grisu(stream, tmp_path / "py.grisu")
     result = subprocess.run(
         [_executable("ps2grisu"), str(stream)], capture_output=True, check=True, text=True
     )

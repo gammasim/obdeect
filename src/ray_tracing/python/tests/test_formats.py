@@ -3,7 +3,7 @@
 import math
 
 import pytest
-from obdeect.formats import (
+from obdeect.ray_tracing.formats import (
     ModelError,
     components,
     length_m,
@@ -16,7 +16,7 @@ from obdeect.formats import (
     secondary_segment_frame,
     segmentation_from_record,
 )
-from obdeect.simtel_tables import evaluate, parse_rpol_table
+from obdeect.ray_tracing.simtel_tables import evaluate, parse_rpol_table
 from telescopes import MIRROR_LIST, STRUCTURE
 
 

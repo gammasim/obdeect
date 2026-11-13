@@ -1,6 +1,6 @@
 #include "check.hpp"
 
-#include "gstrickd/grisu.hpp"
+#include "obdeect/stream/grisu.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-using namespace gstrickd;
+using namespace obdeect::stream;
 
 namespace {
 

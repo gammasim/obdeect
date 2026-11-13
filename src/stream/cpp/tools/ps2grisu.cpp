@@ -1,8 +1,8 @@
 // ps2grisu: ground-frame photon stream (file or stdin) to GrISU/GrOptics photon text on stdout or
 // -o FILE.
 
-#include "gstrickd/grisu.hpp"
-#include "gstrickd/stdin_buffer.hpp"
+#include "obdeect/stream/grisu.hpp"
+#include "obdeect/stream/stdin_buffer.hpp"
 #include "tool_version.hpp"
 
 #include <cstdio>
@@ -28,8 +28,8 @@ int main(int argc, char **argv) {
   std::string input = "-";
   std::string output = "-";
   std::string config_path;
-  gstrickd::GrisuOptions options;
-  options.producer = std::string("ps2grisu ") + GSTRICKD_PACKAGE_VERSION;
+  obdeect::stream::GrisuOptions options;
+  options.producer = std::string("ps2grisu ") + OBDEECT_STREAM_PACKAGE_VERSION;
   options.warnings = &std::cerr;
   bool have_input = false;
   for (int i = 1; i < argc; ++i) {
@@ -91,12 +91,12 @@ int main(int argc, char **argv) {
       if (!config) {
         throw std::runtime_error("cannot open telescope config " + config_path);
       }
-      options.telescopes = gstrickd::read_tlloc(config);
+      options.telescopes = obdeect::stream::read_tlloc(config);
     }
 
     static std::vector<char> in_buffer(buffer_size);
     static std::vector<char> out_buffer(buffer_size);
-    gstrickd::StdinBuffer stdin_buffer;
+    obdeect::stream::StdinBuffer stdin_buffer;
     std::istream stdin_stream(&stdin_buffer);
     std::ifstream in_file;
     std::istream *in = &stdin_stream;
@@ -124,7 +124,7 @@ int main(int argc, char **argv) {
       out = &out_file;
     }
 
-    gstrickd::stream_to_grisu(*in, *out, std::move(options));
+    obdeect::stream::stream_to_grisu(*in, *out, std::move(options));
     out->flush();
     if (!*out) {
       throw std::runtime_error("write error on output");

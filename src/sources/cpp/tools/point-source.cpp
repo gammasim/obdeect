@@ -1,6 +1,6 @@
 // dlamb-point-source: point light source above the observation level (sky frame).
 
-#include "dlamb/programs/point-source.hpp"
+#include "obdeect/sources/programs/point-source.hpp"
 
 #include "sky_args.hpp"
 #include "telpos_file.hpp"
@@ -26,7 +26,7 @@ const char *usage = R"(usage: dlamb-point-source [options] [-o FILE]
 } // namespace
 
 int main(int argc, char **argv) {
-  using namespace dlamb;
+  using namespace obdeect::sources;
   return cli::run_tool("dlamb-point-source", [&] {
     cli::ArgCursor cursor(argc, argv);
     programs::XyzlsOptions o;

@@ -1,7 +1,7 @@
 #include "check.hpp"
 #include "program_stream.hpp"
 
-#include "dlamb/programs/led.hpp"
+#include "obdeect/sources/programs/led.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -12,8 +12,8 @@
 #include <utility>
 #include <vector>
 
-using namespace dlamb;
-using namespace dlamb::programs;
+using namespace obdeect::sources;
+using namespace obdeect::sources::programs;
 
 namespace {
 
@@ -51,7 +51,7 @@ void combinations() {
   auto options = base_options("0 1 2");
   options.require = 2;
   const auto s = read_stream(stream_bytes(options));
-  CHECK(count_type(s, gstrickd::RecordType::event) == 3);
+  CHECK(count_type(s, obdeect::stream::RecordType::event) == 3);
   CHECK(s.rows.size() == 3 * 20);
   std::set<std::set<int>> sets;
   for (std::size_t e = 0; e < 3; ++e) {
@@ -91,7 +91,7 @@ void slaves_and_trigger_groups() {
   }
   const auto a = read_stream(stream_bytes(plain));
   // Groups: {0,1} and {2,3} give two events of 2 x 10 photons.
-  CHECK(count_type(a, gstrickd::RecordType::event) == 2);
+  CHECK(count_type(a, obdeect::stream::RecordType::event) == 2);
   CHECK(a.rows.size() == 40);
 
   const auto b = read_stream(stream_bytes(with_slaves));
@@ -110,7 +110,7 @@ void random_pixels() {
   options.random = true;
   options.events = 5;
   const auto s = read_stream(stream_bytes(options));
-  CHECK(count_type(s, gstrickd::RecordType::event) == 5);
+  CHECK(count_type(s, obdeect::stream::RecordType::event) == 5);
   CHECK(s.rows.size() == 5 * 20);
   for (std::size_t e = 0; e < 5; ++e) {
     std::set<int> lit;
@@ -126,7 +126,7 @@ void all_pixels_and_list_errors() {
   auto options = base_options("+0 1");
   options.photons = 3.0;
   const auto s = read_stream(stream_bytes(options));
-  CHECK(count_type(s, gstrickd::RecordType::event) == 1);
+  CHECK(count_type(s, obdeect::stream::RecordType::event) == 1);
   CHECK(s.rows.size() == 6);
   auto too_many = base_options("0 1");
   too_many.require = 3;

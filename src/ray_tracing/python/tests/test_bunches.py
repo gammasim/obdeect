@@ -4,9 +4,9 @@ import math
 
 import numpy as np
 import pytest
-from obdeect import OpticalModel, ThreadPool
-from obdeect.compiler import model_hash
-from obdeect.model import _obscurer_top_z_m
+from obdeect.ray_tracing import OpticalModel, ThreadPool
+from obdeect.ray_tracing.compiler import model_hash
+from obdeect.ray_tracing.model import _obscurer_top_z_m
 from telescopes import record, segmented
 
 IDENTITY = np.eye(3)

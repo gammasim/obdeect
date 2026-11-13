@@ -1,13 +1,13 @@
-"""gstrickd.stage.transform and the conformance streams."""
+"""obdeect.stream.stage.transform and the conformance streams."""
 
 import json
 import re
 from pathlib import Path
 
-import gstrickd
+import obdeect.stream as obdeect_stream
 import numpy as np
 import pytest
-from gstrickd.stage import efficiency_status_record, transform
+from obdeect.stream.stage import efficiency_status_record, transform
 
 CONFORMANCE = Path(__file__).resolve().parents[2] / "cpp" / "tests" / "data" / "conformance"
 REQUIRED = ("x", "y", "cx", "cy", "t", "w")
@@ -21,7 +21,7 @@ def _chunk(rows, offset=0.0):
 
 
 def _write(path, *, efficiency_status=None):
-    with gstrickd.Writer(str(path), "pytest") as writer:
+    with obdeect_stream.Writer(str(path), "pytest") as writer:
         writer.write("run", {"run_number": 5})
         if efficiency_status:
             writer.write("efficiency_status", efficiency_status)
@@ -59,20 +59,20 @@ def test_transform(tmp_path):
             }
         },
     )
-    records = list(gstrickd.Reader(str(tmp_path / "out.ps")))
+    records = list(obdeect_stream.Reader(str(tmp_path / "out.ps")))
     assert [r["type"] for r in records] == [
         "stream", "run", "efficiency_status", "event", "telescope", "photons", "photons", "blob",
         "telescope_end", "event_end", "run_end",
     ]  # fmt: skip
-    assert records[0]["metadata"]["producer"] == "gstrickd.stage 0x444c0001"
+    assert records[0]["metadata"]["producer"] == "obdeect.stream.stage 0x444c0001"
     assert records[2]["metadata"]["factors"] == "qe"
     assert records[2]["metadata"]["qe.state"] == "applied"
     np.testing.assert_array_equal(records[2]["metadata"]["qe.value"], [0.1, 0.2])
-    assert records[4]["metadata"]["frame"] == gstrickd.FRAMES["camera"]
+    assert records[4]["metadata"]["frame"] == obdeect_stream.FRAMES["camera"]
     assert records[7]["data"] == b"\x01\x02"
     assert records[8]["metadata"] == {"photons": 52.0}
     for record, first, rows in ((records[5], 0, 3), (records[6], 3, 1)):
-        assert record["frame"] == gstrickd.FRAMES["camera"]
+        assert record["frame"] == obdeect_stream.FRAMES["camera"]
         assert record["first_index"] == first
         assert len(record["columns"]["x"]) == rows
     np.testing.assert_array_equal(records[5]["columns"]["x"], [0, 4, 8])
@@ -81,7 +81,7 @@ def test_transform(tmp_path):
     assert info["run"] == {"run_number": 5}
     assert info["event"] == {"event_number": 1}
     assert info["telescope"]["telescope_id"] == 4
-    assert info["frame"] == gstrickd.FRAMES["ground"]
+    assert info["frame"] == obdeect_stream.FRAMES["ground"]
     assert info["stage_id"] == 0x444C0001
 
 
@@ -99,7 +99,7 @@ def test_transform_keeps_existing_efficiency_status_first(tmp_path):
         efficiency_status={"qe": {"state": "pending", "source": "x"}},
     )
     efficiency_statuses = [
-        r for r in gstrickd.Reader(str(tmp_path / "out.ps")) if r["type"] == "efficiency_status"
+        r for r in obdeect_stream.Reader(str(tmp_path / "out.ps")) if r["type"] == "efficiency_status"
     ]
     assert [r["metadata"]["factors"] for r in efficiency_statuses] == ["atmosphere", "qe"]
 
@@ -151,7 +151,7 @@ def test_efficiency_status_record_validation():
 
 def test_conformance_streams():
     expected = json.loads((CONFORMANCE / "expected.json").read_text())
-    records = list(gstrickd.Reader(str(CONFORMANCE / expected["valid"]["file"])))
+    records = list(obdeect_stream.Reader(str(CONFORMANCE / expected["valid"]["file"])))
     wanted = expected["valid"]["records"]
     assert len(records) == len(wanted)
     for record, want in zip(records, wanted, strict=True):
@@ -173,11 +173,11 @@ def test_conformance_streams():
             assert record["data"] == bytes(want["data"])
     for name, message in expected["invalid"].items():
         with pytest.raises(Exception, match=re.escape(message)):
-            list(gstrickd.Reader(str(CONFORMANCE / name)))
+            list(obdeect_stream.Reader(str(CONFORMANCE / name)))
 
 
 def test_transform_rejects_reapplied_factor_in_telescope_efficiency_status(tmp_path):
-    with gstrickd.Writer(str(tmp_path / "in.ps"), "pytest") as writer:
+    with obdeect_stream.Writer(str(tmp_path / "in.ps"), "pytest") as writer:
         writer.write("run", {})
         writer.write("event", {})
         writer.write("telescope", {"telescope_id": 1, "frame": 1})

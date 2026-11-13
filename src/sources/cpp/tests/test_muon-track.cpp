@@ -1,11 +1,11 @@
 #include "check.hpp"
 
-#include "dlamb/emission_stream.hpp"
-#include "dlamb/programs/muon-track.hpp"
-#include "dlamb/track.hpp"
+#include "obdeect/sources/emission_stream.hpp"
+#include "obdeect/sources/programs/muon-track.hpp"
+#include "obdeect/sources/track.hpp"
 #include "program_stream.hpp"
 
-#include "gstrickd/stream.hpp"
+#include "obdeect/stream/stream.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -14,7 +14,7 @@
 #include <stdexcept>
 #include <vector>
 
-using namespace dlamb;
+using namespace obdeect::sources;
 
 namespace {
 
@@ -234,7 +234,7 @@ void rejects_unsupported() {
   CHECK(rejected);
 }
 
-// Stream: readable by gstrickd::Reader; run, events, sky frame and totals agree.
+// Stream: readable by obdeect::stream::Reader; run, events, sky frame and totals agree.
 void stream_round_trip() {
   muon_track::Options o;
   o.theta_deg = 20.0;
@@ -248,33 +248,33 @@ void stream_round_trip() {
   CHECK(summary.photons > 0);
   CHECK_NEAR(summary.weight, summary.expected, 4.0 * std::sqrt(summary.expected + 1.0));
 
-  gstrickd::Reader reader(stream);
-  gstrickd::Record record;
+  obdeect::stream::Reader reader(stream);
+  obdeect::stream::Record record;
   int runs = 0, events = 0, telescopes = 0;
   std::uint64_t rows = 0;
   double telescope_weight = 0.0;
   while (reader.next(record)) {
     switch (record.type) {
-    case gstrickd::RecordType::run:
+    case obdeect::stream::RecordType::run:
       ++runs;
       CHECK(std::get<std::int64_t>(record.metadata.at("run_number")) == 1);
       CHECK(std::get<std::int64_t>(record.metadata.at("refraction_applied")) == 0);
       break;
-    case gstrickd::RecordType::event:
+    case obdeect::stream::RecordType::event:
       ++events;
       break;
-    case gstrickd::RecordType::telescope:
+    case obdeect::stream::RecordType::telescope:
       ++telescopes;
       CHECK(std::get<std::int64_t>(record.metadata.at("frame")) ==
-            static_cast<std::int64_t>(gstrickd::Frame::sky));
+            static_cast<std::int64_t>(obdeect::stream::Frame::sky));
       CHECK_NEAR(std::get<double>(record.metadata.at("r_m")), 15.0, 1e-12);
       break;
-    case gstrickd::RecordType::photons:
-      CHECK(record.chunk.frame == gstrickd::Frame::sky);
-      CHECK(record.chunk.rows() <= gstrickd::max_chunk_rows);
+    case obdeect::stream::RecordType::photons:
+      CHECK(record.chunk.frame == obdeect::stream::Frame::sky);
+      CHECK(record.chunk.rows() <= obdeect::stream::max_chunk_rows);
       rows += record.chunk.rows();
       break;
-    case gstrickd::RecordType::telescope_end:
+    case obdeect::stream::RecordType::telescope_end:
       telescope_weight += std::get<double>(record.metadata.at("photons"));
       break;
     default:

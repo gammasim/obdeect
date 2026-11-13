@@ -2,8 +2,8 @@
 
 // Telescope list files of dlamb-point-source (docs/spec/cli-conventions.md).
 
-#include "dlamb/cli.hpp"
-#include "dlamb/programs/point-source.hpp"
+#include "obdeect/sources/cli.hpp"
+#include "obdeect/sources/programs/point-source.hpp"
 
 #include <istream>
 #include <sstream>
@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-namespace dlamb::cli {
+namespace obdeect::sources::cli {
 
 // Reads lines "x y z r" [cm]; with `corsika` only lines "TELESCOPE x y z r".
 inline std::vector<programs::TelposCm> read_telpos(std::istream &in, const std::string &option,
@@ -58,4 +58,4 @@ inline std::vector<programs::TelposCm> read_telpos(std::istream &in, const std::
   return list;
 }
 
-} // namespace dlamb::cli
+} // namespace obdeect::sources::cli

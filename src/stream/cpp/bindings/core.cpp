@@ -6,13 +6,13 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
-#include "gstrickd/format.hpp"
-#include "gstrickd/grisu.hpp"
-#include "gstrickd/photons.hpp"
-#include "gstrickd/simtel.hpp"
-#include "gstrickd/stdin_buffer.hpp"
-#include "gstrickd/stream.hpp"
-#include "gstrickd/version.hpp"
+#include "obdeect/stream/format.hpp"
+#include "obdeect/stream/grisu.hpp"
+#include "obdeect/stream/photons.hpp"
+#include "obdeect/stream/simtel.hpp"
+#include "obdeect/stream/stdin_buffer.hpp"
+#include "obdeect/stream/stream.hpp"
+#include "obdeect/stream/version.hpp"
 
 #include <algorithm>
 #include <array>
@@ -50,7 +50,7 @@ struct MetadataValueToPy {
   nb::object operator()(const std::vector<double> &v) const { return to_numpy(v.data(), v.size()); }
 };
 
-nb::dict metadata_to_dict(const gstrickd::Metadata &metadata) {
+nb::dict metadata_to_dict(const obdeect::stream::Metadata &metadata) {
   nb::dict out;
   for (const auto &[key, value] : metadata) {
     out[nb::str(key.c_str(), key.size())] = std::visit(MetadataValueToPy{}, value);
@@ -59,8 +59,8 @@ nb::dict metadata_to_dict(const gstrickd::Metadata &metadata) {
 }
 
 // Python values: bool/int -> int, float -> float, str -> str, list/tuple -> float array.
-gstrickd::Metadata dict_to_metadata(const nb::dict &dict) {
-  gstrickd::Metadata metadata;
+obdeect::stream::Metadata dict_to_metadata(const nb::dict &dict) {
+  obdeect::stream::Metadata metadata;
   for (auto item : dict) {
     const auto key = nb::cast<std::string>(item.first);
     const nb::handle value = item.second;
@@ -79,22 +79,22 @@ gstrickd::Metadata dict_to_metadata(const nb::dict &dict) {
   return metadata;
 }
 
-std::optional<gstrickd::Column> column_from_name(const std::string &name) {
-  for (std::uint32_t i = 0; i < gstrickd::n_columns; ++i) {
-    const auto column = static_cast<gstrickd::Column>(i);
-    if (name == gstrickd::column_name(column)) {
+std::optional<obdeect::stream::Column> column_from_name(const std::string &name) {
+  for (std::uint32_t i = 0; i < obdeect::stream::n_columns; ++i) {
+    const auto column = static_cast<obdeect::stream::Column>(i);
+    if (name == obdeect::stream::column_name(column)) {
       return column;
     }
   }
   return std::nullopt;
 }
 
-gstrickd::RecordType metadata_type_from_name(const std::string &name) {
-  using gstrickd::RecordType;
+obdeect::stream::RecordType metadata_type_from_name(const std::string &name) {
+  using obdeect::stream::RecordType;
   for (const auto type :
        {RecordType::run, RecordType::event, RecordType::telescope, RecordType::telescope_end,
         RecordType::event_end, RecordType::run_end, RecordType::efficiency_status}) {
-    if (name == gstrickd::record_name(type)) {
+    if (name == obdeect::stream::record_name(type)) {
       return type;
     }
   }
@@ -113,7 +113,7 @@ public:
       }
       input_ = file_.get();
     }
-    reader_ = std::make_unique<gstrickd::Reader>(*input_);
+    reader_ = std::make_unique<obdeect::stream::Reader>(*input_);
   }
 
   nb::dict next() {
@@ -127,26 +127,26 @@ public:
       throw nb::stop_iteration();
     }
     nb::dict out;
-    const gstrickd::RecordType type = record_.type;
-    out["type"] = nb::str(gstrickd::record_name(type));
+    const obdeect::stream::RecordType type = record_.type;
+    out["type"] = nb::str(obdeect::stream::record_name(type));
     switch (type) {
-    case gstrickd::RecordType::photons: {
+    case obdeect::stream::RecordType::photons: {
       const auto &chunk = record_.chunk;
       out["telescope_id"] = nb::int_(chunk.telescope_id);
       out["frame"] = nb::int_(static_cast<std::uint32_t>(chunk.frame));
       out["first_index"] = nb::int_(chunk.first_index);
       nb::dict columns;
-      for (std::uint32_t i = 0; i < gstrickd::n_columns; ++i) {
+      for (std::uint32_t i = 0; i < obdeect::stream::n_columns; ++i) {
         if (chunk.mask() & (1U << i)) {
           const auto &values = chunk.columns[i];
-          const auto column = static_cast<gstrickd::Column>(i);
-          columns[gstrickd::column_name(column)] = to_numpy(values.data(), values.size());
+          const auto column = static_cast<obdeect::stream::Column>(i);
+          columns[obdeect::stream::column_name(column)] = to_numpy(values.data(), values.size());
         }
       }
       out["columns"] = columns;
       break;
     }
-    case gstrickd::RecordType::blob:
+    case obdeect::stream::RecordType::blob:
       out["eventio_type"] = nb::int_(record_.blob_eventio_type);
       out["eventio_id"] = nb::int_(record_.blob_eventio_id);
       out["data"] =
@@ -162,8 +162,8 @@ public:
 private:
   std::unique_ptr<std::ifstream> file_;
   std::istream *input_{nullptr};
-  std::unique_ptr<gstrickd::Reader> reader_;
-  gstrickd::Record record_;
+  std::unique_ptr<obdeect::stream::Reader> reader_;
+  obdeect::stream::Record record_;
 };
 
 class PyWriter {
@@ -173,7 +173,7 @@ public:
     if (!*file_) {
       throw std::runtime_error("cannot open " + path + " for writing");
     }
-    writer_ = std::make_unique<gstrickd::Writer>(*file_, producer);
+    writer_ = std::make_unique<obdeect::stream::Writer>(*file_, producer);
   }
 
   void write(const std::string &record_type, const nb::dict &metadata) {
@@ -183,15 +183,15 @@ public:
   void write_photons(std::uint32_t telescope_id, std::uint32_t frame, std::uint64_t first_index,
                      const nb::dict &columns) {
     using Array = nb::ndarray<const float, nb::ndim<1>, nb::c_contig, nb::device::cpu>;
-    gstrickd::PhotonChunk chunk;
-    if (frame > static_cast<std::uint32_t>(gstrickd::Frame::camera)) {
+    obdeect::stream::PhotonChunk chunk;
+    if (frame > static_cast<std::uint32_t>(obdeect::stream::Frame::camera)) {
       throw nb::value_error("frame must be 0 (sky), 1 (ground), 2 (telescope) or 3 (camera)");
     }
     chunk.telescope_id = telescope_id;
-    chunk.frame = static_cast<gstrickd::Frame>(frame);
+    chunk.frame = static_cast<obdeect::stream::Frame>(frame);
     chunk.first_index = first_index;
 
-    std::vector<std::pair<gstrickd::Column, Array>> items;
+    std::vector<std::pair<obdeect::stream::Column, Array>> items;
     std::size_t rows = 0;
     std::uint32_t mask = 0;
     for (auto item : columns) {
@@ -210,7 +210,7 @@ public:
       } else if (array.shape(0) != rows) {
         throw nb::value_error("photon columns differ in length");
       }
-      mask |= gstrickd::column_bit(*column);
+      mask |= obdeect::stream::column_bit(*column);
       items.emplace_back(*column, array);
     }
     chunk.resize(rows, mask);
@@ -238,7 +238,7 @@ public:
 
 private:
   std::unique_ptr<std::ofstream> file_;
-  std::unique_ptr<gstrickd::Writer> writer_;
+  std::unique_ptr<obdeect::stream::Writer> writer_;
 };
 
 // Input path or "-" (stdin) as a stream; the file is opened in binary mode.
@@ -258,15 +258,15 @@ public:
   std::istream &get() { return *stream_; }
 
 private:
-  gstrickd::StdinBuffer stdin_buffer_;
+  obdeect::stream::StdinBuffer stdin_buffer_;
   std::istream stdin_{&stdin_buffer_};
   std::ifstream file_;
   std::istream *stream_{nullptr};
 };
 
 std::string producer_name(const char *tool = "corsika2ps") {
-  return std::string(tool) + " " + std::to_string(gstrickd::version_major) + "." +
-         std::to_string(gstrickd::version_minor) + "." + std::to_string(gstrickd::version_patch);
+  return std::string(tool) + " " + std::to_string(obdeect::stream::version_major) + "." +
+         std::to_string(obdeect::stream::version_minor) + "." + std::to_string(obdeect::stream::version_patch);
 }
 
 using CameraEntries = std::vector<std::tuple<std::uint32_t, int, double>>;
@@ -276,25 +276,25 @@ using CameraEntries = std::vector<std::tuple<std::uint32_t, int, double>>;
 NB_MODULE(_core, module) {
   module.doc() = "gstrickd native core";
   module.def("core_version", [] {
-    return std::make_tuple(gstrickd::version_major, gstrickd::version_minor,
-                           gstrickd::version_patch);
+    return std::make_tuple(obdeect::stream::version_major, obdeect::stream::version_minor,
+                           obdeect::stream::version_patch);
   });
   module.def("column_names", [] {
     std::vector<std::string> names;
-    for (std::uint32_t i = 0; i < gstrickd::n_columns; ++i) {
-      names.emplace_back(gstrickd::column_name(static_cast<gstrickd::Column>(i)));
+    for (std::uint32_t i = 0; i < obdeect::stream::n_columns; ++i) {
+      names.emplace_back(obdeect::stream::column_name(static_cast<obdeect::stream::Column>(i)));
     }
     return names;
   });
-  module.attr("format_major") = gstrickd::format_major;
-  module.attr("format_minor") = gstrickd::format_minor;
-  module.attr("max_chunk_rows") = gstrickd::max_chunk_rows;
+  module.attr("format_major") = obdeect::stream::format_major;
+  module.attr("format_minor") = obdeect::stream::format_minor;
+  module.attr("max_chunk_rows") = obdeect::stream::max_chunk_rows;
   module.attr("frame_ids") = [] {
-    const std::array<std::pair<const char *, gstrickd::Frame>, 4> frames{{
-        {"sky", gstrickd::Frame::sky},
-        {"ground", gstrickd::Frame::ground},
-        {"telescope", gstrickd::Frame::telescope},
-        {"camera", gstrickd::Frame::camera},
+    const std::array<std::pair<const char *, obdeect::stream::Frame>, 4> frames{{
+        {"sky", obdeect::stream::Frame::sky},
+        {"ground", obdeect::stream::Frame::ground},
+        {"telescope", obdeect::stream::Frame::telescope},
+        {"camera", obdeect::stream::Frame::camera},
     }};
     nb::dict out;
     for (const auto &[name, frame] : frames) {
@@ -311,7 +311,7 @@ NB_MODULE(_core, module) {
         if (!out) {
           throw nb::value_error(("cannot open " + output + " for writing").c_str());
         }
-        gstrickd::corsika_to_stream(in.get(), out, producer_name());
+        obdeect::stream::corsika_to_stream(in.get(), out, producer_name());
         out.close();
         if (out.fail()) {
           throw std::runtime_error("failed to write " + output);
@@ -322,10 +322,10 @@ NB_MODULE(_core, module) {
       "stream_to_simtel",
       [](const std::string &input, const std::string &output, const CameraEntries &camera,
          const std::vector<std::string> &allow_pending, const std::vector<std::string> &scaled) {
-        gstrickd::CameraMap map;
+        obdeect::stream::CameraMap map;
         for (const auto &[id, mirror_class, rotation] : camera) {
-          static_cast<void>(gstrickd::bypass_optics_level(mirror_class)); // validates
-          if (!map.emplace(id, gstrickd::CameraTelescope{mirror_class, rotation}).second) {
+          static_cast<void>(obdeect::stream::bypass_optics_level(mirror_class)); // validates
+          if (!map.emplace(id, obdeect::stream::CameraTelescope{mirror_class, rotation}).second) {
             throw nb::value_error(("telescope " + std::to_string(id) + " listed twice").c_str());
           }
         }
@@ -334,11 +334,11 @@ NB_MODULE(_core, module) {
         if (!out) {
           throw nb::value_error(("cannot open " + output + " for writing").c_str());
         }
-        gstrickd::SimtelOptions options;
+        obdeect::stream::SimtelOptions options;
         options.camera = std::move(map);
         options.allow_pending = std::set<std::string>(allow_pending.begin(), allow_pending.end());
         options.scaled = std::set<std::string>(scaled.begin(), scaled.end());
-        gstrickd::stream_to_simtel(in.get(), out, std::move(options));
+        obdeect::stream::stream_to_simtel(in.get(), out, std::move(options));
         out.close();
         if (out.fail()) {
           throw std::runtime_error("failed to write " + output);
@@ -350,7 +350,7 @@ NB_MODULE(_core, module) {
       "stream_to_grisu",
       [](const std::string &input, const std::string &output, const std::string &telescope_config,
          double qe, bool expand_bunches, bool event_details) {
-        gstrickd::GrisuOptions options;
+        obdeect::stream::GrisuOptions options;
         options.qe = qe;
         options.expand_bunches = expand_bunches;
         options.event_details = event_details;
@@ -360,7 +360,7 @@ NB_MODULE(_core, module) {
           if (!config) {
             throw nb::value_error(("cannot open " + telescope_config).c_str());
           }
-          options.telescopes = gstrickd::read_tlloc(config);
+          options.telescopes = obdeect::stream::read_tlloc(config);
         }
         std::ostringstream warnings;
         options.warnings = &warnings;
@@ -369,7 +369,7 @@ NB_MODULE(_core, module) {
         if (!out) {
           throw nb::value_error(("cannot open " + output + " for writing").c_str());
         }
-        gstrickd::stream_to_grisu(in.get(), out, std::move(options));
+        obdeect::stream::stream_to_grisu(in.get(), out, std::move(options));
         out.close();
         if (out.fail()) {
           throw std::runtime_error("failed to write " + output);
@@ -383,7 +383,7 @@ NB_MODULE(_core, module) {
       [](const std::string &text) {
         std::istringstream in(text);
         CameraEntries entries;
-        for (const auto &[id, telescope] : gstrickd::read_camera_map(in)) {
+        for (const auto &[id, telescope] : obdeect::stream::read_camera_map(in)) {
           entries.emplace_back(id, telescope.mirror_class, telescope.rotation_deg);
         }
         return entries;

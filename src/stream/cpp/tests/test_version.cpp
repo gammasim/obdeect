@@ -1,11 +1,11 @@
 #include "check.hpp"
 
-#include "gstrickd/version.hpp"
+#include "obdeect/stream/version.hpp"
 
 int main() {
   return run_checks([] {
-    CHECK(gstrickd::version_major >= 0);
-    CHECK(gstrickd::version_minor >= 0);
-    CHECK(gstrickd::version_patch >= 0);
+    CHECK(obdeect::stream::version_major >= 0);
+    CHECK(obdeect::stream::version_minor >= 0);
+    CHECK(obdeect::stream::version_patch >= 0);
   });
 }

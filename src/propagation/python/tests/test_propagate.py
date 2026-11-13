@@ -8,18 +8,18 @@ import sys
 import tempfile
 from pathlib import Path
 
-import dlufd
+import obdeect.propagation as obdeect_propagation
 import numpy as np
 import pytest
 
 try:
-    import gstrickd
+    import obdeect.stream as obdeect_stream
 except ImportError:
-    gstrickd = None
+    obdeect_stream = None
 
 # gstrickd's own Reader and Writer are used when importable; the local codec below is only a
 # fallback. TODO: remove the local codec once gstrickd >= 0.1 is on PyPI.
-USE_GSTRICKD_CODEC = all(hasattr(gstrickd, name) for name in ("Reader", "Writer"))
+USE_GSTRICKD_CODEC = all(hasattr(obdeect_stream, name) for name in ("Reader", "Writer"))
 
 DATA = Path(__file__).resolve().parents[2] / "cpp" / "tests" / "data"
 TABLE_PATH = DATA / "atm_trans_2000_1_10_0_0_2000.dat"
@@ -159,7 +159,7 @@ class _GstrickdStreamWriter:
     def __init__(self):
         self._directory = tempfile.TemporaryDirectory()
         self._path = Path(self._directory.name) / "stream.ps"
-        self._writer = gstrickd.Writer(str(self._path), "test")
+        self._writer = obdeect_stream.Writer(str(self._path), "test")
 
     def metadata(self, kind, values=None):
         self._writer.write(kind, values or {})
@@ -180,7 +180,7 @@ def _read_records_gstrickd(data):
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "stream.ps"
         path.write_bytes(data)
-        return list(gstrickd.Reader(str(path)))
+        return list(obdeect_stream.Reader(str(path)))
 
 
 StreamWriter = _GstrickdStreamWriter if USE_GSTRICKD_CODEC else _LocalStreamWriter
@@ -243,8 +243,8 @@ def _ledger(records):
 
 
 def test_export_is_lazy():
-    assert callable(dlufd.propagate)
-    assert "propagate" in dlufd.__all__
+    assert callable(obdeect_propagation.propagate)
+    assert "propagate" in obdeect_propagation.__all__
 
 
 def test_ledger_and_counts(tmp_path, envelope_files):
@@ -260,8 +260,8 @@ def test_ledger_and_counts(tmp_path, envelope_files):
         "envelope": envelope_files,
         "store_p": True,
     }
-    thinned = dlufd.propagate(source, thinned_out, mode="thinned", **options)
-    weighted = dlufd.propagate(source, weighted_out, mode="weighted", **options)
+    thinned = obdeect_propagation.propagate(source, thinned_out, mode="thinned", **options)
+    weighted = obdeect_propagation.propagate(source, weighted_out, mode="weighted", **options)
 
     assert thinned["photons_in"] == 2 * n
     assert thinned["dropped"] == 0
@@ -315,7 +315,7 @@ def test_input_ledger_showing_atmosphere_applied_is_rejected(tmp_path):
     source = tmp_path / "tampered.ps"
     source.write_bytes(writer.getvalue())
     with pytest.raises(ValueError, match="already applied"):
-        dlufd.propagate(
+        obdeect_propagation.propagate(
             source,
             tmp_path / "out.ps",
             transmission=TABLE_PATH,
@@ -331,7 +331,7 @@ def test_executable_matches_api(tmp_path, envelope_files):
     source = tmp_path / "in.ps"
     source.write_bytes(ground_stream(5000, seed=2, chunk_rows=2048))
     api_out = tmp_path / "api.ps"
-    dlufd.propagate(
+    obdeect_propagation.propagate(
         source,
         api_out,
         transmission=TABLE_PATH,
@@ -427,9 +427,9 @@ def test_scattering_adds_kernel_weight_times_envelope(tmp_path, mirror_file):
         "envelope": {"mirror": mirror_file},
         "mode": "weighted",
     }
-    base = dlufd.propagate(source, tmp_path / "off.ps", **options)
+    base = obdeect_propagation.propagate(source, tmp_path / "off.ps", **options)
     on_out = tmp_path / "on.ps"
-    on = dlufd.propagate(
+    on = obdeect_propagation.propagate(
         source, on_out, scattering=SCATTERING_TABLE, scattering_points=8, **options
     )
 
@@ -446,10 +446,10 @@ def test_scattering_adds_kernel_weight_times_envelope(tmp_path, mirror_file):
         "w": 1.0 + i % 3,
         "wavelength": np.full(n, 355.0),
     }
-    kernel = dlufd.scatter(
+    kernel = obdeect_propagation.scatter(
         columns,
-        dlufd.ScatteringTable(str(SCATTERING_TABLE)),
-        dlufd.TransmissionTable(str(TABLE_PATH), site_altitude_m=SITE_M),
+        obdeect_propagation.ScatteringTable(str(SCATTERING_TABLE)),
+        obdeect_propagation.TransmissionTable(str(TABLE_PATH), site_altitude_m=SITE_M),
         telescopes=SCATTER_TELESCOPES,
         seed=1,
         event=7,
@@ -477,7 +477,7 @@ def test_scattering_chunk_sizes_agree(tmp_path, mirror_file):
         source = tmp_path / f"beam_{chunk_rows}.ps"
         source.write_bytes(beam_stream(3000, chunk_rows=chunk_rows))
         results.append(
-            dlufd.propagate(
+            obdeect_propagation.propagate(
                 source,
                 tmp_path / f"out_{chunk_rows}.ps",
                 transmission=TABLE_PATH,
@@ -496,10 +496,10 @@ def test_scattering_rejects_invalid_settings(tmp_path):
     source.write_bytes(beam_stream(10, radii=False))
     options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 1}
     with pytest.raises(ValueError, match="telescope_r_m"):
-        dlufd.propagate(source, tmp_path / "out.ps", scattering=SCATTERING_TABLE, **options)
+        obdeect_propagation.propagate(source, tmp_path / "out.ps", scattering=SCATTERING_TABLE, **options)
     source.write_bytes(beam_stream(10))
     with pytest.raises(ValueError):
-        dlufd.propagate(
+        obdeect_propagation.propagate(
             source, tmp_path / "out.ps", scattering=SCATTERING_TABLE, scattering_points=0, **options
         )
 
@@ -511,7 +511,7 @@ def test_executable_matches_api_with_scattering(tmp_path):
     source = tmp_path / "beam.ps"
     source.write_bytes(beam_stream(300))
     api_out = tmp_path / "api.ps"
-    dlufd.propagate(
+    obdeect_propagation.propagate(
         source,
         api_out,
         transmission=TABLE_PATH,
@@ -550,7 +550,7 @@ def test_rejects_identical_paths(tmp_path):
     alias = tmp_path / ".." / tmp_path.name / "same.ps"
     for output in (source, alias):
         with pytest.raises(ValueError, match="same file"):
-            dlufd.propagate(
+            obdeect_propagation.propagate(
                 source,
                 output,
                 transmission=TABLE_PATH,
@@ -605,7 +605,7 @@ def test_pathlen_default_and_override(tmp_path):
     source = tmp_path / "in.ps"
     source.write_bytes(ground_stream(4000, seed=3))
     out = tmp_path / "out.ps"
-    dlufd.propagate(
+    obdeect_propagation.propagate(
         source,
         out,
         transmission=TABLE_PATH,
@@ -620,7 +620,7 @@ def test_pathlen_default_and_override(tmp_path):
     assert list(_ledger(records)["atmosphere.pathlen_m"]) == [28.0, 0.0]
 
     # Acceptance of each row with od_focus = tau(h + l) - tau(h).
-    table = dlufd.TransmissionTable(str(TABLE_PATH), SITE_M)
+    table = obdeect_propagation.TransmissionTable(str(TABLE_PATH), SITE_M)
     for telescope, pathlen in ((1, 28.0), (2, 0.0)):
         lam = _photon_block(records, telescope, "wavelength")
         zem = _photon_block(records, telescope, "zem")
@@ -647,8 +647,8 @@ def test_pathlen_changes_acceptance(tmp_path):
         "mode": "weighted",
         "store_p": True,
     }
-    dlufd.propagate(source, with_path, pathlen_m=28.0, **base)
-    dlufd.propagate(source, without, **base)
+    obdeect_propagation.propagate(source, with_path, pathlen_m=28.0, **base)
+    obdeect_propagation.propagate(source, without, **base)
     p_with = _photon_block(read_records(with_path.read_bytes()), 1, "p")
     p_without = _photon_block(read_records(without.read_bytes()), 1, "p")
     assert p_with.shape == p_without.shape
@@ -672,7 +672,7 @@ def test_pathlen_rejects_invalid(tmp_path, options):
     source = tmp_path / "in.ps"
     source.write_bytes(ground_stream(100, seed=5))
     with pytest.raises(ValueError):
-        dlufd.propagate(
+        obdeect_propagation.propagate(
             source,
             tmp_path / "out.ps",
             transmission=TABLE_PATH,
@@ -686,7 +686,7 @@ def test_pathlen_ids_must_be_integers(tmp_path):
     source = tmp_path / "in.ps"
     source.write_bytes(ground_stream(100, seed=5))
     with pytest.raises(TypeError):
-        dlufd.propagate(
+        obdeect_propagation.propagate(
             source,
             tmp_path / "out.ps",
             transmission=TABLE_PATH,
@@ -701,7 +701,7 @@ def test_executable_pathlen_matches_api(tmp_path):
     source = tmp_path / "in.ps"
     source.write_bytes(ground_stream(5000, seed=6, chunk_rows=2048))
     api_out = tmp_path / "api.ps"
-    dlufd.propagate(
+    obdeect_propagation.propagate(
         source,
         api_out,
         transmission=TABLE_PATH,
@@ -822,7 +822,7 @@ def test_geometry_only_matches_geometry_of_normal_run(tmp_path):
     source.write_bytes(sky_stream(3000, seed=8))
     normal_out = tmp_path / "normal.ps"
     geometry_out = tmp_path / "geometry.ps"
-    dlufd.propagate(
+    obdeect_propagation.propagate(
         source,
         normal_out,
         transmission=TABLE_PATH,
@@ -830,7 +830,7 @@ def test_geometry_only_matches_geometry_of_normal_run(tmp_path):
         store_p=True,
         **_geometry_options(),
     )
-    summary = dlufd.propagate(source, geometry_out, extinction=False, **_geometry_options())
+    summary = obdeect_propagation.propagate(source, geometry_out, extinction=False, **_geometry_options())
     normal = read_records(normal_out.read_bytes())
     geometry = read_records(geometry_out.read_bytes())
 
@@ -855,7 +855,7 @@ def test_geometry_only_ledger_is_pending(tmp_path):
     source = tmp_path / "in.ps"
     source.write_bytes(sky_stream(500, seed=9))
     out = tmp_path / "out.ps"
-    dlufd.propagate(source, out, extinction=False, **_geometry_options())
+    obdeect_propagation.propagate(source, out, extinction=False, **_geometry_options())
     ledger = _ledger(read_records(out.read_bytes()))
     assert ledger["factors"] == "atmosphere,wavelength"
     assert ledger["atmosphere.state"] == "pending"
@@ -867,7 +867,7 @@ def test_geometry_only_on_ground_stream_keeps_every_photon(tmp_path):
     source = tmp_path / "in.ps"
     source.write_bytes(ground_stream(1000, seed=2))
     out = tmp_path / "out.ps"
-    summary = dlufd.propagate(
+    summary = obdeect_propagation.propagate(
         source, out, extinction=False, site_altitude_m=SITE_M, seed=1, mode="weighted"
     )
     assert summary["photons_out"] == summary["photons_in"] == 2000
@@ -900,7 +900,7 @@ def test_geometry_only_rejects_extinction_options(tmp_path, options, message):
     source = tmp_path / "in.ps"
     source.write_bytes(ground_stream(10, seed=1))
     with pytest.raises(ValueError, match=message):
-        dlufd.propagate(
+        obdeect_propagation.propagate(
             source,
             tmp_path / "out.ps",
             extinction=False,
@@ -914,7 +914,7 @@ def test_transmission_is_required_with_extinction(tmp_path):
     source = tmp_path / "in.ps"
     source.write_bytes(ground_stream(10, seed=1))
     with pytest.raises(ValueError, match="transmission is required"):
-        dlufd.propagate(source, tmp_path / "out.ps", site_altitude_m=SITE_M, seed=1)
+        obdeect_propagation.propagate(source, tmp_path / "out.ps", site_altitude_m=SITE_M, seed=1)
 
 
 def test_executable_geometry_only_matches_api(tmp_path):
@@ -922,7 +922,7 @@ def test_executable_geometry_only_matches_api(tmp_path):
     source = tmp_path / "in.ps"
     source.write_bytes(sky_stream(2000, seed=4))
     api_out = tmp_path / "api.ps"
-    dlufd.propagate(source, api_out, extinction=False, **_geometry_options())
+    obdeect_propagation.propagate(source, api_out, extinction=False, **_geometry_options())
     cli_out = tmp_path / "cli.ps"
     command = [
         exe,

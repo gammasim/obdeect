@@ -1,6 +1,6 @@
 // dlamb-night-sky: night-sky background photons on a telescope sphere (sky frame).
 
-#include "dlamb/programs/night-sky.hpp"
+#include "obdeect/sources/programs/night-sky.hpp"
 
 #include "sky_args.hpp"
 #include "tool_args.hpp"
@@ -23,7 +23,7 @@ const char *usage = R"(usage: dlamb-night-sky [options] [-o FILE]
 } // namespace
 
 int main(int argc, char **argv) {
-  using namespace dlamb;
+  using namespace obdeect::sources;
   return cli::run_tool("dlamb-night-sky", [&] {
     cli::ArgCursor cursor(argc, argv);
     programs::NsbOptions o;

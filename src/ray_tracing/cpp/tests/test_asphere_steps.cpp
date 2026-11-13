@@ -1,16 +1,16 @@
-// Newton steps of the aspheric intersection (built with OBDEECT_BENCH_COUNTERS).
+// Newton steps of the aspheric intersection (built with OBDEECT_RAY_TRACING_BENCH_COUNTERS).
 // With a single proven root the first guess inside the ray's aperture range is
 // tried first; a convex secondary-like asphere needs fewer than 3 steps per call
 // on average (4.5 when the guess clamped to the start of the range goes first).
 #include "check.hpp"
 
-#include "obdeect/random.hpp"
-#include "obdeect/surfaces.hpp"
+#include "obdeect/ray_tracing/random.hpp"
+#include "obdeect/ray_tracing/surfaces.hpp"
 
 #include <cstdint>
 #include <vector>
 
-using namespace obdeect;
+using namespace obdeect::ray_tracing;
 
 namespace {
 

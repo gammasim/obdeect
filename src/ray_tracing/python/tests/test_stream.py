@@ -7,11 +7,11 @@ import math
 
 import numpy as np
 import pytest
-from obdeect import OpticalModel
-from obdeect import stream as stream_module
-from obdeect.cli import main
-from obdeect.formats import ModelError
-from obdeect.stream import (
+from obdeect.ray_tracing import OpticalModel
+from obdeect.ray_tracing import stream as stream_module
+from obdeect.ray_tracing.cli import main
+from obdeect.ray_tracing.formats import ModelError
+from obdeect.ray_tracing.stream import (
     CONSTANT_FACTOR,
     ground_to_telescope_rotation,
     minimum_input_plane_height_m,
@@ -25,8 +25,8 @@ SEED = 20261107
 
 
 @pytest.fixture
-def gstrickd():
-    return pytest.importorskip("gstrickd")
+def obdeect_stream():
+    return pytest.importorskip("obdeect.stream")
 
 
 @pytest.fixture(scope="module")
@@ -65,8 +65,8 @@ def write_stream(
     """Write a stream: `photons` maps telescope ids to photon columns (one chunk per call)."""
     if event is None:
         event = {"event_number": 1}
-    gstrickd = pytest.importorskip("gstrickd")
-    with gstrickd.Writer(str(path), "pytest") as writer:
+    obdeect_stream = pytest.importorskip("obdeect.stream")
+    with obdeect_stream.Writer(str(path), "pytest") as writer:
         writer.write("run", run)
         for ledger in run_ledgers:
             writer.write("efficiency_status", ledger)
@@ -87,29 +87,29 @@ def write_stream(
     return path
 
 
-def read_records(path, gstrickd):
-    return list(gstrickd.Reader(str(path)))
+def read_records(path, obdeect_stream):
+    return list(obdeect_stream.Reader(str(path)))
 
 
-def camera_photons(path, gstrickd, telescope_id=None):
+def camera_photons(path, obdeect_stream, telescope_id=None):
     """Concatenated C-frame columns of the photon records of one telescope (or all)."""
     chunks = [
         r
-        for r in read_records(path, gstrickd)
+        for r in read_records(path, obdeect_stream)
         if r["type"] == "photons" and telescope_id in (None, r["telescope_id"])
     ]
     names = chunks[0]["columns"].keys()
     return {name: np.concatenate([c["columns"][name] for c in chunks]) for name in names}
 
 
-def ledger_of(path, gstrickd):
-    return [r["metadata"] for r in read_records(path, gstrickd) if r["type"] == "efficiency_status"]
+def ledger_of(path, obdeect_stream):
+    return [r["metadata"] for r in read_records(path, obdeect_stream) if r["type"] == "efficiency_status"]
 
 
 def focus(
     model,
     tmp_path,
-    gstrickd,
+    obdeect_stream,
     photons,
     *,
     pointing=None,
@@ -127,7 +127,7 @@ def focus(
         pointing=pointing,
         telescope_transmission=telescope_transmission,
     )
-    columns = camera_photons(output, gstrickd)
+    columns = camera_photons(output, obdeect_stream)
     return counts, columns, output
 
 
@@ -158,15 +158,15 @@ def test_input_plane_is_above_the_incoming_obscurers(model):
         minimum_input_plane_height_m(model, 90.0)
 
 
-def test_output_telescope_frame_is_camera(model, tmp_path, gstrickd):
-    _, _, output = focus(model, tmp_path, gstrickd, beam(10, (0, 0)), pointing=(0, 0))
-    telescope = next(r for r in read_records(output, gstrickd) if r["type"] == "telescope")
+def test_output_telescope_frame_is_camera(model, tmp_path, obdeect_stream):
+    _, _, output = focus(model, tmp_path, obdeect_stream, beam(10, (0, 0)), pointing=(0, 0))
+    telescope = next(r for r in read_records(output, obdeect_stream) if r["type"] == "telescope")
     assert telescope["metadata"]["frame"] == 3
 
 
-def test_on_axis_beam_focuses_at_the_centre(model, tmp_path, gstrickd):
+def test_on_axis_beam_focuses_at_the_centre(model, tmp_path, obdeect_stream):
     counts, columns, _ = focus(
-        model, tmp_path, gstrickd, beam(4000, (0.0, 0.0, -1.0)[:2]), pointing=(0.0, 0.0)
+        model, tmp_path, obdeect_stream, beam(4000, (0.0, 0.0, -1.0)[:2]), pointing=(0.0, 0.0)
     )
     assert counts["photons_in"] == 4000
     assert 0 < counts["photons_out"] < 4000
@@ -177,23 +177,23 @@ def test_on_axis_beam_focuses_at_the_centre(model, tmp_path, gstrickd):
     assert np.allclose(columns["cx"] ** 2 + columns["cy"] ** 2 + columns["cz"] ** 2, 1.0, atol=1e-5)
 
 
-def test_off_axis_beam_shifts_by_f_tan_theta(model, tmp_path, gstrickd):
+def test_off_axis_beam_shifts_by_f_tan_theta(model, tmp_path, obdeect_stream):
     angle = math.radians(2.0)
     _, columns, _ = focus(
-        model, tmp_path, gstrickd, beam(4000, (-math.sin(angle), 0.0)), pointing=(0.0, 0.0)
+        model, tmp_path, obdeect_stream, beam(4000, (-math.sin(angle), 0.0)), pointing=(0.0, 0.0)
     )
     expected = FOCAL_LENGTH_M * math.tan(angle)
     assert abs(abs(columns["x"].mean()) - expected) < 0.02 * expected
     assert abs(columns["y"].mean()) < 1e-3
 
 
-def test_pointing_rotates_the_ground_frame(model, tmp_path, gstrickd):
+def test_pointing_rotates_the_ground_frame(model, tmp_path, obdeect_stream):
     # A beam parallel to a telescope tilted by 2 deg is focused at the centre.
     angle = math.radians(2.0)
     _, columns, _ = focus(
         model,
         tmp_path,
-        gstrickd,
+        obdeect_stream,
         beam(4000, (-math.sin(angle), 0.0)),
         pointing=(2.0, 0.0),
         name="tilted",
@@ -201,30 +201,30 @@ def test_pointing_rotates_the_ground_frame(model, tmp_path, gstrickd):
     assert abs(columns["x"].mean()) < 1e-3
     # A vertical beam is then off axis by f tan(2 deg).
     _, columns, _ = focus(
-        model, tmp_path, gstrickd, beam(4000, (0.0, 0.0)), pointing=(2.0, 0.0), name="vertical"
+        model, tmp_path, obdeect_stream, beam(4000, (0.0, 0.0)), pointing=(2.0, 0.0), name="vertical"
     )
     assert abs(abs(columns["x"].mean()) - FOCAL_LENGTH_M * math.tan(angle)) < 0.02 * (
         FOCAL_LENGTH_M * math.tan(angle)
     )
 
 
-def test_pointing_is_read_from_the_run_record(model, tmp_path, gstrickd):
+def test_pointing_is_read_from_the_run_record(model, tmp_path, obdeect_stream):
     photons = beam(2000, (0.0, 0.0))
     run = dict(RUN, telescope_pointing_zenith_rad=math.radians(2.0))
     run["telescope_pointing_azimuth_rad"] = math.radians(30.0)
-    _, from_run, _ = focus(model, tmp_path, gstrickd, photons, run=run, name="run")
-    _, from_args, _ = focus(model, tmp_path, gstrickd, photons, pointing=(2.0, 30.0), name="args")
+    _, from_run, _ = focus(model, tmp_path, obdeect_stream, photons, run=run, name="run")
+    _, from_args, _ = focus(model, tmp_path, obdeect_stream, photons, pointing=(2.0, 30.0), name="args")
     assert np.array_equal(from_run["x"], from_args["x"])
 
 
-def test_run_pointing_needs_both_keys(model, tmp_path, gstrickd):
+def test_run_pointing_needs_both_keys(model, tmp_path, obdeect_stream):
     run = dict(RUN, telescope_pointing_zenith_rad=0.1)
     source = write_stream(tmp_path / "half.ps", {1: beam(10, (0.0, 0.0))}, run=run)
     with pytest.raises(ModelError, match="telescope_pointing_azimuth_rad"):
         trace_stream(model, source, tmp_path / "out.ps", seed=SEED)
 
 
-def test_ground_photons_need_a_pointing(model, tmp_path, gstrickd):
+def test_ground_photons_need_a_pointing(model, tmp_path, obdeect_stream):
     # The event header carries no telescope pointing: its CORSIKA azimuth is ignored.
     event = {"event_number": 1, "zenith_rad": 0.3, "azimuth_rad": 1.0}
     source = write_stream(tmp_path / "nopointing.ps", {1: beam(10, (0.0, 0.0))}, event=event)
@@ -232,46 +232,46 @@ def test_ground_photons_need_a_pointing(model, tmp_path, gstrickd):
         trace_stream(model, source, tmp_path / "out.ps", seed=SEED)
 
 
-def test_on_axis_beam_at_a_tilted_pointing_focuses_at_the_centre(model, tmp_path, gstrickd):
+def test_on_axis_beam_at_a_tilted_pointing_focuses_at_the_centre(model, tmp_path, obdeect_stream):
     # Shower from the optical axis of a telescope at zenith 20 deg, azimuth 0 (array frame):
     # propagation direction (-sin(zenith) cos(azimuth), sin(zenith) sin(azimuth), -cos(zenith)).
     direction = (-math.sin(math.radians(20.0)), 0.0)
     _, columns, _ = focus(
-        model, tmp_path, gstrickd, beam(4000, direction), pointing=(20.0, 0.0), name="on"
+        model, tmp_path, obdeect_stream, beam(4000, direction), pointing=(20.0, 0.0), name="on"
     )
     assert len(columns["x"]) > 1000
     assert abs(columns["x"].mean()) < 1e-3
     assert abs(columns["y"].mean()) < 1e-3
 
 
-def test_wrong_azimuth_convention_misses_the_camera(model, tmp_path, gstrickd):
+def test_wrong_azimuth_convention_misses_the_camera(model, tmp_path, obdeect_stream):
     # Regression: the same beam with the CORSIKA propagation azimuth (about 175.68 deg for
     # an OBS-North shower at zenith 20 deg) as telescope azimuth is about 40 deg off axis.
     direction = (-math.sin(math.radians(20.0)), 0.0)
     _, columns, _ = focus(
-        model, tmp_path, gstrickd, beam(4000, direction), pointing=(20.0, 175.68), name="bad"
+        model, tmp_path, obdeect_stream, beam(4000, direction), pointing=(20.0, 175.68), name="bad"
     )
     assert math.hypot(columns["x"].mean(), columns["y"].mean()) > 1.0
 
 
-def test_telescope_frame_matches_ground_frame_at_zenith(model, tmp_path, gstrickd):
+def test_telescope_frame_matches_ground_frame_at_zenith(model, tmp_path, obdeect_stream):
     photons = beam(2000, (0.0, 0.0))
-    _, ground, _ = focus(model, tmp_path, gstrickd, photons, pointing=(0.0, 0.0), name="g")
+    _, ground, _ = focus(model, tmp_path, obdeect_stream, photons, pointing=(0.0, 0.0), name="g")
     telescope = dict(photons, z=np.zeros(2000, np.float32))
-    _, frame_t, _ = focus(model, tmp_path, gstrickd, telescope, frame=2, pointing=None, name="t")
+    _, frame_t, _ = focus(model, tmp_path, obdeect_stream, telescope, frame=2, pointing=None, name="t")
     for name in ("x", "y", "cx", "cy", "cz", "t", "w", "wavelength"):
         assert np.array_equal(ground[name], frame_t[name]), name
 
 
-def test_telescope_frame_needs_z(model, tmp_path, gstrickd):
+def test_telescope_frame_needs_z(model, tmp_path, obdeect_stream):
     with pytest.raises(ModelError, match="column z"):
-        focus(model, tmp_path, gstrickd, beam(10, (0.0, 0.0)), frame=2, name="noz")
+        focus(model, tmp_path, obdeect_stream, beam(10, (0.0, 0.0)), frame=2, name="noz")
 
 
-def test_unsupported_frame_and_column_are_rejected(model, tmp_path, gstrickd):
+def test_unsupported_frame_and_column_are_rejected(model, tmp_path, obdeect_stream):
     photons = dict(beam(10, (0.0, 0.0)), p=np.ones(10, np.float32))
     with pytest.raises(ModelError, match="column p"):
-        focus(model, tmp_path, gstrickd, photons, pointing=(0.0, 0.0), name="p")
+        focus(model, tmp_path, obdeect_stream, photons, pointing=(0.0, 0.0), name="p")
     with pytest.raises(ModelError, match="frame 0"):
         write_stream(tmp_path / "sky.ps", {1: beam(10, (0.0, 0.0))}, frame=0)
         trace_stream(model, tmp_path / "sky.ps", tmp_path / "x.ps", seed=SEED, pointing=(0, 0))
@@ -285,7 +285,7 @@ def test_unknown_photon_column_is_rejected():
         tracer._photons({"telescope_id": 1, "columns": {"w": np.ones(1), "extra": np.ones(1)}})
 
 
-def test_telescope_filter_drops_other_telescopes(model, tmp_path, gstrickd):
+def test_telescope_filter_drops_other_telescopes(model, tmp_path, obdeect_stream):
     source = write_stream(
         tmp_path / "two.ps",
         {1: beam(500, (0.0, 0.0), seed=1), 2: beam(300, (0.0, 0.0), seed=2)},
@@ -294,7 +294,7 @@ def test_telescope_filter_drops_other_telescopes(model, tmp_path, gstrickd):
     )
     output = tmp_path / "two.out.ps"
     counts = trace_stream(model, source, output, seed=SEED, pointing=(0.0, 0.0), telescopes=[2])
-    records = read_records(output, gstrickd)
+    records = read_records(output, obdeect_stream)
     telescopes = [r["metadata"]["telescope_id"] for r in records if r["type"] == "telescope"]
     assert telescopes == [2]
     assert {r["telescope_id"] for r in records if r["type"] == "photons"} == {2}
@@ -305,9 +305,9 @@ def test_telescope_filter_drops_other_telescopes(model, tmp_path, gstrickd):
     assert counts["photons_in"] == 300
 
 
-def test_ledger_pending_and_absent_apply_the_factors_in_full(model, tmp_path, gstrickd):
+def test_ledger_pending_and_absent_apply_the_factors_in_full(model, tmp_path, obdeect_stream):
     photons = beam(3000, (0.0, 0.0))
-    _, absent, _ = focus(model, tmp_path, gstrickd, photons, pointing=(0, 0), name="absent")
+    _, absent, _ = focus(model, tmp_path, obdeect_stream, photons, pointing=(0, 0), name="absent")
     pending = {
         "factors": "mirror_reflectivity,telescope_transmission,qe",
         "mirror_reflectivity.state": "pending",
@@ -315,15 +315,15 @@ def test_ledger_pending_and_absent_apply_the_factors_in_full(model, tmp_path, gs
         "qe.state": "pending",
     }
     _, with_pending, _ = focus(
-        model, tmp_path, gstrickd, photons, pointing=(0, 0), name="pend", run_ledgers=[pending]
+        model, tmp_path, obdeect_stream, photons, pointing=(0, 0), name="pend", run_ledgers=[pending]
     )
     assert np.array_equal(absent["w"], with_pending["w"])
     assert np.array_equal(absent["x"], with_pending["x"])
 
 
-def test_ledger_envelope_divides_by_the_envelope(model, tmp_path, gstrickd):
+def test_ledger_envelope_divides_by_the_envelope(model, tmp_path, obdeect_stream):
     photons = beam(3000, (0.0, 0.0))
-    _, plain, _ = focus(model, tmp_path, gstrickd, photons, pointing=(0, 0), name="plain")
+    _, plain, _ = focus(model, tmp_path, obdeect_stream, photons, pointing=(0, 0), name="plain")
     # Envelope 2 on both factors at every wavelength; the traced photons carry 1/2.
     flat = {
         "factors": "mirror_reflectivity",
@@ -332,12 +332,12 @@ def test_ledger_envelope_divides_by_the_envelope(model, tmp_path, gstrickd):
         "mirror_reflectivity.value": np.array([2.0, 2.0]),
     }
     _, flat_out, _ = focus(
-        model, tmp_path, gstrickd, photons, pointing=(0, 0), name="flat", run_ledgers=[flat]
+        model, tmp_path, obdeect_stream, photons, pointing=(0, 0), name="flat", run_ledgers=[flat]
     )
     # The same envelope written as a steeper table: at 400 nm both give 1/2.
     sloped = dict(flat, **{"mirror_reflectivity.value": np.array([1.0, 4.0])})
     _, sloped_out, _ = focus(
-        model, tmp_path, gstrickd, photons, pointing=(0, 0), name="sloped", run_ledgers=[sloped]
+        model, tmp_path, obdeect_stream, photons, pointing=(0, 0), name="sloped", run_ledgers=[sloped]
     )
     assert np.array_equal(flat_out["x"], sloped_out["x"])
     assert np.array_equal(flat_out["w"], sloped_out["w"])
@@ -346,13 +346,13 @@ def test_ledger_envelope_divides_by_the_envelope(model, tmp_path, gstrickd):
     assert float(flat_out["w"].sum()) == pytest.approx(0.5 * plain["w"].sum(), rel=0.05)
 
 
-def test_ledger_applied_is_rejected(model, tmp_path, gstrickd):
+def test_ledger_applied_is_rejected(model, tmp_path, obdeect_stream):
     applied = {"factors": "telescope_transmission", "telescope_transmission.state": "applied"}
     with pytest.raises(ModelError, match="already applied"):
         focus(
             model,
             tmp_path,
-            gstrickd,
+            obdeect_stream,
             beam(10, (0, 0)),
             pointing=(0, 0),
             name="applied",
@@ -360,7 +360,7 @@ def test_ledger_applied_is_rejected(model, tmp_path, gstrickd):
         )
 
 
-def test_telescope_ledger_overrides_the_run_ledger(model, tmp_path, gstrickd):
+def test_telescope_ledger_overrides_the_run_ledger(model, tmp_path, obdeect_stream):
     run_pending = {"factors": "mirror_reflectivity", "mirror_reflectivity.state": "pending"}
     tel_envelope = {
         "factors": "mirror_reflectivity",
@@ -376,10 +376,10 @@ def test_telescope_ledger_overrides_the_run_ledger(model, tmp_path, gstrickd):
     )
     output = tmp_path / "tel.out.ps"
     trace_stream(model, source, output, seed=SEED, pointing=(0, 0))
-    assert np.all(camera_photons(output, gstrickd)["w"] <= 0.5 + 1e-6)
+    assert np.all(camera_photons(output, obdeect_stream)["w"] <= 0.5 + 1e-6)
 
 
-def test_ledger_output_marks_own_factors_and_keeps_others(model, tmp_path, gstrickd):
+def test_ledger_output_marks_own_factors_and_keeps_others(model, tmp_path, obdeect_stream):
     qe = {
         "factors": "qe,mirror_reflectivity",
         "qe.state": "envelope",
@@ -389,9 +389,9 @@ def test_ledger_output_marks_own_factors_and_keeps_others(model, tmp_path, gstri
         "mirror_reflectivity.state": "pending",
     }
     _, _, output = focus(
-        model, tmp_path, gstrickd, beam(10, (0, 0)), pointing=(0, 0), name="out", run_ledgers=[qe]
+        model, tmp_path, obdeect_stream, beam(10, (0, 0)), pointing=(0, 0), name="out", run_ledgers=[qe]
     )
-    records = read_records(output, gstrickd)
+    records = read_records(output, obdeect_stream)
     types = [r["type"] for r in records]
     run_index = types.index("run")
     assert types[run_index + 1] == "efficiency_status"
@@ -405,7 +405,7 @@ def test_ledger_output_marks_own_factors_and_keeps_others(model, tmp_path, gstri
     assert rewritten["qe.source"] == "sim_telarray"
 
 
-def test_invalid_envelope_table_is_rejected(model, tmp_path, gstrickd):
+def test_invalid_envelope_table_is_rejected(model, tmp_path, obdeect_stream):
     bad = {
         "factors": "mirror_reflectivity",
         "mirror_reflectivity.state": "envelope",
@@ -416,7 +416,7 @@ def test_invalid_envelope_table_is_rejected(model, tmp_path, gstrickd):
         focus(
             model,
             tmp_path,
-            gstrickd,
+            obdeect_stream,
             beam(10, (0, 0)),
             pointing=(0, 0),
             name="bad",
@@ -424,26 +424,26 @@ def test_invalid_envelope_table_is_rejected(model, tmp_path, gstrickd):
         )
 
 
-def test_output_does_not_depend_on_chunking_or_threads(model, tmp_path, gstrickd):
+def test_output_does_not_depend_on_chunking_or_threads(model, tmp_path, obdeect_stream):
     photons = beam(2000, (-0.01, 0.005))
     outputs = []
     for index, (chunk, threads) in enumerate([(None, 1), (333, 2), (7, 1)]):
         source = tmp_path / f"c{index}.in"
-        write_chunks(source, {1: photons}, chunk, gstrickd)
+        write_chunks(source, {1: photons}, chunk, obdeect_stream)
         output = tmp_path / f"c{index}.out"
         trace_stream(model, source, output, seed=SEED, pointing=(0.0, 0.0), threads=threads)
-        outputs.append(camera_photons(output, gstrickd))
+        outputs.append(camera_photons(output, obdeect_stream))
     for other in outputs[1:]:
         for name in outputs[0]:
             assert np.array_equal(outputs[0][name], other[name]), name
 
 
-def write_chunks(path, photons, chunk, gstrickd):
+def write_chunks(path, photons, chunk, obdeect_stream):
     """A stream whose photon chunks hold `chunk` rows each (None: one chunk)."""
     columns = next(iter(photons.values()))
     rows = len(columns["w"])
     step = chunk or rows
-    with gstrickd.Writer(str(path), "pytest") as writer:
+    with obdeect_stream.Writer(str(path), "pytest") as writer:
         writer.write("run", RUN)
         writer.write("event", {"event_number": 1, "zenith_rad": 0.0, "azimuth_rad": 0.0})
         for telescope_id, cols in photons.items():
@@ -456,25 +456,25 @@ def write_chunks(path, photons, chunk, gstrickd):
         writer.write("run_end", {})
 
 
-def test_output_chunks_are_capped_and_numbered(model, tmp_path, gstrickd, monkeypatch):
+def test_output_chunks_are_capped_and_numbered(model, tmp_path, obdeect_stream, monkeypatch):
     monkeypatch.setattr(stream_module, "MAX_CHUNK_ROWS", 100)
     _, _, output = focus(
-        model, tmp_path, gstrickd, beam(2000, (0.0, 0.0)), pointing=(0, 0), name="cap"
+        model, tmp_path, obdeect_stream, beam(2000, (0.0, 0.0)), pointing=(0, 0), name="cap"
     )
-    chunks = [r for r in read_records(output, gstrickd) if r["type"] == "photons"]
+    chunks = [r for r in read_records(output, obdeect_stream) if r["type"] == "photons"]
     assert len(chunks) > 1
     expected_index = 0
     for chunk in chunks:
         assert len(chunk["columns"]["w"]) <= 100
         assert chunk["first_index"] == expected_index
         expected_index += len(chunk["columns"]["w"])
-    telescope_end = [r for r in read_records(output, gstrickd) if r["type"] == "telescope_end"]
+    telescope_end = [r for r in read_records(output, obdeect_stream) if r["type"] == "telescope_end"]
     assert telescope_end[0]["metadata"]["photons"] == pytest.approx(
-        float(camera_photons(output, gstrickd)["w"].sum()), rel=1e-6
+        float(camera_photons(output, obdeect_stream)["w"].sum()), rel=1e-6
     )
 
 
-def test_records_pass_through(model, tmp_path, gstrickd):
+def test_records_pass_through(model, tmp_path, obdeect_stream):
     source = write_stream(
         tmp_path / "pass.ps",
         {1: beam(20, (0.0, 0.0))},
@@ -483,7 +483,7 @@ def test_records_pass_through(model, tmp_path, gstrickd):
     )
     output = tmp_path / "pass.out.ps"
     trace_stream(model, source, output, seed=SEED, pointing=(0.0, 0.0))
-    records = read_records(output, gstrickd)
+    records = read_records(output, obdeect_stream)
     types = [r["type"] for r in records]
     assert types[0] == "stream"
     assert types[-1] == "run_end"
@@ -497,12 +497,12 @@ def test_records_pass_through(model, tmp_path, gstrickd):
 
 
 def test_stream_without_gstrickd_is_a_clear_error(model, tmp_path, monkeypatch):
-    monkeypatch.setitem(__import__("sys").modules, "gstrickd", None)
+    monkeypatch.setitem(__import__("sys").modules, "obdeect.stream", None)
     with pytest.raises(ModelError, match="obdeect\\[stream\\]"):
         trace_stream(model, tmp_path / "x.ps", tmp_path / "y.ps", seed=SEED)
 
 
-def test_cli_trace_stream(model, tmp_path, gstrickd, capsys):
+def test_cli_trace_stream(model, tmp_path, obdeect_stream, capsys):
     model_path = tmp_path / "model.json"
     model.save(model_path)
     source = write_stream(tmp_path / "cli.in.ps", {1: beam(500, (0.0, 0.0))})
@@ -524,7 +524,7 @@ def test_cli_trace_stream(model, tmp_path, gstrickd, capsys):
     ])
     assert code == 0
     assert "trace-stream:" in capsys.readouterr().err
-    assert any(r["type"] == "photons" for r in read_records(output, gstrickd))
+    assert any(r["type"] == "photons" for r in read_records(output, obdeect_stream))
 
 
 def test_cli_needs_a_pointing_for_ground_photons(model, tmp_path, capsys):
@@ -565,18 +565,18 @@ def test_cli_rejects_half_a_pointing(model, tmp_path, capsys):
 
 
 def test_angular_transmission_drops_the_on_axis_value_from_on_axis_photons(
-    model, tmp_path, gstrickd
+    model, tmp_path, obdeect_stream
 ):
     # Telescope transmission on_axis 0.9 (segmented). Photons on the axis see t = t0 in the full
     # trace and t / t0 = 1 in the angular one, so the expected sum of output weights (the count
     # of survivors, roulette on) grows by 1 / t0. The check is statistical (Bernoulli variance).
     on_axis = 0.9
     photons = beam(20000, (0.0, 0.0))
-    _, full, _ = focus(model, tmp_path, gstrickd, photons, pointing=(0, 0), name="tfull")
+    _, full, _ = focus(model, tmp_path, obdeect_stream, photons, pointing=(0, 0), name="tfull")
     _, angular, _ = focus(
         model,
         tmp_path,
-        gstrickd,
+        obdeect_stream,
         photons,
         pointing=(0, 0),
         name="tang",
@@ -593,24 +593,24 @@ def test_angular_transmission_drops_the_on_axis_value_from_on_axis_photons(
     assert sum_angular > 1.05 * sum_full
 
 
-def test_ledger_records_the_transmission_part(model, tmp_path, gstrickd):
+def test_ledger_records_the_transmission_part(model, tmp_path, obdeect_stream):
     _, _, full_out = focus(
-        model, tmp_path, gstrickd, beam(10, (0, 0)), pointing=(0, 0), name="lfull"
+        model, tmp_path, obdeect_stream, beam(10, (0, 0)), pointing=(0, 0), name="lfull"
     )
-    full = ledger_of(full_out, gstrickd)[0]
+    full = ledger_of(full_out, obdeect_stream)[0]
     assert full["telescope_transmission.part"] == "full"
     assert full["telescope_transmission.state"] == "applied"
     assert CONSTANT_FACTOR not in full["factors"]
     _, _, angular_out = focus(
         model,
         tmp_path,
-        gstrickd,
+        obdeect_stream,
         beam(10, (0, 0)),
         pointing=(0, 0),
         name="lang",
         telescope_transmission="angular",
     )
-    angular = ledger_of(angular_out, gstrickd)[0]
+    angular = ledger_of(angular_out, obdeect_stream)[0]
     assert angular["telescope_transmission.part"] == "angular"
     assert angular["telescope_transmission.state"] == "applied"
     assert angular["factors"] == (
@@ -620,7 +620,7 @@ def test_ledger_records_the_transmission_part(model, tmp_path, gstrickd):
     assert float(angular[f"{CONSTANT_FACTOR}.value"]) == pytest.approx(0.9)
 
 
-def test_angular_ledger_marks_telescope_level_transmission(model, tmp_path, gstrickd):
+def test_angular_ledger_marks_telescope_level_transmission(model, tmp_path, obdeect_stream):
     source = write_stream(
         tmp_path / "tl.ps",
         {1: beam(10, (0.0, 0.0))},
@@ -637,20 +637,20 @@ def test_angular_ledger_marks_telescope_level_transmission(model, tmp_path, gstr
         pointing=(0, 0),
         telescope_transmission="angular",
     )
-    run_ledger, telescope_ledger = ledger_of(output, gstrickd)[:2]
+    run_ledger, telescope_ledger = ledger_of(output, obdeect_stream)[:2]
     assert run_ledger["telescope_transmission.part"] == "angular"
     assert telescope_ledger["telescope_transmission.part"] == "angular"
     assert telescope_ledger[f"{CONSTANT_FACTOR}.state"] == "pending"
 
 
-def test_angular_transmission_needs_a_model_with_transmission(model, tmp_path, gstrickd):
+def test_angular_transmission_needs_a_model_with_transmission(model, tmp_path, obdeect_stream):
     records, files = segmented(telescope_transmission=None)
     bare = OpticalModel.from_records(records, files.__getitem__, configuration_seed=1)
     with pytest.raises(ModelError, match="has none"):
         focus(
             bare,
             tmp_path,
-            gstrickd,
+            obdeect_stream,
             beam(10, (0, 0)),
             pointing=(0, 0),
             name="bare",
@@ -658,18 +658,18 @@ def test_angular_transmission_needs_a_model_with_transmission(model, tmp_path, g
         )
     # The full transmission has nothing to apply here and still runs.
     _, _, output = focus(
-        bare, tmp_path, gstrickd, beam(10, (0, 0)), pointing=(0, 0), name="bare-full"
+        bare, tmp_path, obdeect_stream, beam(10, (0, 0)), pointing=(0, 0), name="bare-full"
     )
     if not bare.has_structure:
-        assert "telescope_transmission" not in ledger_of(output, gstrickd)[0]["factors"]
+        assert "telescope_transmission" not in ledger_of(output, obdeect_stream)[0]["factors"]
 
 
-def test_unknown_transmission_part_and_existing_constant_are_rejected(model, tmp_path, gstrickd):
+def test_unknown_transmission_part_and_existing_constant_are_rejected(model, tmp_path, obdeect_stream):
     with pytest.raises(ModelError, match="must be one of"):
         focus(
             model,
             tmp_path,
-            gstrickd,
+            obdeect_stream,
             beam(10, (0, 0)),
             pointing=(0, 0),
             name="unknown",
@@ -686,7 +686,7 @@ def test_unknown_transmission_part_and_existing_constant_are_rejected(model, tmp
         focus(
             model,
             tmp_path,
-            gstrickd,
+            obdeect_stream,
             beam(10, (0, 0)),
             pointing=(0, 0),
             run_ledgers=[constant_only],
@@ -697,7 +697,7 @@ def test_unknown_transmission_part_and_existing_constant_are_rejected(model, tmp
         focus(
             model,
             tmp_path,
-            gstrickd,
+            obdeect_stream,
             beam(10, (0, 0)),
             pointing=(0, 0),
             name="named",
@@ -706,7 +706,7 @@ def test_unknown_transmission_part_and_existing_constant_are_rejected(model, tmp
         )
 
 
-def test_cli_telescope_transmission_option(model, tmp_path, gstrickd, capsys):
+def test_cli_telescope_transmission_option(model, tmp_path, obdeect_stream, capsys):
     model_path = tmp_path / "model.json"
     model.save(model_path)
     source = write_stream(tmp_path / "opt.in.ps", {1: beam(50, (0.0, 0.0))})
@@ -728,7 +728,7 @@ def test_cli_telescope_transmission_option(model, tmp_path, gstrickd, capsys):
     for label, extra in (("default", []), ("angular", ["--telescope-transmission", "angular"])):
         output = tmp_path / f"opt.{label}.ps"
         assert main([*base, str(output), *extra]) == 0
-        parts[label] = ledger_of(output, gstrickd)[0]["telescope_transmission.part"]
+        parts[label] = ledger_of(output, obdeect_stream)[0]["telescope_transmission.part"]
     assert parts == {"default": "full", "angular": "angular"}
     capsys.readouterr()
     with pytest.raises(SystemExit) as error:

@@ -1,14 +1,14 @@
 #include "check.hpp"
 
-#include "dlufd/profile.hpp"
-#include "dlufd/propagator.hpp"
-#include "dlufd/refraction.hpp"
-#include "dlufd/scattering.hpp"
-#include "dlufd/timing.hpp"
-#include "dlufd/transmission.hpp"
+#include "obdeect/propagation/profile.hpp"
+#include "obdeect/propagation/propagator.hpp"
+#include "obdeect/propagation/refraction.hpp"
+#include "obdeect/propagation/scattering.hpp"
+#include "obdeect/propagation/timing.hpp"
+#include "obdeect/propagation/transmission.hpp"
 
-#include "gstrickd/photons.hpp"
-#include "gstrickd/stream.hpp"
+#include "obdeect/stream/photons.hpp"
+#include "obdeect/stream/stream.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -22,15 +22,15 @@
 #include <variant>
 #include <vector>
 
-#ifndef DLUFD_TEST_DATA_DIR
-#error "DLUFD_TEST_DATA_DIR must be defined by CMake"
+#ifndef OBDEECT_PROPAGATION_TEST_DATA_DIR
+#error "OBDEECT_PROPAGATION_TEST_DATA_DIR must be defined by CMake"
 #endif
 
 namespace {
 
-using gstrickd::Column;
-using gstrickd::Frame;
-using gstrickd::RecordType;
+using obdeect::stream::Column;
+using obdeect::stream::Frame;
+using obdeect::stream::RecordType;
 
 constexpr double site_m = 2000.0;
 
@@ -42,28 +42,28 @@ struct Row {
 };
 
 // Transmission without absorption (optical depth 0) for 200..999 nm, at the site altitude.
-dlufd::TransmissionTable zero_table() {
+obdeect::propagation::TransmissionTable zero_table() {
   std::string text = "# H2= 2.000, H1=    3.000     5.000\n";
   for (int nm = 200; nm < 1000; ++nm) {
     text += std::to_string(nm) + " 0 0\n";
   }
-  return dlufd::TransmissionTable(text, site_m);
+  return obdeect::propagation::TransmissionTable(text, site_m);
 }
 
-dlufd::TransmissionTable real_table() {
-  return dlufd::TransmissionTable::from_file(
-      std::string(DLUFD_TEST_DATA_DIR) + "/atm_trans_2000_1_10_0_0_2000.dat", site_m);
+obdeect::propagation::TransmissionTable real_table() {
+  return obdeect::propagation::TransmissionTable::from_file(
+      std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/atm_trans_2000_1_10_0_0_2000.dat", site_m);
 }
 
-dlufd::AtmosphereProfile ecmwf_profile() {
-  return dlufd::AtmosphereProfile::from_file(std::string(DLUFD_TEST_DATA_DIR) +
+obdeect::propagation::AtmosphereProfile ecmwf_profile() {
+  return obdeect::propagation::AtmosphereProfile::from_file(std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) +
                                              "/atmprof_ecmwf_north_winter_fixed.dat");
 }
 
 // Run keys: two telescopes at x = 100 m and x = -50 m; the observation level at 2000 m.
 // refraction < 0: the key is absent.
-gstrickd::Metadata run_keys(int refraction) {
-  gstrickd::Metadata m;
+obdeect::stream::Metadata run_keys(int refraction) {
+  obdeect::stream::Metadata m;
   m["run_number"] = i64(1);
   m["observation_level_m"] = site_m;
   m["telescope_x_m"] = std::vector<double>{100.0, -50.0};
@@ -78,39 +78,39 @@ gstrickd::Metadata run_keys(int refraction) {
   return m;
 }
 
-gstrickd::Metadata event_keys() {
-  gstrickd::Metadata m;
+obdeect::stream::Metadata event_keys() {
+  obdeect::stream::Metadata m;
   m["event_number"] = i64(7);
   return m;
 }
 
-gstrickd::Metadata telescope_keys(std::uint32_t id, Frame frame) {
-  gstrickd::Metadata m;
+obdeect::stream::Metadata telescope_keys(std::uint32_t id, Frame frame) {
+  obdeect::stream::Metadata m;
   m["telescope_id"] = i64(id);
   m["frame"] = i64(static_cast<std::int64_t>(frame));
   return m;
 }
 
-gstrickd::Metadata telescope_end_keys(std::uint32_t id) {
-  gstrickd::Metadata m;
+obdeect::stream::Metadata telescope_end_keys(std::uint32_t id) {
+  obdeect::stream::Metadata m;
   m["telescope_id"] = i64(id);
   m["photons"] = 0.0;
   return m;
 }
 
 // Photons of one chunk: sky (x y z cx cy cz t w) or G (x y cx cy t zem w).
-gstrickd::PhotonChunk make_chunk(Frame frame, std::uint32_t telescope, std::uint64_t first,
+obdeect::stream::PhotonChunk make_chunk(Frame frame, std::uint32_t telescope, std::uint64_t first,
                                  std::size_t n, const std::function<Row(std::size_t)> &row_of) {
-  gstrickd::PhotonChunk chunk;
+  obdeect::stream::PhotonChunk chunk;
   chunk.telescope_id = telescope;
   chunk.frame = frame;
   chunk.first_index = first;
   const bool sky = frame == Frame::sky;
-  std::uint32_t mask = gstrickd::column_bit(Column::x) | gstrickd::column_bit(Column::y) |
-                       gstrickd::column_bit(Column::cx) | gstrickd::column_bit(Column::cy) |
-                       gstrickd::column_bit(Column::t) | gstrickd::column_bit(Column::w);
-  mask |= sky ? gstrickd::column_bit(Column::z) | gstrickd::column_bit(Column::cz)
-              : gstrickd::column_bit(Column::zem);
+  std::uint32_t mask = obdeect::stream::column_bit(Column::x) | obdeect::stream::column_bit(Column::y) |
+                       obdeect::stream::column_bit(Column::cx) | obdeect::stream::column_bit(Column::cy) |
+                       obdeect::stream::column_bit(Column::t) | obdeect::stream::column_bit(Column::w);
+  mask |= sky ? obdeect::stream::column_bit(Column::z) | obdeect::stream::column_bit(Column::cz)
+              : obdeect::stream::column_bit(Column::zem);
   chunk.resize(n, mask);
   for (std::size_t r = 0; r < n; ++r) {
     const Row row = row_of(static_cast<std::size_t>(first) + r);
@@ -158,21 +158,21 @@ Row sky_row(std::size_t i) {
   return row;
 }
 
-std::string make_stream(const std::function<void(gstrickd::Writer &)> &body) {
+std::string make_stream(const std::function<void(obdeect::stream::Writer &)> &body) {
   std::ostringstream out;
   {
-    gstrickd::Writer writer(out, "test");
+    obdeect::stream::Writer writer(out, "test");
     body(writer);
     writer.finish();
   }
   return out.str();
 }
 
-std::vector<gstrickd::Record> records_of(const std::string &bytes) {
+std::vector<obdeect::stream::Record> records_of(const std::string &bytes) {
   std::istringstream in(bytes);
-  gstrickd::Reader reader(in);
-  std::vector<gstrickd::Record> records;
-  gstrickd::Record record;
+  obdeect::stream::Reader reader(in);
+  std::vector<obdeect::stream::Record> records;
+  obdeect::stream::Record record;
   while (reader.next(record)) {
     records.push_back(record);
   }
@@ -181,7 +181,7 @@ std::vector<gstrickd::Record> records_of(const std::string &bytes) {
 }
 
 // Concatenated values of column c over all photon records of one telescope.
-std::vector<float> photon_column(const std::vector<gstrickd::Record> &records,
+std::vector<float> photon_column(const std::vector<obdeect::stream::Record> &records,
                                  std::uint32_t telescope, Column c) {
   std::vector<float> values;
   for (const auto &record : records) {
@@ -193,7 +193,7 @@ std::vector<float> photon_column(const std::vector<gstrickd::Record> &records,
   return values;
 }
 
-std::size_t photon_rows(const std::vector<gstrickd::Record> &records, std::uint32_t telescope) {
+std::size_t photon_rows(const std::vector<obdeect::stream::Record> &records, std::uint32_t telescope) {
   std::size_t rows = 0;
   for (const auto &record : records) {
     if (record.type == RecordType::photons && record.chunk.telescope_id == telescope) {
@@ -205,20 +205,20 @@ std::size_t photon_rows(const std::vector<gstrickd::Record> &records, std::uint3
 
 struct Result {
   std::string bytes;
-  dlufd::PropagationSummary summary;
+  obdeect::propagation::PropagationSummary summary;
 };
 
-Result propagate(const std::string &input, const dlufd::PropagatorConfig &config) {
+Result propagate(const std::string &input, const obdeect::propagation::PropagatorConfig &config) {
   std::istringstream in(input);
   std::ostringstream out;
   Result result;
-  result.summary = dlufd::propagate_stream(in, out, config);
+  result.summary = obdeect::propagation::propagate_stream(in, out, config);
   result.bytes = out.str();
   return result;
 }
 
-dlufd::PropagatorConfig config_for(const dlufd::TransmissionTable &table) {
-  dlufd::PropagatorConfig config;
+obdeect::propagation::PropagatorConfig config_for(const obdeect::propagation::TransmissionTable &table) {
+  obdeect::propagation::PropagatorConfig config;
   config.transmission.emplace(table);
   config.transmission_source = "test table";
   config.site_altitude_m = site_m;
@@ -226,13 +226,13 @@ dlufd::PropagatorConfig config_for(const dlufd::TransmissionTable &table) {
   return config;
 }
 
-dlufd::EnvelopeFactor constant_factor(const std::string &name, double value) {
-  return dlufd::EnvelopeFactor{name, {200.0, 800.0}, {value, value}, name + ".dat"};
+obdeect::propagation::EnvelopeFactor constant_factor(const std::string &name, double value) {
+  return obdeect::propagation::EnvelopeFactor{name, {200.0, 800.0}, {value, value}, name + ".dat"};
 }
 
 // Stream with telescopes 1 and 2 of one event: G-frame photons, n per telescope.
 std::string ground_stream(std::size_t n, std::size_t chunk_rows, int refraction = 0) {
-  return make_stream([&](gstrickd::Writer &writer) {
+  return make_stream([&](obdeect::stream::Writer &writer) {
     writer.write_metadata(RecordType::run, run_keys(refraction));
     writer.write_metadata(RecordType::event, event_keys());
     for (const std::uint32_t telescope : {1U, 2U}) {
@@ -249,7 +249,7 @@ std::string ground_stream(std::size_t n, std::size_t chunk_rows, int refraction 
 }
 
 // Ledger record that follows the run record (first one), or nullptr.
-const gstrickd::Metadata *first_ledger(const std::vector<gstrickd::Record> &records) {
+const obdeect::stream::Metadata *first_ledger(const std::vector<obdeect::stream::Record> &records) {
   for (const auto &record : records) {
     if (record.type == RecordType::efficiency_status) {
       return &record.metadata;
@@ -258,7 +258,7 @@ const gstrickd::Metadata *first_ledger(const std::vector<gstrickd::Record> &reco
   return nullptr;
 }
 
-std::string text_of(const gstrickd::Metadata &m, const std::string &key) {
+std::string text_of(const obdeect::stream::Metadata &m, const std::string &key) {
   const auto it = m.find(key);
   if (it == m.end() || !std::holds_alternative<std::string>(it->second)) {
     return "<missing>";
@@ -266,7 +266,7 @@ std::string text_of(const gstrickd::Metadata &m, const std::string &key) {
   return std::get<std::string>(it->second);
 }
 
-std::size_t array_size_of(const gstrickd::Metadata &m, const std::string &key) {
+std::size_t array_size_of(const obdeect::stream::Metadata &m, const std::string &key) {
   const auto it = m.find(key);
   if (it == m.end() || !std::holds_alternative<std::vector<double>>(it->second)) {
     return 0;
@@ -325,9 +325,9 @@ void test_expected_count() {
   const auto input = ground_stream(60000, 20000);
   auto config = config_for(real_table());
   config.store_p = true;
-  config.mode = dlufd::OutputMode::thinned;
+  config.mode = obdeect::propagation::OutputMode::thinned;
   const auto thinned = propagate(input, config);
-  config.mode = dlufd::OutputMode::weighted;
+  config.mode = obdeect::propagation::OutputMode::weighted;
   const auto weighted = propagate(input, config);
   const auto thinned_records = records_of(thinned.bytes);
   const auto weighted_records = records_of(weighted.bytes);
@@ -359,7 +359,7 @@ void test_weighted_analytic() {
   auto config = config_for(zero_table());
   config.envelope = {constant_factor("qe", 0.5), constant_factor("mirror", 0.8)};
   config.store_p = true;
-  config.mode = dlufd::OutputMode::weighted;
+  config.mode = obdeect::propagation::OutputMode::weighted;
   const auto weighted = propagate(input, config);
   // Sum of the input weights of both telescopes (ground_stream writes telescopes 1 and 2).
   double expected_weight = 0.0;
@@ -373,7 +373,7 @@ void test_weighted_analytic() {
   }
 
   // Thinned: Binomial with p = 0.4; variance sum w p (1 - p).
-  config.mode = dlufd::OutputMode::thinned;
+  config.mode = obdeect::propagation::OutputMode::thinned;
   const auto thinned = propagate(input, config);
   const double sigma = std::sqrt(0.24 * expected_weight);
   CHECK_NEAR(static_cast<double>(thinned.summary.photons_out), 0.4 * expected_weight, 4.0 * sigma);
@@ -382,8 +382,8 @@ void test_weighted_analytic() {
 // The input ledger must not show a factor applied already; pending or absent is fine.
 void test_never_apply_twice() {
   const auto table = zero_table();
-  const auto run_then_ledger = [](const gstrickd::Metadata &ledger) {
-    return make_stream([&](gstrickd::Writer &writer) {
+  const auto run_then_ledger = [](const obdeect::stream::Metadata &ledger) {
+    return make_stream([&](obdeect::stream::Writer &writer) {
       writer.write_metadata(RecordType::run, run_keys(0));
       writer.write_metadata(RecordType::efficiency_status, ledger);
       writer.write_metadata(RecordType::event, event_keys());
@@ -391,19 +391,19 @@ void test_never_apply_twice() {
       writer.write_metadata(RecordType::run_end, {});
     });
   };
-  gstrickd::Metadata applied;
+  obdeect::stream::Metadata applied;
   applied["factors"] = std::string("atmosphere");
   applied["atmosphere.state"] = std::string("applied");
   CHECK(throws_invalid([&] { propagate(run_then_ledger(applied), config_for(table)); }));
 
-  gstrickd::Metadata qe_applied;
+  obdeect::stream::Metadata qe_applied;
   qe_applied["factors"] = std::string("qe");
   qe_applied["qe.state"] = std::string("applied");
   auto config = config_for(table);
   config.envelope = {constant_factor("qe", 0.9)};
   CHECK(throws_invalid([&] { propagate(run_then_ledger(qe_applied), config); }));
 
-  gstrickd::Metadata pending;
+  obdeect::stream::Metadata pending;
   pending["factors"] = std::string("atmosphere,qe");
   pending["atmosphere.state"] = std::string("pending");
   pending["qe.state"] = std::string("pending");
@@ -422,7 +422,7 @@ void test_chunk_size_determinism() {
   auto config = config_for(table);
   config.store_p = true;
   const std::vector<std::string> ground = {ground_stream(50000, 1000), ground_stream(50000, 333),
-                                           ground_stream(50000, gstrickd::max_chunk_rows)};
+                                           ground_stream(50000, obdeect::stream::max_chunk_rows)};
   std::vector<std::vector<float>> reference;
   for (std::size_t k = 0; k < ground.size(); ++k) {
     const auto records = records_of(propagate(ground[k], config).bytes);
@@ -443,7 +443,7 @@ void test_chunk_size_determinism() {
 
   // Sky photons (some upwards) with chunk sizes 777 and 2^16.
   const auto sky_stream = [](std::size_t n, std::size_t chunk_rows) {
-    return make_stream([&](gstrickd::Writer &writer) {
+    return make_stream([&](obdeect::stream::Writer &writer) {
       writer.write_metadata(RecordType::run, run_keys(0));
       writer.write_metadata(RecordType::event, event_keys());
       writer.write_metadata(RecordType::telescope, telescope_keys(2, Frame::sky));
@@ -457,7 +457,7 @@ void test_chunk_size_determinism() {
     });
   };
   const auto small = propagate(sky_stream(20000, 777), config);
-  const auto large = propagate(sky_stream(20000, gstrickd::max_chunk_rows), config);
+  const auto large = propagate(sky_stream(20000, obdeect::stream::max_chunk_rows), config);
   CHECK(small.summary.dropped == large.summary.dropped);
   CHECK(small.summary.dropped > 1000);
   const auto small_records = records_of(small.bytes);
@@ -476,7 +476,7 @@ void test_sky_analytic() {
   const double cy = -0.1;
   const double cz_magnitude = std::sqrt(1.0 - cx * cx - cy * cy);
   const double s = 10000.0 / cz_magnitude;
-  const auto input = make_stream([&](gstrickd::Writer &writer) {
+  const auto input = make_stream([&](obdeect::stream::Writer &writer) {
     writer.write_metadata(RecordType::run, run_keys(-1));
     writer.write_metadata(RecordType::event, event_keys());
     writer.write_metadata(RecordType::telescope, telescope_keys(1, Frame::sky));
@@ -508,7 +508,7 @@ void test_sky_analytic() {
   const auto records = records_of(result.bytes);
   CHECK(photon_rows(records, 1) == 1);
   // Weighted output drops the dropped rows (w = 0) and keeps the arrived photon.
-  config.mode = dlufd::OutputMode::weighted;
+  config.mode = obdeect::propagation::OutputMode::weighted;
   CHECK(propagate(input, config).summary.photons_out == 1);
   const auto x = photon_column(records, 1, Column::x);
   const auto y = photon_column(records, 1, Column::y);
@@ -522,7 +522,7 @@ void test_sky_analytic() {
   CHECK(cz_column.empty()); // frame G: z and cz are not written
   CHECK_NEAR(x[0], 150.0 + s * cx - 100.0, 1e-3);
   CHECK_NEAR(y[0], -40.0 + s * cy, 1e-3);
-  CHECK_NEAR(t[0], 5.0 + s / dlufd::speed_of_light_m_per_ns, 1e-2);
+  CHECK_NEAR(t[0], 5.0 + s / obdeect::propagation::speed_of_light_m_per_ns, 1e-2);
   CHECK_NEAR(zem[0], 12000.0, 1e-3);
   // Frame of the output telescope record is G.
   bool ground_telescope = false;
@@ -541,7 +541,7 @@ void test_sky_refraction() {
   const double cz_magnitude = 0.5;
   const double s = 10000.0 / cz_magnitude;
   const auto profile = ecmwf_profile();
-  const auto input = make_stream([&](gstrickd::Writer &writer) {
+  const auto input = make_stream([&](obdeect::stream::Writer &writer) {
     writer.write_metadata(RecordType::run, run_keys(0));
     writer.write_metadata(RecordType::event, event_keys());
     writer.write_metadata(RecordType::telescope, telescope_keys(1, Frame::sky));
@@ -566,13 +566,13 @@ void test_sky_refraction() {
     return;
   }
   // Kernel reference: bend from the emission height to the plane at the site altitude.
-  const dlufd::RefractionTables tables(profile, site_m);
+  const obdeect::propagation::RefractionTables tables(profile, site_m);
   double dx = cx;
   double dy = 0.0;
   double xm = 150.0 + s * cx - 100.0;
   double ym = -40.0;
   double tb = 0.0;
-  CHECK(dlufd::bend(tables, 12000.0, dx, dy, xm, ym, tb));
+  CHECK(obdeect::propagation::bend(tables, 12000.0, dx, dy, xm, ym, tb));
   const double analytic_x = 150.0 + s * cx - 100.0;
   CHECK(std::abs(xm - analytic_x) > 1.0); // about 3 m at 60 degrees
   // Columns are float32: at 17 km one ulp is about 2 mm.
@@ -581,7 +581,7 @@ void test_sky_refraction() {
   CHECK_NEAR(static_cast<double>(t[0]), 5.0 + tb, 2e-2);
 
   // The same photon with refraction already applied upstream: no bending, air delay added.
-  auto applied_input = make_stream([&](gstrickd::Writer &writer) {
+  auto applied_input = make_stream([&](obdeect::stream::Writer &writer) {
     writer.write_metadata(RecordType::run, run_keys(1));
     writer.write_metadata(RecordType::event, event_keys());
     writer.write_metadata(RecordType::telescope, telescope_keys(1, Frame::sky));
@@ -594,10 +594,10 @@ void test_sky_refraction() {
   });
   const auto plain = records_of(propagate(applied_input, config).bytes);
   const double zenith = std::acos(cz_magnitude);
-  const double air_ns = dlufd::straight_path_air_delay_ns(profile, site_m, 12000.0, zenith);
+  const double air_ns = obdeect::propagation::straight_path_air_delay_ns(profile, site_m, 12000.0, zenith);
   CHECK_NEAR(static_cast<double>(photon_column(plain, 1, Column::x)[0]), analytic_x, 5e-3);
   CHECK_NEAR(static_cast<double>(photon_column(plain, 1, Column::t)[0]),
-             5.0 + s / dlufd::speed_of_light_m_per_ns + air_ns, 2e-2);
+             5.0 + s / obdeect::propagation::speed_of_light_m_per_ns + air_ns, 2e-2);
   // The output run record now says refraction is applied.
   for (const auto &record : records) {
     if (record.type == RecordType::run) {
@@ -608,17 +608,17 @@ void test_sky_refraction() {
 
 // Sky photons need the z column; photons of an unknown telescope are rejected.
 void test_rejects_invalid_input() {
-  const auto no_z = make_stream([&](gstrickd::Writer &writer) {
+  const auto no_z = make_stream([&](obdeect::stream::Writer &writer) {
     writer.write_metadata(RecordType::run, run_keys(0));
     writer.write_metadata(RecordType::event, event_keys());
     writer.write_metadata(RecordType::telescope, telescope_keys(1, Frame::sky));
-    gstrickd::PhotonChunk chunk = make_chunk(Frame::sky, 1, 0, 2, sky_row);
-    chunk.resize(2, gstrickd::required_columns);
+    obdeect::stream::PhotonChunk chunk = make_chunk(Frame::sky, 1, 0, 2, sky_row);
+    chunk.resize(2, obdeect::stream::required_columns);
     writer.write_chunk(chunk);
   });
   CHECK(throws_invalid([&] { propagate(no_z, config_for(zero_table())); }));
 
-  const auto unknown = make_stream([&](gstrickd::Writer &writer) {
+  const auto unknown = make_stream([&](obdeect::stream::Writer &writer) {
     writer.write_metadata(RecordType::run, run_keys(0));
     writer.write_metadata(RecordType::event, event_keys());
     writer.write_metadata(RecordType::telescope, telescope_keys(1, Frame::ground));
@@ -632,14 +632,14 @@ void test_rejects_invalid_input() {
 constexpr std::uint64_t scatter_seed = 20261107;
 
 // Scattering table of the test data: 340 to 400 nm, exponential atmosphere (docs/scattering.md).
-dlufd::ScatteringTable scattering_table() {
-  return dlufd::ScatteringTable::from_file(std::string(DLUFD_TEST_DATA_DIR) +
+obdeect::propagation::ScatteringTable scattering_table() {
+  return obdeect::propagation::ScatteringTable::from_file(std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) +
                                            "/scattering_exponential.dat");
 }
 
 // Telescope 1 at 3 km east of the beam, telescope 2 at 2.5 km south; spheres of 12 m radius.
-gstrickd::Metadata scatter_run_keys() {
-  gstrickd::Metadata m;
+obdeect::stream::Metadata scatter_run_keys() {
+  obdeect::stream::Metadata m;
   m["run_number"] = i64(1);
   m["observation_level_m"] = site_m;
   m["telescope_x_m"] = std::vector<double>{3000.0, 0.0};
@@ -654,17 +654,17 @@ gstrickd::Metadata scatter_run_keys() {
 
 // Vertical beam (cx = cy = 0) at x = offset_x, emitted 15 km above the observation level,
 // wavelength 355 nm, weights 1 to 3.
-gstrickd::PhotonChunk beam_chunk(std::uint32_t telescope, std::size_t first, std::size_t n,
+obdeect::stream::PhotonChunk beam_chunk(std::uint32_t telescope, std::size_t first, std::size_t n,
                                  double offset_x) {
-  gstrickd::PhotonChunk chunk;
+  obdeect::stream::PhotonChunk chunk;
   chunk.telescope_id = telescope;
   chunk.frame = Frame::sky;
   chunk.first_index = first;
-  const std::uint32_t mask = gstrickd::column_bit(Column::x) | gstrickd::column_bit(Column::y) |
-                             gstrickd::column_bit(Column::z) | gstrickd::column_bit(Column::cx) |
-                             gstrickd::column_bit(Column::cy) | gstrickd::column_bit(Column::cz) |
-                             gstrickd::column_bit(Column::t) | gstrickd::column_bit(Column::w) |
-                             gstrickd::column_bit(Column::wavelength);
+  const std::uint32_t mask = obdeect::stream::column_bit(Column::x) | obdeect::stream::column_bit(Column::y) |
+                             obdeect::stream::column_bit(Column::z) | obdeect::stream::column_bit(Column::cx) |
+                             obdeect::stream::column_bit(Column::cy) | obdeect::stream::column_bit(Column::cz) |
+                             obdeect::stream::column_bit(Column::t) | obdeect::stream::column_bit(Column::w) |
+                             obdeect::stream::column_bit(Column::wavelength);
   chunk.resize(n, mask);
   for (std::size_t r = 0; r < n; ++r) {
     const std::size_t i = first + r;
@@ -684,8 +684,8 @@ gstrickd::PhotonChunk beam_chunk(std::uint32_t telescope, std::size_t first, std
 // One event. With two_blocks, telescope 2 has its own beam (at x = 200 m) and primaries; else
 // telescope 2 has no block and receives its scattered photons in a block of its own.
 std::string beam_stream(std::size_t n, std::size_t chunk_rows, bool two_blocks,
-                        gstrickd::Metadata run = scatter_run_keys()) {
-  return make_stream([&](gstrickd::Writer &writer) {
+                        obdeect::stream::Metadata run = scatter_run_keys()) {
+  return make_stream([&](obdeect::stream::Writer &writer) {
     writer.write_metadata(RecordType::run, run);
     writer.write_metadata(RecordType::event, event_keys());
     writer.write_metadata(RecordType::telescope, telescope_keys(1, Frame::sky));
@@ -705,9 +705,9 @@ std::string beam_stream(std::size_t n, std::size_t chunk_rows, bool two_blocks,
   });
 }
 
-dlufd::PropagatorConfig scattering_config(const dlufd::TransmissionTable &table, bool weighted) {
+obdeect::propagation::PropagatorConfig scattering_config(const obdeect::propagation::TransmissionTable &table, bool weighted) {
   auto config = config_for(table);
-  config.mode = weighted ? dlufd::OutputMode::weighted : dlufd::OutputMode::thinned;
+  config.mode = weighted ? obdeect::propagation::OutputMode::weighted : obdeect::propagation::OutputMode::thinned;
   config.envelope.push_back(constant_factor("qe", 0.5));
   config.scattering.enabled = true;
   config.scattering.points_per_photon = 8;
@@ -717,7 +717,7 @@ dlufd::PropagatorConfig scattering_config(const dlufd::TransmissionTable &table,
 }
 
 // Sum of the telescope_end photons (sum of w) of one telescope; 0 without a block.
-double telescope_photons(const std::vector<gstrickd::Record> &records, std::uint32_t telescope) {
+double telescope_photons(const std::vector<obdeect::stream::Record> &records, std::uint32_t telescope) {
   double total = 0.0;
   for (const auto &record : records) {
     if (record.type == RecordType::telescope_end &&
@@ -729,7 +729,7 @@ double telescope_photons(const std::vector<gstrickd::Record> &records, std::uint
 }
 
 // first_index of the photon chunks of one telescope counts its rows from 0 without gaps.
-bool contiguous_indices(const std::vector<gstrickd::Record> &records, std::uint32_t telescope) {
+bool contiguous_indices(const std::vector<obdeect::stream::Record> &records, std::uint32_t telescope) {
   std::uint64_t next = 0;
   for (const auto &record : records) {
     if (record.type == RecordType::photons && record.chunk.telescope_id == telescope) {
@@ -743,14 +743,14 @@ bool contiguous_indices(const std::vector<gstrickd::Record> &records, std::uint3
 }
 
 // Scattered weight per telescope from scatter_chunk called directly on the n beam photons.
-std::vector<double> kernel_weights(const dlufd::TransmissionTable &table, std::size_t n) {
-  dlufd::ScatteringConfig config;
+std::vector<double> kernel_weights(const obdeect::propagation::TransmissionTable &table, std::size_t n) {
+  obdeect::propagation::ScatteringConfig config;
   config.enabled = true;
   config.points_per_photon = 8;
-  const std::vector<dlufd::ScatterTelescope> sphere = {{1, 3000.0, 0.0, 0.0, 12.0},
+  const std::vector<obdeect::propagation::ScatterTelescope> sphere = {{1, 3000.0, 0.0, 0.0, 12.0},
                                                        {2, 0.0, -2500.0, 0.0, 12.0}};
-  std::vector<std::vector<gstrickd::PhotonChunk>> lists(sphere.size());
-  dlufd::scatter_chunk(config, scattering_table(), table, sphere, beam_chunk(1, 0, n, 0.0),
+  std::vector<std::vector<obdeect::stream::PhotonChunk>> lists(sphere.size());
+  obdeect::propagation::scatter_chunk(config, scattering_table(), table, sphere, beam_chunk(1, 0, n, 0.0),
                        scatter_seed, 7, 0, lists);
   std::vector<double> sums(sphere.size(), 0.0);
   for (std::size_t i = 0; i < sphere.size(); ++i) {
@@ -770,7 +770,7 @@ void test_scattering_weights() {
   const std::size_t n = 400;
   const std::string input = beam_stream(n, n, false);
   auto off = scattering_config(table, true);
-  off.scattering = dlufd::ScatteringConfig{};
+  off.scattering = obdeect::propagation::ScatteringConfig{};
   off.scattering_table.reset();
   const auto without = records_of(propagate(input, off).bytes);
   const auto with = records_of(propagate(input, scattering_config(table, true)).bytes);
@@ -794,7 +794,7 @@ void test_scattering_not_attenuated_twice() {
   const std::size_t n = 300;
   const std::string input = beam_stream(n, n, false); // one block: the kernel reference is one beam
   auto off = scattering_config(zero, true);
-  off.scattering = dlufd::ScatteringConfig{};
+  off.scattering = obdeect::propagation::ScatteringConfig{};
   off.scattering_table.reset();
   const auto without = records_of(propagate(input, off).bytes);
   const auto with = records_of(propagate(input, scattering_config(zero, true)).bytes);
@@ -813,18 +813,18 @@ void test_scattered_time_reaches_plane() {
   const std::size_t n = 50;
   const std::string input = beam_stream(n, n, false);
   auto off = scattering_config(table, true);
-  off.scattering = dlufd::ScatteringConfig{};
+  off.scattering = obdeect::propagation::ScatteringConfig{};
   off.scattering_table.reset();
   const auto without = records_of(propagate(input, off).bytes);
   const auto with = records_of(propagate(input, scattering_config(table, true)).bytes);
 
-  dlufd::ScatteringConfig config;
+  obdeect::propagation::ScatteringConfig config;
   config.enabled = true;
   config.points_per_photon = 8;
-  const std::vector<dlufd::ScatterTelescope> sphere = {{1, 3000.0, 0.0, 0.0, 12.0},
+  const std::vector<obdeect::propagation::ScatterTelescope> sphere = {{1, 3000.0, 0.0, 0.0, 12.0},
                                                        {2, 0.0, -2500.0, 0.0, 12.0}};
-  std::vector<std::vector<gstrickd::PhotonChunk>> lists(sphere.size());
-  dlufd::scatter_chunk(config, scattering_table(), table, sphere, beam_chunk(1, 0, n, 0.0),
+  std::vector<std::vector<obdeect::stream::PhotonChunk>> lists(sphere.size());
+  obdeect::propagation::scatter_chunk(config, scattering_table(), table, sphere, beam_chunk(1, 0, n, 0.0),
                        scatter_seed, 7, 0, lists);
   std::vector<double> expected;
   for (const auto &piece : lists[0]) {
@@ -834,7 +834,7 @@ void test_scattered_time_reaches_plane() {
       const double cz_magnitude = std::sqrt(1.0 - cx * cx - cy * cy);
       const double to_plane = piece[Column::z][r] / cz_magnitude; // plane at z = 0
       expected.push_back(static_cast<double>(piece[Column::t][r]) +
-                         to_plane / dlufd::speed_of_light_m_per_ns);
+                         to_plane / obdeect::propagation::speed_of_light_m_per_ns);
     }
   }
   CHECK(!expected.empty());
@@ -861,7 +861,7 @@ void test_scattering_ledger() {
   CHECK(std::get<std::int64_t>(ledger->at("scattering.points_per_photon")) == 8);
 
   auto off = scattering_config(table, false);
-  off.scattering = dlufd::ScatteringConfig{};
+  off.scattering = obdeect::propagation::ScatteringConfig{};
   off.scattering_table.reset();
   const auto plain_records = records_of(propagate(input, off).bytes);
   const auto *plain = first_ledger(plain_records);
@@ -898,7 +898,7 @@ void test_scattering_rejects() {
   no_table.scattering_table.reset();
   CHECK(throws_invalid([&] { propagate(input, no_table); }));
 
-  gstrickd::Metadata no_radius = scatter_run_keys();
+  obdeect::stream::Metadata no_radius = scatter_run_keys();
   no_radius.erase("telescope_r_m");
   CHECK(throws_invalid(
       [&] { propagate(beam_stream(10, 10, false, no_radius), scattering_config(table, false)); }));
@@ -912,10 +912,10 @@ void test_scattering_rejects() {
 // scattering pre-pass runs when the event ends.
 void test_scattering_needs_w_column() {
   const auto table = real_table();
-  dlufd::Propagator propagator(scattering_config(table, false));
-  const auto sink = [](const gstrickd::Record &) {};
-  const auto metadata_record = [](RecordType type, gstrickd::Metadata metadata) {
-    gstrickd::Record record;
+  obdeect::propagation::Propagator propagator(scattering_config(table, false));
+  const auto sink = [](const obdeect::stream::Record &) {};
+  const auto metadata_record = [](RecordType type, obdeect::stream::Metadata metadata) {
+    obdeect::stream::Record record;
     record.type = type;
     record.metadata = std::move(metadata);
     return record;
@@ -924,15 +924,15 @@ void test_scattering_needs_w_column() {
   propagator.process(metadata_record(RecordType::event, event_keys()), sink);
   propagator.process(metadata_record(RecordType::telescope, telescope_keys(1, Frame::sky)), sink);
 
-  gstrickd::Record photons;
+  obdeect::stream::Record photons;
   photons.type = RecordType::photons;
   photons.chunk.telescope_id = 1;
   photons.chunk.frame = Frame::sky;
   photons.chunk.first_index = 0;
-  photons.chunk.resize(2, gstrickd::column_bit(Column::x) | gstrickd::column_bit(Column::y) |
-                              gstrickd::column_bit(Column::z) | gstrickd::column_bit(Column::cx) |
-                              gstrickd::column_bit(Column::cy) | gstrickd::column_bit(Column::cz) |
-                              gstrickd::column_bit(Column::t));
+  photons.chunk.resize(2, obdeect::stream::column_bit(Column::x) | obdeect::stream::column_bit(Column::y) |
+                              obdeect::stream::column_bit(Column::z) | obdeect::stream::column_bit(Column::cx) |
+                              obdeect::stream::column_bit(Column::cy) | obdeect::stream::column_bit(Column::cz) |
+                              obdeect::stream::column_bit(Column::t));
   photons.chunk[Column::z][0] = 10000.0F;
   photons.chunk[Column::z][1] = 10000.0F;
   photons.chunk[Column::cz][0] = 0.5F; // upward: the pre-pass sets its w
@@ -943,9 +943,9 @@ void test_scattering_needs_w_column() {
 }
 
 // Stream of n sky photons of telescope 1 with the given run keys.
-std::string sky_stream(const gstrickd::Metadata &run, std::size_t n,
+std::string sky_stream(const obdeect::stream::Metadata &run, std::size_t n,
                        const std::function<Row(std::size_t)> &rows) {
-  return make_stream([&](gstrickd::Writer &writer) {
+  return make_stream([&](obdeect::stream::Writer &writer) {
     writer.write_metadata(RecordType::run, run);
     writer.write_metadata(RecordType::event, event_keys());
     writer.write_metadata(RecordType::telescope, telescope_keys(1, Frame::sky));
@@ -958,14 +958,14 @@ std::string sky_stream(const gstrickd::Metadata &run, std::size_t n,
 
 // Same file, different spellings: the output must not truncate the input.
 void test_same_file() {
-  const std::string data = DLUFD_TEST_DATA_DIR;
+  const std::string data = OBDEECT_PROPAGATION_TEST_DATA_DIR;
   const std::string table = data + "/atm_trans_2000_1_10_0_0_2000.dat";
-  CHECK(dlufd::same_file(table, table));
-  CHECK(dlufd::same_file(table, data + "/../data/atm_trans_2000_1_10_0_0_2000.dat"));
-  CHECK(!dlufd::same_file(table, data + "/atmprof_ecmwf_north_winter_fixed.dat"));
+  CHECK(obdeect::propagation::same_file(table, table));
+  CHECK(obdeect::propagation::same_file(table, data + "/../data/atm_trans_2000_1_10_0_0_2000.dat"));
+  CHECK(!obdeect::propagation::same_file(table, data + "/atmprof_ecmwf_north_winter_fixed.dat"));
   // An output that does not exist yet, named through "..".
-  CHECK(dlufd::same_file(data + "/new_output.dat", data + "/../data/new_output.dat"));
-  CHECK(!dlufd::same_file(table, data + "/new_output.dat"));
+  CHECK(obdeect::propagation::same_file(data + "/new_output.dat", data + "/../data/new_output.dat"));
+  CHECK(!obdeect::propagation::same_file(table, data + "/new_output.dat"));
 }
 
 // The transmission table's H2 must match the configured site altitude (25 m tolerance).
@@ -977,14 +977,14 @@ void test_rejects_site_mismatch() {
 
 // telescope_end needs an open telescope with the same id.
 void test_rejects_telescope_end_mismatch() {
-  const auto no_open = make_stream([&](gstrickd::Writer &writer) {
+  const auto no_open = make_stream([&](obdeect::stream::Writer &writer) {
     writer.write_metadata(RecordType::run, run_keys(0));
     writer.write_metadata(RecordType::event, event_keys());
     writer.write_metadata(RecordType::telescope_end, telescope_end_keys(1));
   });
   CHECK(throws_invalid([&] { propagate(no_open, config_for(zero_table())); }));
 
-  const auto other = make_stream([&](gstrickd::Writer &writer) {
+  const auto other = make_stream([&](obdeect::stream::Writer &writer) {
     writer.write_metadata(RecordType::run, run_keys(0));
     writer.write_metadata(RecordType::event, event_keys());
     writer.write_metadata(RecordType::telescope, telescope_keys(1, Frame::ground));
@@ -997,7 +997,7 @@ void test_rejects_telescope_end_mismatch() {
 // equals the output of a configuration whose site is that level.
 void test_run_observation_level() {
   const auto profile = ecmwf_profile();
-  gstrickd::Metadata run = run_keys(0);
+  obdeect::stream::Metadata run = run_keys(0);
   run["observation_level_m"] = 2024.0;
   const auto input = sky_stream(run, 1, [](std::size_t) {
     return Row{150.0, -40.0, 10000.0, std::sqrt(3.0) / 2.0, 0.0, -0.5, 5.0, 0.0, 1.0};
@@ -1029,7 +1029,7 @@ void test_rejects_non_finite_input() {
       return row;
     };
   };
-  const gstrickd::Metadata run = run_keys(0);
+  const obdeect::stream::Metadata run = run_keys(0);
   CHECK(throws_invalid([&] {
     propagate(sky_stream(run, 1, with([&](Row &r) { r.x = nan; })), config_for(zero_table()));
   }));
@@ -1040,20 +1040,20 @@ void test_rejects_non_finite_input() {
     propagate(sky_stream(run, 1, with([&](Row &r) { r.cz = nan; })), config_for(zero_table()));
   }));
 
-  gstrickd::Metadata nan_level = run_keys(0);
+  obdeect::stream::Metadata nan_level = run_keys(0);
   nan_level["observation_level_m"] = nan;
   const auto only_run = make_stream(
-      [&](gstrickd::Writer &writer) { writer.write_metadata(RecordType::run, nan_level); });
+      [&](obdeect::stream::Writer &writer) { writer.write_metadata(RecordType::run, nan_level); });
   CHECK(throws_invalid([&] { propagate(only_run, config_for(zero_table())); }));
 }
 
 // Acceptance of one photon with od_focus taken from the table as tau(h + pathlen) - tau(h)
 // (telescope_depths), at the telescope altitude h.
-double expected_acceptance(const dlufd::TransmissionTable &table, double lambda_nm, double zem_m,
+double expected_acceptance(const obdeect::propagation::TransmissionTable &table, double lambda_nm, double zem_m,
                            double cx, double cy, double h_m, double pathlen_m) {
   const double od_tel = table.optical_depth(lambda_nm, h_m);
   const double od_focus = table.optical_depth(lambda_nm, h_m + pathlen_m) - od_tel;
-  return table.transmission2<double>(lambda_nm, zem_m, dlufd::airmass<double>(cx, cy), od_tel,
+  return table.transmission2<double>(lambda_nm, zem_m, obdeect::propagation::airmass<double>(cx, cy), od_tel,
                                      od_focus);
 }
 
@@ -1064,7 +1064,7 @@ void test_pathlen_per_telescope() {
   const auto input = ground_stream(3000, 3000);
   auto config = config_for(table);
   config.store_p = true;
-  config.mode = dlufd::OutputMode::weighted;
+  config.mode = obdeect::propagation::OutputMode::weighted;
   config.default_pathlen_m = 28.0;
   config.telescope_pathlen_m = {{2, 0.0}};
   const auto records = records_of(propagate(input, config).bytes);
@@ -1080,7 +1080,7 @@ void test_pathlen_per_telescope() {
   // Without overrides the ledger holds the default for every telescope (0 unless set).
   auto plain = config_for(table);
   plain.store_p = true;
-  plain.mode = dlufd::OutputMode::weighted;
+  plain.mode = obdeect::propagation::OutputMode::weighted;
   const auto plain_records = records_of(propagate(input, plain).bytes);
   const auto *plain_ledger = first_ledger(plain_records);
   CHECK(plain_ledger != nullptr);
@@ -1131,7 +1131,7 @@ void test_pathlen_per_telescope() {
 void test_scattered_pathlen() {
   const auto table = real_table();
   const std::size_t n = 400;
-  const auto input = make_stream([&](gstrickd::Writer &writer) {
+  const auto input = make_stream([&](obdeect::stream::Writer &writer) {
     writer.write_metadata(RecordType::run, scatter_run_keys());
     writer.write_metadata(RecordType::event, event_keys());
     writer.write_metadata(RecordType::telescope, telescope_keys(2, Frame::sky));
@@ -1182,25 +1182,25 @@ void test_scattered_pathlen() {
 void test_pathlen_rejects() {
   const auto input = ground_stream(10, 10);
   const auto table = zero_table();
-  const auto rejected = [&](const std::function<void(dlufd::PropagatorConfig &)> &edit) {
+  const auto rejected = [&](const std::function<void(obdeect::propagation::PropagatorConfig &)> &edit) {
     auto config = config_for(table);
     edit(config);
     return throws_invalid([&] { propagate(input, config); });
   };
-  CHECK(rejected([](dlufd::PropagatorConfig &c) { c.default_pathlen_m = -1.0; }));
-  CHECK(rejected([](dlufd::PropagatorConfig &c) {
+  CHECK(rejected([](obdeect::propagation::PropagatorConfig &c) { c.default_pathlen_m = -1.0; }));
+  CHECK(rejected([](obdeect::propagation::PropagatorConfig &c) {
     c.default_pathlen_m = std::numeric_limits<double>::quiet_NaN();
   }));
-  CHECK(rejected([](dlufd::PropagatorConfig &c) {
+  CHECK(rejected([](obdeect::propagation::PropagatorConfig &c) {
     c.default_pathlen_m = std::numeric_limits<double>::infinity();
   }));
-  CHECK(rejected([](dlufd::PropagatorConfig &c) { c.telescope_pathlen_m = {{1, -0.5}}; }));
-  CHECK(rejected([](dlufd::PropagatorConfig &c) {
+  CHECK(rejected([](obdeect::propagation::PropagatorConfig &c) { c.telescope_pathlen_m = {{1, -0.5}}; }));
+  CHECK(rejected([](obdeect::propagation::PropagatorConfig &c) {
     c.telescope_pathlen_m = {{2, std::numeric_limits<double>::quiet_NaN()}};
   }));
-  CHECK(rejected([](dlufd::PropagatorConfig &c) { c.telescope_pathlen_m = {{0, 1.0}}; }));
-  CHECK(rejected([](dlufd::PropagatorConfig &c) { c.telescope_pathlen_m = {{3, 1.0}}; }));
-  CHECK(!rejected([](dlufd::PropagatorConfig &c) { c.telescope_pathlen_m = {{2, 0.0}}; }));
+  CHECK(rejected([](obdeect::propagation::PropagatorConfig &c) { c.telescope_pathlen_m = {{0, 1.0}}; }));
+  CHECK(rejected([](obdeect::propagation::PropagatorConfig &c) { c.telescope_pathlen_m = {{3, 1.0}}; }));
+  CHECK(!rejected([](obdeect::propagation::PropagatorConfig &c) { c.telescope_pathlen_m = {{2, 0.0}}; }));
 }
 
 } // namespace

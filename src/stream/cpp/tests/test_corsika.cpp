@@ -1,6 +1,6 @@
 #include "check.hpp"
 
-#include "gstrickd/corsika.hpp"
+#include "obdeect/stream/corsika.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-using namespace gstrickd;
+using namespace obdeect::stream;
 
 namespace {
 

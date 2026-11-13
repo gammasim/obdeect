@@ -1,6 +1,6 @@
 // dlamb-laser-beam: primary photons of a laser beam inside a telescope's field of view.
 
-#include "dlamb/programs/laser-beam.hpp"
+#include "obdeect/sources/programs/laser-beam.hpp"
 
 #include "sky_args.hpp"
 #include "tool_args.hpp"
@@ -26,7 +26,7 @@ double mathematical_azimuth(double astronomical) {
 } // namespace
 
 int main(int argc, char **argv) {
-  using namespace dlamb;
+  using namespace obdeect::sources;
   return cli::run_tool("dlamb-laser-beam", [&] {
     cli::ArgCursor cursor(argc, argv);
     programs::LsBeamOptions o;

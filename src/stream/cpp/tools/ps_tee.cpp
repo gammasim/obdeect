@@ -1,8 +1,8 @@
 // ps-tee: copy a photon stream from stdin to stdout and to each named file,
 // record by record, flushing after every record. Photon columns are not decoded.
 
-#include "gstrickd/stdin_buffer.hpp"
-#include "gstrickd/stream.hpp"
+#include "obdeect/stream/stdin_buffer.hpp"
+#include "obdeect/stream/stream.hpp"
 #include "tool_version.hpp"
 
 #include <cstdint>
@@ -20,11 +20,11 @@ constexpr std::size_t buffer_size = std::size_t{1} << 20;
 // last, nothing after stream_end. Records are checked before they are written.
 class StreamOrder {
 public:
-  void accept(gstrickd::RecordType type) {
+  void accept(obdeect::stream::RecordType type) {
     if (ended_) {
       throw std::runtime_error("data after stream_end");
     }
-    if (type == gstrickd::RecordType::stream) {
+    if (type == obdeect::stream::RecordType::stream) {
       if (header_seen_) {
         throw std::runtime_error("second stream record");
       }
@@ -34,7 +34,7 @@ public:
     if (!header_seen_) {
       throw std::runtime_error("stream does not start with a stream record");
     }
-    ended_ = type == gstrickd::RecordType::stream_end;
+    ended_ = type == obdeect::stream::RecordType::stream_end;
   }
 
   // Called at EOF on a record boundary.
@@ -76,7 +76,7 @@ int main(int argc, char **argv) {
 
   try {
     static std::vector<char> out_buffer(buffer_size);
-    gstrickd::StdinBuffer stdin_buffer;
+    obdeect::stream::StdinBuffer stdin_buffer;
     std::istream in(&stdin_buffer);
     std::cout.rdbuf()->pubsetbuf(out_buffer.data(),
                                  static_cast<std::streamsize>(out_buffer.size()));
@@ -94,9 +94,9 @@ int main(int argc, char **argv) {
 
     std::vector<std::uint8_t> record;
     StreamOrder order;
-    while (gstrickd::read_record_raw(in, record)) {
+    while (obdeect::stream::read_record_raw(in, record)) {
       const auto type =
-          static_cast<gstrickd::RecordType>(gstrickd::stream_detail::load_le(record.data() + 4, 2));
+          static_cast<obdeect::stream::RecordType>(obdeect::stream::stream_detail::load_le(record.data() + 4, 2));
       order.accept(type);
       const auto *data = reinterpret_cast<const char *>(record.data());
       const auto size = static_cast<std::streamsize>(record.size());

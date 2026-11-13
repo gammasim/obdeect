@@ -1,7 +1,7 @@
 // ps2simtel: photon stream (file or stdin) to sim_telarray input (EventIO) on stdout or -o FILE.
 
-#include "gstrickd/simtel.hpp"
-#include "gstrickd/stdin_buffer.hpp"
+#include "obdeect/stream/simtel.hpp"
+#include "obdeect/stream/stdin_buffer.hpp"
 #include "tool_version.hpp"
 
 #include <cstdio>
@@ -77,7 +77,7 @@ int main(int argc, char **argv) {
   }
 
   try {
-    gstrickd::SimtelOptions options;
+    obdeect::stream::SimtelOptions options;
     options.warnings = &std::cerr;
     options.allow_pending = std::move(allow_pending);
     options.scaled = std::move(scaled);
@@ -86,19 +86,19 @@ int main(int argc, char **argv) {
       if (!map_file) {
         throw std::runtime_error("cannot open camera map " + camera_path);
       }
-      options.camera = gstrickd::read_camera_map(map_file);
+      options.camera = obdeect::stream::read_camera_map(map_file);
     }
     if (!atmprof_path.empty()) {
       std::ifstream table_file(atmprof_path);
       if (!table_file) {
         throw std::runtime_error("cannot open atmospheric table " + atmprof_path);
       }
-      options.atmprof = gstrickd::read_atmprof_text(table_file, atmprof_path);
+      options.atmprof = obdeect::stream::read_atmprof_text(table_file, atmprof_path);
     }
 
     static std::vector<char> in_buffer(buffer_size);
     static std::vector<char> out_buffer(buffer_size);
-    gstrickd::StdinBuffer stdin_buffer;
+    obdeect::stream::StdinBuffer stdin_buffer;
     std::istream stdin_stream(&stdin_buffer);
     std::ifstream in_file;
     std::istream *in = &stdin_stream;
@@ -126,7 +126,7 @@ int main(int argc, char **argv) {
       out = &out_file;
     }
 
-    gstrickd::stream_to_simtel(*in, *out, std::move(options));
+    obdeect::stream::stream_to_simtel(*in, *out, std::move(options));
     out->flush();
     if (!*out) {
       throw std::runtime_error("write error on output");

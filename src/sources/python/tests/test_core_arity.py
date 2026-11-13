@@ -1,7 +1,7 @@
 """The native constructors enforce the parameter counts of each kind and validate on creation."""
 
 import pytest
-from dlamb import _core
+from obdeect.sources import _core
 
 
 @pytest.mark.parametrize(

@@ -1,9 +1,9 @@
 """The package and its native extension import."""
 
-import gstrickd
-from gstrickd import _core
+import obdeect.stream as obdeect_stream
+from obdeect.stream import _core
 
 
 def test_version():
-    assert isinstance(gstrickd.__version__, str)
+    assert isinstance(obdeect_stream.__version__, str)
     assert len(_core.core_version()) == 3

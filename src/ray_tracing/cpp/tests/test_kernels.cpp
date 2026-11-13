@@ -2,9 +2,9 @@
 #include "check.hpp"
 #include "legacy_asphere.hpp"
 
-#include "obdeect/model.hpp"
-#include "obdeect/random.hpp"
-#include "obdeect/source.hpp"
+#include "obdeect/ray_tracing/model.hpp"
+#include "obdeect/ray_tracing/random.hpp"
+#include "obdeect/ray_tracing/source.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -13,7 +13,7 @@
 #include <stdexcept>
 #include <vector>
 
-using namespace obdeect;
+using namespace obdeect::ray_tracing;
 
 namespace {
 

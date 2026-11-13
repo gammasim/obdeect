@@ -1,6 +1,6 @@
 #include "check.hpp"
 
-#include "gstrickd/eventio.hpp"
+#include "obdeect/stream/eventio.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-using namespace gstrickd;
+using namespace obdeect::stream;
 
 namespace {
 

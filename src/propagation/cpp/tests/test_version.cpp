@@ -1,11 +1,11 @@
 #include "check.hpp"
 
-#include "dlufd/version.hpp"
+#include "obdeect/propagation/version.hpp"
 
 int main() {
   return run_checks([] {
-    CHECK(dlufd::version_major >= 0);
-    CHECK(dlufd::version_minor >= 0);
-    CHECK(dlufd::version_patch >= 0);
+    CHECK(obdeect::propagation::version_major >= 0);
+    CHECK(obdeect::propagation::version_minor >= 0);
+    CHECK(obdeect::propagation::version_patch >= 0);
   });
 }

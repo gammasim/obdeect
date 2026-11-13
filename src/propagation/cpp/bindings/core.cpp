@@ -3,7 +3,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/tuple.h>
 
-#include "dlufd/version.hpp"
+#include "obdeect/propagation/version.hpp"
 #include "extinction_bindings.hpp"
 #include "profile_bindings.hpp"
 #include "propagator_bindings.hpp"
@@ -16,7 +16,7 @@ namespace nb = nanobind;
 NB_MODULE(_core, module) {
   module.doc() = "dlufd native core";
   module.def("core_version", [] {
-    return std::make_tuple(dlufd::version_major, dlufd::version_minor, dlufd::version_patch);
+    return std::make_tuple(obdeect::propagation::version_major, obdeect::propagation::version_minor, obdeect::propagation::version_patch);
   });
   bind_extinction(module);
   bind_profile(module);

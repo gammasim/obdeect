@@ -1,7 +1,7 @@
 #include "check.hpp"
 #include "program_stream.hpp"
 
-#include "dlamb/programs/flasher.hpp"
+#include "obdeect/sources/programs/flasher.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -12,8 +12,8 @@
 #include <string>
 #include <vector>
 
-using namespace dlamb;
-using namespace dlamb::programs;
+using namespace obdeect::sources;
+using namespace obdeect::sources::programs;
 
 namespace {
 
@@ -46,12 +46,12 @@ void dish_default_options() {
 
   // Structure: one run, 20 events each with telescope, photons, telescope_end, event_end.
   CHECK(s.types.size() > 2);
-  CHECK(count_type(s, gstrickd::RecordType::run) == 1);
-  CHECK(count_type(s, gstrickd::RecordType::event) == 20);
-  CHECK(count_type(s, gstrickd::RecordType::telescope) == 20);
-  CHECK(count_type(s, gstrickd::RecordType::telescope_end) == 20);
-  CHECK(count_type(s, gstrickd::RecordType::event_end) == 20);
-  CHECK(count_type(s, gstrickd::RecordType::run_end) == 1);
+  CHECK(count_type(s, obdeect::stream::RecordType::run) == 1);
+  CHECK(count_type(s, obdeect::stream::RecordType::event) == 20);
+  CHECK(count_type(s, obdeect::stream::RecordType::telescope) == 20);
+  CHECK(count_type(s, obdeect::stream::RecordType::telescope_end) == 20);
+  CHECK(count_type(s, obdeect::stream::RecordType::event_end) == 20);
+  CHECK(count_type(s, obdeect::stream::RecordType::run_end) == 1);
 
   // Count: 2.5e6 photons into 4 pi, of which the fiducial cone keeps
   // N = 2.5e6 * (1 - cos theta) / 2 per event.
@@ -150,10 +150,10 @@ void dish_event_numbering_and_repeat() {
   options.photons = {1e5, 1e5};
   options.events = {1, 3};
   const auto s = read_stream(stream_bytes(options));
-  CHECK(count_type(s, gstrickd::RecordType::event) == 4);
+  CHECK(count_type(s, obdeect::stream::RecordType::event) == 4);
   std::int64_t last_event = 0;
   for (const auto &[type, metadata] : s.metadata) {
-    if (type == gstrickd::RecordType::event) {
+    if (type == obdeect::stream::RecordType::event) {
       const auto number = std::get<std::int64_t>(metadata.at("event_number"));
       CHECK(number == last_event + 1);
       last_event = number;
@@ -171,8 +171,8 @@ void secondary_geometry_and_counts() {
   const auto s = read_stream(stream_bytes(options));
 
   // Four flashers fire in one event: 4 x 1e5 photons (no target inside the fiducial sphere).
-  CHECK(count_type(s, gstrickd::RecordType::event) == 1);
-  CHECK(count_type(s, gstrickd::RecordType::telescope) == 1);
+  CHECK(count_type(s, obdeect::stream::RecordType::event) == 1);
+  CHECK(count_type(s, obdeect::stream::RecordType::telescope) == 1);
   CHECK(s.rows.size() == 4 * 100000);
   for (const Row &r : s.rows) {
     CHECK(r.frame == 2); // telescope frame
@@ -239,7 +239,7 @@ void secondary_delays_and_fire_pattern() {
   alt.events = {4};
   alt.fire = "alternate";
   const auto a = read_stream(stream_bytes(alt));
-  CHECK(count_type(a, gstrickd::RecordType::event) == 4);
+  CHECK(count_type(a, obdeect::stream::RecordType::event) == 4);
   CHECK(a.rows.size() == 4 * 1000);
   for (std::size_t e = 0; e < 4; ++e) {
     const Vec3 q = secondary_position(static_cast<int>(e), 14.62, 2.46);
@@ -324,7 +324,7 @@ void dish_camera_frame() {
   sky.photons = {2e5};
   sky.lightpulse = "Simple:4";
   flasher::Options camera = sky;
-  camera.frame = gstrickd::Frame::camera;
+  camera.frame = obdeect::stream::Frame::camera;
   const auto a = read_stream(stream_bytes(sky));
   const auto b = read_stream(stream_bytes(camera));
   CHECK(a.rows.size() > 0);
@@ -332,7 +332,7 @@ void dish_camera_frame() {
 
   // Run and telescope records: frame C, same fiducial radius.
   for (const auto &[type, meta] : b.metadata) {
-    if (type == gstrickd::RecordType::telescope) {
+    if (type == obdeect::stream::RecordType::telescope) {
       CHECK(std::get<std::int64_t>(meta.at("frame")) == 3);
       CHECK_NEAR(std::get<double>(meta.at("r_m")), 1.2, 1e-9);
     }
@@ -366,7 +366,7 @@ void dish_camera_frame() {
   flasher::Options axis;
   axis.distance_cm = 1000.0;
   axis.photons = {2e5};
-  axis.frame = gstrickd::Frame::camera;
+  axis.frame = obdeect::stream::Frame::camera;
   const double edge = 1.2 / std::sqrt(1.0 - 0.12 * 0.12);
   double max_axis = 0.0;
   for (const Row &r : read_stream(stream_bytes(axis)).rows) {
@@ -380,9 +380,9 @@ void camera_frame_rules() {
   // --frame is for the dish type only, and only sky or camera exist.
   flasher::Options secondary;
   secondary.type = flasher::Type::secondary;
-  secondary.frame = gstrickd::Frame::camera;
+  secondary.frame = obdeect::stream::Frame::camera;
   flasher::Options ground;
-  ground.frame = gstrickd::Frame::telescope;
+  ground.frame = obdeect::stream::Frame::telescope;
   for (const auto &o : {secondary, ground}) {
     bool threw = false;
     try {
@@ -395,7 +395,7 @@ void camera_frame_rules() {
 
   // A profile that emits away from the plane cannot be placed on it.
   flasher::Options up;
-  up.frame = gstrickd::Frame::camera;
+  up.frame = obdeect::stream::Frame::camera;
   up.distance_cm = 100.0; // inside the fiducial sphere: 4 pi emission
   up.photons = {1000};
   bool threw = false;

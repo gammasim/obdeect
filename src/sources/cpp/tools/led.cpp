@@ -1,6 +1,6 @@
 // dlamb-led: LED in front of selected camera pixels (camera frame).
 
-#include "dlamb/programs/led.hpp"
+#include "obdeect/sources/programs/led.hpp"
 
 #include "tool_args.hpp"
 
@@ -25,7 +25,7 @@ const char *usage =
 } // namespace
 
 int main(int argc, char **argv) {
-  using namespace dlamb;
+  using namespace obdeect::sources;
   const std::string prefix = argc > 0 ? argv[0] : "dlamb-led";
   return cli::run_tool(prefix, [&] {
     programs::led::Options o;

@@ -1,9 +1,9 @@
 #include "check.hpp"
 
-#include "dlufd/extinction.hpp"
-#include "dlufd/transmission.hpp"
+#include "obdeect/propagation/extinction.hpp"
+#include "obdeect/propagation/transmission.hpp"
 
-#include "gstrickd/photons.hpp"
+#include "obdeect/stream/photons.hpp"
 
 #include <cmath>
 #include <stdexcept>
@@ -85,7 +85,7 @@ constexpr Reference reference_points[] = {
 };
 
 const std::string table_path =
-    std::string(DLUFD_TEST_DATA_DIR) + "/atm_trans_2000_1_10_0_0_2000.dat";
+    std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/atm_trans_2000_1_10_0_0_2000.dat";
 
 template <class Function> bool throws_invalid(Function function) {
   try {
@@ -97,8 +97,8 @@ template <class Function> bool throws_invalid(Function function) {
 }
 
 // Constant optical depth 0.5 above 3 km, zero at the observation level.
-dlufd::TransmissionTable constant_table() {
-  return dlufd::TransmissionTable("# H2= 2.000, H1=    3.000     4.000\n400 0.5 0.5\n", 2000.0);
+obdeect::propagation::TransmissionTable constant_table() {
+  return obdeect::propagation::TransmissionTable("# H2= 2.000, H1=    3.000     4.000\n400 0.5 0.5\n", 2000.0);
 }
 
 void test_constant_optical_depth() {
@@ -116,7 +116,7 @@ void test_constant_optical_depth() {
 
 void test_hand_interpolation() {
   // Optical depth 1 at 3 km and 3 at 5 km; interpolation is linear in log10(height).
-  const dlufd::TransmissionTable table("# H2= 2.000, H1=    3.000     5.000\n400 1.0 3.0\n",
+  const obdeect::propagation::TransmissionTable table("# H2= 2.000, H1=    3.000     5.000\n400 1.0 3.0\n",
                                        2000.0);
   const double fraction = (std::log10(4.0) - std::log10(3.0)) / (std::log10(5.0) - std::log10(3.0));
   const double expected = 1.0 * (1.0 - fraction) + 3.0 * fraction;
@@ -140,54 +140,54 @@ void test_telescope_transmission_matches_direct_path() {
 }
 
 void test_airmass() {
-  CHECK_NEAR(dlufd::airmass<double>(0.0, 0.0), 1.0, 1e-15);
-  CHECK_NEAR(dlufd::airmass<double>(0.3, 0.4), 1.0 / std::sqrt(0.75), 1e-15);
-  CHECK_NEAR(dlufd::airmass<double>(1.0, 0.0), dlufd::unlimited_airmass, 0.0);
+  CHECK_NEAR(obdeect::propagation::airmass<double>(0.0, 0.0), 1.0, 1e-15);
+  CHECK_NEAR(obdeect::propagation::airmass<double>(0.3, 0.4), 1.0 / std::sqrt(0.75), 1e-15);
+  CHECK_NEAR(obdeect::propagation::airmass<double>(1.0, 0.0), obdeect::propagation::unlimited_airmass, 0.0);
 }
 
 void test_extinction_kernel_constant_tau() {
   const auto table = constant_table();
   const auto depths = table.telescope_depths(2000.0, 0.0);
-  gstrickd::PhotonChunk chunk;
+  obdeect::stream::PhotonChunk chunk;
   chunk.resize(
-      3, gstrickd::column_bit(gstrickd::Column::x) | gstrickd::column_bit(gstrickd::Column::y) |
-             gstrickd::column_bit(gstrickd::Column::cx) |
-             gstrickd::column_bit(gstrickd::Column::cy) |
-             gstrickd::column_bit(gstrickd::Column::t) | gstrickd::column_bit(gstrickd::Column::w) |
-             gstrickd::column_bit(gstrickd::Column::zem) |
-             gstrickd::column_bit(gstrickd::Column::wavelength));
+      3, obdeect::stream::column_bit(obdeect::stream::Column::x) | obdeect::stream::column_bit(obdeect::stream::Column::y) |
+             obdeect::stream::column_bit(obdeect::stream::Column::cx) |
+             obdeect::stream::column_bit(obdeect::stream::Column::cy) |
+             obdeect::stream::column_bit(obdeect::stream::Column::t) | obdeect::stream::column_bit(obdeect::stream::Column::w) |
+             obdeect::stream::column_bit(obdeect::stream::Column::zem) |
+             obdeect::stream::column_bit(obdeect::stream::Column::wavelength));
   for (std::size_t row = 0; row < 3; ++row) {
-    chunk[gstrickd::Column::cx][row] = 0.3F;
-    chunk[gstrickd::Column::cy][row] = 0.4F;
-    chunk[gstrickd::Column::zem][row] = 5000.0F;
-    chunk[gstrickd::Column::wavelength][row] = 400.0F;
-    chunk[gstrickd::Column::w][row] = 1.0F;
+    chunk[obdeect::stream::Column::cx][row] = 0.3F;
+    chunk[obdeect::stream::Column::cy][row] = 0.4F;
+    chunk[obdeect::stream::Column::zem][row] = 5000.0F;
+    chunk[obdeect::stream::Column::wavelength][row] = 400.0F;
+    chunk[obdeect::stream::Column::w][row] = 1.0F;
   }
   std::vector<double> p(3);
-  dlufd::atmospheric_acceptance<double>(chunk, table, depths, p);
+  obdeect::propagation::atmospheric_acceptance<double>(chunk, table, depths, p);
   const double a = 1.0 / std::sqrt(0.75);
   for (const double value : p) {
     CHECK_NEAR(value, std::exp(-0.5 * a), 1e-6);
   }
   // Wavelength at or above MAX_LAMBDA is dropped.
-  chunk[gstrickd::Column::wavelength][0] = 1000.0F;
-  dlufd::atmospheric_acceptance<double>(chunk, table, depths, p);
+  chunk[obdeect::stream::Column::wavelength][0] = 1000.0F;
+  obdeect::propagation::atmospheric_acceptance<double>(chunk, table, depths, p);
   CHECK_NEAR(p[0], 0.0, 0.0);
 }
 
 void test_invalid_tables() {
   CHECK(throws_invalid(
-      [] { return dlufd::TransmissionTable("# H2= 1.835, H1= 3.0\n400 1\n", 2000.0); }));
-  CHECK(throws_invalid([] { return dlufd::TransmissionTable("400 1\n", 2000.0); }));
+      [] { return obdeect::propagation::TransmissionTable("# H2= 1.835, H1= 3.0\n400 1\n", 2000.0); }));
+  CHECK(throws_invalid([] { return obdeect::propagation::TransmissionTable("400 1\n", 2000.0); }));
   CHECK(throws_invalid(
-      [] { return dlufd::TransmissionTable("# H2= 2.000, H1= 4.0 3.0\n400 1 1\n", 2000.0); }));
+      [] { return obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 4.0 3.0\n400 1 1\n", 2000.0); }));
   CHECK(throws_invalid(
-      [] { return dlufd::TransmissionTable("# H2= 2.000, H1= 3.0\n400 1\n402 1\n", 2000.0); }));
-  CHECK(throws_invalid([] { return dlufd::TransmissionTable("# H2= 2.000, H1= 3.0\n", 2000.0); }));
+      [] { return obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.0\n400 1\n402 1\n", 2000.0); }));
+  CHECK(throws_invalid([] { return obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.0\n", 2000.0); }));
 }
 
 void test_reference_table() {
-  const auto table = dlufd::TransmissionTable::from_file(table_path, 2000.0);
+  const auto table = obdeect::propagation::TransmissionTable::from_file(table_path, 2000.0);
   CHECK(table.first_wavelength_nm() == 200);
   // Per-telescope depths and the full lookup, against the reference values.
   const auto depths = table.telescope_depths(2030.0, 28.0);
@@ -210,19 +210,19 @@ void test_reference_table() {
 // A NaN H2 also used to pass the site altitude check (NaN > tolerance is false).
 void test_non_finite_tables_rejected() {
   CHECK(throws_invalid(
-      [] { dlufd::TransmissionTable("# H2= nan, H1= 3.000 4.000\n400 0.5 0.5\n", 2000.0); }));
+      [] { obdeect::propagation::TransmissionTable("# H2= nan, H1= 3.000 4.000\n400 0.5 0.5\n", 2000.0); }));
   CHECK(throws_invalid(
-      [] { dlufd::TransmissionTable("# H2= 2.000, H1= 3.000 inf\n400 0.5 0.5\n", 2000.0); }));
+      [] { obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.000 inf\n400 0.5 0.5\n", 2000.0); }));
   CHECK(throws_invalid(
-      [] { dlufd::TransmissionTable("# H2= 2.000, H1= 3.000 4.000\n400 nan 0.5\n", 2000.0); }));
+      [] { obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.000 4.000\n400 nan 0.5\n", 2000.0); }));
   CHECK(throws_invalid(
-      [] { dlufd::TransmissionTable("# H2= 2.000, H1= 3.000 4.000\n400 -inf 0.5\n", 2000.0); }));
+      [] { obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.000 4.000\n400 -inf 0.5\n", 2000.0); }));
   // H2 = 0 would give log10(0) = -inf in the height grid.
   CHECK(
-      throws_invalid([] { dlufd::TransmissionTable("# H2= 0.000, H1= 3.000\n400 0 0.5\n", 0.0); }));
+      throws_invalid([] { obdeect::propagation::TransmissionTable("# H2= 0.000, H1= 3.000\n400 0 0.5\n", 0.0); }));
   // A finite table still parses.
   CHECK(!throws_invalid(
-      [] { dlufd::TransmissionTable("# H2= 2.000, H1= 3.000 4.000\n400 0.5 0.5\n", 2000.0); }));
+      [] { obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.000 4.000\n400 0.5 0.5\n", 2000.0); }));
 }
 
 // Wavelengths are floating point in the API: NaN throws; values far outside the table

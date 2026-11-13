@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from dlufd import ScatteringTable, TransmissionTable, scatter
+from obdeect.propagation import ScatteringTable, TransmissionTable, scatter
 
 DATA = Path(__file__).resolve().parents[2] / "cpp" / "tests" / "data"
 SCATTERING_PATH = DATA / "scattering_exponential.dat"

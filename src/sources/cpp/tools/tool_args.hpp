@@ -3,7 +3,7 @@
 // Plumbing shared by the tool executables: argument cursor, output file, seed text, and the
 // top-level error handling (one line to stderr, exit 1).
 
-#include "dlamb/cli.hpp"
+#include "obdeect/sources/cli.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -16,7 +16,7 @@
 #include <string>
 #include <vector>
 
-namespace dlamb::cli {
+namespace obdeect::sources::cli {
 
 // A seed: negative values convert to uint64 modulo 2^64.
 inline std::uint64_t parse_seed(const std::string &text, const std::string &option) {
@@ -82,4 +82,4 @@ template <class Body> int run_tool(const std::string &prefix, Body body) {
   }
 }
 
-} // namespace dlamb::cli
+} // namespace obdeect::sources::cli

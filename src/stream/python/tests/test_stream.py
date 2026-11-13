@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-import gstrickd
+import obdeect.stream as obdeect_stream
 import numpy as np
 import pytest
 
@@ -20,7 +20,7 @@ def _columns(rows, names, offset=0):
 
 
 def _write_stream(path, rows=1000, telescope_id=1):
-    with gstrickd.Writer(str(path), "pytest") as writer:
+    with obdeect_stream.Writer(str(path), "pytest") as writer:
         writer.write("run", {"run_number": 1})
         writer.write("telescope", {"telescope_id": telescope_id, "frame": "telescope"})
         writer.write_photons(telescope_id, "telescope", 0, _columns(rows, REQUIRED))
@@ -32,7 +32,7 @@ def test_round_trip(tmp_path):
     path = tmp_path / "a.ps"
     first = _columns(1000, REQUIRED + ("zem", "wavelength"))
     second = _columns(7, REQUIRED, offset=100)
-    with gstrickd.Writer(str(path), "pytest") as writer:
+    with obdeect_stream.Writer(str(path), "pytest") as writer:
         writer.write(
             "run",
             {
@@ -50,7 +50,7 @@ def test_round_trip(tmp_path):
         writer.write("telescope_end", {"photons": 1007.0})
         writer.write("run_end", {})
 
-    records = list(gstrickd.Reader(str(path)))
+    records = list(obdeect_stream.Reader(str(path)))
     assert [r["type"] for r in records] == [
         "stream",
         "run",
@@ -89,10 +89,10 @@ def test_round_trip(tmp_path):
 
 def test_empty_chunk(tmp_path):
     path = tmp_path / "empty.ps"
-    with gstrickd.Writer(str(path), "pytest") as writer:
+    with obdeect_stream.Writer(str(path), "pytest") as writer:
         writer.write_photons(5, "camera", 42, {})
         writer.write_photons(5, "camera", 42, {name: np.empty(0, np.float32) for name in REQUIRED})
-    chunks = [r for r in gstrickd.Reader(str(path)) if r["type"] == "photons"]
+    chunks = [r for r in obdeect_stream.Reader(str(path)) if r["type"] == "photons"]
     assert len(chunks) == 2
     for chunk in chunks:
         assert chunk["columns"] == {}
@@ -101,7 +101,7 @@ def test_empty_chunk(tmp_path):
 
 
 def test_invalid_input_rejected(tmp_path):
-    with gstrickd.Writer(str(tmp_path / "bad.ps"), "pytest") as writer:
+    with obdeect_stream.Writer(str(tmp_path / "bad.ps"), "pytest") as writer:
         with pytest.raises(ValueError):
             writer.write_photons(1, "ground", 0, {"x": np.zeros(2, np.float32)})
         with pytest.raises(ValueError):
@@ -124,7 +124,7 @@ def test_garbage_input_rejected(tmp_path):
     path = tmp_path / "garbage.ps"
     path.write_bytes(b"this is not a photon stream at all")
     with pytest.raises(RuntimeError):
-        list(gstrickd.Reader(str(path)))
+        list(obdeect_stream.Reader(str(path)))
 
 
 def test_missing_stream_end_rejected(tmp_path):
@@ -134,11 +134,11 @@ def test_missing_stream_end_rejected(tmp_path):
     cut = tmp_path / "cut.ps"
     cut.write_bytes(data[:-16])  # drop the 16-byte stream_end record
     with pytest.raises(RuntimeError):
-        list(gstrickd.Reader(str(cut)))
+        list(obdeect_stream.Reader(str(cut)))
     empty = tmp_path / "empty.ps"
     empty.write_bytes(b"")
     with pytest.raises(RuntimeError):
-        list(gstrickd.Reader(str(empty)))
+        list(obdeect_stream.Reader(str(empty)))
 
 
 def test_data_after_stream_end_rejected(tmp_path):
@@ -149,18 +149,18 @@ def test_data_after_stream_end_rejected(tmp_path):
         bad = tmp_path / name
         bad.write_bytes(data + extra)
         with pytest.raises(RuntimeError, match="after stream_end"):
-            list(gstrickd.Reader(str(bad)))
+            list(obdeect_stream.Reader(str(bad)))
 
 
 def test_non_integral_frame_rejected(tmp_path):
-    with gstrickd.Writer(str(tmp_path / "frame.ps"), "pytest") as writer:
+    with obdeect_stream.Writer(str(tmp_path / "frame.ps"), "pytest") as writer:
         for frame in (2.9, True):
             with pytest.raises(TypeError):
                 writer.write_photons(1, frame, 0, _columns(2, REQUIRED))
 
 
 def test_write_after_close_rejected(tmp_path):
-    writer = gstrickd.Writer(str(tmp_path / "closed.ps"), "pytest")
+    writer = obdeect_stream.Writer(str(tmp_path / "closed.ps"), "pytest")
     writer.close()
     writer.close()
     with pytest.raises(RuntimeError):
@@ -185,7 +185,7 @@ def test_ps_cat(tmp_path):
     proc = subprocess.run([cat, str(a), str(b)], capture_output=True, check=True)
     out = tmp_path / "joined.ps"
     out.write_bytes(proc.stdout)
-    records = list(gstrickd.Reader(str(out)))
+    records = list(obdeect_stream.Reader(str(out)))
     types = [r["type"] for r in records]
     assert types.count("stream") == 1
     assert types.count("run") == 2
@@ -193,7 +193,7 @@ def test_ps_cat(tmp_path):
     assert photons == {1: 1000, 2: 500}
 
     stdin = subprocess.run([cat, "-"], input=a.read_bytes(), capture_output=True, check=True)
-    assert [r["type"] for r in gstrickd.Reader(_bytes_path(tmp_path, stdin.stdout))].count(
+    assert [r["type"] for r in obdeect_stream.Reader(_bytes_path(tmp_path, stdin.stdout))].count(
         "photons"
     ) == 1
 

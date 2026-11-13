@@ -2,8 +2,8 @@
 
 import numpy as np
 import pytest
-from dlufd import TransmissionTable, convert_table
-from dlufd.convert import FORMATS, main, read_legacy_table
+from obdeect.propagation import TransmissionTable, convert_table
+from obdeect.propagation.convert import FORMATS, main, read_legacy_table
 
 OBSERVATION_M = 2000.0
 

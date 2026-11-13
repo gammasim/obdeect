@@ -7,12 +7,12 @@ import sys
 
 import numpy as np
 import pytest
-from obdeect import ModelError, OpticalModel, ThreadPool, __version__, trace_many
-from obdeect.cli import main
-from obdeect.compiler import model_hash
-from obdeect.model import DETECTED, STATUS_NAMES
-from obdeect.psf import containment, summary
-from obdeect.repository import read_telescope
+from obdeect.ray_tracing import ModelError, OpticalModel, ThreadPool, __version__, trace_many
+from obdeect.ray_tracing.cli import main
+from obdeect.ray_tracing.compiler import model_hash
+from obdeect.ray_tracing.model import DETECTED, STATUS_NAMES
+from obdeect.ray_tracing.psf import containment, summary
+from obdeect.ray_tracing.repository import read_telescope
 from telescopes import STRUCTURE, dual, record, segmented, write_simulation_models
 
 
@@ -69,7 +69,7 @@ def test_model_document_is_isolated_from_mutation(tmp_path):
 def test_native_errors_name_the_json_path():
     document = model_of(segmented()).document
     document["optics"]["primary"]["facets"][2]["normal"] = [0.0, 0.0, 2.0]
-    from obdeect.compiler import model_hash
+    from obdeect.ray_tracing.compiler import model_hash
 
     document["sha256"] = model_hash(document)
     with pytest.raises(ModelError, match=r"facets\[2\]\.normal: expected a unit vector"):
@@ -426,6 +426,6 @@ def test_obscurer_hits_count_what_each_obscurer_takes_away(telescope, removed):
 
 def test_plot_without_matplotlib_reports_extra(monkeypatch, capsys):
     monkeypatch.setitem(sys.modules, "matplotlib", None)
-    monkeypatch.delitem(sys.modules, "obdeect.plot", raising=False)
+    monkeypatch.delitem(sys.modules, "obdeect.ray_tracing.plot", raising=False)
     assert main(["plot", "--model", "unused.json", "--output", "unused.png"]) == 1
     assert "obdeect[plot]" in capsys.readouterr().err

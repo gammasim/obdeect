@@ -1,7 +1,7 @@
 #include "check.hpp"
 #include "sky_stream_check.hpp"
 
-#include "dlamb/programs/laser-beam.hpp"
+#include "obdeect/sources/programs/laser-beam.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -11,9 +11,9 @@
 #include <string>
 #include <variant>
 
-using namespace dlamb;
-using namespace dlamb::programs;
-using gstrickd::Column;
+using namespace obdeect::sources;
+using namespace obdeect::sources::programs;
+using obdeect::stream::Column;
 
 namespace {
 
@@ -93,7 +93,7 @@ void non_default_pulse() {
   const double half_cos = std::cos(0.5 * o.fov_deg * deg);
   double sum = 0.0, sum2 = 0.0;
   std::uint64_t n = 0;
-  gstrickd::PhotonChunk chunk;
+  obdeect::stream::PhotonChunk chunk;
   for (const auto &st : plan.cases[0]) {
     CHECK(cos_to_axis(std::get<Emitter>(st.source.geometry).position, o) >= half_cos - 1e-9);
     const std::uint64_t rows = st.count(1);

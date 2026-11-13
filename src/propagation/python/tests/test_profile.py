@@ -3,7 +3,7 @@
 import math
 from pathlib import Path
 
-import dlufd
+import obdeect.propagation as obdeect_propagation
 import numpy as np
 import pytest
 
@@ -20,12 +20,12 @@ SPEED_OF_LIGHT_M_PER_NS = 0.299792458
 
 @pytest.fixture(scope="module")
 def profile():
-    return dlufd.AtmosphereProfile(PROFILE)
+    return obdeect_propagation.AtmosphereProfile(PROFILE)
 
 
 @pytest.fixture(scope="module")
 def tables(profile):
-    return dlufd.RefractionTables(profile, OBSERVATION_LEVEL_M)
+    return obdeect_propagation.RefractionTables(profile, OBSERVATION_LEVEL_M)
 
 
 def test_profile_reads_atmprof_table(profile):
@@ -56,13 +56,13 @@ def test_group_index_matches_obdeect(profile):
 def test_vertical_photon_is_not_displaced(tables):
     height = np.array([3000.0, 10000.0])
     zero = np.zeros(2)
-    cx, cy, x, y, t, bent = dlufd.refract(tables, height, zero, zero, zero, zero, zero)
+    cx, cy, x, y, t, bent = obdeect_propagation.refract(tables, height, zero, zero, zero, zero, zero)
     assert np.all(bent)
     assert np.all(cx == 0.0) and np.all(cy == 0.0)
     assert np.all(x == 0.0) and np.all(y == 0.0)
     vacuum_ns = (height - OBSERVATION_LEVEL_M) / SPEED_OF_LIGHT_M_PER_NS
     air_ns = np.array([
-        dlufd.air_delay_ns(dlufd.AtmosphereProfile(PROFILE), 2180.0, h, 0.0) for h in height
+        obdeect_propagation.air_delay_ns(obdeect_propagation.AtmosphereProfile(PROFILE), 2180.0, h, 0.0) for h in height
     ])
     np.testing.assert_allclose(t - vacuum_ns, air_ns, rtol=0, atol=1e-6)
 
@@ -72,7 +72,7 @@ def test_refraction_displaces_and_bends_towards_vertical(tables):
     cx = np.sin(zenith)
     cy = np.zeros_like(cx)
     n = cx.size
-    new_cx, new_cy, x, y, t, bent = dlufd.refract(
+    new_cx, new_cy, x, y, t, bent = obdeect_propagation.refract(
         tables, np.full(n, 20000.0), cx, cy, np.zeros(n), np.zeros(n), np.zeros(n)
     )
     assert bent.dtype == bool and np.all(bent)
@@ -85,7 +85,7 @@ def test_refraction_displaces_and_bends_towards_vertical(tables):
 def test_upward_direction_is_left_unchanged(tables):
     one = np.array([1.1])
     zero = np.zeros(1)
-    cx, cy, x, y, t, bent = dlufd.refract(tables, np.array([20000.0]), one, zero, zero, zero, zero)
+    cx, cy, x, y, t, bent = obdeect_propagation.refract(tables, np.array([20000.0]), one, zero, zero, zero, zero)
     assert not bent[0]
     assert cx[0] == 1.1 and x[0] == 0.0 and t[0] == 0.0
 
@@ -93,16 +93,16 @@ def test_upward_direction_is_left_unchanged(tables):
 def test_refract_rejects_mismatched_inputs(tables):
     good = np.zeros(3)
     with pytest.raises(ValueError):
-        dlufd.refract(tables, good, good, good, good, good, np.zeros(2))
+        obdeect_propagation.refract(tables, good, good, good, good, good, np.zeros(2))
     with pytest.raises(ValueError):
-        dlufd.refract(tables, np.zeros((3, 1)), good, good, good, good, good)
+        obdeect_propagation.refract(tables, np.zeros((3, 1)), good, good, good, good, good)
 
 
 def test_time_helpers():
-    assert dlufd.propagation_time_ns(1000.0, 1.0002) == pytest.approx(
+    assert obdeect_propagation.propagation_time_ns(1000.0, 1.0002) == pytest.approx(
         1000.0 * 1.0002 / SPEED_OF_LIGHT_M_PER_NS, rel=1e-14
     )
-    delay = dlufd.air_delay_ns(dlufd.AtmosphereProfile(PROFILE), 2180.0, 10000.0, 0.0)
+    delay = obdeect_propagation.air_delay_ns(obdeect_propagation.AtmosphereProfile(PROFILE), 2180.0, 10000.0, 0.0)
     assert delay == pytest.approx(4.0219, abs=1e-4)
     assert math.isfinite(delay)
 
@@ -123,15 +123,15 @@ def test_non_finite_heights_raise(profile, bad):
     with pytest.raises(ValueError):
         profile.group_index(bad)
     with pytest.raises(ValueError):
-        dlufd.air_delay_ns(profile, 2180.0, bad, 0.0)
+        obdeect_propagation.air_delay_ns(profile, 2180.0, bad, 0.0)
     with pytest.raises(ValueError):
-        dlufd.air_delay_ns(profile, bad, 10000.0, 0.0)
+        obdeect_propagation.air_delay_ns(profile, bad, 10000.0, 0.0)
     with pytest.raises(ValueError):
-        dlufd.air_delay_ns(profile, 2180.0, 10000.0, bad)
+        obdeect_propagation.air_delay_ns(profile, 2180.0, 10000.0, bad)
     with pytest.raises(ValueError):
-        dlufd.propagation_time_ns(bad, 1.0002)
+        obdeect_propagation.propagation_time_ns(bad, 1.0002)
     with pytest.raises(ValueError):
-        dlufd.propagation_time_ns(1000.0, bad)
+        obdeect_propagation.propagation_time_ns(1000.0, bad)
 
 
 @pytest.mark.parametrize("bad", NON_FINITE)
@@ -146,7 +146,7 @@ def test_refract_reports_non_finite_inputs_as_not_bent(tables, bad):
     t = np.zeros(4)
     cx[2] = bad
     x[3] = bad
-    new_cx, new_cy, new_x, new_y, new_t, bent = dlufd.refract(tables, height, cx, cy, x, y, t)
+    new_cx, new_cy, new_x, new_y, new_t, bent = obdeect_propagation.refract(tables, height, cx, cy, x, y, t)
     assert bent.dtype == bool
     assert list(bent) == [False, True, False, False]
     np.testing.assert_array_equal(new_cx[[0, 2, 3]], cx[[0, 2, 3]])
@@ -157,4 +157,4 @@ def test_refract_reports_non_finite_inputs_as_not_bent(tables, bad):
 
 def test_missing_profile_is_an_error(tmp_path):
     with pytest.raises(ValueError):
-        dlufd.AtmosphereProfile(tmp_path / "missing.dat")
+        obdeect_propagation.AtmosphereProfile(tmp_path / "missing.dat")

@@ -1,8 +1,8 @@
 // ps-cat: concatenate photon streams into one valid stream on stdout, or print
 // a summary of the streams.
 
-#include "gstrickd/stdin_buffer.hpp"
-#include "gstrickd/stream.hpp"
+#include "obdeect/stream/stdin_buffer.hpp"
+#include "obdeect/stream/stream.hpp"
 #include "tool_version.hpp"
 
 #include <array>
@@ -28,17 +28,17 @@ struct Summary {
 void usage() { std::fprintf(stderr, "usage: ps-cat [--summary] [file|-]...\n"); }
 
 // Copies the records of one stream (checked: framing, format major, stream_end).
-void copy_stream(std::istream &in, const std::string &name, gstrickd::Writer &writer) {
-  gstrickd::Reader reader(in);
-  gstrickd::Record record;
+void copy_stream(std::istream &in, const std::string &name, obdeect::stream::Writer &writer) {
+  obdeect::stream::Reader reader(in);
+  obdeect::stream::Record record;
   while (reader.next(record)) {
     switch (record.type) {
-    case gstrickd::RecordType::stream:
+    case obdeect::stream::RecordType::stream:
       break; // one stream header per output
-    case gstrickd::RecordType::photons:
+    case obdeect::stream::RecordType::photons:
       writer.write_chunk(record.chunk);
       break;
-    case gstrickd::RecordType::blob:
+    case obdeect::stream::RecordType::blob:
       writer.write_blob(record.blob_eventio_type, record.blob_eventio_id, record.blob);
       break;
     default:
@@ -55,15 +55,15 @@ void copy_stream(std::istream &in, const std::string &name, gstrickd::Writer &wr
 }
 
 void summarize_stream(std::istream &in, const std::string &name, Summary &summary) {
-  gstrickd::Reader reader(in);
-  gstrickd::Record record;
+  obdeect::stream::Reader reader(in);
+  obdeect::stream::Record record;
   while (reader.next(record)) {
     summary.records[static_cast<std::size_t>(record.type)] += 1;
-    if (record.type == gstrickd::RecordType::photons) {
+    if (record.type == obdeect::stream::RecordType::photons) {
       const auto id = record.chunk.telescope_id;
       summary.photons[id] += record.chunk.rows();
       double sum = 0.0;
-      for (const float w : record.chunk[gstrickd::Column::w]) {
+      for (const float w : record.chunk[obdeect::stream::Column::w]) {
         sum += w;
       }
       summary.weights[id] += sum;
@@ -125,7 +125,7 @@ int main(int argc, char **argv) {
   }
 
   try {
-    gstrickd::StdinBuffer stdin_buffer;
+    obdeect::stream::StdinBuffer stdin_buffer;
     std::istream stdin_stream(&stdin_buffer);
     if (summary) {
       Summary result;
@@ -135,7 +135,7 @@ int main(int argc, char **argv) {
       std::printf("records:\n");
       for (std::size_t t = 0; t < result.records.size(); ++t) {
         if (result.records[t] > 0) {
-          std::printf("  %-14s %llu\n", gstrickd::record_name(static_cast<gstrickd::RecordType>(t)),
+          std::printf("  %-14s %llu\n", obdeect::stream::record_name(static_cast<obdeect::stream::RecordType>(t)),
                       static_cast<unsigned long long>(result.records[t]));
         }
       }
@@ -156,7 +156,7 @@ int main(int argc, char **argv) {
     static std::vector<char> out_buffer(buffer_size);
     std::cout.rdbuf()->pubsetbuf(out_buffer.data(),
                                  static_cast<std::streamsize>(out_buffer.size()));
-    gstrickd::Writer writer(std::cout, "ps-cat");
+    obdeect::stream::Writer writer(std::cout, "ps-cat");
     for_each_input(inputs, stdin_stream, [&](std::istream &in, const std::string &name) {
       copy_stream(in, name, writer);
     });

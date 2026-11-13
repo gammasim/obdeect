@@ -11,7 +11,7 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
-#include "dlufd/propagator.hpp"
+#include "obdeect/propagation/propagator.hpp"
 
 #include <cstdint>
 #include <fstream>
@@ -36,43 +36,43 @@ inline void bind_propagator(nb::module_ &module) {
          bool weighted, bool store_p, const std::optional<std::string> &scattering_path,
          std::uint32_t scattering_points, double pathlen_m,
          const std::map<std::int64_t, double> &telescope_pathlen_m, bool geometry_only) {
-        dlufd::PropagatorConfig config;
+        obdeect::propagation::PropagatorConfig config;
         config.geometry_only = geometry_only;
         config.default_pathlen_m = pathlen_m;
         for (const auto &[id, metres] : telescope_pathlen_m) {
-          if (id < 1 || id > static_cast<std::int64_t>(gstrickd::max_telescope)) {
+          if (id < 1 || id > static_cast<std::int64_t>(obdeect::stream::max_telescope)) {
             throw std::invalid_argument("telescope_pathlen_m: telescope ids are 1-based");
           }
           config.telescope_pathlen_m[static_cast<std::uint32_t>(id)] = metres;
         }
         if (transmission_path) {
           config.transmission.emplace(
-              dlufd::TransmissionTable::from_file(*transmission_path, site_altitude_m));
+              obdeect::propagation::TransmissionTable::from_file(*transmission_path, site_altitude_m));
           config.transmission_source = *transmission_path;
         }
         config.site_altitude_m = site_altitude_m;
         if (profile_path) {
-          config.profile.emplace(dlufd::AtmosphereProfile::from_file(*profile_path));
+          config.profile.emplace(obdeect::propagation::AtmosphereProfile::from_file(*profile_path));
           config.profile_source = *profile_path;
         }
         for (const auto &[name, path] : envelope_paths) {
-          config.envelope.push_back(dlufd::read_envelope_file(name, path));
+          config.envelope.push_back(obdeect::propagation::read_envelope_file(name, path));
         }
         if (wavelength_range) {
-          config.wavelength_range = dlufd::WavelengthRange{std::get<0>(*wavelength_range),
+          config.wavelength_range = obdeect::propagation::WavelengthRange{std::get<0>(*wavelength_range),
                                                            std::get<1>(*wavelength_range)};
         }
         config.seed = seed;
-        config.mode = weighted ? dlufd::OutputMode::weighted : dlufd::OutputMode::thinned;
+        config.mode = weighted ? obdeect::propagation::OutputMode::weighted : obdeect::propagation::OutputMode::thinned;
         config.store_p = store_p;
         if (scattering_path) {
           config.scattering.enabled = true;
           config.scattering.points_per_photon = scattering_points;
-          config.scattering_table.emplace(dlufd::ScatteringTable::from_file(*scattering_path));
+          config.scattering_table.emplace(obdeect::propagation::ScatteringTable::from_file(*scattering_path));
           config.scattering_source = *scattering_path;
         }
 
-        if (dlufd::same_file(input_path, output_path)) {
+        if (obdeect::propagation::same_file(input_path, output_path)) {
           throw std::invalid_argument("input and output are the same file: " + input_path);
         }
         std::ifstream in(input_path, std::ios::binary);
@@ -83,8 +83,8 @@ inline void bind_propagator(nb::module_ &module) {
         if (!out) {
           throw std::runtime_error("cannot open output stream: " + output_path);
         }
-        const dlufd::PropagationSummary summary =
-            dlufd::propagate_stream(in, out, std::move(config));
+        const obdeect::propagation::PropagationSummary summary =
+            obdeect::propagation::propagate_stream(in, out, std::move(config));
         out.close();
         nb::dict result;
         result["photons_in"] = summary.photons_in;

@@ -1,7 +1,7 @@
 // Throughput of the photon-stream writer and reader through a file.
 // Usage: bench_stream [photons] [file]   (defaults: 1e8 photons, temp file)
 
-#include "gstrickd/stream.hpp"
+#include "obdeect/stream/stream.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -27,15 +27,15 @@ int main(int argc, char **argv) {
   const std::uint64_t photons = argc > 1 ? std::strtoull(argv[1], nullptr, 10) : 100000000ULL;
   const std::filesystem::path path =
       argc > 2 ? std::filesystem::path(argv[2])
-               : std::filesystem::temp_directory_path() / "gstrickd_bench.ps";
+               : std::filesystem::temp_directory_path() / "obdeect_stream_bench.ps";
   const std::uint64_t n_chunks = (photons + chunk_rows - 1) / chunk_rows;
 
-  gstrickd::PhotonChunk chunk;
+  obdeect::stream::PhotonChunk chunk;
   chunk.telescope_id = 1;
-  chunk.frame = gstrickd::Frame::telescope;
-  chunk.resize(chunk_rows, gstrickd::required_columns |
-                               gstrickd::column_bit(gstrickd::Column::zem) |
-                               gstrickd::column_bit(gstrickd::Column::wavelength));
+  chunk.frame = obdeect::stream::Frame::telescope;
+  chunk.resize(chunk_rows, obdeect::stream::required_columns |
+                               obdeect::stream::column_bit(obdeect::stream::Column::zem) |
+                               obdeect::stream::column_bit(obdeect::stream::Column::wavelength));
   for (auto &column : chunk.columns) {
     for (std::size_t r = 0; r < column.size(); ++r) {
       column[r] = static_cast<float>(r) * 0.001F;
@@ -54,7 +54,7 @@ int main(int argc, char **argv) {
       return EXIT_FAILURE;
     }
     const auto start = std::chrono::steady_clock::now();
-    gstrickd::Writer writer(out, "bench_stream");
+    obdeect::stream::Writer writer(out, "bench_stream");
     for (std::uint64_t i = 0; i < n_chunks; ++i) {
       const std::uint64_t rows = std::min<std::uint64_t>(chunk_rows, photons - i * chunk_rows);
       if (rows != chunk.rows()) { // last, shorter chunk
@@ -83,12 +83,12 @@ int main(int argc, char **argv) {
     in.rdbuf()->pubsetbuf(buffer.data(), static_cast<std::streamsize>(buffer.size()));
     in.open(path, std::ios::binary);
     const auto start = std::chrono::steady_clock::now();
-    gstrickd::Reader reader(in);
-    gstrickd::Record record;
+    obdeect::stream::Reader reader(in);
+    obdeect::stream::Record record;
     while (reader.next(record)) {
-      if (record.type == gstrickd::RecordType::photons) {
+      if (record.type == obdeect::stream::RecordType::photons) {
         read_photons += record.chunk.rows();
-        for (const float w : record.chunk[gstrickd::Column::w]) {
+        for (const float w : record.chunk[obdeect::stream::Column::w]) {
           weight_sum += w;
         }
       }

@@ -1,7 +1,7 @@
 #include "check.hpp"
 #include "sky_stream_check.hpp"
 
-#include "dlamb/programs/point-source.hpp"
+#include "obdeect/sources/programs/point-source.hpp"
 
 #include "../tools/telpos_file.hpp"
 
@@ -14,9 +14,9 @@
 #include <variant>
 #include <vector>
 
-using namespace dlamb;
-using namespace dlamb::programs;
-using gstrickd::Column;
+using namespace obdeect::sources;
+using namespace obdeect::sources::programs;
+using obdeect::stream::Column;
 
 namespace {
 
@@ -58,7 +58,7 @@ void default_stream() {
   CHECK(s.photons.at(1) == expected);
   const double cos_max = std::sqrt(1.0 - std::pow(1.02 * 15.0 / 1000.0, 2));
   for (const auto &c : s.chunks) {
-    CHECK(c.frame == gstrickd::Frame::sky);
+    CHECK(c.frame == obdeect::stream::Frame::sky);
     for (std::size_t i = 0; i < c.rows(); ++i) {
       CHECK_NEAR(c[Column::w][i], 1.0, 1e-6);
       CHECK_NEAR(c[Column::wavelength][i], 400.0, 1e-4);
@@ -126,7 +126,7 @@ void emission_altitude() {
       read_stream(write_to_string([&](std::ostream &out) { write_point_source(out, o); }));
   CHECK(!s.chunks.empty());
   for (const auto &c : s.chunks) {
-    CHECK((c.mask() & gstrickd::column_bit(Column::zem)) != 0U);
+    CHECK((c.mask() & obdeect::stream::column_bit(Column::zem)) != 0U);
     for (std::size_t i = 0; i < c.rows(); ++i)
       CHECK_NEAR(c[Column::zem][i] - c[Column::z][i], 1234.5, 1e-2);
   }

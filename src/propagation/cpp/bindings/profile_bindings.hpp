@@ -7,9 +7,9 @@
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/string.h>
 
-#include "dlufd/profile.hpp"
-#include "dlufd/refraction.hpp"
-#include "dlufd/timing.hpp"
+#include "obdeect/propagation/profile.hpp"
+#include "obdeect/propagation/refraction.hpp"
+#include "obdeect/propagation/timing.hpp"
 #include "extinction_bindings.hpp" // to_numpy
 
 #include <cstddef>
@@ -21,7 +21,7 @@
 
 namespace nb = nanobind;
 
-namespace dlufd_bindings {
+namespace obdeect_propagation_bindings {
 
 using ConstArray = nb::ndarray<const double, nb::ndim<1>, nb::c_contig, nb::device::cpu>;
 
@@ -41,15 +41,15 @@ nb::ndarray<nb::numpy, double, nb::ndim<1>> map_values(const ConstArray &heights
   return to_numpy(std::move(out));
 }
 
-} // namespace dlufd_bindings
+} // namespace obdeect_propagation_bindings
 
 inline void bind_profile(nb::module_ &module) {
-  using dlufd::AtmosphereProfile;
-  using dlufd::RefractionTables;
-  using dlufd_bindings::ConstArray;
-  using dlufd_bindings::copy_values;
-  using dlufd_bindings::map_values;
-  using dlufd_bindings::to_numpy;
+  using obdeect::propagation::AtmosphereProfile;
+  using obdeect::propagation::RefractionTables;
+  using obdeect_propagation_bindings::ConstArray;
+  using obdeect_propagation_bindings::copy_values;
+  using obdeect_propagation_bindings::map_values;
+  using obdeect_propagation_bindings::to_numpy;
 
   nb::class_<AtmosphereProfile>(module, "AtmosphereProfile")
       .def(nb::new_([](const std::string &path) { return AtmosphereProfile::from_file(path); }),
@@ -80,7 +80,7 @@ inline void bind_profile(nb::module_ &module) {
       .def(
           "group_index",
           [](const AtmosphereProfile &p, double observation_level_m) {
-            return dlufd::ambient_group_index(p, observation_level_m);
+            return obdeect::propagation::ambient_group_index(p, observation_level_m);
           },
           nb::arg("observation_level_m"), "Refractive index n at the observation level.");
 
@@ -105,7 +105,7 @@ inline void bind_profile(nb::module_ &module) {
         std::vector<bool> bent(n);
         for (std::size_t i = 0; i < n; ++i) {
           const double height = h(i);
-          bent[i] = dlufd::bend(tables, height, ux[i], uy[i], px[i], py[i], pt[i]);
+          bent[i] = obdeect::propagation::bend(tables, height, ux[i], uy[i], px[i], py[i], pt[i]);
         }
         std::vector<std::uint8_t> flags(bent.begin(), bent.end());
         return nb::make_tuple(to_numpy(std::move(ux)), to_numpy(std::move(uy)),
@@ -117,9 +117,9 @@ inline void bind_profile(nb::module_ &module) {
       "Bend photons emitted at height_m with direction (cx, cy) and position (x_m, y_m) at the "
       "observation level; returns (cx, cy, x_m, y_m, t_ns, bent) as numpy arrays, bent as uint8.");
 
-  module.def("straight_path_air_delay_ns", &dlufd::straight_path_air_delay_ns, nb::arg("profile"),
+  module.def("straight_path_air_delay_ns", &obdeect::propagation::straight_path_air_delay_ns, nb::arg("profile"),
              nb::arg("height_low_m"), nb::arg("height_high_m"), nb::arg("zenith_rad"),
              "Extra light travel time over a straight path between two heights [ns].");
-  module.def("propagation_time_ns", &dlufd::propagation_time_ns, nb::arg("path_m"),
+  module.def("propagation_time_ns", &obdeect::propagation::propagation_time_ns, nb::arg("path_m"),
              nb::arg("group_index"), "Light travel time over a path in a medium [ns].");
 }

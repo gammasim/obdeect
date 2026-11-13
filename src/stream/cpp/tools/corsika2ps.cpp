@@ -1,8 +1,8 @@
 // corsika2ps: CORSIKA IACT EventIO (file or stdin) to a photon stream on stdout.
 
-#include "gstrickd/simtel.hpp"
-#include "gstrickd/stdin_buffer.hpp"
-#include "gstrickd/version.hpp"
+#include "obdeect/stream/simtel.hpp"
+#include "obdeect/stream/stdin_buffer.hpp"
+#include "obdeect/stream/version.hpp"
 #include "tool_version.hpp"
 
 #include <cstdio>
@@ -53,7 +53,7 @@ int main(int argc, char **argv) {
     static std::vector<char> out_buffer(buffer_size);
     std::cout.rdbuf()->pubsetbuf(out_buffer.data(),
                                  static_cast<std::streamsize>(out_buffer.size()));
-    gstrickd::StdinBuffer stdin_buffer;
+    obdeect::stream::StdinBuffer stdin_buffer;
     std::istream stdin_stream(&stdin_buffer);
     static std::vector<char> in_buffer(buffer_size);
     std::ifstream file;
@@ -66,10 +66,10 @@ int main(int argc, char **argv) {
       }
       in = &file;
     }
-    const std::string producer = "corsika2ps " + std::to_string(gstrickd::version_major) + "." +
-                                 std::to_string(gstrickd::version_minor) + "." +
-                                 std::to_string(gstrickd::version_patch);
-    gstrickd::corsika_to_stream(*in, std::cout, producer);
+    const std::string producer = "corsika2ps " + std::to_string(obdeect::stream::version_major) + "." +
+                                 std::to_string(obdeect::stream::version_minor) + "." +
+                                 std::to_string(obdeect::stream::version_patch);
+    obdeect::stream::corsika_to_stream(*in, std::cout, producer);
     std::cout.flush();
     if (!std::cout) {
       throw std::runtime_error("write error on stdout");

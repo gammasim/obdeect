@@ -4,7 +4,7 @@ import math
 
 import numpy as np
 import pytest
-from dlamb.source import (
+from obdeect.sources.source import (
     CHUNK_ROWS,
     COLUMNS,
     build_source,

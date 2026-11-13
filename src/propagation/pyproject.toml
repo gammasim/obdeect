@@ -1,13 +1,13 @@
 [build-system]
 build-backend = "scikit_build_core.build"
-requires = [ "nanobind>=3.1", "scikit-build-core>=0.10", "setuptools-scm>=8" ]
+requires = [ "nanobind>=3.1", "scikit-build-core>=0.11", "setuptools-scm>=8" ]
 
 [project]
-name = "dlufd"
+name = "obdeect-propagation"
 description = "Atmospheric propagation of Cherenkov and artificial-source photons"
 readme = "README.md"
 license = { file = "LICENSE" }
-authors = [ { name = "Gernot Maier (DESY)" } ]
+authors = [ { name = "obdeect contributors" } ]
 requires-python = ">=3.14"
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -17,14 +17,11 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
   "Programming Language :: Python :: 3.15",
 ]
-dynamic = [ "version" ]
-dependencies = [
-  "numpy>=2.3",
-]
+dynamic = [ "dependencies", "version" ]
 optional-dependencies.dev = [ "nanobind>=3.1", "pre-commit", "pytest", "ruff" ]
 optional-dependencies.docs = [ "myst-parser", "pydata-sphinx-theme", "pyyaml", "sphinx" ]
 optional-dependencies.plot = [ "matplotlib>=3.8" ]
-scripts.dlufd-convert-table = "dlufd.convert:main"
+scripts.dlufd-convert-table = "obdeect.propagation.convert:main"
 
 [tool.setuptools_scm]
 root = "../.."
@@ -32,10 +29,10 @@ fallback_version = "0.1.0"
 
 [tool.scikit-build]
 build-dir = "build/{wheel_tag}"
-cmake.args = [ "-DDLUFD_BUILD_TESTING=OFF" ]
+cmake.args = [ "-DOBDEECT_PROPAGATION_BUILD_TESTING=OFF" ]
 cmake.build-type = "Release"
 sdist.include = [ "cpp/**", "CMakeLists.txt", "python/**", "README.md", "LICENSE" ]
-wheel.packages = [ "python/dlufd" ]
+wheel.packages = { "obdeect/propagation" = "python/obdeect/propagation" }
 wheel.platlib = true
 # Editable installs rebuild the extension when the C++ sources change.
 editable.rebuild = true
@@ -55,7 +52,7 @@ lint.select = [ "E", "F", "I", "UP" ]
 max_supported_python = "3.15"
 
 [tool.towncrier]
-package = "dlufd"
+package = "obdeect.propagation"
 package_dir = "python"
 directory = "docs/changes"
 filename = "CHANGELOG.md"
@@ -70,5 +67,10 @@ type = [
 ]
 
 
-[[tool.dynamic-metadata]]
+[tool.scikit-build.metadata.version]
 provider = "scikit_build_core.metadata.setuptools_scm"
+
+[tool.scikit-build.metadata.dependencies]
+# All components are released together with one version.
+provider = "scikit_build_core.metadata.template"
+result = [ "numpy>=2.3", "obdeect-stream=={project[version]}" ]

@@ -3,7 +3,7 @@
 import math
 import unittest
 
-from obdeect.propagation import ambient_group_index
+from obdeect.ray_tracing.propagation import ambient_group_index
 
 
 class TestPropagation(unittest.TestCase):

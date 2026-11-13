@@ -1,11 +1,11 @@
 #include "check.hpp"
 
-#include "gstrickd/photons.hpp"
-#include "gstrickd/random.hpp"
+#include "obdeect/stream/photons.hpp"
+#include "obdeect/stream/random.hpp"
 
 #include <stdexcept>
 
-using namespace gstrickd;
+using namespace obdeect::stream;
 
 namespace {
 

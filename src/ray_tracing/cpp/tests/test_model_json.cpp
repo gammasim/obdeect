@@ -1,8 +1,8 @@
 // Optical-model loading: valid documents load; every error names its path.
 #include "check.hpp"
 
-#include "obdeect/bunches.hpp"
-#include "obdeect/model_json.hpp"
+#include "obdeect/ray_tracing/bunches.hpp"
+#include "obdeect/ray_tracing/model_json.hpp"
 
 #include <algorithm>
 #include <array>
@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-using namespace obdeect;
+using namespace obdeect::ray_tracing;
 
 namespace {
 
@@ -147,7 +147,7 @@ void axes_offset_is_applied_by_the_tracer() {
 }
 
 // Numbers parse the same under a locale with a decimal comma. Without one installed the
-// test cannot exercise the path: it is skipped, unless OBDEECT_REQUIRE_COMMA_LOCALE is set
+// test cannot exercise the path: it is skipped, unless OBDEECT_RAY_TRACING_REQUIRE_COMMA_LOCALE is set
 // (CI does), in which case a missing locale fails.
 void decimal_comma_locale() {
   const std::string previous = std::setlocale(LC_NUMERIC, nullptr);
@@ -158,7 +158,7 @@ void decimal_comma_locale() {
       break;
     }
   if (!comma) {
-    CHECK(std::getenv("OBDEECT_REQUIRE_COMMA_LOCALE") == nullptr);
+    CHECK(std::getenv("OBDEECT_RAY_TRACING_REQUIRE_COMMA_LOCALE") == nullptr);
     std::puts("decimal_comma_locale: no decimal-comma locale installed, skipped");
     return;
   }

@@ -1,10 +1,10 @@
 #pragma once
 
-// Reads back a stream written by dlamb::programs with gstrickd::Reader (test helper).
+// Reads back a stream written by obdeect::sources::programs with obdeect::stream::Reader (test helper).
 
-#include "gstrickd/format.hpp"
-#include "gstrickd/photons.hpp"
-#include "gstrickd/stream.hpp"
+#include "obdeect/stream/format.hpp"
+#include "obdeect/stream/photons.hpp"
+#include "obdeect/stream/stream.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -24,44 +24,44 @@ struct Row {
 };
 
 struct StreamContents {
-  std::vector<gstrickd::RecordType> types; // every record in order
-  std::vector<std::pair<gstrickd::RecordType, gstrickd::Metadata>> metadata;
+  std::vector<obdeect::stream::RecordType> types; // every record in order
+  std::vector<std::pair<obdeect::stream::RecordType, obdeect::stream::Metadata>> metadata;
   std::vector<Row> rows; // all photons in order
 };
 
 inline StreamContents read_stream(const std::string &bytes) {
   std::istringstream in(bytes);
-  gstrickd::Reader reader(in);
-  gstrickd::Record record;
+  obdeect::stream::Reader reader(in);
+  obdeect::stream::Record record;
   StreamContents contents;
   std::int64_t event = 0;
   while (reader.next(record)) {
     contents.types.push_back(record.type);
-    if (record.type == gstrickd::RecordType::photons) {
+    if (record.type == obdeect::stream::RecordType::photons) {
       const auto &chunk = record.chunk;
-      const bool has_zem = chunk.has(gstrickd::Column::zem);
+      const bool has_zem = chunk.has(obdeect::stream::Column::zem);
       for (std::size_t i = 0; i < chunk.rows(); ++i) {
         Row row;
-        row.x = chunk[gstrickd::Column::x][i];
-        row.y = chunk[gstrickd::Column::y][i];
-        row.z = chunk.has(gstrickd::Column::z) ? chunk[gstrickd::Column::z][i] : 0.0F;
-        row.cx = chunk[gstrickd::Column::cx][i];
-        row.cy = chunk[gstrickd::Column::cy][i];
-        row.cz = chunk[gstrickd::Column::cz][i];
-        row.t = chunk[gstrickd::Column::t][i];
-        row.w = chunk[gstrickd::Column::w][i];
+        row.x = chunk[obdeect::stream::Column::x][i];
+        row.y = chunk[obdeect::stream::Column::y][i];
+        row.z = chunk.has(obdeect::stream::Column::z) ? chunk[obdeect::stream::Column::z][i] : 0.0F;
+        row.cx = chunk[obdeect::stream::Column::cx][i];
+        row.cy = chunk[obdeect::stream::Column::cy][i];
+        row.cz = chunk[obdeect::stream::Column::cz][i];
+        row.t = chunk[obdeect::stream::Column::t][i];
+        row.w = chunk[obdeect::stream::Column::w][i];
         row.wavelength =
-            chunk.has(gstrickd::Column::wavelength) ? chunk[gstrickd::Column::wavelength][i] : 0.0F;
+            chunk.has(obdeect::stream::Column::wavelength) ? chunk[obdeect::stream::Column::wavelength][i] : 0.0F;
         row.has_zem = has_zem;
-        row.zem = has_zem ? chunk[gstrickd::Column::zem][i] : 0.0F;
+        row.zem = has_zem ? chunk[obdeect::stream::Column::zem][i] : 0.0F;
         row.frame = static_cast<std::uint32_t>(chunk.frame);
         row.telescope = chunk.telescope_id;
         row.index = chunk.first_index + i;
         row.event = event;
         contents.rows.push_back(row);
       }
-    } else if (gstrickd::is_metadata_record(record.type)) {
-      if (record.type == gstrickd::RecordType::event) {
+    } else if (obdeect::stream::is_metadata_record(record.type)) {
+      if (record.type == obdeect::stream::RecordType::event) {
         event = std::get<std::int64_t>(record.metadata.at("event_number"));
       }
       contents.metadata.emplace_back(record.type, record.metadata);
@@ -74,7 +74,7 @@ inline StreamContents read_stream(const std::string &bytes) {
 }
 
 // Number of records of one type.
-inline std::size_t count_type(const StreamContents &c, gstrickd::RecordType type) {
+inline std::size_t count_type(const StreamContents &c, obdeect::stream::RecordType type) {
   std::size_t n = 0;
   for (const auto t : c.types) {
     n += t == type;

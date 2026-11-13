@@ -1,10 +1,10 @@
 #pragma once
 
 // Spectrum, pulse and angular option texts of the sky tools, including table files
-// (docs/spec/cli-conventions.md). Namespace dlamb::cli.
+// (docs/spec/cli-conventions.md). Namespace obdeect::sources::cli.
 
-#include "dlamb/cli.hpp"
-#include "dlamb/density.hpp"
+#include "obdeect/sources/cli.hpp"
+#include "obdeect/sources/density.hpp"
 
 #include <cmath>
 #include <cstddef>
@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-namespace dlamb::cli {
+namespace obdeect::sources::cli {
 
 // Two-column table file: '#' starts a comment, lines that are not two numbers are skipped,
 // consecutive equal abscissae merge into one node with the mean value.
@@ -178,4 +178,4 @@ inline Angular parse_angular(const std::string &text, const std::string &option)
   return TabulatedAngular{LinearDensity(std::move(angle), std::move(intensity))};
 }
 
-} // namespace dlamb::cli
+} // namespace obdeect::sources::cli

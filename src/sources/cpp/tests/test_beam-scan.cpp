@@ -1,7 +1,7 @@
 #include "check.hpp"
 #include "sky_stream_check.hpp"
 
-#include "dlamb/programs/beam-scan.hpp"
+#include "obdeect/sources/programs/beam-scan.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -9,9 +9,9 @@
 #include <stdexcept>
 #include <variant>
 
-using namespace dlamb;
-using namespace dlamb::programs;
-using gstrickd::Column;
+using namespace obdeect::sources;
+using namespace obdeect::sources::programs;
+using obdeect::stream::Column;
 
 namespace {
 
@@ -40,7 +40,7 @@ void default_scan() {
   CHECK(s.ended && s.events == 1);
   CHECK(s.photons.at(1) == 100 * positions);
   for (const auto &c : s.chunks) {
-    CHECK(c.frame == gstrickd::Frame::sky);
+    CHECK(c.frame == obdeect::stream::Frame::sky);
     for (std::size_t i = 0; i < c.rows(); ++i) {
       CHECK_NEAR(c[Column::cx][i], 0.0, 1e-6);
       CHECK_NEAR(c[Column::cy][i], 0.0, 1e-6);

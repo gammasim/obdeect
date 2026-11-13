@@ -2,7 +2,7 @@
 
 #include "../tools/sky_args.hpp"
 
-#include "dlamb/density.hpp"
+#include "obdeect/sources/density.hpp"
 
 #include <cstdint>
 #include <limits>
@@ -10,8 +10,8 @@
 #include <string>
 #include <variant>
 
-using namespace dlamb;
-using namespace dlamb::cli;
+using namespace obdeect::sources;
+using namespace obdeect::sources::cli;
 
 namespace {
 

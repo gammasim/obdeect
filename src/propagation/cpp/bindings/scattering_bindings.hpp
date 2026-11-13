@@ -10,11 +10,11 @@
 
 #include "extinction_bindings.hpp"
 
-#include "dlufd/scattering.hpp"
-#include "dlufd/transmission.hpp"
+#include "obdeect/propagation/scattering.hpp"
+#include "obdeect/propagation/transmission.hpp"
 
-#include "gstrickd/format.hpp"
-#include "gstrickd/photons.hpp"
+#include "obdeect/stream/format.hpp"
+#include "obdeect/stream/photons.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -25,14 +25,14 @@
 #include <utility>
 #include <vector>
 
-namespace dlufd_bindings {
+namespace obdeect_propagation_bindings {
 
 namespace nb = nanobind;
 
 using Telescope = std::tuple<std::uint32_t, double, double, double, double>;
 
 inline void bind_scattering_table(nb::module_ &module) {
-  using dlufd::ScatteringTable;
+  using obdeect::propagation::ScatteringTable;
   nb::class_<ScatteringTable>(module, "ScatteringTable")
       .def(nb::new_([](const std::string &path) { return ScatteringTable::from_file(path); }),
            nb::arg("path"))
@@ -65,45 +65,45 @@ inline void bind_scattering_table(nb::module_ &module) {
 inline void bind_scatter(nb::module_ &module) {
   module.def(
       "scatter",
-      [](const nb::dict &columns, const dlufd::ScatteringTable &table,
-         const dlufd::TransmissionTable &transmission, const std::vector<Telescope> &telescopes,
+      [](const nb::dict &columns, const obdeect::propagation::ScatteringTable &table,
+         const obdeect::propagation::TransmissionTable &transmission, const std::vector<Telescope> &telescopes,
          std::uint64_t seed, std::uint32_t event, std::uint64_t first_index,
          std::uint32_t n_points) {
-        std::vector<dlufd::ScatterTelescope> sphere;
+        std::vector<obdeect::propagation::ScatterTelescope> sphere;
         for (const auto &[id, x, y, z, radius] : telescopes) {
           sphere.push_back({id, x, y, z, radius});
         }
-        dlufd::ScatteringConfig config;
+        obdeect::propagation::ScatteringConfig config;
         config.enabled = true;
         config.points_per_photon = n_points;
 
         // Input in slices of at most 2^16 rows; the photon index continues across slices and
         // the output of each slice is appended in order, so the result does not depend on it.
         const InputColumns input = input_columns(columns);
-        std::vector<std::vector<gstrickd::PhotonChunk>> lists(sphere.size());
-        for (std::size_t offset = 0; offset < input.rows; offset += gstrickd::max_chunk_rows) {
+        std::vector<std::vector<obdeect::stream::PhotonChunk>> lists(sphere.size());
+        for (std::size_t offset = 0; offset < input.rows; offset += obdeect::stream::max_chunk_rows) {
           const std::size_t rows =
-              std::min<std::size_t>(gstrickd::max_chunk_rows, input.rows - offset);
-          gstrickd::PhotonChunk slice = slice_chunk(input, offset, rows, first_index + offset);
-          slice.frame = gstrickd::Frame::sky; // primary photons of the sky frame
-          dlufd::scatter_chunk(config, table, transmission, sphere, slice, seed, event,
+              std::min<std::size_t>(obdeect::stream::max_chunk_rows, input.rows - offset);
+          obdeect::stream::PhotonChunk slice = slice_chunk(input, offset, rows, first_index + offset);
+          slice.frame = obdeect::stream::Frame::sky; // primary photons of the sky frame
+          obdeect::propagation::scatter_chunk(config, table, transmission, sphere, slice, seed, event,
                                first_index + offset, lists);
         }
 
         // One dict of float32 columns per telescope, keyed by telescope id.
         nb::dict result;
         for (std::size_t i = 0; i < sphere.size(); ++i) {
-          std::vector<std::vector<float>> out(gstrickd::n_columns);
+          std::vector<std::vector<float>> out(obdeect::stream::n_columns);
           for (const auto &chunk : lists[i]) {
-            for (const auto column : dlufd::scatter_output_columns) {
+            for (const auto column : obdeect::propagation::scatter_output_columns) {
               const auto c = static_cast<std::uint32_t>(column);
               out[c].insert(out[c].end(), chunk.columns[c].begin(), chunk.columns[c].end());
             }
           }
           nb::dict photons;
-          for (const auto column : dlufd::scatter_output_columns) {
+          for (const auto column : obdeect::propagation::scatter_output_columns) {
             const auto c = static_cast<std::uint32_t>(column);
-            photons[gstrickd::column_name(column)] = nb::cast(to_numpy(std::move(out[c])));
+            photons[obdeect::stream::column_name(column)] = nb::cast(to_numpy(std::move(out[c])));
           }
           result[nb::int_(sphere[i].id)] = photons;
         }
@@ -113,10 +113,10 @@ inline void bind_scatter(nb::module_ &module) {
       nb::arg("seed"), nb::arg("event"), nb::arg("first_index"), nb::arg("n_points"));
 }
 
-} // namespace dlufd_bindings
+} // namespace obdeect_propagation_bindings
 
 // Register ScatteringTable and scatter on the extension module.
 inline void bind_scattering(nanobind::module_ &module) {
-  dlufd_bindings::bind_scattering_table(module);
-  dlufd_bindings::bind_scatter(module);
+  obdeect_propagation_bindings::bind_scattering_table(module);
+  obdeect_propagation_bindings::bind_scatter(module);
 }

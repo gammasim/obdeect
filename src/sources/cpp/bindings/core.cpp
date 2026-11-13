@@ -5,13 +5,13 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
-#include "dlamb/density.hpp"
-#include "dlamb/source.hpp"
-#include "dlamb/streams.hpp"
-#include "dlamb/version.hpp"
+#include "obdeect/sources/density.hpp"
+#include "obdeect/sources/source.hpp"
+#include "obdeect/sources/streams.hpp"
+#include "obdeect/sources/version.hpp"
 
-#include "gstrickd/format.hpp"
-#include "gstrickd/photons.hpp"
+#include "obdeect/stream/format.hpp"
+#include "obdeect/stream/photons.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -21,7 +21,7 @@
 #include <vector>
 
 namespace nb = nanobind;
-using namespace dlamb;
+using namespace obdeect::sources;
 
 namespace {
 
@@ -139,21 +139,21 @@ nb::object to_array(const std::vector<float> &values) {
 NB_MODULE(_core, m) {
   m.doc() = "dlamb native core";
   m.def("core_version", [] { return nb::make_tuple(version_major, version_minor, version_patch); });
-  m.def("gstrickd_contract", [] {
+  m.def("stream_contract", [] {
     nb::dict d;
-    d["format_major"] = gstrickd::format_major;
-    d["format_minor"] = gstrickd::format_minor;
-    d["max_chunk_rows"] = gstrickd::max_chunk_rows;
-    d["dlamb_format_major"] = photon_stream_format_major;
+    d["format_major"] = obdeect::stream::format_major;
+    d["format_minor"] = obdeect::stream::format_minor;
+    d["max_chunk_rows"] = obdeect::stream::max_chunk_rows;
+    d["sources_format_major"] = photon_stream_format_major;
     nb::dict frames;
-    frames["sky"] = static_cast<int>(gstrickd::Frame::sky);
-    frames["telescope"] = static_cast<int>(gstrickd::Frame::telescope);
-    frames["camera"] = static_cast<int>(gstrickd::Frame::camera);
+    frames["sky"] = static_cast<int>(obdeect::stream::Frame::sky);
+    frames["telescope"] = static_cast<int>(obdeect::stream::Frame::telescope);
+    frames["camera"] = static_cast<int>(obdeect::stream::Frame::camera);
     d["frames"] = frames;
     nb::list columns;
-    for (std::uint32_t c = 0; c < gstrickd::n_columns; ++c)
+    for (std::uint32_t c = 0; c < obdeect::stream::n_columns; ++c)
       if ((source_columns >> c) & 1U)
-        columns.append(gstrickd::column_name(static_cast<gstrickd::Column>(c)));
+        columns.append(obdeect::stream::column_name(static_cast<obdeect::stream::Column>(c)));
     d["emitted_columns"] = columns;
     return d;
   });
@@ -186,7 +186,7 @@ NB_MODULE(_core, m) {
              if (frame != 0 && frame != 2 && frame != 3)
                throw std::invalid_argument("frame must be 0 (sky), 2 (telescope) or 3 (camera)");
              new (self) Source();
-             self->frame = static_cast<gstrickd::Frame>(frame);
+             self->frame = static_cast<obdeect::stream::Frame>(frame);
              if (nb::isinstance<Emitter>(geometry))
                self->geometry = nb::cast<Emitter>(geometry);
              else if (nb::isinstance<Star>(geometry))
@@ -215,13 +215,13 @@ NB_MODULE(_core, m) {
            })
       .def("emit", [](const Source &s, std::uint64_t seed, std::uint32_t event,
                       std::uint32_t telescope, std::uint64_t first_index, std::size_t rows) {
-        gstrickd::PhotonChunk chunk;
+        obdeect::stream::PhotonChunk chunk;
         emit(s, seed, event, telescope, first_index, rows, chunk);
         nb::dict out;
-        for (std::uint32_t c = 0; c < gstrickd::n_columns; ++c)
+        for (std::uint32_t c = 0; c < obdeect::stream::n_columns; ++c)
           if ((source_columns >> c) & 1U) {
-            const auto column = static_cast<gstrickd::Column>(c);
-            out[gstrickd::column_name(column)] = to_array(chunk[column]);
+            const auto column = static_cast<obdeect::stream::Column>(c);
+            out[obdeect::stream::column_name(column)] = to_array(chunk[column]);
           }
         return out;
       });

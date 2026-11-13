@@ -1,6 +1,6 @@
 #include "check.hpp"
 
-#include "dlufd/profile.hpp"
+#include "obdeect/propagation/profile.hpp"
 
 #include <cmath>
 #include <fstream>
@@ -10,14 +10,14 @@
 #include <string>
 #include <vector>
 
-#ifndef DLUFD_TEST_DATA_DIR
-#error "DLUFD_TEST_DATA_DIR must be defined by CMake"
+#ifndef OBDEECT_PROPAGATION_TEST_DATA_DIR
+#error "OBDEECT_PROPAGATION_TEST_DATA_DIR must be defined by CMake"
 #endif
 
 namespace {
 
 const std::string kProfilePath =
-    std::string(DLUFD_TEST_DATA_DIR) + "/atmprof_ecmwf_north_winter_fixed.dat";
+    std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/atmprof_ecmwf_north_winter_fixed.dat";
 
 // Exponential atmosphere, 1 km levels to 10 km: rho = 1.2e-3 exp(-h/7 km) g/cm^3,
 // thickness = integral from h to 10 km = 7e5 cm * (rho - rho(10 km)), n-1 = etadsn * rho
@@ -27,7 +27,7 @@ std::string exponential_row(int km) {
   const double rho_top = 1.2e-3 * std::exp(-10. / 7.);
   std::ostringstream row;
   row << km << ' ' << rho << ' ' << 7e5 * (rho - rho_top) << ' '
-      << dlufd::AtmosphereProfile::default_etadsn * rho;
+      << obdeect::propagation::AtmosphereProfile::default_etadsn * rho;
   return row.str();
 }
 
@@ -62,7 +62,7 @@ std::string with_column(int km, std::size_t column, const std::string &token) {
 // The error message of a rejected profile, or an empty string if it is accepted.
 std::string parse_error(const std::string &text) {
   try {
-    dlufd::AtmosphereProfile profile(text);
+    obdeect::propagation::AtmosphereProfile profile(text);
   } catch (const std::invalid_argument &error) {
     return error.what();
   }
@@ -85,7 +85,7 @@ bool throws_invalid(auto &&action) {
 int main() {
   return run_checks([] {
     // The exponential profile reproduces its analytic density, thickness and n-1 between levels.
-    const dlufd::AtmosphereProfile exp_profile(exponential_profile());
+    const obdeect::propagation::AtmosphereProfile exp_profile(exponential_profile());
     CHECK(exp_profile.levels() == 11);
     // Density and n-1 agree to 3e-6 (linear interpolation on the 3 m grid). Thickness is the
     // spline of log(thickness) through the truncated levels; it is within 0.5 % everywhere
@@ -96,14 +96,14 @@ int main() {
       const double rho_top = 1.2e-3 * std::exp(-10. / 7.);
       CHECK_NEAR(exp_profile.density(h) / rho, 1., 1e-5);
       CHECK_NEAR(exp_profile.refractive_index_minus_one(h) /
-                     (dlufd::AtmosphereProfile::default_etadsn * rho),
+                     (obdeect::propagation::AtmosphereProfile::default_etadsn * rho),
                  1., 1e-5);
       // The thickness spline is least accurate in the top 2 km of this coarse table.
       CHECK_NEAR(exp_profile.thickness(h) / (7e5 * (rho - rho_top)), 1., km < 7.5 ? 1e-3 : 5e-3);
     }
 
     // The ECMWF table (atmprof format, 55 levels, comment header skipped).
-    const auto profile = dlufd::AtmosphereProfile::from_file(kProfilePath);
+    const auto profile = obdeect::propagation::AtmosphereProfile::from_file(kProfilePath);
     CHECK(profile.levels() == 55);
     CHECK_NEAR(profile.bottom_m(), 0., 1e-9);
     CHECK_NEAR(profile.top_m(), 120000., 1e-6);
@@ -180,9 +180,9 @@ int main() {
     }
     // Trailing columns beyond the four are ignored: they are accepted
     // and give the same table as the four-column text, whatever they contain.
-    const dlufd::AtmosphereProfile four_columns(exponential_profile());
+    const obdeect::propagation::AtmosphereProfile four_columns(exponential_profile());
     for (const std::string trailing : {" x", " 1e-3 2 abc", " 0.5"}) {
-      const dlufd::AtmosphereProfile extra(exponential_profile(trailing));
+      const obdeect::propagation::AtmosphereProfile extra(exponential_profile(trailing));
       CHECK(extra.levels() == four_columns.levels());
       for (double h = 0.; h <= 10000.; h += 333.) {
         CHECK(extra.density(h) == four_columns.density(h));

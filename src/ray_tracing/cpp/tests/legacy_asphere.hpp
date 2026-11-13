@@ -3,7 +3,7 @@
 // sag(r), slope(r)) and with the first-guess paraboloid through the vertex and
 // the outer rim. Test-only: it checks that later reformulations of
 // Asphere::intersect keep the surface they find.
-#include "obdeect/surfaces.hpp"
+#include "obdeect/ray_tracing/surfaces.hpp"
 
 #include <algorithm>
 #include <array>
@@ -13,7 +13,7 @@
 
 namespace legacy {
 
-using namespace obdeect;
+using namespace obdeect::ray_tracing;
 
 template <class Accept>
 std::optional<SurfaceHit> intersect(const Asphere &a, const Ray &ray, double t_min, Accept accept,

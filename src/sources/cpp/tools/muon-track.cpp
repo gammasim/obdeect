@@ -1,6 +1,6 @@
 // dlamb-muon-track: Cherenkov light of one muon-like track on a telescope sphere (sky frame).
 
-#include "dlamb/programs/muon-track.hpp"
+#include "obdeect/sources/programs/muon-track.hpp"
 
 #include "tool_args.hpp"
 
@@ -8,7 +8,7 @@
 #include <iostream>
 
 int main(int argc, char **argv) {
-  using namespace dlamb;
+  using namespace obdeect::sources;
   std::vector<std::string> args;
   for (int i = 1; i < argc; ++i)
     args.emplace_back(argv[i]);

@@ -1,13 +1,13 @@
 // The response bound of an optical model against traced weights.
 #include "check.hpp"
 
-#include "obdeect/bounds.hpp"
-#include "obdeect/trace.hpp"
+#include "obdeect/ray_tracing/bounds.hpp"
+#include "obdeect/ray_tracing/trace.hpp"
 
 #include <algorithm>
 #include <vector>
 
-using namespace obdeect;
+using namespace obdeect::ray_tracing;
 
 namespace {
 

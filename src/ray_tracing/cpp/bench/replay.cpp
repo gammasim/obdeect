@@ -18,10 +18,10 @@
 // so the same source builds against the reference headers. Not run by ctest.
 #include "replay_compare.hpp"
 
-#include "obdeect/json.hpp"
-#include "obdeect/model_json.hpp"
-#include "obdeect/source.hpp"
-#include "obdeect/trace.hpp"
+#include "obdeect/ray_tracing/json.hpp"
+#include "obdeect/ray_tracing/model_json.hpp"
+#include "obdeect/ray_tracing/source.hpp"
+#include "obdeect/ray_tracing/trace.hpp"
 
 #include <algorithm>
 #include <array>
@@ -37,7 +37,7 @@
 #include <string>
 #include <vector>
 
-using namespace obdeect;
+using namespace obdeect::ray_tracing;
 
 namespace {
 

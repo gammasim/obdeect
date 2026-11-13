@@ -1,11 +1,11 @@
 #include "check.hpp"
 
-#include "dlamb/version.hpp"
+#include "obdeect/sources/version.hpp"
 
 int main() {
   return run_checks([] {
-    CHECK(dlamb::version_major >= 0);
-    CHECK(dlamb::version_minor >= 0);
-    CHECK(dlamb::version_patch >= 0);
+    CHECK(obdeect::sources::version_major >= 0);
+    CHECK(obdeect::sources::version_minor >= 0);
+    CHECK(obdeect::sources::version_patch >= 0);
   });
 }

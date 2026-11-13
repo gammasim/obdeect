@@ -8,7 +8,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 
-project = "dlufd"
+project = "obdeect"
 copyright = "2026, dlufd developers"  # noqa: A001
 with open(ROOT / "CITATION.cff", encoding="utf-8") as file:
     author = ", ".join(

@@ -1,9 +1,9 @@
 // End-to-end transport through analytic telescopes.
 #include "check.hpp"
 
-#include "obdeect/bunches.hpp"
-#include "obdeect/source.hpp"
-#include "obdeect/trace.hpp"
+#include "obdeect/ray_tracing/bunches.hpp"
+#include "obdeect/ray_tracing/source.hpp"
+#include "obdeect/ray_tracing/trace.hpp"
 
 #include <array>
 #include <atomic>
@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-using namespace obdeect;
+using namespace obdeect::ray_tracing;
 
 namespace {
 

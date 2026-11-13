@@ -7,10 +7,10 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
-#include "obdeect/bunches.hpp"
-#include "obdeect/model_json.hpp"
-#include "obdeect/source.hpp"
-#include "obdeect/trace.hpp"
+#include "obdeect/ray_tracing/bunches.hpp"
+#include "obdeect/ray_tracing/model_json.hpp"
+#include "obdeect/ray_tracing/source.hpp"
+#include "obdeect/ray_tracing/trace.hpp"
 
 #include <algorithm>
 #include <iterator>
@@ -52,8 +52,8 @@ class Model {
 public:
   explicit Model(const std::string &json) {
     try {
-      model_ = obdeect::load_model(json);
-    } catch (const obdeect::ModelError &error) {
+      model_ = obdeect::ray_tracing::load_model(json);
+    } catch (const obdeect::ray_tracing::ModelError &error) {
       throw nb::value_error(error.what());
     }
   }
@@ -79,7 +79,7 @@ public:
   struct Columns {
     nb::dict result;
     std::vector<std::string> requested;
-    obdeect::ResultBlock block;
+    obdeect::ray_tracing::ResultBlock block;
   };
 
   static Columns allocate(std::size_t n, const std::optional<std::vector<std::string>> &outputs,
@@ -151,7 +151,7 @@ public:
     return columns.result;
   }
 
-  static obdeect::PhotonBlock photons(const In3 &position, const In3 &direction,
+  static obdeect::ray_tracing::PhotonBlock photons(const In3 &position, const In3 &direction,
                                       const In1<double> &wavelength_nm, const In1<double> &time_ns,
                                       const In1<double> &weight,
                                       const In1<std::uint64_t> &photon_id) {
@@ -173,23 +173,23 @@ public:
                  In1<double> weight, In1<std::uint64_t> photon_id, std::uint64_t seed,
                  bool apply_responses, unsigned threads, bool direct,
                  std::optional<std::vector<std::string>> outputs, bool detected_only,
-                 bool classify_losses, obdeect::ThreadPool *pool) const {
-    const obdeect::PhotonBlock in =
+                 bool classify_losses, obdeect::ray_tracing::ThreadPool *pool) const {
+    const obdeect::ray_tracing::PhotonBlock in =
         photons(position, direction, wavelength_nm, time_ns, weight, photon_id);
     Columns columns = allocate(in.size, outputs, detected_only);
     std::size_t count = 0;
     {
       nb::gil_scoped_release release;
-      count = pool ? obdeect::trace_block(model_, in, columns.block, seed, apply_responses, *pool,
+      count = pool ? obdeect::ray_tracing::trace_block(model_, in, columns.block, seed, apply_responses, *pool,
                                           direct, detected_only, classify_losses)
-                   : obdeect::trace_block(model_, in, columns.block, seed, apply_responses,
+                   : obdeect::ray_tracing::trace_block(model_, in, columns.block, seed, apply_responses,
                                           thread_count(threads), direct, detected_only,
                                           classify_losses);
     }
     return finish(columns, count, detected_only);
   }
 
-  // Photon bunches (see obdeect::trace_bunches). Acceptance and density are
+  // Photon bunches (see obdeect::ray_tracing::trace_bunches). Acceptance and density are
   // given as arrays; the output arrays are views of the rows written.
   nb::dict trace_bunches(
       In1<float> x, In1<float> y, In1<float> cx, In1<float> cy, In1<float> time_ns, In1<float> zem,
@@ -198,7 +198,7 @@ public:
       const std::optional<std::tuple<In1<double>, In1<double>, In1<double>>> &acceptance,
       const std::optional<std::tuple<In1<double>, In1<double>>> &density,
       const std::optional<std::tuple<double, double>> &wavelength_law, bool roulette,
-      bool classify_losses, bool normalise_transmission, obdeect::ThreadPool &pool) const {
+      bool classify_losses, bool normalise_transmission, obdeect::ray_tracing::ThreadPool &pool) const {
     const std::size_t n = x.shape(0);
     for (const std::size_t length :
          {y.shape(0), cx.shape(0), cy.shape(0), time_ns.shape(0), zem.shape(0), size.shape(0),
@@ -207,16 +207,16 @@ public:
         throw nb::value_error("bunch arrays must have the same length");
     if (rotation.shape(0) != 9 || offset_m.shape(0) != 3)
       throw nb::value_error("rotation needs nine elements and offset_m three");
-    obdeect::BunchFrame frame;
+    obdeect::ray_tracing::BunchFrame frame;
     std::copy_n(rotation.data(), 9, frame.rotation);
     std::copy_n(offset_m.data(), 3, frame.offset_m);
     frame.length_unit_m = length_unit_m;
     frame.plane_z = plane_z;
 
-    obdeect::Map2D acceptance_map;
-    obdeect::LinearDensity wavelength_density;
-    obdeect::InverseSquareLaw law;
-    obdeect::BunchOptions options;
+    obdeect::ray_tracing::Map2D acceptance_map;
+    obdeect::ray_tracing::LinearDensity wavelength_density;
+    obdeect::ray_tracing::InverseSquareLaw law;
+    obdeect::ray_tracing::BunchOptions options;
     options.roulette = roulette;
     options.classify_losses = classify_losses;
     options.normalise_transmission = normalise_transmission;
@@ -234,7 +234,7 @@ public:
       if (density) {
         const auto &[nodes, weights] = *density;
         wavelength_density =
-            obdeect::LinearDensity({nodes.data(), nodes.data() + nodes.shape(0)},
+            obdeect::ray_tracing::LinearDensity({nodes.data(), nodes.data() + nodes.shape(0)},
                                    {weights.data(), weights.data() + weights.shape(0)});
         options.wavelength_density = &wavelength_density;
       }
@@ -247,7 +247,7 @@ public:
       throw nb::value_error(error.what());
     }
 
-    const obdeect::BunchBlock block{x.data(),        y.data(),   cx.data(),   cy.data(),
+    const obdeect::ray_tracing::BunchBlock block{x.data(),        y.data(),   cx.data(),   cy.data(),
                                     time_ns.data(),  zem.data(), size.data(), wavelength_nm.data(),
                                     bunch_id.data(), n};
     static constexpr const char *names[] = {"position_m",    "direction",   "time_ns",   "weight",
@@ -257,7 +257,7 @@ public:
     try {
       nb::gil_scoped_release release;
       count =
-          obdeect::trace_bunches(model_, block, frame, options, seed, pool, [&](std::size_t rows) {
+          obdeect::ray_tracing::trace_bunches(model_, block, frame, options, seed, pool, [&](std::size_t rows) {
             nb::gil_scoped_acquire acquire; // The arrays are Python objects.
             const auto position = owned_array<double>(rows, 3);
             const auto direction = owned_array<double>(rows, 3);
@@ -272,12 +272,12 @@ public:
             result["wavelength_nm"] = wavelength;
             result["bunch_index"] = index;
             result["sub_photon"] = sub;
-            return obdeect::BunchResult{data_of<double>(position),   data_of<double>(direction),
+            return obdeect::ray_tracing::BunchResult{data_of<double>(position),   data_of<double>(direction),
                                         data_of<double>(time),       data_of<double>(weight),
                                         data_of<double>(wavelength), data_of<std::uint64_t>(index),
                                         data_of<std::uint32_t>(sub)};
           });
-    } catch (const obdeect::ModelError &error) {
+    } catch (const obdeect::ray_tracing::ModelError &error) {
       throw nb::value_error(error.what());
     }
     for (const char *name : names) {
@@ -289,7 +289,7 @@ public:
   }
 
   // Every obscurer met on the segments from start to end (row i on leg[i],
-  // obdeect::Leg bits): (rows, obscurer ids), one entry per crossing.
+  // obdeect::ray_tracing::Leg bits): (rows, obscurer ids), one entry per crossing.
   [[nodiscard]] std::tuple<nb::object, nb::object> obscurer_crossings(In3 start, In3 end,
                                                                       In1<std::uint8_t> leg) const {
     const std::size_t n = start.shape(0);
@@ -301,13 +301,13 @@ public:
       nb::gil_scoped_release release;
       std::vector<std::uint32_t> crossed;
       for (std::size_t i = 0; i < n; ++i) {
-        const obdeect::Vec3 a{start(i, 0), start(i, 1), start(i, 2)};
-        const obdeect::Vec3 b{end(i, 0), end(i, 1), end(i, 2)};
-        const double length = obdeect::norm(b - a);
+        const obdeect::ray_tracing::Vec3 a{start(i, 0), start(i, 1), start(i, 2)};
+        const obdeect::ray_tracing::Vec3 b{end(i, 0), end(i, 1), end(i, 2)};
+        const double length = obdeect::ray_tracing::norm(b - a);
         if (!(length > 0.0) || !std::isfinite(length))
           continue;
         crossed.clear();
-        model_.obscurers.crossed({a, (b - a) * (1.0 / length)}, static_cast<obdeect::Leg>(leg(i)),
+        model_.obscurers.crossed({a, (b - a) * (1.0 / length)}, static_cast<obdeect::ray_tracing::Leg>(leg(i)),
                                  length, crossed);
         rows.insert(rows.end(), crossed.size(), i);
         ids.insert(ids.end(), crossed.begin(), crossed.end());
@@ -320,10 +320,10 @@ public:
     return {row_array, id_array};
   }
 
-  [[nodiscard]] const obdeect::OpticalModel &optical_model() const { return model_; }
+  [[nodiscard]] const obdeect::ray_tracing::OpticalModel &optical_model() const { return model_; }
 
 private:
-  obdeect::OpticalModel model_;
+  obdeect::ray_tracing::OpticalModel model_;
 };
 
 // Photon arrays of `count` rows filled by photon(i) -> (ray, time, weight).
@@ -340,7 +340,7 @@ nb::dict photon_arrays(std::size_t count, std::uint64_t first_id, double wavelen
   std::uint64_t *k = data_of<std::uint64_t>(id);
   {
     nb::gil_scoped_release release;
-    obdeect::parallel_for(count, thread_count(0), [&](std::size_t begin, std::size_t end) {
+    obdeect::ray_tracing::parallel_for(count, thread_count(0), [&](std::size_t begin, std::size_t end) {
       for (std::size_t i = begin; i < end; ++i) {
         const auto [ray, time_ns, photon_weight] = photon(first_id + i);
         p[3 * i] = ray.origin.x;
@@ -366,11 +366,11 @@ nb::dict photon_arrays(std::size_t count, std::uint64_t first_id, double wavelen
   return result;
 }
 
-obdeect::Vec3 vec3(const In1<double> &v, const char *name) {
+obdeect::ray_tracing::Vec3 vec3(const In1<double> &v, const char *name) {
   if (v.shape(0) != 3)
     throw nb::value_error((std::string(name) + " must have three components").c_str());
-  const obdeect::Vec3 result{v(0), v(1), v(2)};
-  if (!obdeect::finite(result))
+  const obdeect::ray_tracing::Vec3 result{v(0), v(1), v(2)};
+  if (!obdeect::ray_tracing::finite(result))
     throw nb::value_error((std::string(name) + " must be finite").c_str());
   return result;
 }
@@ -380,21 +380,21 @@ nb::dict sample_source(In1<double> towards_source, double distance_m, double dis
                        std::uint64_t first_id, std::size_t count, std::uint64_t seed) {
   if (towards_source.shape(0) != 3)
     throw nb::value_error("towards_source must have three components");
-  const obdeect::Vec3 towards{towards_source(0), towards_source(1), towards_source(2)};
-  if (std::abs(obdeect::norm(towards) - 1.0) > 1e-9 || towards.z <= 0.0)
+  const obdeect::ray_tracing::Vec3 towards{towards_source(0), towards_source(1), towards_source(2)};
+  if (std::abs(obdeect::ray_tracing::norm(towards) - 1.0) > 1e-9 || towards.z <= 0.0)
     throw nb::value_error("towards_source must be a unit vector pointing upwards");
   if (!(distance_m > 0.0) || !(disk_radius_m > 0.0) || !(wavelength_nm > 0.0) ||
       !std::isfinite(disk_z_m) || !std::isfinite(start_z_m))
     throw nb::value_error("distance, disk radius and wavelength must be positive; heights finite");
-  const obdeect::PointSource source{towards,  distance_m, disk_radius_m,
+  const obdeect::ray_tracing::PointSource source{towards,  distance_m, disk_radius_m,
                                     disk_z_m, start_z_m,  wavelength_nm};
   return photon_arrays(count, first_id, wavelength_nm, [&](std::uint64_t id) {
-    const auto photon = obdeect::sample_source(source, id, seed);
+    const auto photon = obdeect::ray_tracing::sample_source(source, id, seed);
     return std::tuple{photon.ray, photon.time_ns, 1.0};
   });
 }
 
-// A point emitter (see obdeect::Emitter).
+// A point emitter (see obdeect::ray_tracing::Emitter).
 class Emitter {
 public:
   Emitter(In1<double> position_m, In1<double> axis, In1<double> intensity_u, In1<double> intensity,
@@ -410,8 +410,8 @@ public:
                  wavelength_nm} {
     if (intensity_u.shape(0) == 0)
       throw nb::value_error("the intensity table must not be empty");
-    if (std::abs(obdeect::norm(emitter_.axis) - 1.0) > 1e-9 ||
-        std::abs(obdeect::norm(emitter_.disk_normal) - 1.0) > 1e-9)
+    if (std::abs(obdeect::ray_tracing::norm(emitter_.axis) - 1.0) > 1e-9 ||
+        std::abs(obdeect::ray_tracing::norm(emitter_.disk_normal) - 1.0) > 1e-9)
       throw nb::value_error("axis and disk_normal must be unit vectors");
     if (!(disk_radius_m > 0.0) || !(wavelength_nm > 0.0) || !(emitter_.disk_distance_m() > 0.0))
       throw nb::value_error(
@@ -423,13 +423,13 @@ public:
   [[nodiscard]] nb::dict sample(std::uint64_t first_id, std::size_t count,
                                 std::uint64_t seed) const {
     return photon_arrays(count, first_id, emitter_.wavelength_nm, [&](std::uint64_t id) {
-      const auto photon = obdeect::sample_emitter(emitter_, id, seed);
+      const auto photon = obdeect::ray_tracing::sample_emitter(emitter_, id, seed);
       return std::tuple{photon.ray, photon.time_ns, photon.weight};
     });
   }
 
 private:
-  static obdeect::LinearDensity density(const In1<double> &x, const In1<double> &y) {
+  static obdeect::ray_tracing::LinearDensity density(const In1<double> &x, const In1<double> &y) {
     if (x.shape(0) == 0 && y.shape(0) == 0)
       return {};
     try {
@@ -439,7 +439,7 @@ private:
     }
   }
 
-  obdeect::Emitter emitter_;
+  obdeect::ray_tracing::Emitter emitter_;
 };
 
 // One request of trace_many: (Model, photons, apply_responses, direct, outputs,
@@ -449,7 +449,7 @@ using ManyItem =
     std::tuple<Model *, nb::dict, bool, bool, std::optional<std::vector<std::string>>, bool, bool>;
 
 nb::list trace_many(const std::vector<ManyItem> &items, std::uint64_t seed,
-                    obdeect::ThreadPool &pool) {
+                    obdeect::ray_tracing::ThreadPool &pool) {
   struct Prepared {
     In3 position, direction;
     In1<double> wavelength_nm, time_ns, weight;
@@ -458,7 +458,7 @@ nb::list trace_many(const std::vector<ManyItem> &items, std::uint64_t seed,
     bool detected_only;
   };
   std::vector<Prepared> prepared;
-  std::vector<obdeect::BlockRequest> requests;
+  std::vector<obdeect::ray_tracing::BlockRequest> requests;
   prepared.reserve(items.size());
   for (const auto &[model, photon_dict, apply_responses, direct, outputs, detected_only,
                     classify_losses] : items) {
@@ -471,7 +471,7 @@ nb::list trace_many(const std::vector<ManyItem> &items, std::uint64_t seed,
                nb::cast<In1<std::uint64_t>>(get("photon_id")),
                {},
                detected_only};
-    const obdeect::PhotonBlock in =
+    const obdeect::ray_tracing::PhotonBlock in =
         Model::photons(p.position, p.direction, p.wavelength_nm, p.time_ns, p.weight, p.photon_id);
     p.columns = Model::allocate(in.size, outputs, detected_only);
     requests.push_back({&model->optical_model(), in, p.columns.block, apply_responses, direct,
@@ -481,7 +481,7 @@ nb::list trace_many(const std::vector<ManyItem> &items, std::uint64_t seed,
   std::vector<std::size_t> rows;
   {
     nb::gil_scoped_release release;
-    rows = obdeect::trace_blocks(requests, seed, pool);
+    rows = obdeect::ray_tracing::trace_blocks(requests, seed, pool);
   }
   nb::list results;
   for (std::size_t i = 0; i < prepared.size(); ++i)
@@ -493,14 +493,14 @@ nb::list trace_many(const std::vector<ManyItem> &items, std::uint64_t seed,
 
 NB_MODULE(_core, module) {
   module.doc() = "obdeect native optical transport";
-  nb::class_<obdeect::ThreadPool>(module, "ThreadPool")
+  nb::class_<obdeect::ray_tracing::ThreadPool>(module, "ThreadPool")
       .def(
           "__init__",
-          [](obdeect::ThreadPool *self, unsigned threads) {
-            new (self) obdeect::ThreadPool(thread_count(threads));
+          [](obdeect::ray_tracing::ThreadPool *self, unsigned threads) {
+            new (self) obdeect::ray_tracing::ThreadPool(thread_count(threads));
           },
           "threads"_a = 0U)
-      .def_prop_ro("size", &obdeect::ThreadPool::size);
+      .def_prop_ro("size", &obdeect::ray_tracing::ThreadPool::size);
   nb::class_<Model>(module, "Model")
       .def(nb::init<const std::string &>(), "json"_a)
       .def("trace", &Model::trace, "position_m"_a, "direction"_a, "wavelength_nm"_a, "time_ns"_a,
@@ -525,8 +525,8 @@ NB_MODULE(_core, module) {
   module.def("sample_source", &sample_source, "towards_source"_a, "distance_m"_a, "disk_radius_m"_a,
              "disk_z_m"_a, "start_z_m"_a, "wavelength_nm"_a, "first_id"_a, "count"_a, "seed"_a);
   nb::list names;
-  for (std::size_t i = 0; i < obdeect::kStatusCount; ++i)
-    names.append(nb::str(std::string(obdeect::to_string(static_cast<obdeect::Status>(i))).c_str()));
+  for (std::size_t i = 0; i < obdeect::ray_tracing::kStatusCount; ++i)
+    names.append(nb::str(std::string(obdeect::ray_tracing::to_string(static_cast<obdeect::ray_tracing::Status>(i))).c_str()));
   module.attr("STATUS_NAMES") = nb::tuple(names);
-  module.attr("MODEL_FORMAT") = std::string(obdeect::kModelFormat);
+  module.attr("MODEL_FORMAT") = std::string(obdeect::ray_tracing::kModelFormat);
 }

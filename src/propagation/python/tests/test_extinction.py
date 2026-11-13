@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from dlufd import TransmissionTable, apply_extinction
+from obdeect.propagation import TransmissionTable, apply_extinction
 
 DATA = Path(__file__).resolve().parents[2] / "cpp" / "tests" / "data"
 TABLE_PATH = DATA / "atm_trans_2000_1_10_0_0_2000.dat"

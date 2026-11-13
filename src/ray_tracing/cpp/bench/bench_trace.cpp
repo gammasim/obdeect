@@ -8,9 +8,9 @@
 // Photons are sampled before the timing starts (star on the optical axis at
 // 10 km, 400 nm, seed 3). Times are ns per photon, best of three. Not run by
 // ctest.
-#include "obdeect/model_json.hpp"
-#include "obdeect/source.hpp"
-#include "obdeect/trace.hpp"
+#include "obdeect/ray_tracing/model_json.hpp"
+#include "obdeect/ray_tracing/source.hpp"
+#include "obdeect/ray_tracing/trace.hpp"
 
 #include <array>
 #include <chrono>
@@ -21,7 +21,7 @@
 #include <sstream>
 #include <vector>
 
-using namespace obdeect;
+using namespace obdeect::ray_tracing;
 using clk = std::chrono::steady_clock;
 
 namespace {
@@ -88,7 +88,7 @@ static int run(int argc, char **argv) {
   bool failed = false;
   std::size_t hits = 0;
   std::vector<char> hit(n);
-#ifdef OBDEECT_BENCH_COUNTERS
+#ifdef OBDEECT_RAY_TRACING_BENCH_COUNTERS
   SegmentGrid::counters() = {};
 #endif
   const double primary_ns = best_ns(n, [&] {
@@ -103,7 +103,7 @@ static int run(int argc, char **argv) {
   });
   std::printf("primary intersect   %8.1f ns  (hit %.4f)\n", primary_ns,
               static_cast<double>(hits) / static_cast<double>(n));
-#ifdef OBDEECT_BENCH_COUNTERS
+#ifdef OBDEECT_RAY_TRACING_BENCH_COUNTERS
   // Per primary hit of the timed runs (best_ns runs the body three times).
   if (hits && SegmentGrid::counters().calls)
     std::printf("  %s\n", SegmentGrid::counter_report(3 * hits).c_str());
@@ -152,7 +152,7 @@ static int run(int argc, char **argv) {
   }
 
   std::size_t blocked = 0;
-#ifdef OBDEECT_BENCH_COUNTERS
+#ifdef OBDEECT_RAY_TRACING_BENCH_COUNTERS
   Obscurers::counters() = {};
 #endif
   const double obscurer_ns = best_ns(n, [&] {
@@ -166,7 +166,7 @@ static int run(int argc, char **argv) {
   std::printf("obscurers incoming  %8.1f ns  (blocked %.4f, %zu items)\n", obscurer_ns,
               static_cast<double>(blocked) / static_cast<double>(n),
               model.obscurers.items().size());
-#ifdef OBDEECT_BENCH_COUNTERS
+#ifdef OBDEECT_RAY_TRACING_BENCH_COUNTERS
   std::printf("%s\n", Obscurers::counter_report(3 * n).c_str());
 #endif
   // Round-2 measures. Each one collects its inputs first and times only the calls.
@@ -217,7 +217,7 @@ static int run(int argc, char **argv) {
 
   // Reflected rays after the primary, with the distance to their next surface.
   std::vector<Ray> after_primary_rays, after_secondary_rays;
-#ifdef OBDEECT_BENCH_COUNTERS
+#ifdef OBDEECT_RAY_TRACING_BENCH_COUNTERS
   std::vector<Ray> reflected_primary_rays; // All of them, also those that miss the next surface.
 #endif
   std::vector<double> after_primary_limits, after_secondary_limits;
@@ -227,7 +227,7 @@ static int run(int argc, char **argv) {
     const Vec3 d1 = detail::reflect_at(model.primary, mh, photons[i].ray.direction, i, 3,
                                        Stream::primary_scatter);
     const Ray r1{mh.hit.point, d1};
-#ifdef OBDEECT_BENCH_COUNTERS
+#ifdef OBDEECT_RAY_TRACING_BENCH_COUNTERS
     reflected_primary_rays.push_back(r1);
 #endif
     std::optional<double> limit1;
@@ -256,7 +256,7 @@ static int run(int argc, char **argv) {
                                   Leg leg, const char *label) {
     if (rays.empty())
       return;
-#ifdef OBDEECT_BENCH_COUNTERS
+#ifdef OBDEECT_RAY_TRACING_BENCH_COUNTERS
     Obscurers::counters() = {};
 #endif
     const double ns = best_ns(rays.size(), [&] {
@@ -265,7 +265,7 @@ static int run(int argc, char **argv) {
           checksum += b->t;
     });
     std::printf("obscurers %-16s %8.1f ns  (%zu rays)\n", label, ns, rays.size());
-#ifdef OBDEECT_BENCH_COUNTERS
+#ifdef OBDEECT_RAY_TRACING_BENCH_COUNTERS
     std::printf("  %s\n", Obscurers::counter_report(3 * rays.size()).c_str());
 #endif
   };
@@ -289,7 +289,7 @@ static int run(int argc, char **argv) {
     std::printf("miss cost           %8.1f ns  (%zu rays)\n", miss_ns, missed.size());
   }
 
-#ifdef OBDEECT_BENCH_COUNTERS
+#ifdef OBDEECT_RAY_TRACING_BENCH_COUNTERS
   // Newton steps per call of each aspheric surface, for the rays that reach it:
   // photons (primary), all rays reflected by the primary (secondary, or the focal
   // surface without a secondary) and rays after the secondary (focal surface).

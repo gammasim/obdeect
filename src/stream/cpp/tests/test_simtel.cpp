@@ -1,6 +1,6 @@
 #include "check.hpp"
 
-#include "gstrickd/simtel.hpp"
+#include "obdeect/stream/simtel.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-using namespace gstrickd;
+using namespace obdeect::stream;
 
 namespace {
 

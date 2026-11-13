@@ -2,7 +2,7 @@
 // throughput tests of corsika2ps and ps2simtel.
 // Usage: gen_corsika OUTPUT [BUNCHES=10000000] [TELESCOPES=4] [BUNCHES_PER_BLOCK=250000]
 
-#include "gstrickd/eventio.hpp"
+#include "obdeect/stream/eventio.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -48,16 +48,16 @@ int main(int argc, char **argv) {
   runh[5] = 2200000.0F;
   runh[16] = 10.0F;
   runh[17] = 100000.0F;
-  gstrickd::write_block(out, gstrickd::make_float_block(gstrickd::iact::runh, 1, runh));
+  obdeect::stream::write_block(out, obdeect::stream::make_float_block(obdeect::stream::iact::runh, 1, runh));
 
-  gstrickd::TelPos pos;
+  obdeect::stream::TelPos pos;
   for (std::uint64_t t = 0; t < telescopes; ++t) {
     pos.x.push_back(10000.0 * static_cast<double>(t));
     pos.y.push_back(0.0);
     pos.z.push_back(0.0);
     pos.r.push_back(1200.0);
   }
-  gstrickd::write_block(out, gstrickd::make_telpos_block(pos));
+  obdeect::stream::write_block(out, obdeect::stream::make_telpos_block(pos));
 
   std::mt19937 rng{20261107};
   std::uniform_real_distribution<float> position{-10000.0F, 10000.0F};
@@ -74,21 +74,21 @@ int main(int argc, char **argv) {
     evth[76] = 5136.0F;
     evth[95] = 250.0F;
     evth[96] = 800.0F;
-    gstrickd::write_block(
-        out, gstrickd::make_float_block(gstrickd::iact::evth, static_cast<std::uint32_t>(e), evth));
-    gstrickd::TelOffset off;
+    obdeect::stream::write_block(
+        out, obdeect::stream::make_float_block(obdeect::stream::iact::evth, static_cast<std::uint32_t>(e), evth));
+    obdeect::stream::TelOffset off;
     off.xoff = {0.0};
     off.yoff = {0.0};
-    gstrickd::write_block(out, gstrickd::make_teloff_block(off));
+    obdeect::stream::write_block(out, obdeect::stream::make_teloff_block(off));
 
-    std::vector<gstrickd::EventioBlock> children;
+    std::vector<obdeect::stream::EventioBlock> children;
     for (std::uint64_t t = 0; t < telescopes; ++t) {
-      gstrickd::TelPhotons p;
+      obdeect::stream::TelPhotons p;
       p.array = 0;
       p.tel = static_cast<int>(t);
       p.bunches.reserve(per_block);
       for (std::uint64_t i = 0; i < per_block; ++i) {
-        gstrickd::Bunch b;
+        obdeect::stream::Bunch b;
         b.x = position(rng);
         b.y = position(rng);
         b.cx = direction(rng);
@@ -100,17 +100,17 @@ int main(int argc, char **argv) {
         p.photons += b.photons;
         p.bunches.push_back(b);
       }
-      children.push_back(gstrickd::make_photons_block(p));
+      children.push_back(obdeect::stream::make_photons_block(p));
     }
-    gstrickd::write_block(out, gstrickd::make_container(gstrickd::iact::telarray, 0, 0, children));
+    obdeect::stream::write_block(out, obdeect::stream::make_container(obdeect::stream::iact::telarray, 0, 0, children));
     std::vector<float> evte = words273();
     evte[1] = static_cast<float>(e);
-    gstrickd::write_block(
-        out, gstrickd::make_float_block(gstrickd::iact::evte, static_cast<std::uint32_t>(e), evte));
+    obdeect::stream::write_block(
+        out, obdeect::stream::make_float_block(obdeect::stream::iact::evte, static_cast<std::uint32_t>(e), evte));
   }
   std::vector<float> rune = words273();
   rune[1] = 1.0F;
-  gstrickd::write_block(out, gstrickd::make_float_block(gstrickd::iact::rune, 1, rune));
+  obdeect::stream::write_block(out, obdeect::stream::make_float_block(obdeect::stream::iact::rune, 1, rune));
   out.close();
   if (!out) {
     std::fprintf(stderr, "gen_corsika: write failed\n");

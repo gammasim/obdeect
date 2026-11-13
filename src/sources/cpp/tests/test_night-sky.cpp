@@ -1,8 +1,8 @@
 #include "check.hpp"
 #include "sky_stream_check.hpp"
 
-#include "dlamb/background.hpp"
-#include "dlamb/programs/night-sky.hpp"
+#include "obdeect/sources/background.hpp"
+#include "obdeect/sources/programs/night-sky.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -10,9 +10,9 @@
 #include <variant>
 #include <vector>
 
-using namespace dlamb;
-using namespace dlamb::programs;
-using gstrickd::Column;
+using namespace obdeect::sources;
+using namespace obdeect::sources::programs;
+using obdeect::stream::Column;
 
 namespace {
 
@@ -47,10 +47,10 @@ Moments moments_of(const std::vector<double> &v) {
 }
 
 // Rows of one event of a background plan, written in full through fill().
-gstrickd::PhotonChunk rows_of(const NsbOptions &o, std::uint32_t event) {
+obdeect::stream::PhotonChunk rows_of(const NsbOptions &o, std::uint32_t event) {
   const auto plan = plan_night_sky(o);
   const auto &em = plan.cases[0][0];
-  gstrickd::PhotonChunk chunk;
+  obdeect::stream::PhotonChunk chunk;
   em.fill(event, 0, static_cast<std::size_t>(em.count(event)), chunk);
   return chunk;
 }
@@ -173,8 +173,8 @@ void emission_altitude() {
   const auto s = read_stream(write_to_string([&](std::ostream &out) { write_night_sky(out, o); }));
   CHECK(!s.chunks.empty());
   for (const auto &c : s.chunks) {
-    CHECK((c.mask() & gstrickd::column_bit(Column::zem)) != 0U);
-    if ((c.mask() & gstrickd::column_bit(Column::zem)) == 0U)
+    CHECK((c.mask() & obdeect::stream::column_bit(Column::zem)) != 0U);
+    if ((c.mask() & obdeect::stream::column_bit(Column::zem)) == 0U)
       continue;
     for (std::size_t i = 0; i < c.rows(); ++i)
       CHECK_NEAR(c[Column::zem][i] - c[Column::z][i], 1000.0, 1e-2);

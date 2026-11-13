@@ -83,16 +83,16 @@ def moments(a):
     return float(np.mean(a)), float(np.std(a) / np.sqrt(n)) if n > 1 else float("nan")
 
 
-def main(reference, dlamb):
+def main(reference, obdeect_sources):
     oc, oo = read_reference(reference)
-    dc, dd = read_dlamb(dlamb)
+    dc, dd = read_dlamb(obdeect_sources)
     print(f"events: reference {len(oc)}, dlamb {len(dc)}")
     if oc and dc:
         print(
             f"photons per event: reference mean {np.mean(oc):.2f} (sum {np.sum(oc):.0f}), "
             f"dlamb mean {np.mean(dc):.2f} (sum {np.sum(dc):.0f})"
         )
-    print(f"{'quantity':12s} {'reference':>24s} {'dlamb':>24s} {'diff/sigma':>11s}")
+    print(f"{'quantity':12s} {'reference':>24s} {'obdeect':>24s} {'diff/sigma':>11s}")
     for name in ["cx", "cy", "cz", "t", "wavelength"]:
         mo, so = moments(oo[name])
         md, sd = moments(dd[name])

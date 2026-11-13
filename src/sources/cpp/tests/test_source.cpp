@@ -1,10 +1,10 @@
 #include "check.hpp"
 
-#include "dlamb/source.hpp"
-#include "dlamb/streams.hpp"
+#include "obdeect/sources/source.hpp"
+#include "obdeect/sources/streams.hpp"
 
-#include "gstrickd/format.hpp"
-#include "gstrickd/photons.hpp"
+#include "obdeect/stream/format.hpp"
+#include "obdeect/stream/photons.hpp"
 
 #include <algorithm>
 #include <array>
@@ -15,8 +15,8 @@
 #include <string>
 #include <vector>
 
-using namespace dlamb;
-using gstrickd::Column;
+using namespace obdeect::sources;
+using obdeect::stream::Column;
 
 namespace {
 
@@ -25,8 +25,8 @@ constexpr double inf = std::numeric_limits<double>::infinity();
 // All photons of a test source, one array per column. A PhotonChunk holds at most 2^16
 // rows, so the test keeps the columns itself.
 struct Photons {
-  gstrickd::Frame frame{gstrickd::Frame::ground};
-  std::array<std::vector<float>, gstrickd::n_columns> columns{};
+  obdeect::stream::Frame frame{obdeect::stream::Frame::ground};
+  std::array<std::vector<float>, obdeect::stream::n_columns> columns{};
 
   std::size_t rows() const { return columns[static_cast<std::size_t>(Column::x)].size(); }
   const std::vector<float> &operator[](Column c) const {
@@ -40,15 +40,15 @@ Photons emit_all(const Source &source, std::uint64_t seed, std::uint64_t n,
                  std::uint32_t telescope = 2) {
   Photons all;
   all.frame = source.frame;
-  for (std::uint32_t c = 0; c < gstrickd::n_columns; ++c) {
+  for (std::uint32_t c = 0; c < obdeect::stream::n_columns; ++c) {
     if (source_columns & (std::uint32_t{1} << c))
       all.columns[c].resize(n);
   }
-  gstrickd::PhotonChunk part;
+  obdeect::stream::PhotonChunk part;
   for (std::uint64_t first = 0; first < n; first += chunk) {
     const std::size_t rows = static_cast<std::size_t>(std::min<std::uint64_t>(chunk, n - first));
     emit(source, seed, event, telescope, first, rows, part);
-    for (std::uint32_t c = 0; c < gstrickd::n_columns; ++c) {
+    for (std::uint32_t c = 0; c < obdeect::stream::n_columns; ++c) {
       const auto bit = std::uint32_t{1} << c;
       if (!(source_columns & bit))
         continue;
@@ -64,7 +64,7 @@ Photons emit_all(const Source &source, std::uint64_t seed, std::uint64_t n,
 bool same_chunk(const Photons &a, const Photons &b) {
   if (a.rows() != b.rows())
     return false;
-  for (std::uint32_t c = 0; c < gstrickd::n_columns; ++c)
+  for (std::uint32_t c = 0; c < obdeect::stream::n_columns; ++c)
     if (a.columns[c] != b.columns[c])
       return false;
   return true;
@@ -72,7 +72,7 @@ bool same_chunk(const Photons &a, const Photons &b) {
 
 Source star_source(double distance, double photons = 1000.0) {
   Source s;
-  s.frame = gstrickd::Frame::telescope;
+  s.frame = obdeect::stream::Frame::telescope;
   s.photons = photons;
   s.geometry = Star{normalised({0.01, 0.0, 1.0}), distance, 5.0, 0.0, 30.0};
   return s;
@@ -80,7 +80,7 @@ Source star_source(double distance, double photons = 1000.0) {
 
 Source lamp_source(double photons = 1e5) {
   Source s;
-  s.frame = gstrickd::Frame::camera;
+  s.frame = obdeect::stream::Frame::camera;
   s.photons = photons;
   s.geometry = Emitter{{0.0, 0.0, 10.0}, {0.0, 0.0, -1.0}, Isotropic{}};
   s.pulse = UniformRange{-1.0, 1.0};
@@ -118,7 +118,7 @@ void stars() {
   // Point source at 20 m, 1.5 m above the entrance plane, below the start plane:
   // photons leave the source itself (obdeect PointSource, finite distance).
   Source lamp;
-  lamp.frame = gstrickd::Frame::telescope;
+  lamp.frame = obdeect::stream::Frame::telescope;
   lamp.photons = 50.0;
   lamp.geometry = Star{normalised({0.6, 0.0, 0.8}), 20.0, 1.0, 1.5, 30.0};
   // The source sits at (0.6, 0, 0.8) * 20 m above the disc centre (0, 0, 1.5 m): (12, 0, 17.5).
@@ -187,7 +187,7 @@ void chunks_and_determinism() {
   CHECK(!same_chunk(whole, emit_all(s, 10, 3000, 1 << 16)));   // Another seed differs.
   CHECK(!same_chunk(whole, emit_all(s, 9, 3000, 1 << 16, 2))); // Another event differs.
   // A chunk starting at photon 2^20 is the same photons whatever came before.
-  gstrickd::PhotonChunk late, check;
+  obdeect::stream::PhotonChunk late, check;
   emit(s, 9, 1, 2, 1U << 20, 100, late);
   emit(s, 9, 1, 2, 1U << 20, 50, check);
   CHECK(late.first_index == (1U << 20) && check.first_index == (1U << 20));
@@ -195,7 +195,7 @@ void chunks_and_determinism() {
     CHECK(late[Column::x][i] == check[Column::x][i] && late[Column::t][i] == check[Column::t][i]);
   bool rejected = false;
   try {
-    gstrickd::PhotonChunk big;
+    obdeect::stream::PhotonChunk big;
     emit(s, 9, 1, 2, 0, (1U << 16) + 1, big);
   } catch (const std::invalid_argument &) {
     rejected = true;
@@ -209,10 +209,10 @@ void directions_and_frames() {
                                       Lambertian{}, TabulatedAngular{gaussian_angular_table(0.2)}};
   for (const auto &profile : profiles) {
     Source s = lamp_source(1e4);
-    s.frame = gstrickd::Frame::camera;
+    s.frame = obdeect::stream::Frame::camera;
     s.geometry = Emitter{{1.0, -2.0, 3.0}, normalised({0.2, 0.1, -1.0}), profile};
     const auto c = emit_all(s, 1, 2000, 512);
-    CHECK(c.frame == gstrickd::Frame::camera || c.rows() == 0);
+    CHECK(c.frame == obdeect::stream::Frame::camera || c.rows() == 0);
     for (std::size_t i = 0; i < c.rows(); ++i) {
       const double length = std::hypot(c[Column::cx][i], c[Column::cy][i], c[Column::cz][i]);
       CHECK_NEAR(length, 1.0, 1e-6);
@@ -233,7 +233,7 @@ void directions_and_frames() {
   }
   // A star in frame T keeps its start-plane height in the telescope frame.
   const auto s = emit_all(star_source(inf, 10.0), 1, 10);
-  CHECK(s.frame == gstrickd::Frame::telescope);
+  CHECK(s.frame == obdeect::stream::Frame::telescope);
   CHECK_NEAR(s[Column::z][0], 30.0, 1e-4);
 }
 
@@ -287,7 +287,7 @@ void validation() {
   bad.photons = -1.0;
   CHECK(rejects(bad));
   bad = s;
-  bad.frame = gstrickd::Frame::ground;
+  bad.frame = obdeect::stream::Frame::ground;
   CHECK(rejects(bad));
   bad = s;
   bad.geometry = Emitter{{0, 0, 1}, {0, 0, 2}, Isotropic{}};
@@ -344,11 +344,11 @@ void validation_bounds() {
 
   // Frames: only sky, T and C are source frames (G and unknown codes are rejected).
   Source frame = lamp_source(10.0);
-  frame.frame = static_cast<gstrickd::Frame>(7);
+  frame.frame = static_cast<obdeect::stream::Frame>(7);
   CHECK(throws_invalid([&] { validate(frame); }));
-  frame.frame = gstrickd::Frame::sky;
+  frame.frame = obdeect::stream::Frame::sky;
   CHECK(!throws_invalid([&] { validate(frame); }));
-  frame.frame = gstrickd::Frame::telescope;
+  frame.frame = obdeect::stream::Frame::telescope;
   CHECK(!throws_invalid([&] { validate(frame); }));
 
   // Complex pulse: every width must be finite (+inf used to pass the >= 0 test).

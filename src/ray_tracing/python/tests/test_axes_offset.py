@@ -4,8 +4,8 @@ import math
 
 import numpy as np
 import pytest
-from obdeect import OpticalModel
-from obdeect.formats import ModelError
+from obdeect.ray_tracing import OpticalModel
+from obdeect.ray_tracing.formats import ModelError
 from telescopes import record, segmented
 
 SEED = 20261029

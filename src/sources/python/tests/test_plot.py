@@ -1,7 +1,7 @@
 """Profile plots (optional matplotlib)."""
 
 import pytest
-from dlamb.plot import profile_figure
+from obdeect.sources.plot import profile_figure
 
 matplotlib = pytest.importorskip("matplotlib")
 matplotlib.use("Agg")

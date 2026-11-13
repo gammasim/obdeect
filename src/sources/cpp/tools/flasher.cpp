@@ -1,6 +1,6 @@
 // dlamb-flasher: flasher photon stream, dish or secondary type.
 
-#include "dlamb/programs/flasher.hpp"
+#include "obdeect/sources/programs/flasher.hpp"
 
 #include "tool_args.hpp"
 
@@ -21,7 +21,7 @@ const char *usage = R"(usage: dlamb-flasher [--type dish|secondary] [options] [-
 } // namespace
 
 int main(int argc, char **argv) {
-  using namespace dlamb;
+  using namespace obdeect::sources;
   using programs::flasher::Type;
   const std::string prefix = argc > 0 ? argv[0] : "dlamb-flasher";
   return cli::run_tool(prefix, [&] {
@@ -74,9 +74,9 @@ int main(int argc, char **argv) {
       } else if (name == "--frame") {
         only(name, Type::dish);
         if (text == "sky")
-          o.frame = gstrickd::Frame::sky;
+          o.frame = obdeect::stream::Frame::sky;
         else if (text == "camera")
-          o.frame = gstrickd::Frame::camera;
+          o.frame = obdeect::stream::Frame::camera;
         else
           throw std::invalid_argument("--frame must be sky or camera");
       } else if (name == "--xy" || name == "--flasher-xy") {

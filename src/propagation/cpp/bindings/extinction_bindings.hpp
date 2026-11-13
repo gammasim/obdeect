@@ -8,14 +8,14 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 
-#include "dlufd/extinction.hpp"
-#include "dlufd/pipeline.hpp"
-#include "dlufd/thinning.hpp"
-#include "dlufd/transmission.hpp"
-#include "dlufd/wavelength.hpp"
+#include "obdeect/propagation/extinction.hpp"
+#include "obdeect/propagation/pipeline.hpp"
+#include "obdeect/propagation/thinning.hpp"
+#include "obdeect/propagation/transmission.hpp"
+#include "obdeect/propagation/wavelength.hpp"
 
-#include "gstrickd/format.hpp"
-#include "gstrickd/photons.hpp"
+#include "obdeect/stream/format.hpp"
+#include "obdeect/stream/photons.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -26,7 +26,7 @@
 #include <utility>
 #include <vector>
 
-namespace dlufd_bindings {
+namespace obdeect_propagation_bindings {
 
 namespace nb = nanobind;
 
@@ -48,7 +48,7 @@ inline std::vector<double> to_vector(const DoubleArray &array) {
 }
 
 inline void bind_table(nb::module_ &module) {
-  using dlufd::TransmissionTable;
+  using obdeect::propagation::TransmissionTable;
   nb::class_<TransmissionTable>(module, "TransmissionTable")
       .def(nb::new_([](const std::string &path, double site_altitude_m) {
              return TransmissionTable::from_file(path, site_altitude_m);
@@ -119,10 +119,10 @@ inline void bind_table(nb::module_ &module) {
 }
 
 // Map a column name of the Python API to its gstrickd column.
-inline gstrickd::Column column_from_name(const std::string &name) {
-  for (std::uint32_t c = 0; c < gstrickd::n_columns; ++c) {
-    const auto column = static_cast<gstrickd::Column>(c);
-    if (name == gstrickd::column_name(column)) {
+inline obdeect::stream::Column column_from_name(const std::string &name) {
+  for (std::uint32_t c = 0; c < obdeect::stream::n_columns; ++c) {
+    const auto column = static_cast<obdeect::stream::Column>(c);
+    if (name == obdeect::stream::column_name(column)) {
       return column;
     }
   }
@@ -132,7 +132,7 @@ inline gstrickd::Column column_from_name(const std::string &name) {
 // Input columns given as equal-length float32 arrays, keyed by column name. The arrays
 // are not copied; mask is the set of columns given (also when there are no rows).
 struct InputColumns {
-  std::vector<std::pair<gstrickd::Column, FloatArray>> arrays;
+  std::vector<std::pair<obdeect::stream::Column, FloatArray>> arrays;
   std::size_t rows{};
   std::uint32_t mask{};
 };
@@ -146,17 +146,17 @@ inline InputColumns input_columns(const nb::dict &columns) {
       throw std::invalid_argument("photon columns differ in length");
     }
     input.rows = array.size();
-    input.mask |= gstrickd::column_bit(column);
+    input.mask |= obdeect::stream::column_bit(column);
     input.arrays.emplace_back(column, array);
   }
   return input;
 }
 
 // Chunk of rows [offset, offset + count) of the input; first_index is the index of row
-// offset among all photons. count must be at most gstrickd::max_chunk_rows.
-inline gstrickd::PhotonChunk slice_chunk(const InputColumns &input, std::size_t offset,
+// offset among all photons. count must be at most obdeect::stream::max_chunk_rows.
+inline obdeect::stream::PhotonChunk slice_chunk(const InputColumns &input, std::size_t offset,
                                          std::size_t count, std::uint64_t first_index) {
-  gstrickd::PhotonChunk chunk;
+  obdeect::stream::PhotonChunk chunk;
   chunk.first_index = first_index;
   chunk.resize(count, input.mask);
   for (const auto &[column, array] : input.arrays) {
@@ -169,14 +169,14 @@ inline gstrickd::PhotonChunk slice_chunk(const InputColumns &input, std::size_t 
 inline void bind_apply(nb::module_ &module) {
   module.def(
       "apply_extinction",
-      [](const nb::dict &columns, const dlufd::TransmissionTable &table,
+      [](const nb::dict &columns, const obdeect::propagation::TransmissionTable &table,
          double telescope_altitude_m, const DoubleArray &envelope_wavelength,
          const DoubleArray &envelope_value, std::uint64_t seed, std::uint32_t event,
          std::uint32_t telescope, std::uint64_t first_index, bool weighted,
          std::tuple<double, double> wavelength_range, double pathlen_m) {
-        const dlufd::Envelope envelope(to_vector(envelope_wavelength), to_vector(envelope_value));
+        const obdeect::propagation::Envelope envelope(to_vector(envelope_wavelength), to_vector(envelope_value));
         const auto depths = table.telescope_depths(telescope_altitude_m, pathlen_m);
-        dlufd::ExtinctionSettings settings;
+        obdeect::propagation::ExtinctionSettings settings;
         settings.table = &table;
         settings.depths = &depths;
         settings.envelope = &envelope;
@@ -193,17 +193,17 @@ inline void bind_apply(nb::module_ &module) {
         // Output columns: the input columns plus the wavelength and p columns, which the
         // pipeline always produces, also when no photon survives.
         const std::uint32_t output_mask = input.mask |
-                                          gstrickd::column_bit(gstrickd::Column::wavelength) |
-                                          gstrickd::column_bit(gstrickd::Column::p);
-        std::vector<std::vector<float>> out(gstrickd::n_columns);
+                                          obdeect::stream::column_bit(obdeect::stream::Column::wavelength) |
+                                          obdeect::stream::column_bit(obdeect::stream::Column::p);
+        std::vector<std::vector<float>> out(obdeect::stream::n_columns);
         std::uint64_t out_index = 0;
-        for (std::size_t offset = 0; offset < input.rows; offset += gstrickd::max_chunk_rows) {
+        for (std::size_t offset = 0; offset < input.rows; offset += obdeect::stream::max_chunk_rows) {
           const std::size_t rows =
-              std::min<std::size_t>(gstrickd::max_chunk_rows, input.rows - offset);
-          gstrickd::PhotonChunk slice = slice_chunk(input, offset, rows, first_index + offset);
-          for (auto &chunk : dlufd::apply_extinction_chunk(std::move(slice), settings, out_index)) {
-            for (std::uint32_t c = 0; c < gstrickd::n_columns; ++c) {
-              if (chunk.has(static_cast<gstrickd::Column>(c))) {
+              std::min<std::size_t>(obdeect::stream::max_chunk_rows, input.rows - offset);
+          obdeect::stream::PhotonChunk slice = slice_chunk(input, offset, rows, first_index + offset);
+          for (auto &chunk : obdeect::propagation::apply_extinction_chunk(std::move(slice), settings, out_index)) {
+            for (std::uint32_t c = 0; c < obdeect::stream::n_columns; ++c) {
+              if (chunk.has(static_cast<obdeect::stream::Column>(c))) {
                 out[c].insert(out[c].end(), chunk.columns[c].begin(), chunk.columns[c].end());
               }
             }
@@ -211,10 +211,10 @@ inline void bind_apply(nb::module_ &module) {
           }
         }
         nb::dict result;
-        for (std::uint32_t c = 0; c < gstrickd::n_columns; ++c) {
-          const auto column = static_cast<gstrickd::Column>(c);
+        for (std::uint32_t c = 0; c < obdeect::stream::n_columns; ++c) {
+          const auto column = static_cast<obdeect::stream::Column>(c);
           if ((output_mask >> c) & 1U) {
-            result[gstrickd::column_name(column)] = nb::cast(to_numpy(std::move(out[c])));
+            result[obdeect::stream::column_name(column)] = nb::cast(to_numpy(std::move(out[c])));
           }
         }
         return result;
@@ -225,10 +225,10 @@ inline void bind_apply(nb::module_ &module) {
       nb::arg("wavelength_range"), nb::arg("pathlen_m") = 0.0);
 }
 
-} // namespace dlufd_bindings
+} // namespace obdeect_propagation_bindings
 
 // Register TransmissionTable and apply_extinction on the extension module.
 inline void bind_extinction(nanobind::module_ &module) {
-  dlufd_bindings::bind_table(module);
-  dlufd_bindings::bind_apply(module);
+  obdeect_propagation_bindings::bind_table(module);
+  obdeect_propagation_bindings::bind_apply(module);
 }
