@@ -24,62 +24,81 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          fetch-depth: 0  # component versions come from the repository tags
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7
         with:
           python-version: ${{ matrix.python-version }}
           allow-prereleases: true
-      - name: Install Python package and test dependencies
-        run: python -m pip install --upgrade pip && python -m pip install ".[plot]" pytest
-      - name: Configure and build
+      - name: Install all components and test dependencies
+        run: >-
+          python -m pip install --upgrade pip
+          && python -m pip install ./src/stream ./src/propagation ./src/sources
+          "./src/ray_tracing[plot]" pytest
+      - name: Configure and build all components
         run: >-
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           && cmake --build build --parallel
-      - name: Run native and Python tests
-        run: ctest --test-dir build --output-on-failure && pytest python/tests
+      - name: Run native tests
+        run: ctest --test-dir build --output-on-failure
+      - name: Run Python tests
+        run: pytest src/stream/python/tests src/propagation/python/tests src/sources/python/tests src/ray_tracing/python/tests
   fma:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
-      - name: Configure, build, and test with OBDEECT_USE_FMA
+        with:
+          fetch-depth: 0
+      - name: Configure, build, and test with OBDEECT_RAY_TRACING_USE_FMA
         run: >-
-          cmake -S . -B build-fma -DCMAKE_BUILD_TYPE=Release -DOBDEECT_USE_FMA=ON
+          cmake -S . -B build-fma -DCMAKE_BUILD_TYPE=Release -DOBDEECT_RAY_TRACING_USE_FMA=ON
           && cmake --build build-fma --parallel
           && ctest --test-dir build-fma --output-on-failure
   sanitizers:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          fetch-depth: 0
       - name: Install a decimal-comma locale
         run: sudo locale-gen de_DE.UTF-8
       - name: Configure, build, and test with sanitizers
         env:
-          OBDEECT_REQUIRE_COMMA_LOCALE: "1"
+          OBDEECT_RAY_TRACING_REQUIRE_COMMA_LOCALE: "1"
         run: >-
           cmake -S . -B build-sanitize -DCMAKE_BUILD_TYPE=Debug
           -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined"
           && cmake --build build-sanitize --parallel
           && ctest --test-dir build-sanitize --output-on-failure
   thread-sanitizer:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          fetch-depth: 0
       - name: Configure, build, and test with ThreadSanitizer
         run: >-
           cmake -S . -B build-tsan -DCMAKE_BUILD_TYPE=RelWithDebInfo
           -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer"
+          -DCMAKE_C_FLAGS="-fsanitize=thread -fno-omit-frame-pointer"
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
+          -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=thread"
           && cmake --build build-tsan --parallel
           && ctest --test-dir build-tsan --output-on-failure
   clang-tidy:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          fetch-depth: 0
       - name: Configure with the compilation database
         run: >-
-          cmake -S . -B build-tidy -DCMAKE_BUILD_TYPE=Debug -DOBDEECT_BUILD_BENCH=ON
+          cmake -S . -B build-tidy -DCMAKE_BUILD_TYPE=Debug -DOBDEECT_RAY_TRACING_BUILD_BENCH=ON
           -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-      - name: Run clang-tidy on tests and benchmarks (headers via HeaderFilterRegex)
+      - name: Run clang-tidy on ray-tracing tests and benchmarks (headers via HeaderFilterRegex)
         run: >-
-          find cpp/tests cpp/bench -name '*.cpp' -print0
+          find src/ray_tracing/cpp/tests src/ray_tracing/cpp/bench -name '*.cpp' -print0
           | xargs -0 clang-tidy -p build-tidy

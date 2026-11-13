@@ -9,9 +9,6 @@ on:
     branches:
       - 'main'
 
-env:
-  FRAGMENT_NAME_PREFIX: "docs/changes/${{ github.event.number }}"
-
 permissions:
   contents: read
 
@@ -26,7 +23,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
 
-      - name: Check for at least one changelog fragment
+      - name: Check for at least one changelog fragment in a component
+        env:
+          PR_NUMBER: ${{ github.event.number }}
         run: |
-          find docs/changes -type f | \
-          grep -E "^${FRAGMENT_NAME_PREFIX}\.(feature|bugfix|maintenance)\.md$"
+          find src/*/docs/changes -type f | \
+          grep -E "^src/[a-z_]+/docs/changes/${PR_NUMBER}\.(feature|bugfix|maintenance)\.md$"

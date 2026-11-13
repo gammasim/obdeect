@@ -1,13 +1,15 @@
 ---
 name: Build and publish obdeect
+# One tag vX.Y.Z releases all components and the obdeect meta-package at version X.Y.Z.
 
 on:
   pull_request:
     paths:
-      - "cpp/**"
-      - "python/**"
-      - "CMakeLists.txt"
-      - "pyproject.toml"
+      - "src/*/cpp/**"
+      - "src/*/python/**"
+      - "src/*/CMakeLists.txt"
+      - "src/*/pyproject.toml"
+      - "meta/**"
       - ".github/workflows/pypi.yml"
   push:
     tags:
@@ -33,11 +35,13 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
+        component: [stream, propagation, sources, ray_tracing]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           ref: ${{ github.ref }}
+          fetch-depth: 0  # the version comes from the repository tags
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7
         with:
           python-version: "3.14"
@@ -46,12 +50,16 @@ jobs:
       - name: Build and smoke-test wheels
         env:
           CIBW_BUILD: "cp314-* cp315-*"
+          # The components require obdeect-stream of the same version, which is not on
+          # PyPI yet: install it from the same checkout before the tests.
+          CIBW_BEFORE_TEST: >-
+            ${{ matrix.component != 'stream' && 'pip install {project}/src/stream' || '' }}
           CIBW_TEST_REQUIRES: "pytest matplotlib"
-          CIBW_TEST_COMMAND: python -m pytest {project}/python/tests -q
-        run: python -m cibuildwheel --output-dir wheelhouse
+          CIBW_TEST_COMMAND: python -m pytest {package}/python/tests -q
+        run: python -m cibuildwheel src/${{ matrix.component }} --output-dir wheelhouse
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
-          name: wheels-${{ matrix.os }}
+          name: wheels-${{ matrix.component }}-${{ matrix.os }}
           path: wheelhouse/*.whl
 
   sdist:
@@ -60,17 +68,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           ref: ${{ github.ref }}
+          fetch-depth: 0
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7
         with:
           python-version: "3.14"
-      - name: Build source distribution
+      - name: Build source distributions and the meta-package
         run: |
           python -m pip install --upgrade build
-          python -m build --sdist --outdir dist
+          for component in stream propagation sources ray_tracing; do
+            python -m build --sdist --outdir dist "src/${component}"
+          done
+          python -m build --outdir dist meta
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: sdist
-          path: dist/*.tar.gz
+          path: dist/*
 
   publish:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
