@@ -444,8 +444,8 @@ class OpticalModel:
         (n_wavelength, n_zem) in [0, 1]; `wavelength_density` is ``(nm,
         values)``. `wavelength_law` is ``(lo_nm, hi_nm)``: it samples
         wavelength-0 bunches, with density proportional to
-        1/lambda^2 on [lo_nm, hi_nm] (1 <= lo_nm < hi_nm), continuous in nm. Give at most one of `wavelength_density` and
-        `wavelength_law`.
+        1/lambda^2 on [lo_nm, hi_nm] (1 <= lo_nm < hi_nm), continuous in nm. Give at
+        most one of `wavelength_density` and `wavelength_law`.
 
         Each photon of a bunch is thinned by the acceptance and the model's
         response bound, traced, and, with `roulette`, kept with the probability
