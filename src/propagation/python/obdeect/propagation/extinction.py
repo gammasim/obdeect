@@ -7,7 +7,6 @@ photon stream. The lookups broadcast their array arguments.
 from collections.abc import Mapping, Sequence
 
 import numpy as np
-
 from obdeect.propagation import _core
 
 

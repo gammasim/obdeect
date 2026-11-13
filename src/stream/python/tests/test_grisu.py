@@ -1,18 +1,19 @@
-"""ps2grisu: Python API and command line."""
+"""obdeect stream to-grisu: Python API and command line."""
 
-import shutil
 import subprocess
-import sys
-from pathlib import Path
 
-import obdeect.stream as obdeect_stream
 import numpy as np
+import obdeect.stream as obdeect_stream
 import pytest
+from obdeect.stream.cli import program_path
 
 
 def _executable(name):
-    local = Path(sys.executable).parent / name
-    return str(local) if local.exists() else shutil.which(name)
+    """Native program installed in the component package; None if absent."""
+    try:
+        return program_path("obdeect." + name.split("-")[1], name)
+    except FileNotFoundError:
+        return None
 
 
 def _write_stream(path, weight=1.0, atmosphere="applied", wavelength=400.0):
@@ -116,18 +117,29 @@ def test_expand_bunches(tmp_path):
     assert (tmp_path / "run.grisu").read_text().count("\nP ") == 3
 
 
-@pytest.mark.skipif(_executable("ps2grisu") is None, reason="ps2grisu is not installed")
+@pytest.mark.skipif(
+    _executable("obdeect-stream-to-grisu") is None,
+    reason="obdeect stream to-grisu is not installed",
+)
 def test_cli_matches_python(tmp_path):
     stream = tmp_path / "run.ps"
     _write_stream(stream)
     obdeect_stream.stream_to_grisu(stream, tmp_path / "py.grisu")
     result = subprocess.run(
-        [_executable("ps2grisu"), str(stream)], capture_output=True, check=True, text=True
+        [_executable("obdeect-stream-to-grisu"), str(stream)],
+        capture_output=True,
+        check=True,
+        text=True,
     )
     # Headers differ only in the producer line.
     assert _body(result.stdout) == _body((tmp_path / "py.grisu").read_text())
     failure = subprocess.run(
-        [_executable("ps2grisu"), "--telescope-config", str(tmp_path / "missing"), str(stream)],
+        [
+            _executable("obdeect-stream-to-grisu"),
+            "--telescope-config",
+            str(tmp_path / "missing"),
+            str(stream),
+        ],
         capture_output=True,
         check=False,
         text=True,

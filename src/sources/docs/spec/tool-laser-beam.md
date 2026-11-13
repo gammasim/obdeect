@@ -1,7 +1,7 @@
-# dlamb-laser-beam
+# obdeect sources laser-beam
 
 Primary photons of a laser beam inside the field-of-view cone of a telescope, sky frame.
-Scattering is not generated here. Writer B, producer `dlamb-laser-beam`.
+Scattering is not generated here. Writer B, producer `obdeect sources laser-beam`.
 
 ## Options
 

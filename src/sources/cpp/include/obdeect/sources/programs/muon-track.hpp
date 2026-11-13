@@ -247,7 +247,7 @@ inline std::vector<Track> tracks(const Options &o) {
 }
 
 inline std::string usage() {
-  return "usage: dlamb-muon-track [options]\n"
+  return "usage: obdeect sources muon-track [options]\n"
          "  -r R  telescope radius [m]      -x X -y Y  impact position [m]\n"
          "  -h H  start altitude [m]        --theta T  zenith angle [deg]   --phi P  azimuth "
          "[deg]\n"
@@ -452,7 +452,7 @@ inline StreamSummary write(std::ostream &out, const Options &o) {
   run.wavelength_min_nm = o.wavelength_min_nm;
   run.wavelength_max_nm = o.wavelength_max_nm;
   run.telescopes.push_back({1, {0.0, 0.0, 0.0}, o.telescope_radius_m});
-  RunWriter writer(out, "dlamb-muon-track", run);
+  RunWriter writer(out, "obdeect sources muon-track", run);
   const double energy =
       (o.beta < 1.0 && o.mass_gev > 0.0) ? o.mass_gev / std::sqrt(1.0 - o.beta * o.beta) : 1e-9;
   double expected = 0.0;

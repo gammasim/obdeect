@@ -1,7 +1,7 @@
-# dlamb-muon-track
+# obdeect sources muon-track
 
 Cherenkov light of one muon-like track, filtered to a telescope sphere at the origin, sky
-frame. Writer C, producer `dlamb-muon-track`; source in [track](track.md). Namespace
+frame. Writer C, producer `obdeect sources muon-track`; source in [track](track.md). Namespace
 `dlamb::muon_track`.
 
 ## Options (all take a value unless stated)
@@ -87,9 +87,9 @@ Writer C: run `wavelength_min/max` = wlmin/wlmax, telescope id 1 at (0,0,0), rad
 source_seed(seed, k), event, 1, ...)`; rows are appended in order (frame sky). Total weight
 sum ~ `expected_track_weight` summed over segments times `N`.
 
-After the stream, stderr gets one line: `dlamb-muon-track: expected weight <%.6g>, wrote
+After the stream, stderr gets one line: `obdeect sources muon-track: expected weight <%.6g>, wrote
 <rows> photons, weight <%.6g>` (expected = sum of `expected_track_weight` over segments times
-events). On error: `dlamb-muon-track: <message>` plus the usage text on stderr, exit 1.
+events). On error: `obdeect sources muon-track: <message>` plus the usage text on stderr, exit 1.
 
 ## Acceptance (`test_muon-track`)
 

@@ -10,7 +10,6 @@ from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
-
 from obdeect.sources.source import CHUNK_ROWS, build_source, emit_chunk
 
 

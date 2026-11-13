@@ -218,7 +218,7 @@ inline std::vector<Event> build_sources(const Options &o) {
 inline void write_stream(std::ostream &out, const Options &o) {
   const auto events = build_sources(o);
   RunSetup setup;
-  setup.producer = "dlamb-flasher";
+  setup.producer = "obdeect sources flasher";
   setup.run_number = o.run_number;
   setup.observation_level_m = observation_level_m(o);
   setup.atmosphere = o.atmosphere;

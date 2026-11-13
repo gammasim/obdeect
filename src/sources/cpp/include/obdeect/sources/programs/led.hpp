@@ -358,7 +358,7 @@ inline std::vector<Event> build_sources(const Options &o) {
 inline void write_stream(std::ostream &out, const Options &o) {
   const auto events = build_sources(o);
   RunSetup setup;
-  setup.producer = "dlamb-led";
+  setup.producer = "obdeect sources led";
   setup.run_number = o.run_number;
   setup.observation_level_m = o.altitude_m;
   setup.atmosphere = o.atmosphere;

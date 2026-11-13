@@ -1,7 +1,7 @@
-# dlamb-led
+# obdeect sources led
 
-LED in front of selected camera pixels (frame C). `dlamb-led --camera-file FILE (--use LIST |
---use-trg-rand N | --use-trg-all) [options]`. Writer A, producer `dlamb-led`.
+LED in front of selected camera pixels (frame C). `obdeect sources led --camera-file FILE (--use LIST |
+--use-trg-rand N | --use-trg-all) [options]`. Writer A, producer `obdeect sources led`.
 
 ## Options
 

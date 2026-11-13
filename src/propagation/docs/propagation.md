@@ -1,6 +1,6 @@
 # Atmosphere stage
 
-`dlufd-propagate` (C++ tool) and `dlufd.propagate` (Python) run the atmosphere stage on a
+`obdeect propagation run` (C++ tool) and `dlufd.propagate` (Python) run the atmosphere stage on a
 gstrickd photon stream: sky photons are brought to the telescope plane, then every chunk
 gets the atmospheric effects in a fixed order. Each effect is recorded in the efficiency
 ledger of the output.
@@ -110,10 +110,10 @@ Readers merge the ledger records of a stream in order.
 ## Command line
 
 ```console
-$ dlufd-propagate --transmission atm_trans_2000_1_10_0_0_2000.dat --site-altitude 2000 \
+$ obdeect propagation run --transmission atm_trans_2000_1_10_0_0_2000.dat --site-altitude 2000 \
     --profile atmprof.dat --envelope qe=qe.dat --envelope mirror=mirror.dat \
     --wavelength-range 250 700 --seed 1 -i in.ps -o out.ps
-dlufd-propagate: photons in <n>, out <m> (weight <w>), dropped <d>
+obdeect propagation run: photons in <n>, out <m> (weight <w>), dropped <d>
 ```
 
 | Option | Meaning |
@@ -136,7 +136,7 @@ dlufd-propagate: photons in <n>, out <m> (weight <w>), dropped <d>
 Example with the in-telescope path of 28 m for all telescopes, 0 m for telescope 2:
 
 ```console
-$ dlufd-propagate ... --pathlen 28 --telescope-pathlen 2=0
+$ obdeect propagation run ... --pathlen 28 --telescope-pathlen 2=0
 ```
 
 The summary goes to stderr.
@@ -168,7 +168,7 @@ when a later program applies the atmospheric transmission itself, for example a 
 (dlamb) feeding the camera simulation directly.
 
 ```console
-$ dlufd-propagate --no-extinction --site-altitude 2000 --profile atmprof.dat --seed 1 \
+$ obdeect propagation run --no-extinction --site-altitude 2000 --profile atmprof.dat --seed 1 \
     -i dlamb.ps -o ground.ps
 ```
 

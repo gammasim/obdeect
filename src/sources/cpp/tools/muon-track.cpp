@@ -1,4 +1,4 @@
-// dlamb-muon-track: Cherenkov light of one muon-like track on a telescope sphere (sky frame).
+// obdeect sources muon-track: Cherenkov light of one muon-like track on a telescope sphere (sky frame).
 
 #include "obdeect/sources/programs/muon-track.hpp"
 
@@ -23,11 +23,11 @@ int main(int argc, char **argv) {
     const StreamSummary summary = muon_track::write(out.stream(), parsed.options);
     out.close();
     std::fprintf(
-        stderr, "dlamb-muon-track: expected weight %.6g, wrote %llu photons, weight %.6g\n",
+        stderr, "obdeect sources muon-track: expected weight %.6g, wrote %llu photons, weight %.6g\n",
         summary.expected, static_cast<unsigned long long>(summary.photons), summary.weight);
     return 0;
   } catch (const std::exception &error) {
-    std::cerr << "dlamb-muon-track: " << error.what() << '\n' << muon_track::usage();
+    std::cerr << "obdeect sources muon-track: " << error.what() << '\n' << muon_track::usage();
     return 1;
   }
 }

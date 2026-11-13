@@ -47,7 +47,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         path = _locate("include", "obdeect/stream/stream.hpp")
     if path is None:
-        print("obdeect stream: no installed CMake package, headers or library found", file=sys.stderr)
+        print(
+            "obdeect stream: no installed CMake package, headers or library found", file=sys.stderr
+        )
         return 1
     print(path)
     return 0

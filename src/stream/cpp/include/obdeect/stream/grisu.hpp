@@ -1,12 +1,12 @@
 #pragma once
 
-// Photon stream to GrISU/GrOptics photon text input (ps2grisu). Header-only,
+// Photon stream to GrISU/GrOptics photon text input (obdeect stream to-grisu). Header-only,
 // standard library only.
 //
 // Input: ground-frame photons (frame G, CORSIKA axes: x north, y west) with
 // the zem and wavelength columns, atmosphere applied upstream (efficiency status factor
 // `atmosphere` in state `applied`). Output: a header block, then per event
-// `S` lines and per photon `P` lines (docs/usage.md, "ps2grisu").
+// `S` lines and per photon `P` lines (docs/usage.md, "obdeect stream to-grisu").
 //
 // Frames: x_g = -y_c, y_g = -x_c for positions. Azimuths: az_g = (3 pi / 2 -
 // az_c) mod 2 pi, with az_c = atan2(cy, cx) for photons. The direction cosines
@@ -45,7 +45,7 @@ struct GrisuOptions {
   double qe{1.0};                   // global QE factor written on the `R` line, not applied
   bool expand_bunches{};            // write round(w) copies of a bunch with w > 1
   bool event_details{};             // write a `C` line after each `S` line
-  std::string producer{"ps2grisu"}; // name and version for the header
+  std::string producer{"obdeect stream to-grisu"}; // name and version for the header
   std::optional<std::vector<GrisuTelescope>> telescopes; // TLLOC map; none: id = stream id
   std::ostream *warnings{};
 };
@@ -198,7 +198,7 @@ public:
   void finish() {
     end_run();
     if (options_.warnings != nullptr && !skipped_.empty()) {
-      *options_.warnings << "ps2grisu: skipped " << skipped_.size()
+      *options_.warnings << "obdeect stream to-grisu: skipped " << skipped_.size()
                          << " telescope(s) without a TLLOC match within "
                          << grisu_detail::match_distance_m << " m\n";
     }
@@ -209,7 +209,7 @@ private:
   static double number(const Metadata &metadata, const char *key, const char *what) {
     const auto it = metadata.find(key);
     if (it == metadata.end()) {
-      throw std::runtime_error(std::string("ps2grisu: stream lacks '") + key + "' (" + what + ")");
+      throw std::runtime_error(std::string("obdeect stream to-grisu: stream lacks '") + key + "' (" + what + ")");
     }
     if (const auto *integer = std::get_if<std::int64_t>(&it->second)) {
       return static_cast<double>(*integer);
@@ -217,7 +217,7 @@ private:
     if (const auto *real = std::get_if<double>(&it->second)) {
       return *real;
     }
-    throw std::runtime_error(std::string("ps2grisu: stream key '") + key + "' is not a number");
+    throw std::runtime_error(std::string("obdeect stream to-grisu: stream key '") + key + "' is not a number");
   }
 
   static std::optional<double> optional_number(const Metadata &metadata, const char *key) {
@@ -237,18 +237,18 @@ private:
     char buffer[512];
     const int n = std::snprintf(buffer, sizeof buffer, format, values...);
     if (n < 0 || static_cast<std::size_t>(n) >= sizeof buffer) {
-      throw std::runtime_error("ps2grisu: output line too long");
+      throw std::runtime_error("obdeect stream to-grisu: output line too long");
     }
     out_.write(buffer, n);
   }
 
   void efficiency_status(const Metadata &metadata) {
     if (!run_open_) {
-      throw std::runtime_error("ps2grisu: efficiency status record outside a run");
+      throw std::runtime_error("obdeect stream to-grisu: efficiency status record outside a run");
     }
     if (telescope_open_) {
       if (efficiency_status_checked_) {
-        throw std::runtime_error("ps2grisu: efficiency status for telescope " +
+        throw std::runtime_error("obdeect stream to-grisu: efficiency status for telescope " +
                                  std::to_string(telescope_id_) + " comes after its photons");
       }
       telescope_efficiency_statuses_.push_back(metadata);
@@ -310,7 +310,7 @@ private:
 
   void begin_event(const Metadata &metadata) {
     if (!run_open_) {
-      throw std::runtime_error("ps2grisu: event record outside a run");
+      throw std::runtime_error("obdeect stream to-grisu: event record outside a run");
     }
     write_header(&metadata);
     event_ = metadata;
@@ -325,7 +325,7 @@ private:
 
   void begin_telescope(const Metadata &metadata) {
     if (!event_open_) {
-      throw std::runtime_error("ps2grisu: telescope record outside an event");
+      throw std::runtime_error("obdeect stream to-grisu: telescope record outside an event");
     }
     telescope_open_ = true;
     telescope_efficiency_statuses_.clear();
@@ -334,7 +334,7 @@ private:
     const auto id_it = metadata.find("telescope_id");
     const auto *id = id_it == metadata.end() ? nullptr : std::get_if<std::int64_t>(&id_it->second);
     if (id == nullptr || *id < 1 || *id > 0xFFFFFFFFLL) {
-      throw std::runtime_error("ps2grisu: telescope record needs an integer telescope_id >= 1");
+      throw std::runtime_error("obdeect stream to-grisu: telescope record needs an integer telescope_id >= 1");
     }
     telescope_id_ = static_cast<std::uint32_t>(*id);
     // Position in the CORSIKA ground frame [m].
@@ -349,7 +349,7 @@ private:
       const auto *ys = array(run_metadata_, "telescope_y_m");
       if (xs == nullptr || ys == nullptr || telescope_id_ == 0 || telescope_id_ > xs->size() ||
           telescope_id_ > ys->size()) {
-        throw std::runtime_error("ps2grisu: no position for telescope " +
+        throw std::runtime_error("obdeect stream to-grisu: no position for telescope " +
                                  std::to_string(telescope_id_));
       }
       x = (*xs)[telescope_id_ - 1];
@@ -396,7 +396,7 @@ private:
     if (xs != nullptr && ys != nullptr) {
       if (array_index < 0 || static_cast<std::size_t>(array_index) >= xs->size() ||
           static_cast<std::size_t>(array_index) >= ys->size()) {
-        throw std::runtime_error("ps2grisu: no core position for array index " +
+        throw std::runtime_error("obdeect stream to-grisu: no core position for array index " +
                                  std::to_string(array_index));
       }
       core_x = (*xs)[static_cast<std::size_t>(array_index)];
@@ -432,7 +432,7 @@ private:
                                   : (run_state != run_states.end() ? run_state->second : "");
     if (state != "applied") {
       throw std::runtime_error(
-          "ps2grisu: efficiency status of telescope " + std::to_string(telescope_id_) +
+          "obdeect stream to-grisu: efficiency status of telescope " + std::to_string(telescope_id_) +
           (state.empty() ? " lacks the factor 'atmosphere'" : ": factor 'atmosphere' is " + state) +
           "; the atmosphere must be applied upstream (state applied)");
     }
@@ -440,7 +440,7 @@ private:
 
   void photons(const PhotonChunk &chunk) {
     if (!telescope_open_) {
-      throw std::runtime_error("ps2grisu: photons outside a telescope record");
+      throw std::runtime_error("obdeect stream to-grisu: photons outside a telescope record");
     }
     if (!efficiency_status_checked_) {
       check_atmosphere();
@@ -450,14 +450,14 @@ private:
       return;
     }
     if (chunk.frame != Frame::ground) {
-      throw std::runtime_error("ps2grisu: photons of telescope " + std::to_string(telescope_id_) +
+      throw std::runtime_error("obdeect stream to-grisu: photons of telescope " + std::to_string(telescope_id_) +
                                " are not in the ground frame");
     }
     if (!chunk.has(Column::zem)) {
-      throw std::runtime_error("ps2grisu: photons need the zem column");
+      throw std::runtime_error("obdeect stream to-grisu: photons need the zem column");
     }
     if (!chunk.has(Column::wavelength)) {
-      throw std::runtime_error("ps2grisu: wavelength is not assigned (no wavelength column)");
+      throw std::runtime_error("obdeect stream to-grisu: wavelength is not assigned (no wavelength column)");
     }
     const auto &x = chunk[Column::x];
     const auto &y = chunk[Column::y];
@@ -471,24 +471,24 @@ private:
     char buffer[256];
     for (std::size_t i = 0; i < chunk.rows(); ++i) {
       if (!(lambda[i] >= 0.5F) || !std::isfinite(lambda[i])) {
-        throw std::runtime_error("ps2grisu: wavelength is not assigned (value " +
+        throw std::runtime_error("obdeect stream to-grisu: wavelength is not assigned (value " +
                                  std::to_string(lambda[i]) + " nm)");
       }
       long long copies = 1;
       if (!std::isfinite(w[i])) {
-        throw std::runtime_error("ps2grisu: photon weight is not finite");
+        throw std::runtime_error("obdeect stream to-grisu: photon weight is not finite");
       }
       if (!(std::abs(w[i] - 1.0F) <= grisu_detail::unit_weight_tolerance)) {
         if (!(w[i] > 1.0F)) {
-          throw std::runtime_error("ps2grisu: photon weight " + std::to_string(w[i]) +
+          throw std::runtime_error("obdeect stream to-grisu: photon weight " + std::to_string(w[i]) +
                                    " is below 1; thin the photons upstream");
         }
         if (!options_.expand_bunches) {
-          throw std::runtime_error("ps2grisu: photon weight " + std::to_string(w[i]) +
+          throw std::runtime_error("obdeect stream to-grisu: photon weight " + std::to_string(w[i]) +
                                    " is above 1; use --expand-bunches to write copies");
         }
         if (w[i] > 1e6F) {
-          throw std::runtime_error("ps2grisu: photon weight " + std::to_string(w[i]) +
+          throw std::runtime_error("obdeect stream to-grisu: photon weight " + std::to_string(w[i]) +
                                    " is too large to expand");
         }
         copies = std::llround(static_cast<double>(w[i]));
@@ -502,7 +502,7 @@ private:
           grisu_detail::zero_tiny(dcy), static_cast<double>(zem[i]), static_cast<double>(t[i]),
           std::llround(static_cast<double>(lambda[i])), grisu_id_);
       if (n < 0 || static_cast<std::size_t>(n) >= sizeof buffer) {
-        throw std::runtime_error("ps2grisu: output line too long");
+        throw std::runtime_error("obdeect stream to-grisu: output line too long");
       }
       for (long long k = 0; k < copies; ++k) {
         text.append(buffer, static_cast<std::size_t>(n));

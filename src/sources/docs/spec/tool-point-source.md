@@ -1,7 +1,7 @@
-# dlamb-point-source
+# obdeect sources point-source
 
 Point light source above the observation level, sky frame. Replaces an earlier point-source
-program. Writer B, producer `dlamb-point-source`.
+program. Writer B, producer `obdeect sources point-source`.
 
 ## Options (units cm unless stated)
 

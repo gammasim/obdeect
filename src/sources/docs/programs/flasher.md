@@ -1,7 +1,7 @@
 # flasher
 
 One tool for two flasher types, chosen with `--type`. Replaces the earlier ff-1m and ff-gct
-programs; options keep their names. Command: `dlamb-flasher [--type dish|secondary]
+programs; options keep their names. Command: `obdeect sources flasher [--type dish|secondary]
 [options] > out.gst`.
 
 - `--type dish` (default): a flasher on the axis of a single-reflector telescope, in front of

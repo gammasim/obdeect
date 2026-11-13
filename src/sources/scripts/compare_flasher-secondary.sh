@@ -1,5 +1,5 @@
 #!/bin/bash
-# Cross-check dlamb-flasher --type secondary against the reference ff-gct program in the
+# Cross-check obdeect sources flasher --type secondary against the reference ff-gct program in the
 # simtools-dev container. Photons per flasher reduced to 1e5 (the default 2.5e6 gives ~360 MB of output).
 # The reference photon bunches carry cx, cy only, so cz is not comparable here.
 set -euo pipefail

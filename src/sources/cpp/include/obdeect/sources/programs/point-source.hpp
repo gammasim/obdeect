@@ -93,7 +93,7 @@ inline SkyPlan<SourceEmission> plan_point_source(const XyzlsOptions &o) {
 }
 
 inline void write_point_source(std::ostream &out, const XyzlsOptions &o) {
-  write_plan(out, "dlamb-point-source", plan_point_source(o));
+  write_plan(out, "obdeect sources point-source", plan_point_source(o));
 }
 
 } // namespace obdeect::sources::programs

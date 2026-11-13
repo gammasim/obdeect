@@ -15,7 +15,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
-
 from obdeect.ray_tracing import __version__
 from obdeect.ray_tracing.formats import ModelError
 from obdeect.ray_tracing.model import OpticalModel, ThreadPool, _obscurer_support

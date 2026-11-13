@@ -1,4 +1,4 @@
-// ps2grisu: ground-frame photon stream (file or stdin) to GrISU/GrOptics photon text on stdout or
+// obdeect stream to-grisu: ground-frame photon stream (file or stdin) to GrISU/GrOptics photon text on stdout or
 // -o FILE.
 
 #include "obdeect/stream/grisu.hpp"
@@ -17,7 +17,7 @@ namespace {
 constexpr std::size_t buffer_size = std::size_t{1} << 20;
 
 void usage() {
-  std::fprintf(stderr, "usage: ps2grisu [--telescope-config FILE] [--qe FACTOR] "
+  std::fprintf(stderr, "usage: obdeect stream to-grisu [--telescope-config FILE] [--qe FACTOR] "
                        "[--expand-bunches] [--event-details] [-o FILE|-] [input|-]\n");
 }
 
@@ -29,13 +29,13 @@ int main(int argc, char **argv) {
   std::string output = "-";
   std::string config_path;
   obdeect::stream::GrisuOptions options;
-  options.producer = std::string("ps2grisu ") + OBDEECT_STREAM_PACKAGE_VERSION;
+  options.producer = std::string("obdeect stream to-grisu ") + OBDEECT_STREAM_PACKAGE_VERSION;
   options.warnings = &std::cerr;
   bool have_input = false;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
     if (arg == "--version") {
-      print_version("ps2grisu");
+      print_version("obdeect stream to-grisu");
       return 0;
     }
     if (arg == "-h" || arg == "--help") {
@@ -52,7 +52,7 @@ int main(int argc, char **argv) {
     }
     if (arg == "--telescope-config" || arg == "--qe" || arg == "-o") {
       if (i + 1 >= argc) {
-        std::fprintf(stderr, "ps2grisu: %s needs an argument\n", arg.c_str());
+        std::fprintf(stderr, "obdeect stream to-grisu: %s needs an argument\n", arg.c_str());
         usage();
         return 2;
       }
@@ -65,19 +65,19 @@ int main(int argc, char **argv) {
         char *end = nullptr;
         options.qe = std::strtod(value.c_str(), &end);
         if (value.empty() || end != value.c_str() + value.size()) {
-          std::fprintf(stderr, "ps2grisu: invalid number for --qe: %s\n", value.c_str());
+          std::fprintf(stderr, "obdeect stream to-grisu: invalid number for --qe: %s\n", value.c_str());
           return 2;
         }
       }
       continue;
     }
     if (arg.size() > 1 && arg[0] == '-') {
-      std::fprintf(stderr, "ps2grisu: unknown option %s\n", arg.c_str());
+      std::fprintf(stderr, "obdeect stream to-grisu: unknown option %s\n", arg.c_str());
       usage();
       return 2;
     }
     if (have_input) {
-      std::fprintf(stderr, "ps2grisu: only one input is accepted\n");
+      std::fprintf(stderr, "obdeect stream to-grisu: only one input is accepted\n");
       usage();
       return 2;
     }
@@ -133,7 +133,7 @@ int main(int argc, char **argv) {
       out_file.close();
     }
   } catch (const std::exception &error) {
-    std::fprintf(stderr, "ps2grisu: %s\n", error.what());
+    std::fprintf(stderr, "obdeect stream to-grisu: %s\n", error.what());
     return 1;
   }
   return 0;

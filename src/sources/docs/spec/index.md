@@ -48,7 +48,7 @@ tests
 
 - Header-only, standard-library-only C++20 core in `cpp/include/dlamb/`; gstrickd supplies
   the stream writer/reader, `PhotonChunk`, `uniform4` (Philox), stage ids and frame codes.
-- Executables `dlamb-flasher`, `-led`, `-point-source`, `-beam-scan`, `-laser-beam`,
+- Executables `obdeect sources flasher`, `-led`, `-point-source`, `-beam-scan`, `-laser-beam`,
   `-night-sky`, `-muon-track` from `cpp/tools/<name>.cpp`; tests `cpp/tests/test_<name>.cpp`
   (one CTest each); Python extension `dlamb._core` (nanobind) and package `python/dlamb`.
 - Header and namespace names used by the tests are listed on the [tests](tests.md) page.

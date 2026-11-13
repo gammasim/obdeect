@@ -1,4 +1,4 @@
-// dlamb-led: LED in front of selected camera pixels (camera frame).
+// obdeect sources led: LED in front of selected camera pixels (camera frame).
 
 #include "obdeect/sources/programs/led.hpp"
 
@@ -11,7 +11,7 @@
 namespace {
 
 const char *usage =
-    R"(usage: dlamb-led --camera-file FILE (--use LIST | --use-trg-rand N | --use-trg-all) [options]
+    R"(usage: obdeect sources led --camera-file FILE (--use LIST | --use-trg-rand N | --use-trg-all) [options]
   --camera-file, -c FILE   camera definition (Pixel and Trigger lines)
   --use, -u LIST           pixels: ids, + required, [a,b] slaves, % comment
   --use-trg-rand N         N random trigger groups      --use-trg-all  all trigger groups
@@ -26,7 +26,7 @@ const char *usage =
 
 int main(int argc, char **argv) {
   using namespace obdeect::sources;
-  const std::string prefix = argc > 0 ? argv[0] : "dlamb-led";
+  const std::string prefix = argc > 0 ? argv[0] : "obdeect sources led";
   return cli::run_tool(prefix, [&] {
     programs::led::Options o;
     std::string camera_file, output;

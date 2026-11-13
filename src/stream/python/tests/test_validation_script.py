@@ -16,9 +16,9 @@ def test_required_commands_propagate_failure(tmp_path, corsika_status, adapter_s
     fragment = script.split("start=$(date +%s)", 1)[1].split("cmp -l run.iact", 1)[0]
     corsika = tmp_path / "corsika"
     corsika.write_text(f"#!/bin/sh\nprintf partial > run.iact\nexit {corsika_status}\n")
-    source = tmp_path / "corsika2ps"
+    source = tmp_path / "obdeect stream from-corsika"
     source.write_text(f"#!/bin/sh\ncat\nexit {adapter_status}\n")
-    sink = tmp_path / "ps2simtel"
+    sink = tmp_path / "obdeect stream to-simtel"
     sink.write_text("#!/bin/sh\ncat\n")
     for path in (corsika, source, sink):
         path.chmod(0o755)

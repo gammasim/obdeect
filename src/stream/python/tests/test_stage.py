@@ -4,8 +4,8 @@ import json
 import re
 from pathlib import Path
 
-import obdeect.stream as obdeect_stream
 import numpy as np
+import obdeect.stream as obdeect_stream
 import pytest
 from obdeect.stream.stage import efficiency_status_record, transform
 
@@ -99,7 +99,9 @@ def test_transform_keeps_existing_efficiency_status_first(tmp_path):
         efficiency_status={"qe": {"state": "pending", "source": "x"}},
     )
     efficiency_statuses = [
-        r for r in obdeect_stream.Reader(str(tmp_path / "out.ps")) if r["type"] == "efficiency_status"
+        r
+        for r in obdeect_stream.Reader(str(tmp_path / "out.ps"))
+        if r["type"] == "efficiency_status"
     ]
     assert [r["metadata"]["factors"] for r in efficiency_statuses] == ["atmosphere", "qe"]
 

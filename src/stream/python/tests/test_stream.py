@@ -1,13 +1,11 @@
-"""Photon-stream round trips through the Python API and the ps-cat / ps-tee tools."""
+"""Photon-stream round trips through the Python API and the obdeect stream cat / obdeect stream tee tools."""
 
-import shutil
 import subprocess
-import sys
-from pathlib import Path
 
-import obdeect.stream as obdeect_stream
 import numpy as np
+import obdeect.stream as obdeect_stream
 import pytest
+from obdeect.stream.cli import program_path
 
 REQUIRED = ("x", "y", "cx", "cy", "t", "w")
 
@@ -168,16 +166,16 @@ def test_write_after_close_rejected(tmp_path):
 
 
 def _tool(name):
-    found = shutil.which(name)
-    if found is None:
-        candidate = Path(sys.prefix) / "bin" / name
-        found = str(candidate) if candidate.exists() else None
-    return found
+    """Native program installed in the component package; None if absent."""
+    try:
+        return program_path("obdeect." + name.split("-")[1], name)
+    except FileNotFoundError:
+        return None
 
 
-@pytest.mark.skipif(_tool("ps-cat") is None, reason="ps-cat not installed")
+@pytest.mark.skipif(_tool("obdeect-stream-cat") is None, reason="obdeect stream cat not installed")
 def test_ps_cat(tmp_path):
-    cat = _tool("ps-cat")
+    cat = _tool("obdeect-stream-cat")
     a, b = tmp_path / "a.ps", tmp_path / "b.ps"
     _write_stream(a, rows=1000, telescope_id=1)
     _write_stream(b, rows=500, telescope_id=2)
@@ -209,9 +207,9 @@ def test_ps_cat(tmp_path):
     assert failed.returncode != 0
 
 
-@pytest.mark.skipif(_tool("ps-tee") is None, reason="ps-tee not installed")
+@pytest.mark.skipif(_tool("obdeect-stream-tee") is None, reason="obdeect stream tee not installed")
 def test_ps_tee(tmp_path):
-    tee = _tool("ps-tee")
+    tee = _tool("obdeect-stream-tee")
     source = tmp_path / "source.ps"
     _write_stream(source)
     copy = tmp_path / "copy.ps"
@@ -222,7 +220,7 @@ def test_ps_tee(tmp_path):
     assert copy.read_bytes() == source.read_bytes()
 
 
-@pytest.mark.skipif(_tool("ps-tee") is None, reason="ps-tee not installed")
+@pytest.mark.skipif(_tool("obdeect-stream-tee") is None, reason="obdeect stream tee not installed")
 @pytest.mark.parametrize(
     ("case", "message"),
     [
@@ -233,7 +231,7 @@ def test_ps_tee(tmp_path):
     ],
 )
 def test_ps_tee_rejects_bad_record_order(tmp_path, case, message):
-    tee = _tool("ps-tee")
+    tee = _tool("obdeect-stream-tee")
     source = tmp_path / "source.ps"
     _write_stream(source)
     data = source.read_bytes()

@@ -1,6 +1,6 @@
 # laser-beam
 
-Laser beam crossing the field of view of a telescope. Tool `dlamb-laser-beam`, programme
+Laser beam crossing the field of view of a telescope. Tool `obdeect sources laser-beam`, programme
 `cpp/include/dlamb/programs/laser-beam.hpp`. Replaces the earlier ls-beam program; options
 keep their names.
 

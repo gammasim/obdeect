@@ -9,12 +9,12 @@ import sys
 from pathlib import Path
 
 import numpy as np
-
 from obdeect.ray_tracing import __version__
 from obdeect.ray_tracing.formats import ModelError
 from obdeect.ray_tracing.model import STATUS_NAMES, OpticalModel
 from obdeect.ray_tracing.psf import summary
 from obdeect.ray_tracing.stream import TRANSMISSION_PARTS, trace_stream
+from obdeect.stream.cli import Command, Group
 
 # Columns of `obdeect obscurers` (see OpticalModel.obscurer_hits).
 CENSUS = ("crossed", "first", "sole")
@@ -167,8 +167,8 @@ def _source_arguments(command: argparse.ArgumentParser) -> None:
     command.add_argument("--threads", type=int, default=0, help="0 uses every core")
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="obdeect", description=__doc__)
+def main(argv: list[str] | None = None, prog: str = "obdeect ray-tracing") -> int:
+    parser = argparse.ArgumentParser(prog=prog, description=__doc__)
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -248,3 +248,26 @@ def main(argv: list[str] | None = None) -> int:
         print(f"obdeect: error: {error}", file=sys.stderr)
         return 1
     return 0
+
+
+def _command(name: str):
+    return lambda argv: main([name, *argv])
+
+
+group = Group(
+    package="obdeect.ray_tracing",
+    help="ray tracing through telescope optics",
+    commands={
+        "compile": Command(
+            "compile an optical model from simulation-models", function=_command("compile")
+        ),
+        "trace": Command("trace a star or point source", function=_command("trace")),
+        "obscurers": Command("which obscurers shade a star", function=_command("obscurers")),
+        "trace-stream": Command(
+            "trace a photon stream to camera-frame photons", function=_command("trace-stream")
+        ),
+        "plot": Command(
+            "plot the dish layout and the focal-plane image", function=_command("plot")
+        ),
+    },
+)

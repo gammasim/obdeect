@@ -135,7 +135,7 @@ def test_command_line(tmp_path, capsys):
         + ["--observation-level", "2000"]
     )
     assert status == 1
-    assert "dlufd-convert-table" in capsys.readouterr().err
+    assert "obdeect propagation convert-table" in capsys.readouterr().err
 
 
 def bad(tmp_path, text, format="kascade", **kwargs):

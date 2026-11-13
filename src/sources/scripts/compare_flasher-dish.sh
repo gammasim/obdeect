@@ -1,5 +1,5 @@
 #!/bin/bash
-# Cross-check dlamb-flasher --type dish (default options, 20 events) against the reference ff-1m program
+# Cross-check obdeect sources flasher --type dish (default options, 20 events) against the reference ff-1m program
 # in the simtools-dev container. Needs the built dlamb tool (build/debug/dlamb-flasher --type dish) and podman.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

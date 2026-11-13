@@ -8,7 +8,7 @@ else()
   set(OBDEECT_PROPAGATION_BUILD_PYTHON_API_DEFAULT OFF)
 endif()
 option(OBDEECT_PROPAGATION_BUILD_PYTHON_API "Build the Python extension" ${OBDEECT_PROPAGATION_BUILD_PYTHON_API_DEFAULT})
-option(OBDEECT_PROPAGATION_BUILD_TOOLS "Build the dlufd-propagate command-line tool" ON)
+option(OBDEECT_PROPAGATION_BUILD_TOOLS "Build the obdeect propagation run command-line tool" ON)
 
 # The stream component: the target of the combined build, else the stream sources next to
 # this component (builds from the repository), else an installed package (sdist builds).
@@ -58,11 +58,12 @@ if(OBDEECT_PROPAGATION_BUILD_PYTHON_API)
 endif()
 
 if(OBDEECT_PROPAGATION_BUILD_TOOLS)
-  add_executable(dlufd-propagate cpp/tools/propagate.cpp)
-  target_link_libraries(dlufd-propagate PRIVATE obdeect_propagation_core)
-  obdeect_propagation_enable_warnings(dlufd-propagate)
-  if(DEFINED SKBUILD_SCRIPTS_DIR)
-    install(TARGETS dlufd-propagate RUNTIME DESTINATION ${SKBUILD_SCRIPTS_DIR})
+  add_executable(obdeect-propagation-run cpp/tools/propagate.cpp)
+  target_link_libraries(obdeect-propagation-run PRIVATE obdeect_propagation_core)
+  obdeect_propagation_enable_warnings(obdeect-propagation-run)
+  # Wheels: inside the package, run through `obdeect propagation run`.
+  if(DEFINED SKBUILD_PLATLIB_DIR)
+    install(TARGETS obdeect-propagation-run RUNTIME DESTINATION obdeect/propagation/bin)
   endif()
 endif()
 

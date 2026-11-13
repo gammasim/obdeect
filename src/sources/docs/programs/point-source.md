@@ -1,6 +1,6 @@
 # point-source
 
-Point light source above the telescope, sky-frame photons. Tool `dlamb-point-source`,
+Point light source above the telescope, sky-frame photons. Tool `obdeect sources point-source`,
 programme `cpp/include/dlamb/programs/point-source.hpp`. Replaces the earlier xyzls program;
 options keep their names.
 
@@ -41,8 +41,8 @@ then per event one telescope block per telescope, with the same photons for ever
 telescope (one emission, shared key). Frame sky, `z` above the observation level.
 
 ```console
-$ dlamb-point-source -N 50 -o point-source.ps
-$ ps-cat --summary point-source.ps
+$ obdeect sources point-source -N 50 -o point-source.ps
+$ obdeect stream cat --summary point-source.ps
 ```
 
 ## Checks

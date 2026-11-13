@@ -34,7 +34,6 @@ from collections.abc import Iterator, Mapping
 from typing import Any
 
 import numpy as np
-
 from obdeect.sources import _core
 
 # Copies of gstrickd constants (no runtime dependency on gstrickd). The tests in

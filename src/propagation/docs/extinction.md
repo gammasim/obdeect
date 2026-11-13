@@ -73,12 +73,12 @@ column p.
 
 ## Legacy tables
 
-`dlufd-convert-table` (Python: `dlufd.convert_table`) converts older extinction tables to the
+`obdeect propagation convert-table` (Python: `dlufd.convert_table`) converts older extinction tables to the
 format above, so that existing setups can be used:
 
 ```console
-$ dlufd-convert-table --format kascade us76.ext -o atm_trans_1800.dat --observation-level 1800
-$ dlufd-convert-table --format modtran5 us76.ext -o out.dat --observation-level 1800 --min-wavelength 210
+$ obdeect propagation convert-table --format kascade us76.ext -o atm_trans_1800.dat --observation-level 1800
+$ obdeect propagation convert-table --format modtran5 us76.ext -o out.dat --observation-level 1800 --min-wavelength 210
 ```
 
 All legacy layouts hold the cumulative vertical optical depth $c(\lambda, h)$, which rises with

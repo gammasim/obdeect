@@ -1,6 +1,6 @@
 # night-sky
 
-Night-sky background photons on one telescope sphere. Tool `dlamb-night-sky`, programme
+Night-sky background photons on one telescope sphere. Tool `obdeect sources night-sky`, programme
 `cpp/include/dlamb/programs/night-sky.hpp`, core `cpp/include/dlamb/background.hpp`.
 Replaces the earlier nsbls program; options keep their names.
 

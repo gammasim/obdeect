@@ -1,4 +1,4 @@
-// dlamb-beam-scan: parallel downward beam scanned over the camera area (sky frame).
+// obdeect sources beam-scan: parallel downward beam scanned over the camera area (sky frame).
 
 #include "obdeect/sources/programs/beam-scan.hpp"
 
@@ -8,7 +8,7 @@
 
 namespace {
 
-const char *usage = R"(usage: dlamb-beam-scan [options] [-o FILE]
+const char *usage = R"(usage: obdeect sources beam-scan [options] [-o FILE]
   -r rcam    camera radius [cm] (123)
   -x xpos    scan start x [cm] (0.3 * 123)    -y ypos  scan start y [cm] (0.2 * 123)
   -h height  source height [cm] (0.05 * 123)
@@ -19,7 +19,7 @@ const char *usage = R"(usage: dlamb-beam-scan [options] [-o FILE]
 
 int main(int argc, char **argv) {
   using namespace obdeect::sources;
-  return cli::run_tool("dlamb-beam-scan", [&] {
+  return cli::run_tool("obdeect sources beam-scan", [&] {
     cli::ArgCursor cursor(argc, argv);
     programs::XylsOptions o;
     std::string output, arg;

@@ -145,7 +145,7 @@ inline SkyPlan<SourceEmission> plan_laser_beam(const LsBeamOptions &o) {
 }
 
 inline void write_laser_beam(std::ostream &out, const LsBeamOptions &o) {
-  write_plan(out, "dlamb-laser-beam", plan_laser_beam(o));
+  write_plan(out, "obdeect sources laser-beam", plan_laser_beam(o));
 }
 
 } // namespace obdeect::sources::programs

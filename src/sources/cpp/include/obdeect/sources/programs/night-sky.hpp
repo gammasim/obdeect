@@ -75,7 +75,7 @@ inline SkyPlan<BackgroundEmission> plan_night_sky(const NsbOptions &o) {
 }
 
 inline void write_night_sky(std::ostream &out, const NsbOptions &o) {
-  write_plan(out, "dlamb-night-sky", plan_night_sky(o));
+  write_plan(out, "obdeect sources night-sky", plan_night_sky(o));
 }
 
 } // namespace obdeect::sources::programs

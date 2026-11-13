@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 import numpy as np
-
 from obdeect.stream import _core
 
 Reader = _core.Reader

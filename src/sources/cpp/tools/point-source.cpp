@@ -1,4 +1,4 @@
-// dlamb-point-source: point light source above the observation level (sky frame).
+// obdeect sources point-source: point light source above the observation level (sky frame).
 
 #include "obdeect/sources/programs/point-source.hpp"
 
@@ -11,7 +11,7 @@
 
 namespace {
 
-const char *usage = R"(usage: dlamb-point-source [options] [-o FILE]
+const char *usage = R"(usage: obdeect sources point-source [options] [-o FILE]
   -R run     run number (1)              -N n      events per case (1)
   -r r       telescope radius [cm]       -x X -y Y source position [cm]
   -z z       height [cm]                 -n N[,..] photons into 4 pi, one case each
@@ -27,7 +27,7 @@ const char *usage = R"(usage: dlamb-point-source [options] [-o FILE]
 
 int main(int argc, char **argv) {
   using namespace obdeect::sources;
-  return cli::run_tool("dlamb-point-source", [&] {
+  return cli::run_tool("obdeect sources point-source", [&] {
     cli::ArgCursor cursor(argc, argv);
     programs::XyzlsOptions o;
     std::string spectrum = "400", pulse = "Gauss:0.0", angular = "isotropic", output, telpos,

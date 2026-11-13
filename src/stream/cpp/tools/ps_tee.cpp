@@ -1,4 +1,4 @@
-// ps-tee: copy a photon stream from stdin to stdout and to each named file,
+// obdeect stream tee: copy a photon stream from stdin to stdout and to each named file,
 // record by record, flushing after every record. Photon columns are not decoded.
 
 #include "obdeect/stream/stdin_buffer.hpp"
@@ -60,15 +60,15 @@ int main(int argc, char **argv) {
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
     if (arg == "--version") {
-      print_version("ps-tee");
+      print_version("obdeect stream tee");
       return 0;
     }
     if (arg == "-h" || arg == "--help") {
-      std::fprintf(stderr, "usage: ps-tee file...  (copies stdin to stdout and to each file)\n");
+      std::fprintf(stderr, "usage: obdeect stream tee file...  (copies stdin to stdout and to each file)\n");
       return 0;
     }
     if (arg.size() > 1 && arg[0] == '-') {
-      std::fprintf(stderr, "ps-tee: unknown option %s\n", arg.c_str());
+      std::fprintf(stderr, "obdeect stream tee: unknown option %s\n", arg.c_str());
       return 2;
     }
     names.push_back(arg);
@@ -117,7 +117,7 @@ int main(int argc, char **argv) {
     }
     order.finish();
   } catch (const std::exception &error) {
-    std::fprintf(stderr, "ps-tee: %s\n", error.what());
+    std::fprintf(stderr, "obdeect stream tee: %s\n", error.what());
     return 1;
   }
   return 0;

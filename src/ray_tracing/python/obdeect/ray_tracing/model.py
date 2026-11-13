@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-
 from obdeect.ray_tracing import _core
 from obdeect.ray_tracing.compiler import compile_model, model_hash
 from obdeect.ray_tracing.formats import ModelError

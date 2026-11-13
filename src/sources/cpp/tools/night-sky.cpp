@@ -1,4 +1,4 @@
-// dlamb-night-sky: night-sky background photons on a telescope sphere (sky frame).
+// obdeect sources night-sky: night-sky background photons on a telescope sphere (sky frame).
 
 #include "obdeect/sources/programs/night-sky.hpp"
 
@@ -9,7 +9,7 @@
 
 namespace {
 
-const char *usage = R"(usage: dlamb-night-sky [options] [-o FILE]
+const char *usage = R"(usage: obdeect sources night-sky [options] [-o FILE]
   -r, --radius, --telescope-radius m   telescope sphere radius (15)
   -v, --viewcone deg                   half opening angle (10)
   -a, --altitude, --obslev m           observation level (2150)
@@ -24,7 +24,7 @@ const char *usage = R"(usage: dlamb-night-sky [options] [-o FILE]
 
 int main(int argc, char **argv) {
   using namespace obdeect::sources;
-  return cli::run_tool("dlamb-night-sky", [&] {
+  return cli::run_tool("obdeect sources night-sky", [&] {
     cli::ArgCursor cursor(argc, argv);
     programs::NsbOptions o;
     std::string spectrum = "Benn_LaPalma_sky_converted.lis", output, arg;

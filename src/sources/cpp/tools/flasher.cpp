@@ -1,4 +1,4 @@
-// dlamb-flasher: flasher photon stream, dish or secondary type.
+// obdeect sources flasher: flasher photon stream, dish or secondary type.
 
 #include "obdeect/sources/programs/flasher.hpp"
 
@@ -9,7 +9,7 @@
 
 namespace {
 
-const char *usage = R"(usage: dlamb-flasher [--type dish|secondary] [options] [-o FILE]
+const char *usage = R"(usage: obdeect sources flasher [--type dish|secondary] [options] [-o FILE]
   both:      --photons N[,..]  --bunchsize F (--bs, -b)  --spectrum W|Cherenkov:A:B
              --lightpulse S (--pulse)  --angular-distribution S (--angular)  --run N
              --altitude M (-a)  --atmosphere N (-A)  --seed N  --events N[,..]  -o FILE
@@ -23,7 +23,7 @@ const char *usage = R"(usage: dlamb-flasher [--type dish|secondary] [options] [-
 int main(int argc, char **argv) {
   using namespace obdeect::sources;
   using programs::flasher::Type;
-  const std::string prefix = argc > 0 ? argv[0] : "dlamb-flasher";
+  const std::string prefix = argc > 0 ? argv[0] : "obdeect sources flasher";
   return cli::run_tool(prefix, [&] {
     std::vector<std::pair<std::string, std::string>> pairs;
     for (int i = 1; i < argc; ++i) {

@@ -10,7 +10,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
-
 from obdeect.ray_tracing.model import DETECTED, OpticalModel  # noqa: E402
 
 _CORNERS = {"circle": 48, "square": 4, "hexagon_flat_x": 6, "hexagon_flat_y": 6}

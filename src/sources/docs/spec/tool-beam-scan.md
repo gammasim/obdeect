@@ -1,7 +1,7 @@
-# dlamb-beam-scan
+# obdeect sources beam-scan
 
 Parallel downward beam scanned along two lines over the camera area, sky frame. Writer B,
-producer `dlamb-beam-scan`.
+producer `obdeect sources beam-scan`.
 
 ## Options
 

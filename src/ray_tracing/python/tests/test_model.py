@@ -20,7 +20,7 @@ def test_cli_version(capsys):
     with pytest.raises(SystemExit) as error:
         main(["--version"])
     assert error.value.code == 0
-    assert capsys.readouterr().out.strip() == f"obdeect {__version__}"
+    assert capsys.readouterr().out.strip() == f"obdeect ray-tracing {__version__}"
 
 
 def model_of(records_files, **options):

@@ -1,7 +1,7 @@
-# dlamb-night-sky
+# obdeect sources night-sky
 
 Night-sky background photons on one telescope sphere in a cone about the downward viewing axis (0,0,-1), sky frame.
-Writer B, producer `dlamb-night-sky`; source in [background](background.md).
+Writer B, producer `obdeect sources night-sky`; source in [background](background.md).
 
 ## Options
 

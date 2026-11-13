@@ -1,4 +1,4 @@
-// dlamb-laser-beam: primary photons of a laser beam inside a telescope's field of view.
+// obdeect sources laser-beam: primary photons of a laser beam inside a telescope's field of view.
 
 #include "obdeect/sources/programs/laser-beam.hpp"
 
@@ -9,7 +9,7 @@
 
 namespace {
 
-const char *usage = R"(usage: dlamb-laser-beam [options] [-o FILE]
+const char *usage = R"(usage: obdeect sources laser-beam [options] [-o FILE]
   --events n  --step m  --bunchsize f  --primary-per-m f
   --spectrum s  --lightpulse p  --angular text
   --run n  --altitude m  --atmosphere n
@@ -27,7 +27,7 @@ double mathematical_azimuth(double astronomical) {
 
 int main(int argc, char **argv) {
   using namespace obdeect::sources;
-  return cli::run_tool("dlamb-laser-beam", [&] {
+  return cli::run_tool("obdeect sources laser-beam", [&] {
     cli::ArgCursor cursor(argc, argv);
     programs::LsBeamOptions o;
     std::string spectrum = "355", pulse = "Simple:0", output, arg;

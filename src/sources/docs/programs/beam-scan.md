@@ -1,7 +1,7 @@
 # beam-scan
 
 Parallel downward light beam scanned along two lines over the camera area. Tool
-`dlamb-beam-scan`, programme `cpp/include/dlamb/programs/beam-scan.hpp`. Replaces the earlier
+`obdeect sources beam-scan`, programme `cpp/include/dlamb/programs/beam-scan.hpp`. Replaces the earlier
 xyls program; options keep their names.
 
 ## Options (cm)

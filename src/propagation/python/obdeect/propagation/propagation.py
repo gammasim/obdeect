@@ -1,7 +1,7 @@
 """Atmosphere stage on a gstrickd photon stream: extinction, envelope thinning, refraction.
 
 The stream is read from and written to files; the work is done by the C++ core, the same code
-as the ``dlufd-propagate`` command-line tool.
+as the ``obdeect propagation run`` command-line tool.
 """
 
 import operator

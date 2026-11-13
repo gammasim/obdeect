@@ -264,7 +264,7 @@ private:
   std::istream *stream_{nullptr};
 };
 
-std::string producer_name(const char *tool = "corsika2ps") {
+std::string producer_name(const char *tool = "obdeect stream from-corsika") {
   return std::string(tool) + " " + std::to_string(obdeect::stream::version_major) + "." +
          std::to_string(obdeect::stream::version_minor) + "." + std::to_string(obdeect::stream::version_patch);
 }
@@ -354,7 +354,7 @@ NB_MODULE(_core, module) {
         options.qe = qe;
         options.expand_bunches = expand_bunches;
         options.event_details = event_details;
-        options.producer = producer_name("ps2grisu");
+        options.producer = producer_name("obdeect stream to-grisu");
         if (!telescope_config.empty()) {
           std::ifstream config(telescope_config);
           if (!config) {

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Cross-check dlamb-led against the reference pixled program (test camera, pixels
+# Cross-check obdeect sources led against the reference pixled program (test camera, pixels
 # 0 1 2 with two pixels per event, 10 photons per pixel). Both write pixel positions.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

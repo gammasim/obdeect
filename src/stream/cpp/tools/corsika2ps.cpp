@@ -1,4 +1,4 @@
-// corsika2ps: CORSIKA IACT EventIO (file or stdin) to a photon stream on stdout.
+// obdeect stream from-corsika: CORSIKA IACT EventIO (file or stdin) to a photon stream on stdout.
 
 #include "obdeect/stream/simtel.hpp"
 #include "obdeect/stream/stdin_buffer.hpp"
@@ -16,7 +16,7 @@ namespace {
 constexpr std::size_t buffer_size = std::size_t{1} << 20;
 
 void usage() {
-  std::fprintf(stderr, "usage: corsika2ps [input|-]  (writes the stream to stdout)\n");
+  std::fprintf(stderr, "usage: obdeect stream from-corsika [input|-]  (writes the stream to stdout)\n");
 }
 
 } // namespace
@@ -28,7 +28,7 @@ int main(int argc, char **argv) {
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
     if (arg == "--version") {
-      print_version("corsika2ps");
+      print_version("obdeect stream from-corsika");
       return 0;
     }
     if (arg == "-h" || arg == "--help") {
@@ -36,12 +36,12 @@ int main(int argc, char **argv) {
       return 0;
     }
     if (arg.size() > 1 && arg[0] == '-') {
-      std::fprintf(stderr, "corsika2ps: unknown option %s\n", arg.c_str());
+      std::fprintf(stderr, "obdeect stream from-corsika: unknown option %s\n", arg.c_str());
       usage();
       return 2;
     }
     if (have_input) {
-      std::fprintf(stderr, "corsika2ps: only one input is accepted\n");
+      std::fprintf(stderr, "obdeect stream from-corsika: only one input is accepted\n");
       usage();
       return 2;
     }
@@ -66,7 +66,7 @@ int main(int argc, char **argv) {
       }
       in = &file;
     }
-    const std::string producer = "corsika2ps " + std::to_string(obdeect::stream::version_major) + "." +
+    const std::string producer = "obdeect stream from-corsika " + std::to_string(obdeect::stream::version_major) + "." +
                                  std::to_string(obdeect::stream::version_minor) + "." +
                                  std::to_string(obdeect::stream::version_patch);
     obdeect::stream::corsika_to_stream(*in, std::cout, producer);
@@ -75,7 +75,7 @@ int main(int argc, char **argv) {
       throw std::runtime_error("write error on stdout");
     }
   } catch (const std::exception &error) {
-    std::fprintf(stderr, "corsika2ps: %s\n", error.what());
+    std::fprintf(stderr, "obdeect stream from-corsika: %s\n", error.what());
     return 1;
   }
   return 0;

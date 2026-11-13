@@ -37,7 +37,7 @@ records allowed anywhere between `run` and `run_end`. Blobs keep the order
 of the input (CORSIKA: RUNH and TELPOS after `run`, EVTH and TELOFF before
 the telescopes, EVTE after them, RUNE before `run_end`); writers of EventIO
 output emit them in that order. CORSIKA split-mode markers (1213, 1214) are
-blobs too, between the telescopes of an event. `ps2simtel` does not write
+blobs too, between the telescopes of an event. `obdeect stream to-simtel` does not write
 them.
 An `efficiency_status` record may also follow a `telescope` record and then applies to
 that telescope only.
@@ -106,7 +106,7 @@ Frames:
   to the centre, CORSIKA axes.
 - T: telescope-local 3D frame (z along the optical axis towards the sky).
 - C: camera-neutral focal-plane frame (x, y on the camera entrance, telescope
-  axes, z = 0); conversion to sim_telarray conventions only in `ps2simtel`.
+  axes, z = 0); conversion to sim_telarray conventions only in `obdeect stream to-simtel`.
 
 ## Efficiency status
 
@@ -131,7 +131,7 @@ Within either scope, repeated status records may advance a factor only from `pen
 `envelope` to `applied`; a repeated or backward state is invalid. Telescope updates are checked
 separately from run updates before the telescope status overrides the run status.
 
-`ps2simtel` checks the efficiency status of each telescope against the frame of its
+`obdeect stream to-simtel` checks the efficiency status of each telescope against the frame of its
 photons. It accepts a factor that is `applied` upstream unless sim_telarray
 applies it again in that frame. It accepts `pending` only for factors that
 sim_telarray applies in that frame. `envelope` is always an error for those
@@ -147,10 +147,10 @@ factors: sim_telarray applies the full factor, not f/f_env.
 | any other name | error | error |
 
 Any other factor (or unknown name) raises an error that names it, unless it is
-given to `ps2simtel --allow-pending FACTOR` or `allow_pending=` in Python.
+given to `obdeect stream to-simtel --allow-pending FACTOR` or `allow_pending=` in Python.
 
 `envelope` for a factor that sim_telarray applies is valid only with
-`ps2simtel --scaled-factor FACTOR` (`scaled_factors=` in Python): the sim_telarray
+`obdeect stream to-simtel --scaled-factor FACTOR` (`scaled_factors=` in Python): the sim_telarray
 table of the factor then holds f/f_env, e.g. the QE table divided by the QE envelope
 applied upstream. Every `--scaled-factor` must have a matching efficiency status in state
 `envelope`; a missing status or a scaled factor in any other state is an error.

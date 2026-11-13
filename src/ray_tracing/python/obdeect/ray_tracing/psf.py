@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-
 from obdeect.ray_tracing.model import DETECTED, STATUS_NAMES
 
 

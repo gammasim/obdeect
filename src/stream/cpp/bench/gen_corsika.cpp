@@ -1,5 +1,5 @@
 // Writes a synthetic CORSIKA IACT EventIO file (normal mode, long-format photon blocks) for
-// throughput tests of corsika2ps and ps2simtel.
+// throughput tests of obdeect stream from-corsika and obdeect stream to-simtel.
 // Usage: gen_corsika OUTPUT [BUNCHES=10000000] [TELESCOPES=4] [BUNCHES_PER_BLOCK=250000]
 
 #include "obdeect/stream/eventio.hpp"

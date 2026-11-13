@@ -1,7 +1,7 @@
-# dlamb-flasher
+# obdeect sources flasher
 
-Flasher photon stream. `dlamb-flasher [--type dish|secondary] [options] [-o FILE]`.
-Replaces an earlier pair of flasher programs. Writer A (producer `dlamb-flasher`),
+Flasher photon stream. `obdeect sources flasher [--type dish|secondary] [options] [-o FILE]`.
+Replaces an earlier pair of flasher programs. Writer A (producer `obdeect sources flasher`),
 `telescope_id = 1`, telescope position (0,0,0).
 
 ## Options

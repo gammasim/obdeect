@@ -1,15 +1,15 @@
 #pragma once
 
 // Adapters between the photon stream and the CORSIKA IACT EventIO world:
-// CORSIKA output to a photon stream (corsika2ps) and a photon stream to
-// sim_telarray input (ps2simtel). Header-only, standard library only.
+// CORSIKA output to a photon stream (obdeect stream from-corsika) and a photon stream to
+// sim_telarray input (obdeect stream to-simtel). Header-only, standard library only.
 //
 // Camera-frame (C) photons are converted per telescope to the Bypass_Optics
 // convention of the receiving program:
 //   - single mirror (Bypass_Optics=1): (x, y) -> (x, -y), (cx, cy) -> (cx, -cy);
 //   - dual mirror (Bypass_Optics=2): the camera rotation by camera_rotation_deg,
 //     x' = x cos r + y sin r, y' = y cos r - x sin r (same for cx, cy).
-// The Bypass_Optics value is printed by ps2simtel for each converted telescope;
+// The Bypass_Optics value is printed by obdeect stream to-simtel for each converted telescope;
 // it must be set as an option of the receiving run.
 //
 // Telescope-frame (T) photons are for dual-mirror telescopes only (camera map
@@ -32,7 +32,7 @@
 // TELPOS, EVTH, TELOFF, EVTE, INPUTCFG (one line, NSHOW <events>, before RUNE) and
 // RUNE synthesised from the run and event metadata. Each synthesised header is
 // reported as a warning. ATMPROF (1216) is written only when a table is given
-// (ps2simtel --atmprof): before the first EVTH, with the profile number that EVTH
+// (obdeect stream to-simtel --atmprof): before the first EVTH, with the profile number that EVTH
 // names (99 for synthesised headers).
 //
 // Efficiency status (docs/format.md): run efficiency status records apply to every telescope, a
@@ -442,7 +442,7 @@ inline TelPos telpos_from_metres(const std::vector<double> &x, const std::vector
   return pos;
 }
 
-// Efficiency status rules for ps2simtel (docs/usage.md, "Efficiency status").
+// Efficiency status rules for obdeect stream to-simtel (docs/usage.md, "Efficiency status").
 // sim_telarray applies these factors itself, by the frame of the telescope.
 // Camera frame: the camera efficiencies. Ground frame: also mirror reflectivity
 // and telescope transmission. Atmosphere is not in either list.
@@ -747,10 +747,10 @@ private:
       return;
     }
     if (chunk.frame == Frame::telescope) {
-      *warnings_ << "ps2simtel: telescope " << chunk.telescope_id
+      *warnings_ << "obdeect stream to-simtel: telescope " << chunk.telescope_id
                  << ": telescope frame, mirror class 2, Bypass_Optics=1\n";
     } else {
-      *warnings_ << "ps2simtel: telescope " << chunk.telescope_id << ": camera frame, mirror class "
+      *warnings_ << "obdeect stream to-simtel: telescope " << chunk.telescope_id << ": camera frame, mirror class "
                  << camera.mirror_class
                  << ", Bypass_Optics=" << bypass_optics_level(camera.mirror_class)
                  << ", camera rotation " << camera.rotation_deg << " deg\n";
@@ -963,7 +963,7 @@ private:
     if (warnings_ == nullptr || !warned_.insert(name).second) {
       return;
     }
-    *warnings_ << "ps2simtel: warning: no CORSIKA " << name
+    *warnings_ << "obdeect stream to-simtel: warning: no CORSIKA " << name
                << " block in the stream; synthesised it from the run metadata\n";
   }
 
@@ -971,7 +971,7 @@ private:
     if (warnings_ == nullptr || !warned_.insert("ATMPROF").second) {
       return;
     }
-    *warnings_ << "ps2simtel: warning: no atmospheric table; sim_telarray cannot find profile "
+    *warnings_ << "obdeect stream to-simtel: warning: no atmospheric table; sim_telarray cannot find profile "
                << custom_profile_id << " (use --atmprof FILE)\n";
   }
 

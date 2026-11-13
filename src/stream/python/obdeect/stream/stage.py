@@ -11,7 +11,6 @@ import os
 from collections.abc import Callable, Mapping
 
 import numpy as np
-
 import obdeect.stream as obdeect_stream
 from obdeect.stream.stream import METADATA_RECORDS, Reader, Writer, _frame
 

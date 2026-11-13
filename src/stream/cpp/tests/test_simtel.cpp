@@ -511,7 +511,7 @@ void test_telescope_frame_report_and_telpos() {
   options.camera = camera;
   options.warnings = &warnings;
   const std::string bytes = run_adapter_with(records, options);
-  CHECK(warnings.str().find("ps2simtel: telescope 1: telescope frame, mirror class 2, "
+  CHECK(warnings.str().find("obdeect stream to-simtel: telescope 1: telescope frame, mirror class 2, "
                             "Bypass_Optics=1\n") != std::string::npos);
   for (const EventioBlock &block : read_blocks(bytes)) {
     if (block.type == iact::telpos) {

@@ -65,7 +65,7 @@ inline SkyPlan<SourceEmission> plan_beam_scan(const XylsOptions &o) {
 }
 
 inline void write_beam_scan(std::ostream &out, const XylsOptions &o) {
-  write_plan(out, "dlamb-beam-scan", plan_beam_scan(o));
+  write_plan(out, "obdeect sources beam-scan", plan_beam_scan(o));
 }
 
 } // namespace obdeect::sources::programs

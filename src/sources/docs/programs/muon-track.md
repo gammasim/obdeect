@@ -4,8 +4,8 @@ Cherenkov light of one muon-like track, as a sky-frame photon stream. Replaces t
 fake-muon program; options keep their names.
 
 ```bash
-dlamb-muon-track -x 70 -h 3000 --theta 0 -o muon-track.ps
-dlamb-muon-track --help
+obdeect sources muon-track -x 70 -h 3000 --theta 0 -o muon-track.ps
+obdeect sources muon-track --help
 ```
 
 ## Geometry and yield
@@ -64,6 +64,6 @@ stepped (10 m steps, index at each mid-point).
 ## Example
 
 ```bash
-dlamb-muon-track -x 70 -N 10 --seed 3 -o muon-track.ps 2> summary.txt
-dlamb-muon-track -x 70 --index-profile atm_index.txt | ps-cat --summary -
+obdeect sources muon-track -x 70 -N 10 --seed 3 -o muon-track.ps 2> summary.txt
+obdeect sources muon-track -x 70 --index-profile atm_index.txt | obdeect stream cat --summary -
 ```

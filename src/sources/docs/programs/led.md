@@ -1,7 +1,7 @@
 # led
 
 An LED in front of selected camera pixels, to test trigger definitions. Replaces the earlier
-pixled program; options keep their names. Command: `dlamb-led --camera-file FILE (--use LIST |
+pixled program; options keep their names. Command: `obdeect sources led --camera-file FILE (--use LIST |
 --use-trg-rand N | --use-trg-all) [options] > out.gst`. `--list-only` prints the pixel
 combinations instead.
 

@@ -1,6 +1,6 @@
 #pragma once
 
-// Telescope list files of dlamb-point-source (docs/spec/cli-conventions.md).
+// Telescope list files of obdeect sources point-source (docs/spec/cli-conventions.md).
 
 #include "obdeect/sources/cli.hpp"
 #include "obdeect/sources/programs/point-source.hpp"

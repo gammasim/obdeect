@@ -5,7 +5,14 @@ from pathlib import Path
 
 import pytest
 
-STREAMS_HEADER = Path(__file__).resolve().parents[2] / "cpp" / "include" / "obdeect" / "propagation" / "streams.hpp"
+STREAMS_HEADER = (
+    Path(__file__).resolve().parents[2]
+    / "cpp"
+    / "include"
+    / "obdeect"
+    / "propagation"
+    / "streams.hpp"
+)
 
 
 def _expected_format_major():

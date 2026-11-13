@@ -103,7 +103,11 @@ def camera_photons(path, obdeect_stream, telescope_id=None):
 
 
 def ledger_of(path, obdeect_stream):
-    return [r["metadata"] for r in read_records(path, obdeect_stream) if r["type"] == "efficiency_status"]
+    return [
+        r["metadata"]
+        for r in read_records(path, obdeect_stream)
+        if r["type"] == "efficiency_status"
+    ]
 
 
 def focus(
@@ -201,7 +205,12 @@ def test_pointing_rotates_the_ground_frame(model, tmp_path, obdeect_stream):
     assert abs(columns["x"].mean()) < 1e-3
     # A vertical beam is then off axis by f tan(2 deg).
     _, columns, _ = focus(
-        model, tmp_path, obdeect_stream, beam(4000, (0.0, 0.0)), pointing=(2.0, 0.0), name="vertical"
+        model,
+        tmp_path,
+        obdeect_stream,
+        beam(4000, (0.0, 0.0)),
+        pointing=(2.0, 0.0),
+        name="vertical",
     )
     assert abs(abs(columns["x"].mean()) - FOCAL_LENGTH_M * math.tan(angle)) < 0.02 * (
         FOCAL_LENGTH_M * math.tan(angle)
@@ -213,7 +222,9 @@ def test_pointing_is_read_from_the_run_record(model, tmp_path, obdeect_stream):
     run = dict(RUN, telescope_pointing_zenith_rad=math.radians(2.0))
     run["telescope_pointing_azimuth_rad"] = math.radians(30.0)
     _, from_run, _ = focus(model, tmp_path, obdeect_stream, photons, run=run, name="run")
-    _, from_args, _ = focus(model, tmp_path, obdeect_stream, photons, pointing=(2.0, 30.0), name="args")
+    _, from_args, _ = focus(
+        model, tmp_path, obdeect_stream, photons, pointing=(2.0, 30.0), name="args"
+    )
     assert np.array_equal(from_run["x"], from_args["x"])
 
 
@@ -258,7 +269,9 @@ def test_telescope_frame_matches_ground_frame_at_zenith(model, tmp_path, obdeect
     photons = beam(2000, (0.0, 0.0))
     _, ground, _ = focus(model, tmp_path, obdeect_stream, photons, pointing=(0.0, 0.0), name="g")
     telescope = dict(photons, z=np.zeros(2000, np.float32))
-    _, frame_t, _ = focus(model, tmp_path, obdeect_stream, telescope, frame=2, pointing=None, name="t")
+    _, frame_t, _ = focus(
+        model, tmp_path, obdeect_stream, telescope, frame=2, pointing=None, name="t"
+    )
     for name in ("x", "y", "cx", "cy", "cz", "t", "w", "wavelength"):
         assert np.array_equal(ground[name], frame_t[name]), name
 
@@ -315,7 +328,13 @@ def test_ledger_pending_and_absent_apply_the_factors_in_full(model, tmp_path, ob
         "qe.state": "pending",
     }
     _, with_pending, _ = focus(
-        model, tmp_path, obdeect_stream, photons, pointing=(0, 0), name="pend", run_ledgers=[pending]
+        model,
+        tmp_path,
+        obdeect_stream,
+        photons,
+        pointing=(0, 0),
+        name="pend",
+        run_ledgers=[pending],
     )
     assert np.array_equal(absent["w"], with_pending["w"])
     assert np.array_equal(absent["x"], with_pending["x"])
@@ -337,7 +356,13 @@ def test_ledger_envelope_divides_by_the_envelope(model, tmp_path, obdeect_stream
     # The same envelope written as a steeper table: at 400 nm both give 1/2.
     sloped = dict(flat, **{"mirror_reflectivity.value": np.array([1.0, 4.0])})
     _, sloped_out, _ = focus(
-        model, tmp_path, obdeect_stream, photons, pointing=(0, 0), name="sloped", run_ledgers=[sloped]
+        model,
+        tmp_path,
+        obdeect_stream,
+        photons,
+        pointing=(0, 0),
+        name="sloped",
+        run_ledgers=[sloped],
     )
     assert np.array_equal(flat_out["x"], sloped_out["x"])
     assert np.array_equal(flat_out["w"], sloped_out["w"])
@@ -389,7 +414,13 @@ def test_ledger_output_marks_own_factors_and_keeps_others(model, tmp_path, obdee
         "mirror_reflectivity.state": "pending",
     }
     _, _, output = focus(
-        model, tmp_path, obdeect_stream, beam(10, (0, 0)), pointing=(0, 0), name="out", run_ledgers=[qe]
+        model,
+        tmp_path,
+        obdeect_stream,
+        beam(10, (0, 0)),
+        pointing=(0, 0),
+        name="out",
+        run_ledgers=[qe],
     )
     records = read_records(output, obdeect_stream)
     types = [r["type"] for r in records]
@@ -468,7 +499,9 @@ def test_output_chunks_are_capped_and_numbered(model, tmp_path, obdeect_stream, 
         assert len(chunk["columns"]["w"]) <= 100
         assert chunk["first_index"] == expected_index
         expected_index += len(chunk["columns"]["w"])
-    telescope_end = [r for r in read_records(output, obdeect_stream) if r["type"] == "telescope_end"]
+    telescope_end = [
+        r for r in read_records(output, obdeect_stream) if r["type"] == "telescope_end"
+    ]
     assert telescope_end[0]["metadata"]["photons"] == pytest.approx(
         float(camera_photons(output, obdeect_stream)["w"].sum()), rel=1e-6
     )
@@ -664,7 +697,9 @@ def test_angular_transmission_needs_a_model_with_transmission(model, tmp_path, o
         assert "telescope_transmission" not in ledger_of(output, obdeect_stream)[0]["factors"]
 
 
-def test_unknown_transmission_part_and_existing_constant_are_rejected(model, tmp_path, obdeect_stream):
+def test_unknown_transmission_part_and_existing_constant_are_rejected(
+    model, tmp_path, obdeect_stream
+):
     with pytest.raises(ModelError, match="must be one of"):
         focus(
             model,

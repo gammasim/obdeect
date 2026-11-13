@@ -1,24 +1,24 @@
 """CORSIKA <-> photon stream <-> sim_telarray conversions through the Python API and the CLIs."""
 
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-import obdeect.stream as obdeect_stream
 import numpy as np
+import obdeect.stream as obdeect_stream
 import pytest
+from obdeect.stream.cli import program_path
 
 COLUMNS = ("x", "y", "cx", "cy", "t", "w", "zem", "wavelength")
 
 
 def _executable(name):
-    """Installed tool next to the interpreter (a venv's bin) or on PATH; None if absent."""
-    local = Path(sys.executable).parent / name
-    if local.exists():
-        return str(local)
-    return shutil.which(name)
+    """Native program installed in the component package; None if absent."""
+    try:
+        return program_path("obdeect." + name.split("-")[1], name)
+    except FileNotFoundError:
+        return None
 
 
 def _photons(rows, telescope_offset=0.0):
@@ -329,8 +329,9 @@ def test_rejects_truncated_stream(tmp_path):
 
 
 @pytest.mark.skipif(
-    _executable("ps2simtel") is None or _executable("corsika2ps") is None,
-    reason="corsika2ps and ps2simtel are not installed",
+    _executable("obdeect-stream-to-simtel") is None
+    or _executable("obdeect-stream-from-corsika") is None,
+    reason="obdeect stream from-corsika and obdeect stream to-simtel are not installed",
 )
 def test_cli_matches_python_api(tmp_path):
     stream = tmp_path / "light.ps"
@@ -341,16 +342,26 @@ def test_cli_matches_python_api(tmp_path):
     camera.write_text("2 1 0.0\n")
     obdeect_stream.stream_to_simtel(stream, api_out, {2: (1, 0.0)})
     subprocess.run(
-        [_executable("ps2simtel"), "--camera-map", str(camera), "-o", str(cli_out), str(stream)],
+        [
+            _executable("obdeect-stream-to-simtel"),
+            "--camera-map",
+            str(camera),
+            "-o",
+            str(cli_out),
+            str(stream),
+        ],
         check=True,
         capture_output=True,
     )
     assert cli_out.read_bytes() == api_out.read_bytes()
 
-    # corsika2ps reads the file from stdin and writes the stream to stdout; pipe it back.
+    # obdeect stream from-corsika reads the file from stdin and writes the stream to stdout; pipe it back.
     with cli_out.open("rb") as source:
         piped = subprocess.run(
-            [_executable("corsika2ps")], stdin=source, check=True, capture_output=True
+            [_executable("obdeect-stream-from-corsika")],
+            stdin=source,
+            check=True,
+            capture_output=True,
         ).stdout
     assert piped[:4] == b"GSTR"
     back = tmp_path / "piped.ps"
@@ -360,8 +371,8 @@ def test_cli_matches_python_api(tmp_path):
 
 
 @pytest.mark.skipif(
-    _executable("ps2simtel") is None,
-    reason="ps2simtel is not installed",
+    _executable("obdeect-stream-to-simtel") is None,
+    reason="obdeect stream to-simtel is not installed",
 )
 def test_cli_allow_pending_option(tmp_path):
     stream = tmp_path / "light.ps"
@@ -369,7 +380,13 @@ def test_cli_allow_pending_option(tmp_path):
     camera.write_text("2 1 0.0\n")
     constant = _efficiency_status("telescope_transmission_constant", "pending")
     _write_light_source_stream(stream, telescope_efficiency_status=constant)
-    base = [_executable("ps2simtel"), "--camera-map", str(camera), "-o", str(tmp_path / "x")]
+    base = [
+        _executable("obdeect-stream-to-simtel"),
+        "--camera-map",
+        str(camera),
+        "-o",
+        str(tmp_path / "x"),
+    ]
     failed = subprocess.run([*base, str(stream)], capture_output=True)
     assert failed.returncode != 0
     assert b"telescope_transmission_constant" in failed.stderr
@@ -435,15 +452,18 @@ sys.exit(1)
         check=False,
         env={
             **os.environ,
-            "PYTHONPATH": os.pathsep.join([str(Path(obdeect_stream.__file__).parent.parent), *sys.path]),
+            "PYTHONPATH": os.pathsep.join([
+                str(Path(obdeect_stream.__file__).parent.parent),
+                *sys.path,
+            ]),
         },
     )
     assert result.returncode == 0, result.stderr.decode()
 
 
 @pytest.mark.skipif(
-    _executable("ps2simtel") is None,
-    reason="ps2simtel is not installed",
+    _executable("obdeect-stream-to-simtel") is None,
+    reason="obdeect stream to-simtel is not installed",
 )
 def test_cli_scaled_factor_option(tmp_path):
     stream = tmp_path / "light.ps"
@@ -455,7 +475,7 @@ def test_cli_scaled_factor_option(tmp_path):
         telescope_efficiency_status=_efficiency_status("qe", "envelope"),
     )
     out = tmp_path / "ok.simtel"
-    base = [_executable("ps2simtel"), "--camera-map", str(camera), "-o", str(out)]
+    base = [_executable("obdeect-stream-to-simtel"), "--camera-map", str(camera), "-o", str(out)]
     failed = subprocess.run([*base, str(stream)], capture_output=True)
     assert failed.returncode != 0
     assert b"--scaled-factor qe" in failed.stderr

@@ -222,9 +222,9 @@ def convert_table(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Command line: ``dlufd-convert-table --format FORMAT IN -o OUT --observation-level M``."""
+    """Command line: ``obdeect propagation convert-table --format FORMAT IN -o OUT --observation-level M``."""
     parser = argparse.ArgumentParser(
-        prog="dlufd-convert-table",
+        prog="obdeect propagation convert-table",
         description="Convert a legacy extinction table to the dlufd transmission-table format.",
     )
     parser.add_argument("input", help="legacy table")
@@ -254,7 +254,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             min_wavelength_nm=args.min_wavelength,
         )
     except (OSError, ValueError) as error:
-        print(f"dlufd-convert-table: {error}", file=sys.stderr)
+        print(f"obdeect propagation convert-table: {error}", file=sys.stderr)
         return 1
     return 0
 

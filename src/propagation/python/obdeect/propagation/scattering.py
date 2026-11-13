@@ -8,7 +8,6 @@ Arrays are float64 for the table lookups and float32 for photon columns, as in t
 from collections.abc import Mapping, Sequence
 
 import numpy as np
-
 from obdeect.propagation import _core
 
 

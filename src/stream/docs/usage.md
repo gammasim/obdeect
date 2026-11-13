@@ -62,15 +62,15 @@ must be float32 arrays; the names are `gstrickd.COLUMNS`, the frames are `gstric
 ## Command line
 
 ```console
-$ ps-cat run1.ps run2.ps > all.ps        # one stream: one stream and one stream_end record
-$ ps-cat --summary all.ps                # records per type, photons and weight per telescope
-$ ps-cat run.ps | ps-tee copy.ps > out.ps  # copy.ps and out.ps get the same records
-$ corsika2ps run.iact > run.ps           # CORSIKA IACT EventIO to a photon stream
-$ ps2simtel --camera-map cam.txt run.ps > sim.simtel   # stream to sim_telarray input
-$ ps2simtel --atmprof atmprof1.dat light.ps > sim.simtel  # table for streams without CORSIKA input
-$ corsika2ps < run.iact | ps2simtel > sim.simtel       # pipe; "-" reads stdin
-$ ps2grisu --telescope-config TLLOC.dat run.ps > run.grisu  # GrISU photon text
-$ ps-cat --version                       # ps-cat <package version> (photon-stream format 1.0)
+$ obdeect stream cat run1.ps run2.ps > all.ps        # one stream: one stream and one stream_end record
+$ obdeect stream cat --summary all.ps                # records per type, photons and weight per telescope
+$ obdeect stream cat run.ps | obdeect stream tee copy.ps > out.ps  # copy.ps and out.ps get the same records
+$ obdeect stream from-corsika run.iact > run.ps           # CORSIKA IACT EventIO to a photon stream
+$ obdeect stream to-simtel --camera-map cam.txt run.ps > sim.simtel   # stream to sim_telarray input
+$ obdeect stream to-simtel --atmprof atmprof1.dat light.ps > sim.simtel  # table for streams without CORSIKA input
+$ obdeect stream from-corsika < run.iact | obdeect stream to-simtel > sim.simtel       # pipe; "-" reads stdin
+$ obdeect stream to-grisu --telescope-config TLLOC.dat run.ps > run.grisu  # GrISU photon text
+$ obdeect stream cat --version                       # obdeect stream cat <package version> (photon-stream format 1.0)
 ```
 
 The camera map lists the camera-frame telescopes, one per line:
@@ -94,7 +94,7 @@ Run(s) completed as expected after 3 events (3 showers).
 
 Telescopes not listed are ground-frame (sim_telarray `Bypass_Optics=0`). Listed telescopes with
 camera-frame photons are converted to the bypass convention and need `Bypass_Optics=1` (class 1) or
-`2` (class 2) in sim_telarray; `ps2simtel` prints the value for each. Listed dual-mirror telescopes
+`2` (class 2) in sim_telarray; `obdeect stream to-simtel` prints the value for each. Listed dual-mirror telescopes
 may instead carry telescope-frame photons (next section).
 
 ### Telescope-frame photons (dual-mirror telescopes)
@@ -103,7 +103,7 @@ A dual-mirror telescope listed with `mirror_class` 2 may carry telescope-frame (
 instead of camera-frame photons, for example four flashers at the camera firing onto the
 secondary mirror. The T frame has its origin at the secondary centre and z along the optical
 axis towards the sky; each photon is an emission point (`x`, `y`, `z`) with direction
-(`cx`, `cy`, `cz`) and emission time `t`. `ps2simtel` writes one bunch per photon at the
+(`cx`, `cy`, `cz`) and emission time `t`. `obdeect stream to-simtel` writes one bunch per photon at the
 plane z = 0 of that frame, and sim_telarray needs `Bypass_Optics=1`:
 
 ```text
@@ -115,13 +115,13 @@ The bunch position is where the photon's line crosses z = 0 (path 0.625 m here, 
 photon moving away from the plane), the time is `t` plus that path length over the speed of
 light, and `zem` is the observation level plus `z`. Without a `cz` column the photon moves
 towards the plane. The camera rotation of the map is not used, and TELPOS z is set to 0 as for
-camera-frame telescopes. `ps2simtel` reports the value when it sees the first photons:
+camera-frame telescopes. `obdeect stream to-simtel` reports the value when it sees the first photons:
 
 ```console
 $ cat cam.txt
 1 2 0.0
-$ dlamb-flasher --type secondary --photons 1e6 | ps2simtel --camera-map cam.txt | sim_telarray ... -C Bypass_Optics=1 -
-ps2simtel: telescope 1: telescope frame, mirror class 2, Bypass_Optics=1
+$ obdeect sources flasher --type secondary --photons 1e6 | obdeect stream to-simtel --camera-map cam.txt | sim_telarray ... -C Bypass_Optics=1 -
+obdeect stream to-simtel: telescope 1: telescope frame, mirror class 2, Bypass_Optics=1
 ```
 
 Errors: T photons for a telescope without map entry or with `mirror_class` 1, a photon with
@@ -130,21 +130,21 @@ The efficiency status of such a telescope is checked as for camera frame.
 
 ### GrISU photon input
 
-`ps2grisu` writes ground-frame photons as GrISU/GrOptics photon text. The atmosphere
-must be applied upstream and the wavelength assigned, for example by `dlufd-propagate`:
+`obdeect stream to-grisu` writes ground-frame photons as GrISU/GrOptics photon text. The atmosphere
+must be applied upstream and the wavelength assigned, for example by `obdeect propagation run`:
 
 ```console
-$ zstd -dc run.corsika.zst | corsika2ps \
-    | dlufd-propagate --transmission atm.dat --site-altitude 2156 --seed 1 \
+$ zstd -dc run.corsika.zst | obdeect stream from-corsika \
+    | obdeect propagation run --transmission atm.dat --site-altitude 2156 --seed 1 \
         --envelope qe=qe_envelope.dat -i - -o - \
-    | ps2grisu --telescope-config TLLOC.dat > run.grisu
+    | obdeect stream to-grisu --telescope-config TLLOC.dat > run.grisu
 ```
 
 Output (one header block, then `S` and `P` lines):
 
 ```text
 * HEADF  <-- Start of header flag
-* Produced by ps2grisu 0.1.0 from a photon stream written by corsika2ps 0.1.0
+* Produced by obdeect stream to-grisu 0.1.0 from a photon stream written by obdeect stream from-corsika 0.1.0
 * CORSIKA run number: 5
 * Energy range [TeV]: 0.1 10
 * Spectral slope: -2
@@ -188,11 +188,11 @@ In Python: `gstrickd.stream_to_grisu(run.ps, run.grisu, telescope_config="TLLOC.
 
 ### Efficiency status
 
-`ps2simtel` refuses a stream whose efficiency status says a factor is still to be applied and
+`obdeect stream to-simtel` refuses a stream whose efficiency status says a factor is still to be applied and
 sim_telarray does not apply it in that frame. The error names the factor:
 
 ```text
-ps2simtel: efficiency status of telescope 2 (camera frame): factor
+obdeect stream to-simtel: efficiency status of telescope 2 (camera frame): factor
 'telescope_transmission_constant' is pending, but sim_telarray does not apply it in this frame;
 apply it upstream (state applied); pass --allow-pending telescope_transmission_constant to accept it as it is
 ```
@@ -202,7 +202,7 @@ in the chain, for example by the camera module. Which factors sim_telarray appli
 each frame is listed in docs/format.md ("Efficiency status").
 
 ```console
-$ ps2simtel --camera-map cam.txt --allow-pending telescope_transmission_constant run.ps > sim.simtel
+$ obdeect stream to-simtel --camera-map cam.txt --allow-pending telescope_transmission_constant run.ps > sim.simtel
 ```
 
 In Python: `gstrickd.stream_to_simtel(run.ps, sim.simtel, cam, allow_pending=["telescope_transmission_constant"])`.
@@ -211,14 +211,14 @@ When the QE envelope was applied upstream (efficiency status state `envelope`) a
 sim_telarray QE table is divided by that envelope, declare it:
 
 ```console
-$ ps2simtel --camera-map cam.txt --scaled-factor qe run.ps > sim.simtel
+$ obdeect stream to-simtel --camera-map cam.txt --scaled-factor qe run.ps > sim.simtel
 ```
 
 ### Developer checks
 
 `scripts/validate_container.sh OUTDIR` is a manual end-to-end check of the codec. In the
 `ghcr.io/gammasim/simtools-dev` container it runs CORSIKA, then
-`corsika2ps | ps2simtel`, and compares the EventIO file written by CORSIKA with the
+`obdeect stream from-corsika | obdeect stream to-simtel`, and compares the EventIO file written by CORSIKA with the
 round-trip file. It then runs sim_telarray on both files with the same configuration and
 seed and compares the outputs. The container, CORSIKA and sim_telarray are not part of the
 automated tests.

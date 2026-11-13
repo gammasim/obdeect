@@ -1,4 +1,4 @@
-// ps-cat: concatenate photon streams into one valid stream on stdout, or print
+// obdeect stream cat: concatenate photon streams into one valid stream on stdout, or print
 // a summary of the streams.
 
 #include "obdeect/stream/stdin_buffer.hpp"
@@ -25,7 +25,7 @@ struct Summary {
   std::map<std::uint32_t, double> weights;
 };
 
-void usage() { std::fprintf(stderr, "usage: ps-cat [--summary] [file|-]...\n"); }
+void usage() { std::fprintf(stderr, "usage: obdeect stream cat [--summary] [file|-]...\n"); }
 
 // Copies the records of one stream (checked: framing, format major, stream_end).
 void copy_stream(std::istream &in, const std::string &name, obdeect::stream::Writer &writer) {
@@ -107,13 +107,13 @@ int main(int argc, char **argv) {
     if (arg == "--summary") {
       summary = true;
     } else if (arg == "--version") {
-      print_version("ps-cat");
+      print_version("obdeect stream cat");
       return 0;
     } else if (arg == "-h" || arg == "--help") {
       usage();
       return 0;
     } else if (arg.size() > 1 && arg[0] == '-') {
-      std::fprintf(stderr, "ps-cat: unknown option %s\n", arg.c_str());
+      std::fprintf(stderr, "obdeect stream cat: unknown option %s\n", arg.c_str());
       usage();
       return 2;
     } else {
@@ -156,7 +156,7 @@ int main(int argc, char **argv) {
     static std::vector<char> out_buffer(buffer_size);
     std::cout.rdbuf()->pubsetbuf(out_buffer.data(),
                                  static_cast<std::streamsize>(out_buffer.size()));
-    obdeect::stream::Writer writer(std::cout, "ps-cat");
+    obdeect::stream::Writer writer(std::cout, "obdeect stream cat");
     for_each_input(inputs, stdin_stream, [&](std::istream &in, const std::string &name) {
       copy_stream(in, name, writer);
     });
@@ -166,7 +166,7 @@ int main(int argc, char **argv) {
       throw std::runtime_error("write error on stdout");
     }
   } catch (const std::exception &error) {
-    std::fprintf(stderr, "ps-cat: %s\n", error.what());
+    std::fprintf(stderr, "obdeect stream cat: %s\n", error.what());
     return 1;
   }
   return 0;

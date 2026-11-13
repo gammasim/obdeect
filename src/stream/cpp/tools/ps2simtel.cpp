@@ -1,4 +1,4 @@
-// ps2simtel: photon stream (file or stdin) to sim_telarray input (EventIO) on stdout or -o FILE.
+// obdeect stream to-simtel: photon stream (file or stdin) to sim_telarray input (EventIO) on stdout or -o FILE.
 
 #include "obdeect/stream/simtel.hpp"
 #include "obdeect/stream/stdin_buffer.hpp"
@@ -16,7 +16,7 @@ namespace {
 constexpr std::size_t buffer_size = std::size_t{1} << 20;
 
 void usage() {
-  std::fprintf(stderr, "usage: ps2simtel [--camera-map FILE] [--atmprof FILE] "
+  std::fprintf(stderr, "usage: obdeect stream to-simtel [--camera-map FILE] [--atmprof FILE] "
                        "[--allow-pending FACTOR]... [--scaled-factor FACTOR]... [-o FILE|-] "
                        "[input|-]\n");
 }
@@ -35,7 +35,7 @@ int main(int argc, char **argv) {
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
     if (arg == "--version") {
-      print_version("ps2simtel");
+      print_version("obdeect stream to-simtel");
       return 0;
     }
     if (arg == "-h" || arg == "--help") {
@@ -45,7 +45,7 @@ int main(int argc, char **argv) {
     if (arg == "--camera-map" || arg == "--atmprof" || arg == "-o" || arg == "--allow-pending" ||
         arg == "--scaled-factor") {
       if (i + 1 >= argc) {
-        std::fprintf(stderr, "ps2simtel: %s needs an argument\n", arg.c_str());
+        std::fprintf(stderr, "obdeect stream to-simtel: %s needs an argument\n", arg.c_str());
         usage();
         return 2;
       }
@@ -63,12 +63,12 @@ int main(int argc, char **argv) {
       continue;
     }
     if (arg.size() > 1 && arg[0] == '-') {
-      std::fprintf(stderr, "ps2simtel: unknown option %s\n", arg.c_str());
+      std::fprintf(stderr, "obdeect stream to-simtel: unknown option %s\n", arg.c_str());
       usage();
       return 2;
     }
     if (have_input) {
-      std::fprintf(stderr, "ps2simtel: only one input is accepted\n");
+      std::fprintf(stderr, "obdeect stream to-simtel: only one input is accepted\n");
       usage();
       return 2;
     }
@@ -135,7 +135,7 @@ int main(int argc, char **argv) {
       out_file.close();
     }
   } catch (const std::exception &error) {
-    std::fprintf(stderr, "ps2simtel: %s\n", error.what());
+    std::fprintf(stderr, "obdeect stream to-simtel: %s\n", error.what());
     return 1;
   }
   return 0;

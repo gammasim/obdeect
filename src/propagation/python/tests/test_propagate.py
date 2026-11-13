@@ -1,16 +1,15 @@
-"""Atmosphere stage through the Python API and the dlufd-propagate executable."""
+"""Atmosphere stage through the Python API and the obdeect propagation run executable."""
 
 import io
-import shutil
 import struct
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
-import obdeect.propagation as obdeect_propagation
 import numpy as np
+import obdeect.propagation as obdeect_propagation
 import pytest
+from obdeect.stream.cli import program_path
 
 try:
     import obdeect.stream as obdeect_stream
@@ -176,6 +175,13 @@ class _GstrickdStreamWriter:
             self._directory.cleanup()
 
 
+def _program():
+    try:
+        return program_path("obdeect.propagation", "obdeect-propagation-run")
+    except FileNotFoundError:
+        return ""
+
+
 def _read_records_gstrickd(data):
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "stream.ps"
@@ -325,9 +331,9 @@ def test_input_ledger_showing_atmosphere_applied_is_rejected(tmp_path):
 
 
 def test_executable_matches_api(tmp_path, envelope_files):
-    exe = shutil.which("dlufd-propagate") or str(Path(sys.executable).with_name("dlufd-propagate"))
+    exe = _program()
     if not Path(exe).exists():
-        pytest.skip("dlufd-propagate not installed")
+        pytest.skip("obdeect propagation run not installed")
     source = tmp_path / "in.ps"
     source.write_bytes(ground_stream(5000, seed=2, chunk_rows=2048))
     api_out = tmp_path / "api.ps"
@@ -496,7 +502,9 @@ def test_scattering_rejects_invalid_settings(tmp_path):
     source.write_bytes(beam_stream(10, radii=False))
     options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 1}
     with pytest.raises(ValueError, match="telescope_r_m"):
-        obdeect_propagation.propagate(source, tmp_path / "out.ps", scattering=SCATTERING_TABLE, **options)
+        obdeect_propagation.propagate(
+            source, tmp_path / "out.ps", scattering=SCATTERING_TABLE, **options
+        )
     source.write_bytes(beam_stream(10))
     with pytest.raises(ValueError):
         obdeect_propagation.propagate(
@@ -505,9 +513,9 @@ def test_scattering_rejects_invalid_settings(tmp_path):
 
 
 def test_executable_matches_api_with_scattering(tmp_path):
-    exe = shutil.which("dlufd-propagate") or str(Path(sys.executable).with_name("dlufd-propagate"))
+    exe = _program()
     if not Path(exe).exists():
-        pytest.skip("dlufd-propagate not installed")
+        pytest.skip("obdeect propagation run not installed")
     source = tmp_path / "beam.ps"
     source.write_bytes(beam_stream(300))
     api_out = tmp_path / "api.ps"
@@ -561,9 +569,9 @@ def test_rejects_identical_paths(tmp_path):
 
 
 def test_executable_rejects_identical_paths(tmp_path):
-    exe = shutil.which("dlufd-propagate") or str(Path(sys.executable).with_name("dlufd-propagate"))
+    exe = _program()
     if not Path(exe).exists():
-        pytest.skip("dlufd-propagate not installed")
+        pytest.skip("obdeect propagation run not installed")
     source = tmp_path / "same.ps"
     original = ground_stream(100, seed=3, chunk_rows=64)
     source.write_bytes(original)
@@ -587,9 +595,9 @@ def test_executable_rejects_identical_paths(tmp_path):
 
 
 def _executable():
-    exe = shutil.which("dlufd-propagate") or str(Path(sys.executable).with_name("dlufd-propagate"))
+    exe = _program()
     if not Path(exe).exists():
-        pytest.skip("dlufd-propagate not installed")
+        pytest.skip("obdeect propagation run not installed")
     return exe
 
 
@@ -830,7 +838,9 @@ def test_geometry_only_matches_geometry_of_normal_run(tmp_path):
         store_p=True,
         **_geometry_options(),
     )
-    summary = obdeect_propagation.propagate(source, geometry_out, extinction=False, **_geometry_options())
+    summary = obdeect_propagation.propagate(
+        source, geometry_out, extinction=False, **_geometry_options()
+    )
     normal = read_records(normal_out.read_bytes())
     geometry = read_records(geometry_out.read_bytes())
 

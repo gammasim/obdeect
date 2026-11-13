@@ -1,4 +1,4 @@
-// dlufd-propagate: the atmosphere stage on a gstrickd photon stream (docs/propagation.md).
+// obdeect propagation run: the atmosphere stage on a gstrickd photon stream (docs/propagation.md).
 // Reads a stream from a file or stdin, writes the processed stream to a file or stdout, and
 // prints a summary to stderr.
 
@@ -23,7 +23,7 @@ namespace {
 
 void usage() {
   std::fprintf(stderr,
-               "usage: dlufd-propagate (--transmission FILE | --no-extinction) --site-altitude M\n"
+               "usage: obdeect propagation run (--transmission FILE | --no-extinction) --site-altitude M\n"
                "                       [--profile FILE]\n"
                "                       [--envelope NAME=FILE]... [--wavelength-range LO HI]\n"
                "                       --seed N [--mode thinned|weighted] [--store-p]\n"
@@ -259,16 +259,16 @@ int main(int argc, char **argv) {
                                       : static_cast<std::ostream &>(out_file);
     const PropagationSummary summary = propagate_stream(in, out, std::move(config));
     out.flush();
-    std::fprintf(stderr, "dlufd-propagate: photons in %llu, out %llu (weight %.6g), dropped %llu\n",
+    std::fprintf(stderr, "obdeect propagation run: photons in %llu, out %llu (weight %.6g), dropped %llu\n",
                  static_cast<unsigned long long>(summary.photons_in),
                  static_cast<unsigned long long>(summary.photons_out), summary.weight_out,
                  static_cast<unsigned long long>(summary.dropped));
   } catch (const UsageError &error) {
-    std::fprintf(stderr, "dlufd-propagate: %s\n", error.what());
+    std::fprintf(stderr, "obdeect propagation run: %s\n", error.what());
     usage();
     return 2;
   } catch (const std::exception &error) {
-    std::fprintf(stderr, "dlufd-propagate: error: %s\n", error.what());
+    std::fprintf(stderr, "obdeect propagation run: error: %s\n", error.what());
     return 1;
   }
   return 0;

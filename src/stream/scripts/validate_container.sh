@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# End-to-end validation of corsika2ps and ps2simtel in ghcr.io/gammasim/simtools-dev.
+# End-to-end validation of obdeect stream from-corsika and obdeect stream to-simtel in ghcr.io/gammasim/simtools-dev.
 #
 #   1. CORSIKA (image binary) writes a small IACT EventIO file: 20 gamma showers, 100-1000 GeV,
 #      20 deg zenith, 3 telescopes.
-#   2. corsika2ps and ps2simtel are compiled inside the container with g++ (the image has no
+#   2. obdeect stream from-corsika and obdeect stream to-simtel are compiled inside the container with g++ (the image has no
 #      cmake; the sources are mounted read-only).
-#   3. corsika2ps < run.iact | ps2simtel > roundtrip.corsika; the files are compared.
+#   3. obdeect stream from-corsika < run.iact | obdeect stream to-simtel > roundtrip.corsika; the files are compared.
 #   4. sim_telarray (image binary, CTA-PROD6 LST configuration from the host checkout) runs on
 #      both files with the same configuration and seed; the outputs are compared.
 #
@@ -49,7 +49,7 @@ fi
 mkdir -p /out/gen/gstrickd
 sed -e 's/@PROJECT_VERSION_MAJOR@/0/' -e 's/@PROJECT_VERSION_MINOR@/0/' \
     -e 's/@PROJECT_VERSION_PATCH@/0/' /src/cmake/version.hpp.in > /out/gen/gstrickd/version.hpp
-for tool in corsika2ps ps2simtel; do
+for tool in obdeect stream from-corsika obdeect stream to-simtel; do
   g++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror -ffp-contract=off \
       -DGSTRICKD_PACKAGE_VERSION='"0.0.0+validation"' -I/out/gen -I/src/cpp/include \
       "/src/cpp/tools/$tool.cpp" -o "/out/bin/$tool" || exit 1
