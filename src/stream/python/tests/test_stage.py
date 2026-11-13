@@ -196,3 +196,24 @@ def test_transform_rejects_reapplied_factor_in_telescope_efficiency_status(tmp_p
             frame_out="camera",
             efficiency_status={"qe": {"state": "applied", "source": "x"}},
         )
+
+
+def test_transform_indices_continue_across_array_reuses(tmp_path):
+    source = tmp_path / "reuse.ps"
+    with obdeect_stream.Writer(str(source), "pytest") as writer:
+        writer.write("run", {"run_number": 5})
+        writer.write("event", {"event_number": 1})
+        for array_index, first_index in ((0, 0), (1, 6)):
+            writer.write(
+                "telescope", {"telescope_id": 4, "frame": "ground", "array_index": array_index}
+            )
+            writer.write_photons(4, "ground", first_index, _chunk(6))
+            writer.write("telescope_end", {"telescope_id": 4, "photons": 6.0})
+        writer.write("event_end", {})
+        writer.write("run_end", {})
+    output = tmp_path / "out.ps"
+    transform(source, output, lambda tel, cols, info: cols, stage_id=1, frame_out="ground")
+    firsts = [
+        r["first_index"] for r in obdeect_stream.Reader(str(output)) if r["type"] == "photons"
+    ]
+    assert firsts == [0, 6]

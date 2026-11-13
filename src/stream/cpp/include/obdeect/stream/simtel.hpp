@@ -812,6 +812,7 @@ private:
   }
 
   void begin_event(const Metadata &metadata) {
+    writer_.begin_event();
     event_open_ = true;
     event_headers_done_ = false;
     have_evth_ = have_teloff_ = have_evte_ = false;
