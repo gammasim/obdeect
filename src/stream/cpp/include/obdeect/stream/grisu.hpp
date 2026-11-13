@@ -42,10 +42,10 @@ struct GrisuTelescope {
 };
 
 struct GrisuOptions {
-  double qe{1.0};                   // global QE factor written on the `R` line, not applied
-  bool expand_bunches{};            // write round(w) copies of a bunch with w > 1
-  bool event_details{};             // write a `C` line after each `S` line
-  std::string producer{"obdeect stream to-grisu"}; // name and version for the header
+  double qe{1.0};        // global QE factor written on the `R` line, not applied
+  bool expand_bunches{}; // write round(w) copies of a bunch with w > 1
+  bool event_details{};  // write a `C` line after each `S` line
+  std::string producer{"obdeect stream to-grisu"};       // name and version for the header
   std::optional<std::vector<GrisuTelescope>> telescopes; // TLLOC map; none: id = stream id
   std::ostream *warnings{};
 };
@@ -209,7 +209,8 @@ private:
   static double number(const Metadata &metadata, const char *key, const char *what) {
     const auto it = metadata.find(key);
     if (it == metadata.end()) {
-      throw std::runtime_error(std::string("obdeect stream to-grisu: stream lacks '") + key + "' (" + what + ")");
+      throw std::runtime_error(std::string("obdeect stream to-grisu: stream lacks '") + key +
+                               "' (" + what + ")");
     }
     if (const auto *integer = std::get_if<std::int64_t>(&it->second)) {
       return static_cast<double>(*integer);
@@ -217,7 +218,8 @@ private:
     if (const auto *real = std::get_if<double>(&it->second)) {
       return *real;
     }
-    throw std::runtime_error(std::string("obdeect stream to-grisu: stream key '") + key + "' is not a number");
+    throw std::runtime_error(std::string("obdeect stream to-grisu: stream key '") + key +
+                             "' is not a number");
   }
 
   static std::optional<double> optional_number(const Metadata &metadata, const char *key) {
@@ -334,7 +336,8 @@ private:
     const auto id_it = metadata.find("telescope_id");
     const auto *id = id_it == metadata.end() ? nullptr : std::get_if<std::int64_t>(&id_it->second);
     if (id == nullptr || *id < 1 || *id > 0xFFFFFFFFLL) {
-      throw std::runtime_error("obdeect stream to-grisu: telescope record needs an integer telescope_id >= 1");
+      throw std::runtime_error(
+          "obdeect stream to-grisu: telescope record needs an integer telescope_id >= 1");
     }
     telescope_id_ = static_cast<std::uint32_t>(*id);
     // Position in the CORSIKA ground frame [m].
@@ -432,7 +435,8 @@ private:
                                   : (run_state != run_states.end() ? run_state->second : "");
     if (state != "applied") {
       throw std::runtime_error(
-          "obdeect stream to-grisu: efficiency status of telescope " + std::to_string(telescope_id_) +
+          "obdeect stream to-grisu: efficiency status of telescope " +
+          std::to_string(telescope_id_) +
           (state.empty() ? " lacks the factor 'atmosphere'" : ": factor 'atmosphere' is " + state) +
           "; the atmosphere must be applied upstream (state applied)");
     }
@@ -450,14 +454,15 @@ private:
       return;
     }
     if (chunk.frame != Frame::ground) {
-      throw std::runtime_error("obdeect stream to-grisu: photons of telescope " + std::to_string(telescope_id_) +
-                               " are not in the ground frame");
+      throw std::runtime_error("obdeect stream to-grisu: photons of telescope " +
+                               std::to_string(telescope_id_) + " are not in the ground frame");
     }
     if (!chunk.has(Column::zem)) {
       throw std::runtime_error("obdeect stream to-grisu: photons need the zem column");
     }
     if (!chunk.has(Column::wavelength)) {
-      throw std::runtime_error("obdeect stream to-grisu: wavelength is not assigned (no wavelength column)");
+      throw std::runtime_error(
+          "obdeect stream to-grisu: wavelength is not assigned (no wavelength column)");
     }
     const auto &x = chunk[Column::x];
     const auto &y = chunk[Column::y];
@@ -480,16 +485,17 @@ private:
       }
       if (!(std::abs(w[i] - 1.0F) <= grisu_detail::unit_weight_tolerance)) {
         if (!(w[i] > 1.0F)) {
-          throw std::runtime_error("obdeect stream to-grisu: photon weight " + std::to_string(w[i]) +
-                                   " is below 1; thin the photons upstream");
+          throw std::runtime_error("obdeect stream to-grisu: photon weight " +
+                                   std::to_string(w[i]) + " is below 1; thin the photons upstream");
         }
         if (!options_.expand_bunches) {
-          throw std::runtime_error("obdeect stream to-grisu: photon weight " + std::to_string(w[i]) +
+          throw std::runtime_error("obdeect stream to-grisu: photon weight " +
+                                   std::to_string(w[i]) +
                                    " is above 1; use --expand-bunches to write copies");
         }
         if (w[i] > 1e6F) {
-          throw std::runtime_error("obdeect stream to-grisu: photon weight " + std::to_string(w[i]) +
-                                   " is too large to expand");
+          throw std::runtime_error("obdeect stream to-grisu: photon weight " +
+                                   std::to_string(w[i]) + " is too large to expand");
         }
         copies = std::llround(static_cast<double>(w[i]));
       }
@@ -558,10 +564,10 @@ inline void stream_to_grisu(std::istream &in, std::ostream &out, GrisuOptions op
     converter.write(record);
   }
   if (!reader.ended()) {
-    throw std::runtime_error("gstrickd: no stream_end (truncated stream)");
+    throw std::runtime_error("obdeect stream: no stream_end (truncated stream)");
   }
   if (in.peek() != std::char_traits<char>::eof()) {
-    throw std::runtime_error("gstrickd: data after stream_end");
+    throw std::runtime_error("obdeect stream: data after stream_end");
   }
   converter.finish();
 }

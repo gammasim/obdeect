@@ -1,6 +1,6 @@
 # Stream writers
 
-All tools write a gstrickd stream (`gstrickd::Writer(out, producer)`; the writer emits the
+All tools write a photon stream (`obdeect::stream::Writer(out, producer)`; the writer emits the
 `stream` record with key `producer`, and `finish()` writes `stream_end`). Metadata values are
 int64, double, `vector<double>` or string, exactly as typed below. Chunks hold at most
 `65536` rows; a chunk carries `telescope_id`, `frame`, `first_index` and a column set.
@@ -72,4 +72,4 @@ Misuse (push outside a block, nested block) is a logic error (`std::logic_error`
 
 ## Frame code in `telescope` records
 
-Integer gstrickd code: sky 0, T 2, C 3.
+Integer obdeect stream code: sky 0, T 2, C 3.

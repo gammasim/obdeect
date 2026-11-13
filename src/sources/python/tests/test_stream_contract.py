@@ -1,6 +1,7 @@
-"""obdeect.sources.source keeps Python copies of gstrickd constants. They must equal the values of
-the gstrickd headers compiled into dlamb (always checked) and of an installed gstrickd
-Python package (checked when it can be imported)."""
+"""obdeect.sources.source keeps Python copies of obdeect stream constants.
+They must equal the values of the obdeect stream headers compiled into
+obdeect sources (always checked) and of an installed obdeect stream Python
+package (checked when it can be imported)."""
 
 import pytest
 from obdeect.sources import _core, source

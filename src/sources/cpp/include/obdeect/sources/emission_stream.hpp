@@ -1,6 +1,6 @@
 #pragma once
 
-// Run writer for sources that push photons one by one (muon track): gstrickd records with
+// Run writer for sources that push photons one by one (muon track): obdeect stream records with
 // buffered chunks (docs/spec/stream-writer.md, writer C).
 
 #include "obdeect/sources/source.hpp"

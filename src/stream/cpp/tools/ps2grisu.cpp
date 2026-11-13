@@ -1,5 +1,5 @@
-// obdeect stream to-grisu: ground-frame photon stream (file or stdin) to GrISU/GrOptics photon text on stdout or
-// -o FILE.
+// obdeect stream to-grisu: ground-frame photon stream (file or stdin) to GrISU/GrOptics photon text
+// on stdout or -o FILE.
 
 #include "obdeect/stream/grisu.hpp"
 #include "obdeect/stream/stdin_buffer.hpp"
@@ -65,7 +65,8 @@ int main(int argc, char **argv) {
         char *end = nullptr;
         options.qe = std::strtod(value.c_str(), &end);
         if (value.empty() || end != value.c_str() + value.size()) {
-          std::fprintf(stderr, "obdeect stream to-grisu: invalid number for --qe: %s\n", value.c_str());
+          std::fprintf(stderr, "obdeect stream to-grisu: invalid number for --qe: %s\n",
+                       value.c_str());
           return 2;
         }
       }

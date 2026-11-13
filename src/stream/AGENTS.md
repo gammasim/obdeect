@@ -1,8 +1,8 @@
-# gstrickd Agent Guide
+# obdeect stream Agent Guide
 
 ## Scope
 
-`gstrickd` defines the photon stream exchanged between the modules of the simulation
+`obdeect stream` defines the photon stream exchanged between the modules of the simulation
 chain (light sources, atmosphere, optics, camera): run, event and telescope records
 with float32 photon columns, frames, MC truth and an efficiency status. It also holds
 the only EventIO code of the chain: `obdeect stream from-corsika` (CORSIKA IACT output to stream) and
@@ -11,11 +11,11 @@ the only EventIO code of the chain: `obdeect stream from-corsika` (CORSIKA IACT 
 
 ## Layout
 
-- `cpp/include/gstrickd/`: C++ core headers.
+- `cpp/include/obdeect/stream/`: C++ core headers.
 - `cpp/bindings/core.cpp`: nanobind extension; the only C++ file that may
   depend on Python.
 - `cpp/tests/`: native tests (`test_*.cpp`) and shared helpers (`check.hpp`).
-- `python/gstrickd/`: Python boundary (API, CLI, optional plotting).
+- `python/obdeect/stream/`: Python boundary (API, CLI, optional plotting).
 - `python/tests/`: pytest suite.
 - `docs/`: Sphinx sources. `docs/changes/` is towncrier input.
 

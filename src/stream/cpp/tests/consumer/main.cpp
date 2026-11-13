@@ -1,4 +1,4 @@
-// Uses the installed gstrickd headers: a stream round trip and the stage ids.
+// Uses the installed obdeect stream headers: a stream round trip and the stage ids.
 
 #include "obdeect/stream/stages.hpp"
 #include "obdeect/stream/stream.hpp"

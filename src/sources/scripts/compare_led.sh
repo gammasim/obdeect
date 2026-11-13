@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 : "${CFG:?set CFG to the configuration directory of the reference programs}"
 mkdir -p "$WORK"
 cp "$ROOT/scripts/compare-led-camera.txt" "$WORK/camera.txt"
-"$ROOT/build/debug/dlamb-led" -c "$WORK/camera.txt" --use "0 1 2" --require 2 --photons 10 -o "$WORK/dlamb.gst"
+"$ROOT/build/debug/obdeect-sources-led" -c "$WORK/camera.txt" --use "0 1 2" --require 2 --photons 10 -o "$WORK/sources.gst"
 podman run --rm -v "$CFG:/cfg:ro" -v "$WORK:/out" -v "$ROOT/scripts:/scripts:ro" \
   ghcr.io/gammasim/simtools-dev:latest sh -c \
-  "cd /out && /workdir/simulation_software/sim_telarray/LightEmission/pixled -I/cfg -c /out/camera.txt --use '0 1 2' --require 2 --photons 10 -o /out/orig.dat.gz > /out/orig.log 2>&1 && python3 /scripts/compare_stream.py /out/orig.dat.gz /out/dlamb.gst"
+  "cd /out && /workdir/simulation_software/sim_telarray/LightEmission/pixled -I/cfg -c /out/camera.txt --use '0 1 2' --require 2 --photons 10 -o /out/orig.dat.gz > /out/orig.log 2>&1 && python3 /scripts/compare_stream.py /out/orig.dat.gz /out/sources.gst"

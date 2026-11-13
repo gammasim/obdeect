@@ -1,7 +1,7 @@
 # Native binding boundary
 
 `core.cpp` builds the optional nanobind bulk API, included in portable wheels.
-`obdeect._core.OpticalModel(path)` loads and validates an immutable compiled
+`obdeect.ray_tracing._core.OpticalModel(path)` loads and validates an immutable compiled
 optical model. Its `trace` method uses the same C++ transport as the native
 command; Python does not reimplement optical physics.
 

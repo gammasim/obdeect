@@ -10,7 +10,7 @@ calls: `ThreadPool(n)` (0 uses every core) runs one job at a time, and
 single call:
 
 ```python
-from obdeect import ThreadPool, trace_many
+from obdeect.ray_tracing import ThreadPool, trace_many
 
 pool = ThreadPool(0)
 results = trace_many(
@@ -97,7 +97,7 @@ telescope transmission then enters as `t(theta) / t0`. The output weights are
 relative to `t0`; the caller applies `t0` itself, as sim_telarray does.
 
 For each photon of a bunch (`ceil(size)` of them; the last one counts with the
-fraction `size - floor(size)`) obdeect
+fraction `size - floor(size)`) obdeect ray tracing
 
 1. looks up the external `acceptance` (atmosphere, quantum efficiency, ...; a
    table you supply, with wavelength in nm and emission height in metres; none

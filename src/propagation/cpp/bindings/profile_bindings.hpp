@@ -7,10 +7,10 @@
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/string.h>
 
+#include "extinction_bindings.hpp" // to_numpy
 #include "obdeect/propagation/profile.hpp"
 #include "obdeect/propagation/refraction.hpp"
 #include "obdeect/propagation/timing.hpp"
-#include "extinction_bindings.hpp" // to_numpy
 
 #include <cstddef>
 #include <cstdint>
@@ -117,8 +117,9 @@ inline void bind_profile(nb::module_ &module) {
       "Bend photons emitted at height_m with direction (cx, cy) and position (x_m, y_m) at the "
       "observation level; returns (cx, cy, x_m, y_m, t_ns, bent) as numpy arrays, bent as uint8.");
 
-  module.def("straight_path_air_delay_ns", &obdeect::propagation::straight_path_air_delay_ns, nb::arg("profile"),
-             nb::arg("height_low_m"), nb::arg("height_high_m"), nb::arg("zenith_rad"),
+  module.def("straight_path_air_delay_ns", &obdeect::propagation::straight_path_air_delay_ns,
+             nb::arg("profile"), nb::arg("height_low_m"), nb::arg("height_high_m"),
+             nb::arg("zenith_rad"),
              "Extra light travel time over a straight path between two heights [ns].");
   module.def("propagation_time_ns", &obdeect::propagation::propagation_time_ns, nb::arg("path_m"),
              nb::arg("group_index"), "Light travel time over a path in a medium [ns].");

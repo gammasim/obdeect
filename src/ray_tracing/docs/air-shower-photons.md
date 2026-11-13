@@ -80,7 +80,7 @@ The total equals the native chain. The correction and its validation are in
 
 Output `time_ns` is the input `time_ns` plus the path from the input plane through
 the optics, times the model's `propagation_group_index`, divided by the speed of light.
-obdeect adds no delay for the telescope height or the airmass.
+obdeect ray tracing adds no delay for the telescope height or the airmass.
 
 ## Input plane
 
@@ -97,7 +97,7 @@ the bunches. Bunch ids must be unique per seed.
 
 ## Not modelled
 
-- Atmosphere (absorption, airmass) and quantum efficiency. Applying them inside obdeect is later work.
+- Atmosphere (absorption, airmass) and quantum efficiency. Applying them inside obdeect ray tracing is later work.
 - Cherenkov emission, shower development and the CORSIKA input format. These are in simtools.
 - Electronics, pixel readout, triggers, and the event output.
 - Scattering or absorption that the model does not describe as a response.

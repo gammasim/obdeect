@@ -59,14 +59,14 @@ Options that belong to one type are rejected with the other type, e.g.
 plane z = 0 of the camera, without atmosphere. Time is emission time plus path / c. Count and
 directions equal the sky-frame output for the same seed; positions lie in a disc of radius
 `R / sqrt(1 - (R / d)^2)`. A photon that does not travel towards the plane is an error.
-Pipeline: see [Using dlamb with sim_telarray](../sim_telarray.md).
+Pipeline: see [Using obdeect sources with sim_telarray](../sim_telarray.md).
 
 ## Times and frames
 
 - Times are emission times (plus the delay for secondary). The atmosphere stage adds path
   delays.
 - Positions are emission points, not impacts on a plane. No refraction (applied by the
-  atmosphere stage). Output is a gstrickd stream.
+  atmosphere stage). Output is a photon stream.
 - `--delays` with fewer than 4 values is an error.
 - `--xy` and `--flasher-xy` are both accepted for both types, with the meaning of the type
   (a pair for dish, one value for secondary).
@@ -77,9 +77,9 @@ Pipeline: see [Using dlamb with sim_telarray](../sim_telarray.md).
   pulse, bunch size, event repeats; secondary: flasher positions, direction moments, counts,
   delays, fire patterns, alternate events; type rules).
 - dish reference run (default options, 20 events; `scripts/compare_flasher-dish.sh`): photons
-  per event 3519.7 (reference) vs 3520.5 (dlamb); cz mean -0.998593 +- 3e-6 vs -0.998583 +- 3e-6
+  per event 3519.7 (reference) vs 3520.5 (obdeect sources); cz mean -0.998593 +- 3e-6 vs -0.998583 +- 3e-6
   (2.2 sigma); wavelength 400 nm both; reference time 53.45 ns is the flight time.
 - secondary reference run (`--photons 1e5 --events 1`; `scripts/compare_flasher-secondary.sh`):
-  399939 bunches (reference) vs 400000 (dlamb). The reference cz is always negative (sign
+  399939 bunches (reference) vs 400000 (obdeect sources). The reference cz is always negative (sign
   lost), so the cz comparison is not valid for this isotropic emitter; cx, cy agree within
   1 sigma.

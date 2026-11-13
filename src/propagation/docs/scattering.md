@@ -115,7 +115,7 @@ Attention:
 
 ## Random numbers
 
-Philox (gstrickd `uniform4`), stage `DLUF`, stream `stream_scattering` (3), keyed on
+Philox (obdeect stream `uniform4`), stage `DLUF`, stream `stream_scattering` (3), keyed on
 (seed, event, photon index = index of the primary photon in the event). Deviates 0..N_s-1
 place the scattering points; deviates N_s + 2 (j n_tel + t) and +1 are the aim-point offsets
 of point j and telescope t. The output does not depend on chunk splits when the chunks are
@@ -124,11 +124,11 @@ passed in order.
 ## Example
 
 ```python
-import dlufd
+import obdeect.propagation
 
-table = dlufd.ScatteringTable("scattering_exponential.dat")
-site = dlufd.TransmissionTable("atm_trans_2000_1_10_0_0_2000.dat", site_altitude_m=2000.0)
-out = dlufd.scatter(
+table = obdeect.propagation.ScatteringTable("scattering_exponential.dat")
+site = obdeect.propagation.TransmissionTable("atm_trans_2000_1_10_0_0_2000.dat", site_altitude_m=2000.0)
+out = obdeect.propagation.scatter(
     columns,  # x, y, z, cx, cy, t, w, wavelength (float32), z above the observation level
     table, site,
     telescopes=[(1, 3000.0, 0.0, 0.0, 12.5)],  # id, x, y, z, radius [m]
@@ -159,5 +159,5 @@ scattering point; it matches the analytic integral without attenuation to 1e-4.
 
 ## References
 
-- `cpp/include/dlufd/scattering.hpp`, `python/dlufd/scattering.py`.
+- `cpp/include/obdeect/propagation/scattering.hpp`, `python/obdeect/propagation/scattering.py`.
 - Transmission table and optical depths: [extinction](extinction.md).

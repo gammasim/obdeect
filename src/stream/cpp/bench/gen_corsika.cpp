@@ -48,7 +48,8 @@ int main(int argc, char **argv) {
   runh[5] = 2200000.0F;
   runh[16] = 10.0F;
   runh[17] = 100000.0F;
-  obdeect::stream::write_block(out, obdeect::stream::make_float_block(obdeect::stream::iact::runh, 1, runh));
+  obdeect::stream::write_block(
+      out, obdeect::stream::make_float_block(obdeect::stream::iact::runh, 1, runh));
 
   obdeect::stream::TelPos pos;
   for (std::uint64_t t = 0; t < telescopes; ++t) {
@@ -75,7 +76,8 @@ int main(int argc, char **argv) {
     evth[95] = 250.0F;
     evth[96] = 800.0F;
     obdeect::stream::write_block(
-        out, obdeect::stream::make_float_block(obdeect::stream::iact::evth, static_cast<std::uint32_t>(e), evth));
+        out, obdeect::stream::make_float_block(obdeect::stream::iact::evth,
+                                               static_cast<std::uint32_t>(e), evth));
     obdeect::stream::TelOffset off;
     off.xoff = {0.0};
     off.yoff = {0.0};
@@ -102,15 +104,18 @@ int main(int argc, char **argv) {
       }
       children.push_back(obdeect::stream::make_photons_block(p));
     }
-    obdeect::stream::write_block(out, obdeect::stream::make_container(obdeect::stream::iact::telarray, 0, 0, children));
+    obdeect::stream::write_block(
+        out, obdeect::stream::make_container(obdeect::stream::iact::telarray, 0, 0, children));
     std::vector<float> evte = words273();
     evte[1] = static_cast<float>(e);
     obdeect::stream::write_block(
-        out, obdeect::stream::make_float_block(obdeect::stream::iact::evte, static_cast<std::uint32_t>(e), evte));
+        out, obdeect::stream::make_float_block(obdeect::stream::iact::evte,
+                                               static_cast<std::uint32_t>(e), evte));
   }
   std::vector<float> rune = words273();
   rune[1] = 1.0F;
-  obdeect::stream::write_block(out, obdeect::stream::make_float_block(obdeect::stream::iact::rune, 1, rune));
+  obdeect::stream::write_block(
+      out, obdeect::stream::make_float_block(obdeect::stream::iact::rune, 1, rune));
   out.close();
   if (!out) {
     std::fprintf(stderr, "gen_corsika: write failed\n");

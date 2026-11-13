@@ -1,8 +1,8 @@
-# dlufd Agent Guide
+# obdeect propagation Agent Guide
 
 ## Scope
 
-`dlufd` propagates photons through the atmosphere, from an emission point or the
+`obdeect propagation` propagates photons through the atmosphere, from an emission point or the
 sky-frame plane to the telescope-sphere plane: extinction, refraction
 and group-index timing from n(h), optional single scattering, wavelength assignment,
 and early thinning with the efficiency envelope. Photon generation, optics and camera
@@ -10,11 +10,11 @@ simulation are out of scope.
 
 ## Layout
 
-- `cpp/include/dlufd/`: C++ core headers.
+- `cpp/include/obdeect/propagation/`: C++ core headers.
 - `cpp/bindings/core.cpp`: nanobind extension; the only C++ file that may
   depend on Python.
 - `cpp/tests/`: native tests (`test_*.cpp`) and shared helpers (`check.hpp`).
-- `python/dlufd/`: Python boundary (API, CLI, optional plotting).
+- `python/obdeect/propagation/`: Python boundary (API, CLI, optional plotting).
 - `python/tests/`: pytest suite.
 - `docs/`: Sphinx sources. `docs/changes/` is towncrier input.
 

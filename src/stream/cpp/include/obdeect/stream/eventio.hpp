@@ -1,7 +1,7 @@
 #pragma once
 
 // EventIO block container and the IACT payloads of CORSIKA output (types
-// 1200-1217). Own little-endian code; only the formats needed by gstrickd.
+// 1200-1217). Own little-endian code; only the formats needed by obdeect.stream.
 
 #include <algorithm>
 #include <bit>

@@ -1,7 +1,7 @@
 # Light sources
 
 A source emits photons from a point (an emitter) or as a parallel beam (a star).
-Its photons are written as gstrickd photon chunks, in the frame of the source.
+Its photons are written as photon stream chunks, in the frame of the source.
 
 ## Model
 
@@ -16,10 +16,10 @@ Its photons are written as gstrickd photon chunks, in the frame of the source.
 
 Profiles are relative: an emitter with profile `P` emits all `photons` with the
 directions distributed as `P`. Times are emission times at the source; a star's
-times are the wavefront arrival at the disc centre (obdeect convention).
+times are the wavefront arrival at the disc centre (obdeect ray tracing convention).
 
 ```python
-from dlamb.source import emit
+from obdeect.sources.source import emit
 
 flasher = {
     "frame": "camera",
@@ -47,7 +47,7 @@ Use `iter_chunks` for large counts (at most 2^16 rows per chunk) and
 - Lengths in metres, times in ns, wavelengths in nm, angles in degrees (in the
   dictionary; the core takes `u = 1 - cos(theta)`).
 - Directions are unit vectors of the propagation direction. `cz < 0` is downward,
-  as in obdeect and gstrickd. Without a target, `w = 1` for every photon.
+  as in obdeect ray tracing and obdeect stream. Without a target, `w = 1` for every photon.
 
 ## Targets (importance sampling)
 
@@ -66,10 +66,10 @@ photons that can reach it:
 
 ## Random numbers
 
-Each photon draws from Philox (gstrickd `uniform4`) keyed on
+Each photon draws from Philox (obdeect stream `uniform4`) keyed on
 `(seed, stage, event, telescope, photon index, stream)`, with stage
-`dlamb::stage_sources` (alias of `gstrickd::stage_sources`, `0x444C0001`) and streams in
-`cpp/include/dlamb/streams.hpp`. Results do not depend on chunk size or order. Two sources
+`obdeect::sources::stage_sources` (alias of `obdeect::stream::stage_sources`, `0x444C0001`) and streams in
+`cpp/include/obdeect/sources/streams.hpp`. Results do not depend on chunk size or order. Two sources
 with the same seed, event and telescope use the same draws: give each independent source
 its own seed.
 
@@ -85,4 +85,4 @@ its own seed.
   `rayleigh`, `Cherenkov:a:b` is `inverse_square`, and `Simple:`, `Gauss:`, `Exp:`,
   `Complex:` are the pulse kinds.
 - Tables are passed as arrays, not read from files.
-- Refraction and airlight belong to dlufd. The Gaussian spectrum is not available.
+- Refraction and airlight belong to obdeect propagation. The Gaussian spectrum is not available.

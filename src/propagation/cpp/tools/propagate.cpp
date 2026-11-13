@@ -1,4 +1,4 @@
-// obdeect propagation run: the atmosphere stage on a gstrickd photon stream (docs/propagation.md).
+// obdeect propagation run: the atmosphere stage on a photon stream (docs/propagation.md).
 // Reads a stream from a file or stdin, writes the processed stream to a file or stdout, and
 // prints a summary to stderr.
 
@@ -22,14 +22,15 @@ using namespace obdeect::propagation;
 namespace {
 
 void usage() {
-  std::fprintf(stderr,
-               "usage: obdeect propagation run (--transmission FILE | --no-extinction) --site-altitude M\n"
-               "                       [--profile FILE]\n"
-               "                       [--envelope NAME=FILE]... [--wavelength-range LO HI]\n"
-               "                       --seed N [--mode thinned|weighted] [--store-p]\n"
-               "                       [--scattering FILE] [--scattering-points N]\n"
-               "                       [--pathlen M] [--telescope-pathlen ID=M]...\n"
-               "                       [-i FILE|-] [-o FILE|-]\n");
+  std::fprintf(
+      stderr,
+      "usage: obdeect propagation run (--transmission FILE | --no-extinction) --site-altitude M\n"
+      "                       [--profile FILE]\n"
+      "                       [--envelope NAME=FILE]... [--wavelength-range LO HI]\n"
+      "                       --seed N [--mode thinned|weighted] [--store-p]\n"
+      "                       [--scattering FILE] [--scattering-points N]\n"
+      "                       [--pathlen M] [--telescope-pathlen ID=M]...\n"
+      "                       [-i FILE|-] [-o FILE|-]\n");
 }
 
 // Thrown for bad command lines (exit status 2).
@@ -259,7 +260,8 @@ int main(int argc, char **argv) {
                                       : static_cast<std::ostream &>(out_file);
     const PropagationSummary summary = propagate_stream(in, out, std::move(config));
     out.flush();
-    std::fprintf(stderr, "obdeect propagation run: photons in %llu, out %llu (weight %.6g), dropped %llu\n",
+    std::fprintf(stderr,
+                 "obdeect propagation run: photons in %llu, out %llu (weight %.6g), dropped %llu\n",
                  static_cast<unsigned long long>(summary.photons_in),
                  static_cast<unsigned long long>(summary.photons_out), summary.weight_out,
                  static_cast<unsigned long long>(summary.dropped));

@@ -1,6 +1,6 @@
 # Background source (night sky)
 
-Header `dlamb/background.hpp`. Photons start on the sphere of one telescope on the hemisphere
+Header `obdeect/sources/background.hpp`. Photons start on the sphere of one telescope on the hemisphere
 facing their own direction, travel inwards, with directions uniform in solid angle inside a
 cone about a viewing axis.
 

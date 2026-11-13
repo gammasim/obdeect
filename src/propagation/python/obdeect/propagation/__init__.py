@@ -1,4 +1,4 @@
-"""dlufd: atmospheric propagation of Cherenkov and artificial-source photons."""
+"""obdeect propagation: atmospheric propagation of Cherenkov and artificial-source photons."""
 
 import importlib
 from importlib.metadata import PackageNotFoundError, version
@@ -28,4 +28,4 @@ __all__ = [*_EXPORTS, "__version__"]
 def __getattr__(name: str):
     if name in _EXPORTS:
         return getattr(importlib.import_module(_EXPORTS[name]), name)
-    raise AttributeError(f"module 'dlufd' has no attribute {name!r}")
+    raise AttributeError(f"module 'obdeect.propagation' has no attribute {name!r}")

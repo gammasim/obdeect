@@ -1,5 +1,5 @@
-// C API of gstrickd (cpp/include/obdeect/stream/obdeect_stream.h): a thin layer over the header-only C++
-// reader and writer. Every exported function catches all exceptions.
+// C API of obdeect stream (cpp/include/obdeect/stream/obdeect_stream.h): a thin layer over the
+// header-only C++ reader and writer. Every exported function catches all exceptions.
 
 #include "obdeect/stream/obdeect_stream.h"
 
@@ -165,7 +165,8 @@ int check_metadata_access(const obdeect_stream_reader *reader, const char *key) 
   return OBDEECT_STREAM_OK;
 }
 
-template <class T> const T *typed_value(const obdeect_stream_reader *reader, const char *key, int &code) {
+template <class T>
+const T *typed_value(const obdeect_stream_reader *reader, const char *key, int &code) {
   code = check_metadata_access(reader, key);
   if (code != OBDEECT_STREAM_OK) {
     return nullptr;
@@ -341,7 +342,8 @@ const char *obdeect_stream_reader_key(const obdeect_stream_reader *reader, size_
   return reader->keys[i]->c_str();
 }
 
-int obdeect_stream_reader_meta_type(const obdeect_stream_reader *reader, const char *key, int *value_type) {
+int obdeect_stream_reader_meta_type(const obdeect_stream_reader *reader, const char *key,
+                                    int *value_type) {
   try {
     const int code = check_metadata_access(reader, key);
     if (code != OBDEECT_STREAM_OK) {
@@ -361,7 +363,8 @@ int obdeect_stream_reader_meta_type(const obdeect_stream_reader *reader, const c
   }
 }
 
-int obdeect_stream_reader_meta_int(const obdeect_stream_reader *reader, const char *key, int64_t *value) {
+int obdeect_stream_reader_meta_int(const obdeect_stream_reader *reader, const char *key,
+                                   int64_t *value) {
   try {
     int code = OBDEECT_STREAM_OK;
     const auto *typed = typed_value<std::int64_t>(reader, key, code);
@@ -378,7 +381,8 @@ int obdeect_stream_reader_meta_int(const obdeect_stream_reader *reader, const ch
   }
 }
 
-int obdeect_stream_reader_meta_float(const obdeect_stream_reader *reader, const char *key, double *value) {
+int obdeect_stream_reader_meta_float(const obdeect_stream_reader *reader, const char *key,
+                                     double *value) {
   try {
     const int code = check_metadata_access(reader, key);
     if (code != OBDEECT_STREAM_OK) {
@@ -404,8 +408,8 @@ int obdeect_stream_reader_meta_float(const obdeect_stream_reader *reader, const 
   }
 }
 
-int obdeect_stream_reader_meta_string(const obdeect_stream_reader *reader, const char *key, const char **value,
-                                size_t *length) {
+int obdeect_stream_reader_meta_string(const obdeect_stream_reader *reader, const char *key,
+                                      const char **value, size_t *length) {
   try {
     int code = OBDEECT_STREAM_OK;
     const auto *typed = typed_value<std::string>(reader, key, code);
@@ -426,7 +430,7 @@ int obdeect_stream_reader_meta_string(const obdeect_stream_reader *reader, const
 }
 
 int obdeect_stream_reader_meta_array(const obdeect_stream_reader *reader, const char *key,
-                               const double **values, size_t *n) {
+                                     const double **values, size_t *n) {
   try {
     int code = OBDEECT_STREAM_OK;
     const auto *typed = typed_value<std::vector<double>>(reader, key, code);
@@ -444,8 +448,9 @@ int obdeect_stream_reader_meta_array(const obdeect_stream_reader *reader, const 
   }
 }
 
-int obdeect_stream_reader_photons(const obdeect_stream_reader *reader, uint32_t *telescope_id, uint32_t *frame,
-                            uint64_t *first_index, uint32_t *rows, uint32_t *column_mask) {
+int obdeect_stream_reader_photons(const obdeect_stream_reader *reader, uint32_t *telescope_id,
+                                  uint32_t *frame, uint64_t *first_index, uint32_t *rows,
+                                  uint32_t *column_mask) {
   if (reader == nullptr) {
     return bad_argument("NULL argument");
   }
@@ -482,7 +487,7 @@ const float *obdeect_stream_reader_column(const obdeect_stream_reader *reader, i
 }
 
 int obdeect_stream_reader_blob(const obdeect_stream_reader *reader, uint32_t *eventio_type,
-                         uint32_t *eventio_id, const uint8_t **data, size_t *size) {
+                               uint32_t *eventio_id, const uint8_t **data, size_t *size) {
   if (reader == nullptr) {
     return bad_argument("NULL argument");
   }
@@ -504,7 +509,8 @@ int obdeect_stream_reader_blob(const obdeect_stream_reader *reader, uint32_t *ev
   return OBDEECT_STREAM_OK;
 }
 
-int obdeect_stream_writer_open(const char *path, const char *producer, obdeect_stream_writer **out) {
+int obdeect_stream_writer_open(const char *path, const char *producer,
+                               obdeect_stream_writer **out) {
   try {
     if (path == nullptr || producer == nullptr || out == nullptr) {
       return bad_argument("NULL argument");
@@ -552,7 +558,8 @@ int obdeect_stream_writer_set_float(obdeect_stream_writer *writer, const char *k
   }
 }
 
-int obdeect_stream_writer_set_string(obdeect_stream_writer *writer, const char *key, const char *value) {
+int obdeect_stream_writer_set_string(obdeect_stream_writer *writer, const char *key,
+                                     const char *value) {
   try {
     if (value == nullptr) {
       return bad_argument("NULL argument");
@@ -563,8 +570,8 @@ int obdeect_stream_writer_set_string(obdeect_stream_writer *writer, const char *
   }
 }
 
-int obdeect_stream_writer_set_array(obdeect_stream_writer *writer, const char *key, const double *values,
-                              size_t n) {
+int obdeect_stream_writer_set_array(obdeect_stream_writer *writer, const char *key,
+                                    const double *values, size_t n) {
   try {
     if (values == nullptr && n > 0) {
       return bad_argument("NULL array");
@@ -594,9 +601,9 @@ int obdeect_stream_writer_write_record(obdeect_stream_writer *writer, int record
   }
 }
 
-int obdeect_stream_writer_write_photons(obdeect_stream_writer *writer, uint32_t telescope_id, uint32_t frame,
-                                  uint64_t first_index, uint32_t rows,
-                                  const float *const *columns) {
+int obdeect_stream_writer_write_photons(obdeect_stream_writer *writer, uint32_t telescope_id,
+                                        uint32_t frame, uint64_t first_index, uint32_t rows,
+                                        const float *const *columns) {
   try {
     if (writer == nullptr || (rows > 0 && columns == nullptr)) {
       return bad_argument("NULL argument");
@@ -627,8 +634,8 @@ int obdeect_stream_writer_write_photons(obdeect_stream_writer *writer, uint32_t 
   }
 }
 
-int obdeect_stream_writer_write_blob(obdeect_stream_writer *writer, uint32_t eventio_type, uint32_t eventio_id,
-                               const uint8_t *data, size_t size) {
+int obdeect_stream_writer_write_blob(obdeect_stream_writer *writer, uint32_t eventio_type,
+                                     uint32_t eventio_id, const uint8_t *data, size_t size) {
   try {
     if (writer == nullptr || (data == nullptr && size > 0)) {
       return bad_argument("NULL argument");

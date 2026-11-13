@@ -16,9 +16,10 @@ namespace {
 
 constexpr std::size_t n = 200000;
 
-// Uniform deviates of photon i for a test stream (keys as in dlamb/source.hpp).
+// Uniform deviates of photon i for a test stream (keys as in obdeect/sources/source.hpp).
 Uniforms draw(std::uint64_t i, Stream stream = Stream::pulse) {
-  return obdeect::stream::uniform4({12345, stage_sources, 0, 0, i, static_cast<std::uint32_t>(stream)});
+  return obdeect::stream::uniform4(
+      {12345, stage_sources, 0, 0, i, static_cast<std::uint32_t>(stream)});
 }
 
 // Sample mean and variance (unbiased) of f over n draws.

@@ -72,8 +72,9 @@ def transform(
 
     ``func(telescope_id, columns, metadata)`` gets the chunk's float32 columns (name to numpy
     array) and returns a mapping of the same kind for the output chunk: float32 arrays of
-    equal length (at most ``gstrickd.max_chunk_rows``, may differ from the input; ``{}`` writes
-    an empty chunk). ``metadata`` is a dict with the latest ``run``, ``event`` and ``telescope``
+    equal length (at most ``obdeect.stream.max_chunk_rows``, may differ from the input;
+    ``{}`` writes an empty chunk). ``metadata`` is a dict with the latest ``run``, ``event`` and
+    ``telescope``
     record metadata (empty dicts before the first), the chunk's ``frame`` and ``first_index``,
     and ``stage_id``. Output indices are contiguous and the output uses ``frame_out``.
     ``telescope_end.photons`` is updated to the sum of output weights.

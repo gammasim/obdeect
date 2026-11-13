@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 : "${WORK:?set WORK to a scratch directory for the cross-check outputs}"
 : "${CFG:?set CFG to the configuration directory of the reference programs}"
 mkdir -p "$WORK"
-"$ROOT/build/debug/dlamb-flasher" --type secondary --photons 1e5 --events 1 -o "$WORK/dlamb.gst"
+"$ROOT/build/debug/obdeect-sources-flasher" --type secondary --photons 1e5 --events 1 -o "$WORK/sources.gst"
 podman run --rm -v "$CFG:/cfg:ro" -v "$WORK:/out" -v "$ROOT/scripts:/scripts:ro" \
   ghcr.io/gammasim/simtools-dev:latest sh -c \
-  "cd /out && /workdir/simulation_software/sim_telarray/LightEmission/ff-gct -I/cfg --photons 1e5 --events 1 -o /out/orig.dat.gz > /out/orig.log 2>&1 && python3 /scripts/compare_stream.py /out/orig.dat.gz /out/dlamb.gst"
+  "cd /out && /workdir/simulation_software/sim_telarray/LightEmission/ff-gct -I/cfg --photons 1e5 --events 1 -o /out/orig.dat.gz > /out/orig.log 2>&1 && python3 /scripts/compare_stream.py /out/orig.dat.gz /out/sources.gst"

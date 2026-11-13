@@ -1,6 +1,6 @@
 # Track source
 
-Header `dlamb/track.hpp`. A line segment emitting Cherenkov light at a fixed angle to its
+Header `obdeect/sources/track.hpp`. A line segment emitting Cherenkov light at a fixed angle to its
 direction of motion; only photons that reach a sphere are generated (importance sampling).
 
 `Track{start (upper end), direction (unit), length_m, cos_theta (= 1/(n beta)), beta, time_ns

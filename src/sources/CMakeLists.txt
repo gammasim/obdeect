@@ -31,7 +31,7 @@ if(NOT TARGET obdeect::stream)
   endif()
 endif()
 
-# Header-only, standard-library-only core. Photon chunks use the gstrickd headers.
+# Header-only, standard-library-only core. Photon chunks use the obdeect stream headers.
 add_library(obdeect_sources_core INTERFACE)
 target_include_directories(obdeect_sources_core INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/cpp/include)
 target_compile_features(obdeect_sources_core INTERFACE cxx_std_20)

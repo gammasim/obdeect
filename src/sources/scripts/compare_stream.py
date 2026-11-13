@@ -1,13 +1,13 @@
-"""Compare a reference IACT file with a dlamb gstrickd stream.
+"""Compare a reference IACT file with a obdeect sources obdeect stream stream.
 
 Usage (inside the simtools-dev container, which has eventio and numpy):
-    python3 compare_stream.py REFERENCE.dat.gz DLAMB.gst
+    python3 compare_stream.py REFERENCE.dat.gz SOURCES.gst
 
-Per event: photon count (reference: sum of bunch sizes; dlamb: sum of weights).
+Per event: photon count (reference: sum of bunch sizes; obdeect sources: sum of weights).
 Over all photons: means of cx, cy, cz, time [ns], wavelength [nm] with standard errors.
 Reference cz = -sqrt(1 - cx^2 - cy^2) (IACT stores w = -cz with cz < 0 downwards).
 Positions are not compared: the reference writes them at the observation plane.
-Times: the reference adds the flight time to the observation plane; dlamb writes emission
+Times: the reference adds the flight time to the observation plane; obdeect sources writes emission
 times, so the t difference equals the path length / c (flasher --type dish: 16 m, 53.4 ns).
 """
 
@@ -52,7 +52,7 @@ def read_dlamb(path):
     while pos + 16 <= len(data):
         magic, rtype, _flags, length = struct.unpack_from("<IHHQ", data, pos)
         if magic != MAGIC:
-            raise ValueError("not a gstrickd stream")
+            raise ValueError("not a photon stream")
         payload = data[pos + 16 : pos + 16 + length]
         pos += 16 + length
         if rtype == RECORD_EVENT:
@@ -86,11 +86,11 @@ def moments(a):
 def main(reference, obdeect_sources):
     oc, oo = read_reference(reference)
     dc, dd = read_dlamb(obdeect_sources)
-    print(f"events: reference {len(oc)}, dlamb {len(dc)}")
+    print(f"events: reference {len(oc)}, obdeect sources {len(dc)}")
     if oc and dc:
         print(
             f"photons per event: reference mean {np.mean(oc):.2f} (sum {np.sum(oc):.0f}), "
-            f"dlamb mean {np.mean(dc):.2f} (sum {np.sum(dc):.0f})"
+            f"obdeect sources mean {np.mean(dc):.2f} (sum {np.sum(dc):.0f})"
         )
     print(f"{'quantity':12s} {'reference':>24s} {'obdeect':>24s} {'diff/sigma':>11s}")
     for name in ["cx", "cy", "cz", "t", "wavelength"]:

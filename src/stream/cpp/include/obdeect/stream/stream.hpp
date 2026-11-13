@@ -86,7 +86,7 @@ inline constexpr std::uint8_t value_string = 3;
 inline constexpr std::uint8_t value_array = 4;
 
 [[noreturn]] inline void malformed(const char *what) {
-  throw std::runtime_error(std::string("gstrickd: malformed stream: ") + what);
+  throw std::runtime_error(std::string("obdeect stream: malformed stream: ") + what);
 }
 
 inline void put_le(std::vector<std::uint8_t> &out, std::uint64_t value, std::size_t nbytes) {
@@ -274,8 +274,8 @@ inline void decode_chunk(PhotonChunk &chunk, const std::uint8_t *data, std::size
 inline std::int64_t int_field(const Metadata &metadata, const char *key) {
   const auto it = metadata.find(key);
   if (it == metadata.end() || !std::holds_alternative<std::int64_t>(it->second)) {
-    throw std::runtime_error(std::string("gstrickd: stream record lacks integer key '") + key +
-                             "'");
+    throw std::runtime_error(std::string("obdeect stream: stream record lacks integer key '") +
+                             key + "'");
   }
   return std::get<std::int64_t>(it->second);
 }
@@ -426,7 +426,7 @@ inline bool read_record_raw(std::istream &in, std::vector<std::uint8_t> &bytes) 
   const auto got = static_cast<std::size_t>(in.gcount());
   if (got == 0) {
     if (in.bad()) {
-      throw std::runtime_error("gstrickd: read error on input stream");
+      throw std::runtime_error("obdeect stream: read error on input stream");
     }
     bytes.clear();
     return false;
@@ -435,7 +435,7 @@ inline bool read_record_raw(std::istream &in, std::vector<std::uint8_t> &bytes) 
     malformed("truncated record header");
   }
   if (load_le(bytes.data(), 4) != record_magic) {
-    throw std::runtime_error("gstrickd: bad magic, not a photon stream");
+    throw std::runtime_error("obdeect stream: bad magic, not a photon stream");
   }
   if (load_le(bytes.data() + 6, 2) != 0) {
     malformed("nonzero reserved flags");
@@ -485,7 +485,7 @@ public:
         decode_metadata_into(record.metadata, payload, size);
         const std::int64_t major = int_field(record.metadata, "format_major");
         if (major != format_major) {
-          throw std::runtime_error("gstrickd: unsupported format major version " +
+          throw std::runtime_error("obdeect stream: unsupported format major version " +
                                    std::to_string(major) + " (reader supports " +
                                    std::to_string(format_major) + ")");
         }
@@ -539,7 +539,7 @@ public:
     }
     const auto next = in_.peek();
     if (in_.bad()) {
-      throw std::runtime_error("gstrickd: read error on input stream");
+      throw std::runtime_error("obdeect stream: read error on input stream");
     }
     return next == std::istream::traits_type::eof();
   }

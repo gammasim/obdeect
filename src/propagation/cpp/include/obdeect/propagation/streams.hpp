@@ -6,12 +6,13 @@
 
 namespace obdeect::propagation {
 
-// Photon-stream format major version that dlufd is written for (obdeect::stream::format_major).
-// A different major version of gstrickd is not read or written correctly.
+// Photon-stream format major version that obdeect propagation is written for
+// (obdeect::stream::format_major). A different major version of obdeect stream is not read or
+// written correctly.
 inline constexpr int expected_gstrickd_format_major = 1;
 
 // Philox stage id of the atmosphere module (obdeect::stream::DrawKey::stage). Every module
-// uses its own stage id, so draws of different modules never coincide. Owned by gstrickd
+// uses its own stage id, so draws of different modules never coincide. Owned by obdeect stream
 // (obdeect::stream::stage_atmosphere); this name is kept as an alias.
 inline constexpr std::uint32_t stage_atmosphere = obdeect::stream::stage_atmosphere;
 

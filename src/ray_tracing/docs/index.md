@@ -1,7 +1,7 @@
-# obdeect
+# obdeect ray tracing
 
 ```{image} _static/images/obdeect_21ratio_small.jpg
-:alt: obdeect — optical ray tracing for gamma-ray astronomy
+:alt: obdeect ray tracing — optical ray tracing for gamma-ray astronomy
 :align: center
 :class: homepage-logo
 ```
@@ -38,7 +38,7 @@ structure to the camera entrance, using a compiled optical model.
 :link-type: doc
 :class-card: sd-shadow-sm
 
-Install obdeect and run your first trace from the command line or Python.
+Install obdeect ray tracing and run your first trace from the command line or Python.
 :::
 
 :::{grid-item-card} {fas}`eye;pst-color-primary` Optics

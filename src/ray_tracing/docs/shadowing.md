@@ -16,7 +16,7 @@ MSTS-01 (FlashCam), simulation models 7.0.0: an on-axis star at infinity,
 
 Dotted elements are never crossed in this sample. Blue shows the fraction of unobscured light that each element alone blocks;
 grey elements stop no light on their own in this sample. The nominal layout is
-drawn by simtools, with shadowing calculated by obdeect.
+drawn by simtools, with shadowing calculated by obdeect ray tracing.
 
 ## Which elements matter?
 
@@ -31,7 +31,7 @@ weights for each element:
 | `sole` | Light stopped only by this element; removing it would recover this light. |
 
 ```python
-from obdeect import OpticalModel
+from obdeect.ray_tracing import OpticalModel
 
 model = OpticalModel.load("mst.json")
 photons = model.star_photons(1_000_000, seed=11)
@@ -42,7 +42,7 @@ share = hits["sole"] / hits["unobscured"]
 The command-line equivalent is:
 
 ```sh
-obdeect obscurers --model mst.json --seed 11 --photons 1000000 --field-deg 0 0
+obdeect ray-tracing obscurers --model mst.json --seed 11 --photons 1000000 --field-deg 0 0
 ```
 
 This diagnostic checks every obscurer on every leg and is intended for studies.

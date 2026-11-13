@@ -1,6 +1,6 @@
 # Scope and limitations
 
-obdeect traces light through the optical model to the camera entrance. The
+obdeect ray tracing traces light through the optical model to the camera entrance. The
 following effects are outside the current trace. Their impact depends on the
 instrument and its optical-model parameters.
 
@@ -29,7 +29,7 @@ the pixels. Refraction in it shifts each photon sideways, moves the focus
 backwards, and delays the photon. A curved window additionally acts as a weak
 lens.
 
-obdeect stops at the camera entrance (the focal surface). The window and its
+obdeect ray tracing stops at the camera entrance (the focal surface). The window and its
 transmission belong to the downstream camera simulation; window geometry and
 refraction are not traced.
 

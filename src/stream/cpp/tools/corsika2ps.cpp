@@ -16,7 +16,8 @@ namespace {
 constexpr std::size_t buffer_size = std::size_t{1} << 20;
 
 void usage() {
-  std::fprintf(stderr, "usage: obdeect stream from-corsika [input|-]  (writes the stream to stdout)\n");
+  std::fprintf(stderr,
+               "usage: obdeect stream from-corsika [input|-]  (writes the stream to stdout)\n");
 }
 
 } // namespace
@@ -66,7 +67,8 @@ int main(int argc, char **argv) {
       }
       in = &file;
     }
-    const std::string producer = "obdeect stream from-corsika " + std::to_string(obdeect::stream::version_major) + "." +
+    const std::string producer = "obdeect stream from-corsika " +
+                                 std::to_string(obdeect::stream::version_major) + "." +
                                  std::to_string(obdeect::stream::version_minor) + "." +
                                  std::to_string(obdeect::stream::version_patch);
     obdeect::stream::corsika_to_stream(*in, std::cout, producer);

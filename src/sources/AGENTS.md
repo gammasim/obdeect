@@ -1,8 +1,8 @@
-# dlamb Agent Guide
+# obdeect sources Agent Guide
 
 ## Scope
 
-`dlamb` generates photons from artificial light sources (flashers, illuminators,
+`obdeect sources` generates photons from artificial light sources (flashers, illuminators,
 laser beams, LEDs, focal-plane and NSB sources, stars) with their angular, spectral
 and pulse profiles. It writes photons at sky, telescope-sphere (G), telescope (T) or
 camera (C) level. Atmospheric propagation, optics and camera simulation are out of
@@ -10,11 +10,11 @@ scope.
 
 ## Layout
 
-- `cpp/include/dlamb/`: C++ core headers.
+- `cpp/include/obdeect/sources/`: C++ core headers.
 - `cpp/bindings/core.cpp`: nanobind extension; the only C++ file that may
   depend on Python.
 - `cpp/tests/`: native tests (`test_*.cpp`) and shared helpers (`check.hpp`).
-- `python/dlamb/`: Python boundary (API, CLI, optional plotting).
+- `python/obdeect/sources/`: Python boundary (API, CLI, optional plotting).
 - `python/tests/`: pytest suite.
 - `docs/`: Sphinx sources. `docs/changes/` is towncrier input.
 

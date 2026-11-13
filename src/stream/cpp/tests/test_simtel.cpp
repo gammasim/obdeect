@@ -511,8 +511,9 @@ void test_telescope_frame_report_and_telpos() {
   options.camera = camera;
   options.warnings = &warnings;
   const std::string bytes = run_adapter_with(records, options);
-  CHECK(warnings.str().find("obdeect stream to-simtel: telescope 1: telescope frame, mirror class 2, "
-                            "Bypass_Optics=1\n") != std::string::npos);
+  CHECK(
+      warnings.str().find("obdeect stream to-simtel: telescope 1: telescope frame, mirror class 2, "
+                          "Bypass_Optics=1\n") != std::string::npos);
   for (const EventioBlock &block : read_blocks(bytes)) {
     if (block.type == iact::telpos) {
       const TelPos pos = decode_telpos(block);
@@ -979,7 +980,8 @@ void test_efficiency_status_rules() {
         efficiency_status_run(Frame::camera, {efficiency_status_of("atmosphere", "applied")}, {}),
         camera);
   }));
-  // dlufd assigns wavelengths and may add scattered photons; both are upstream-only factors.
+  // obdeect propagation assigns wavelengths and may add scattered photons; both are upstream-only
+  // factors.
   for (const char *factor : {"wavelength", "scattering"}) {
     CHECK(!throws_error([&] {
       run_adapter(

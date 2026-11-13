@@ -1,4 +1,4 @@
-"""dlufd and an installed gstrickd agree on the photon-stream format version."""
+"""obdeect propagation and an installed obdeect stream agree on the photon-stream format version."""
 
 import re
 from pathlib import Path
@@ -26,5 +26,5 @@ def _expected_format_major():
 def test_gstrickd_format_major_matches_dlufd():
     obdeect_stream = pytest.importorskip("obdeect.stream")
     if not hasattr(obdeect_stream, "format_major"):
-        pytest.skip("installed gstrickd has no format_major")
+        pytest.skip("installed obdeect stream has no format_major")
     assert obdeect_stream.format_major == _expected_format_major()

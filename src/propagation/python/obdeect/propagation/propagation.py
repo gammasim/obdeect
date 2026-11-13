@@ -1,4 +1,4 @@
-"""Atmosphere stage on a gstrickd photon stream: extinction, envelope thinning, refraction.
+"""Atmosphere stage on a photon stream: extinction, envelope thinning, refraction.
 
 The stream is read from and written to files; the work is done by the C++ core, the same code
 as the ``obdeect propagation run`` command-line tool.
@@ -35,8 +35,8 @@ def propagate(
     """Run the atmosphere stage on a photon stream file.
 
     Args:
-        input_path: input gstrickd stream.
-        output_path: output gstrickd stream (overwritten).
+        input_path: input photon stream.
+        output_path: output photon stream (overwritten).
         transmission: transmission table of the site (extinction-table format, ``# H2=`` header).
             Required with extinction; not allowed without.
         site_altitude_m: observation level [m a.s.l.]; must match the table within 25 m.

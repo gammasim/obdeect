@@ -36,11 +36,12 @@ int main() {
     CHECK_NEAR(obdeect::propagation::ambient_group_index(profile, 1000.), 1.000255944992766, 1e-12);
     CHECK_NEAR(obdeect::propagation::ambient_group_index(profile, 2180.), 1.000225191893913, 1e-12);
     CHECK_NEAR(obdeect::propagation::ambient_group_index(profile, 4500.), 1.000177406919158, 1e-12);
-    CHECK_NEAR(obdeect::propagation::ambient_group_index(profile, 60000.), 1.0000000583180002, 1e-12);
+    CHECK_NEAR(obdeect::propagation::ambient_group_index(profile, 60000.), 1.0000000583180002,
+               1e-12);
 
     // obdeect edge rules: below the table the ground value, above the table 1.
-    CHECK_NEAR(obdeect::propagation::ambient_group_index(profile, -10.), 1. + profile.table_index_minus_one()[0],
-               1e-15);
+    CHECK_NEAR(obdeect::propagation::ambient_group_index(profile, -10.),
+               1. + profile.table_index_minus_one()[0], 1e-15);
     CHECK(obdeect::propagation::ambient_group_index(profile, 130000.) == 1.);
     CHECK(throws_invalid([&] { obdeect::propagation::ambient_group_index(profile, 119000.); }));
 
@@ -49,13 +50,16 @@ int main() {
     const std::vector<double> index{3e-4, 2e-4, 1e-4, 0.};
     CHECK(throws_invalid([&] { obdeect::propagation::ambient_group_index(heights, index, 100.); }));
     const std::vector<double> index_ok{3e-4, 2e-4, 1e-4, 5e-5};
-    CHECK(throws_invalid([&] { obdeect::propagation::ambient_group_index(heights, index_ok, 2500.); }));
+    CHECK(throws_invalid(
+        [&] { obdeect::propagation::ambient_group_index(heights, index_ok, 2500.); }));
     CHECK(throws_invalid([&] {
-      obdeect::propagation::ambient_group_index(std::vector<double>{0., 0., 2000., 3000.}, index_ok, 100.);
+      obdeect::propagation::ambient_group_index(std::vector<double>{0., 0., 2000., 3000.}, index_ok,
+                                                100.);
     }));
 
     // Propagation time: path * n / c.
-    CHECK_NEAR(obdeect::propagation::propagation_time_ns(1000., 1.0002), 1000. * 1.0002 / 0.299792458, 1e-9);
+    CHECK_NEAR(obdeect::propagation::propagation_time_ns(1000., 1.0002),
+               1000. * 1.0002 / 0.299792458, 1e-9);
 
     // Straight-path air delay against a fine midpoint quadrature of (n-1) / c / cos(zenith).
     const double zenith = 0.6;
@@ -65,24 +69,35 @@ int main() {
     double sum = 0.;
     for (int i = 0; i < steps; ++i)
       sum += profile.refractive_index_minus_one(low + (i + 0.5) * dh) * dh;
-    const double reference = sum / (obdeect::propagation::speed_of_light_m_per_ns * std::cos(zenith));
-    CHECK_NEAR(obdeect::propagation::straight_path_air_delay_ns(profile, low, high, zenith) / reference, 1., 1e-6);
-    CHECK_NEAR(obdeect::propagation::straight_path_air_delay_ns(profile, low, low, zenith), 0., 1e-15);
-    CHECK(throws_invalid([&] { obdeect::propagation::straight_path_air_delay_ns(profile, high, low, 0.); }));
-    CHECK(throws_invalid([&] { obdeect::propagation::straight_path_air_delay_ns(profile, low, high, 1.6); }));
+    const double reference =
+        sum / (obdeect::propagation::speed_of_light_m_per_ns * std::cos(zenith));
+    CHECK_NEAR(obdeect::propagation::straight_path_air_delay_ns(profile, low, high, zenith) /
+                   reference,
+               1., 1e-6);
+    CHECK_NEAR(obdeect::propagation::straight_path_air_delay_ns(profile, low, low, zenith), 0.,
+               1e-15);
+    CHECK(throws_invalid(
+        [&] { obdeect::propagation::straight_path_air_delay_ns(profile, high, low, 0.); }));
+    CHECK(throws_invalid(
+        [&] { obdeect::propagation::straight_path_air_delay_ns(profile, low, high, 1.6); }));
 
     // Non-finite inputs throw (heights, zenith angle, group index, path length).
     const double nan = std::numeric_limits<double>::quiet_NaN();
     const double inf = std::numeric_limits<double>::infinity();
     for (double bad : {nan, inf, -inf}) {
       CHECK(throws_invalid([&] { obdeect::propagation::ambient_group_index(profile, bad); }));
-      CHECK(throws_invalid([&] { obdeect::propagation::straight_path_air_delay_ns(profile, bad, high, zenith); }));
-      CHECK(throws_invalid([&] { obdeect::propagation::straight_path_air_delay_ns(profile, low, bad, zenith); }));
-      CHECK(throws_invalid([&] { obdeect::propagation::straight_path_air_delay_ns(profile, low, high, bad); }));
+      CHECK(throws_invalid(
+          [&] { obdeect::propagation::straight_path_air_delay_ns(profile, bad, high, zenith); }));
+      CHECK(throws_invalid(
+          [&] { obdeect::propagation::straight_path_air_delay_ns(profile, low, bad, zenith); }));
+      CHECK(throws_invalid(
+          [&] { obdeect::propagation::straight_path_air_delay_ns(profile, low, high, bad); }));
       CHECK(throws_invalid([&] { obdeect::propagation::propagation_time_ns(bad, 1.0002); }));
       CHECK(throws_invalid([&] { obdeect::propagation::propagation_time_ns(1000., bad); }));
     }
-    CHECK(throws_invalid([&] { obdeect::propagation::ambient_group_index(heights, index_ok, nan); }));
-    CHECK(throws_invalid([&] { obdeect::propagation::ambient_group_index(heights, index_ok, inf); }));
+    CHECK(
+        throws_invalid([&] { obdeect::propagation::ambient_group_index(heights, index_ok, nan); }));
+    CHECK(
+        throws_invalid([&] { obdeect::propagation::ambient_group_index(heights, index_ok, inf); }));
   });
 }

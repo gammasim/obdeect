@@ -56,8 +56,8 @@ obdeect::propagation::TransmissionTable real_table() {
 }
 
 obdeect::propagation::AtmosphereProfile ecmwf_profile() {
-  return obdeect::propagation::AtmosphereProfile::from_file(std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) +
-                                             "/atmprof_ecmwf_north_winter_fixed.dat");
+  return obdeect::propagation::AtmosphereProfile::from_file(
+      std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/atmprof_ecmwf_north_winter_fixed.dat");
 }
 
 // Run keys: two telescopes at x = 100 m and x = -50 m; the observation level at 2000 m.
@@ -100,15 +100,17 @@ obdeect::stream::Metadata telescope_end_keys(std::uint32_t id) {
 
 // Photons of one chunk: sky (x y z cx cy cz t w) or G (x y cx cy t zem w).
 obdeect::stream::PhotonChunk make_chunk(Frame frame, std::uint32_t telescope, std::uint64_t first,
-                                 std::size_t n, const std::function<Row(std::size_t)> &row_of) {
+                                        std::size_t n,
+                                        const std::function<Row(std::size_t)> &row_of) {
   obdeect::stream::PhotonChunk chunk;
   chunk.telescope_id = telescope;
   chunk.frame = frame;
   chunk.first_index = first;
   const bool sky = frame == Frame::sky;
-  std::uint32_t mask = obdeect::stream::column_bit(Column::x) | obdeect::stream::column_bit(Column::y) |
-                       obdeect::stream::column_bit(Column::cx) | obdeect::stream::column_bit(Column::cy) |
-                       obdeect::stream::column_bit(Column::t) | obdeect::stream::column_bit(Column::w);
+  std::uint32_t mask =
+      obdeect::stream::column_bit(Column::x) | obdeect::stream::column_bit(Column::y) |
+      obdeect::stream::column_bit(Column::cx) | obdeect::stream::column_bit(Column::cy) |
+      obdeect::stream::column_bit(Column::t) | obdeect::stream::column_bit(Column::w);
   mask |= sky ? obdeect::stream::column_bit(Column::z) | obdeect::stream::column_bit(Column::cz)
               : obdeect::stream::column_bit(Column::zem);
   chunk.resize(n, mask);
@@ -193,7 +195,8 @@ std::vector<float> photon_column(const std::vector<obdeect::stream::Record> &rec
   return values;
 }
 
-std::size_t photon_rows(const std::vector<obdeect::stream::Record> &records, std::uint32_t telescope) {
+std::size_t photon_rows(const std::vector<obdeect::stream::Record> &records,
+                        std::uint32_t telescope) {
   std::size_t rows = 0;
   for (const auto &record : records) {
     if (record.type == RecordType::photons && record.chunk.telescope_id == telescope) {
@@ -217,7 +220,8 @@ Result propagate(const std::string &input, const obdeect::propagation::Propagato
   return result;
 }
 
-obdeect::propagation::PropagatorConfig config_for(const obdeect::propagation::TransmissionTable &table) {
+obdeect::propagation::PropagatorConfig
+config_for(const obdeect::propagation::TransmissionTable &table) {
   obdeect::propagation::PropagatorConfig config;
   config.transmission.emplace(table);
   config.transmission_source = "test table";
@@ -594,7 +598,8 @@ void test_sky_refraction() {
   });
   const auto plain = records_of(propagate(applied_input, config).bytes);
   const double zenith = std::acos(cz_magnitude);
-  const double air_ns = obdeect::propagation::straight_path_air_delay_ns(profile, site_m, 12000.0, zenith);
+  const double air_ns =
+      obdeect::propagation::straight_path_air_delay_ns(profile, site_m, 12000.0, zenith);
   CHECK_NEAR(static_cast<double>(photon_column(plain, 1, Column::x)[0]), analytic_x, 5e-3);
   CHECK_NEAR(static_cast<double>(photon_column(plain, 1, Column::t)[0]),
              5.0 + s / obdeect::propagation::speed_of_light_m_per_ns + air_ns, 2e-2);
@@ -633,8 +638,8 @@ constexpr std::uint64_t scatter_seed = 20261107;
 
 // Scattering table of the test data: 340 to 400 nm, exponential atmosphere (docs/scattering.md).
 obdeect::propagation::ScatteringTable scattering_table() {
-  return obdeect::propagation::ScatteringTable::from_file(std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) +
-                                           "/scattering_exponential.dat");
+  return obdeect::propagation::ScatteringTable::from_file(
+      std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/scattering_exponential.dat");
 }
 
 // Telescope 1 at 3 km east of the beam, telescope 2 at 2.5 km south; spheres of 12 m radius.
@@ -655,16 +660,17 @@ obdeect::stream::Metadata scatter_run_keys() {
 // Vertical beam (cx = cy = 0) at x = offset_x, emitted 15 km above the observation level,
 // wavelength 355 nm, weights 1 to 3.
 obdeect::stream::PhotonChunk beam_chunk(std::uint32_t telescope, std::size_t first, std::size_t n,
-                                 double offset_x) {
+                                        double offset_x) {
   obdeect::stream::PhotonChunk chunk;
   chunk.telescope_id = telescope;
   chunk.frame = Frame::sky;
   chunk.first_index = first;
-  const std::uint32_t mask = obdeect::stream::column_bit(Column::x) | obdeect::stream::column_bit(Column::y) |
-                             obdeect::stream::column_bit(Column::z) | obdeect::stream::column_bit(Column::cx) |
-                             obdeect::stream::column_bit(Column::cy) | obdeect::stream::column_bit(Column::cz) |
-                             obdeect::stream::column_bit(Column::t) | obdeect::stream::column_bit(Column::w) |
-                             obdeect::stream::column_bit(Column::wavelength);
+  const std::uint32_t mask =
+      obdeect::stream::column_bit(Column::x) | obdeect::stream::column_bit(Column::y) |
+      obdeect::stream::column_bit(Column::z) | obdeect::stream::column_bit(Column::cx) |
+      obdeect::stream::column_bit(Column::cy) | obdeect::stream::column_bit(Column::cz) |
+      obdeect::stream::column_bit(Column::t) | obdeect::stream::column_bit(Column::w) |
+      obdeect::stream::column_bit(Column::wavelength);
   chunk.resize(n, mask);
   for (std::size_t r = 0; r < n; ++r) {
     const std::size_t i = first + r;
@@ -705,9 +711,11 @@ std::string beam_stream(std::size_t n, std::size_t chunk_rows, bool two_blocks,
   });
 }
 
-obdeect::propagation::PropagatorConfig scattering_config(const obdeect::propagation::TransmissionTable &table, bool weighted) {
+obdeect::propagation::PropagatorConfig
+scattering_config(const obdeect::propagation::TransmissionTable &table, bool weighted) {
   auto config = config_for(table);
-  config.mode = weighted ? obdeect::propagation::OutputMode::weighted : obdeect::propagation::OutputMode::thinned;
+  config.mode = weighted ? obdeect::propagation::OutputMode::weighted
+                         : obdeect::propagation::OutputMode::thinned;
   config.envelope.push_back(constant_factor("qe", 0.5));
   config.scattering.enabled = true;
   config.scattering.points_per_photon = 8;
@@ -717,7 +725,8 @@ obdeect::propagation::PropagatorConfig scattering_config(const obdeect::propagat
 }
 
 // Sum of the telescope_end photons (sum of w) of one telescope; 0 without a block.
-double telescope_photons(const std::vector<obdeect::stream::Record> &records, std::uint32_t telescope) {
+double telescope_photons(const std::vector<obdeect::stream::Record> &records,
+                         std::uint32_t telescope) {
   double total = 0.0;
   for (const auto &record : records) {
     if (record.type == RecordType::telescope_end &&
@@ -729,7 +738,8 @@ double telescope_photons(const std::vector<obdeect::stream::Record> &records, st
 }
 
 // first_index of the photon chunks of one telescope counts its rows from 0 without gaps.
-bool contiguous_indices(const std::vector<obdeect::stream::Record> &records, std::uint32_t telescope) {
+bool contiguous_indices(const std::vector<obdeect::stream::Record> &records,
+                        std::uint32_t telescope) {
   std::uint64_t next = 0;
   for (const auto &record : records) {
     if (record.type == RecordType::photons && record.chunk.telescope_id == telescope) {
@@ -743,15 +753,16 @@ bool contiguous_indices(const std::vector<obdeect::stream::Record> &records, std
 }
 
 // Scattered weight per telescope from scatter_chunk called directly on the n beam photons.
-std::vector<double> kernel_weights(const obdeect::propagation::TransmissionTable &table, std::size_t n) {
+std::vector<double> kernel_weights(const obdeect::propagation::TransmissionTable &table,
+                                   std::size_t n) {
   obdeect::propagation::ScatteringConfig config;
   config.enabled = true;
   config.points_per_photon = 8;
   const std::vector<obdeect::propagation::ScatterTelescope> sphere = {{1, 3000.0, 0.0, 0.0, 12.0},
-                                                       {2, 0.0, -2500.0, 0.0, 12.0}};
+                                                                      {2, 0.0, -2500.0, 0.0, 12.0}};
   std::vector<std::vector<obdeect::stream::PhotonChunk>> lists(sphere.size());
-  obdeect::propagation::scatter_chunk(config, scattering_table(), table, sphere, beam_chunk(1, 0, n, 0.0),
-                       scatter_seed, 7, 0, lists);
+  obdeect::propagation::scatter_chunk(config, scattering_table(), table, sphere,
+                                      beam_chunk(1, 0, n, 0.0), scatter_seed, 7, 0, lists);
   std::vector<double> sums(sphere.size(), 0.0);
   for (std::size_t i = 0; i < sphere.size(); ++i) {
     for (const auto &chunk : lists[i]) {
@@ -822,10 +833,10 @@ void test_scattered_time_reaches_plane() {
   config.enabled = true;
   config.points_per_photon = 8;
   const std::vector<obdeect::propagation::ScatterTelescope> sphere = {{1, 3000.0, 0.0, 0.0, 12.0},
-                                                       {2, 0.0, -2500.0, 0.0, 12.0}};
+                                                                      {2, 0.0, -2500.0, 0.0, 12.0}};
   std::vector<std::vector<obdeect::stream::PhotonChunk>> lists(sphere.size());
-  obdeect::propagation::scatter_chunk(config, scattering_table(), table, sphere, beam_chunk(1, 0, n, 0.0),
-                       scatter_seed, 7, 0, lists);
+  obdeect::propagation::scatter_chunk(config, scattering_table(), table, sphere,
+                                      beam_chunk(1, 0, n, 0.0), scatter_seed, 7, 0, lists);
   std::vector<double> expected;
   for (const auto &piece : lists[0]) {
     for (std::size_t r = 0; r < piece.rows(); ++r) {
@@ -929,10 +940,11 @@ void test_scattering_needs_w_column() {
   photons.chunk.telescope_id = 1;
   photons.chunk.frame = Frame::sky;
   photons.chunk.first_index = 0;
-  photons.chunk.resize(2, obdeect::stream::column_bit(Column::x) | obdeect::stream::column_bit(Column::y) |
-                              obdeect::stream::column_bit(Column::z) | obdeect::stream::column_bit(Column::cx) |
-                              obdeect::stream::column_bit(Column::cy) | obdeect::stream::column_bit(Column::cz) |
-                              obdeect::stream::column_bit(Column::t));
+  photons.chunk.resize(
+      2, obdeect::stream::column_bit(Column::x) | obdeect::stream::column_bit(Column::y) |
+             obdeect::stream::column_bit(Column::z) | obdeect::stream::column_bit(Column::cx) |
+             obdeect::stream::column_bit(Column::cy) | obdeect::stream::column_bit(Column::cz) |
+             obdeect::stream::column_bit(Column::t));
   photons.chunk[Column::z][0] = 10000.0F;
   photons.chunk[Column::z][1] = 10000.0F;
   photons.chunk[Column::cz][0] = 0.5F; // upward: the pre-pass sets its w
@@ -964,7 +976,8 @@ void test_same_file() {
   CHECK(obdeect::propagation::same_file(table, data + "/../data/atm_trans_2000_1_10_0_0_2000.dat"));
   CHECK(!obdeect::propagation::same_file(table, data + "/atmprof_ecmwf_north_winter_fixed.dat"));
   // An output that does not exist yet, named through "..".
-  CHECK(obdeect::propagation::same_file(data + "/new_output.dat", data + "/../data/new_output.dat"));
+  CHECK(
+      obdeect::propagation::same_file(data + "/new_output.dat", data + "/../data/new_output.dat"));
   CHECK(!obdeect::propagation::same_file(table, data + "/new_output.dat"));
 }
 
@@ -1049,12 +1062,12 @@ void test_rejects_non_finite_input() {
 
 // Acceptance of one photon with od_focus taken from the table as tau(h + pathlen) - tau(h)
 // (telescope_depths), at the telescope altitude h.
-double expected_acceptance(const obdeect::propagation::TransmissionTable &table, double lambda_nm, double zem_m,
-                           double cx, double cy, double h_m, double pathlen_m) {
+double expected_acceptance(const obdeect::propagation::TransmissionTable &table, double lambda_nm,
+                           double zem_m, double cx, double cy, double h_m, double pathlen_m) {
   const double od_tel = table.optical_depth(lambda_nm, h_m);
   const double od_focus = table.optical_depth(lambda_nm, h_m + pathlen_m) - od_tel;
-  return table.transmission2<double>(lambda_nm, zem_m, obdeect::propagation::airmass<double>(cx, cy), od_tel,
-                                     od_focus);
+  return table.transmission2<double>(
+      lambda_nm, zem_m, obdeect::propagation::airmass<double>(cx, cy), od_tel, od_focus);
 }
 
 // Telescope 1 gets the default path (28 m), telescope 2 its override (0 m). The acceptance p of
@@ -1182,11 +1195,12 @@ void test_scattered_pathlen() {
 void test_pathlen_rejects() {
   const auto input = ground_stream(10, 10);
   const auto table = zero_table();
-  const auto rejected = [&](const std::function<void(obdeect::propagation::PropagatorConfig &)> &edit) {
-    auto config = config_for(table);
-    edit(config);
-    return throws_invalid([&] { propagate(input, config); });
-  };
+  const auto rejected =
+      [&](const std::function<void(obdeect::propagation::PropagatorConfig &)> &edit) {
+        auto config = config_for(table);
+        edit(config);
+        return throws_invalid([&] { propagate(input, config); });
+      };
   CHECK(rejected([](obdeect::propagation::PropagatorConfig &c) { c.default_pathlen_m = -1.0; }));
   CHECK(rejected([](obdeect::propagation::PropagatorConfig &c) {
     c.default_pathlen_m = std::numeric_limits<double>::quiet_NaN();
@@ -1194,13 +1208,17 @@ void test_pathlen_rejects() {
   CHECK(rejected([](obdeect::propagation::PropagatorConfig &c) {
     c.default_pathlen_m = std::numeric_limits<double>::infinity();
   }));
-  CHECK(rejected([](obdeect::propagation::PropagatorConfig &c) { c.telescope_pathlen_m = {{1, -0.5}}; }));
+  CHECK(rejected(
+      [](obdeect::propagation::PropagatorConfig &c) { c.telescope_pathlen_m = {{1, -0.5}}; }));
   CHECK(rejected([](obdeect::propagation::PropagatorConfig &c) {
     c.telescope_pathlen_m = {{2, std::numeric_limits<double>::quiet_NaN()}};
   }));
-  CHECK(rejected([](obdeect::propagation::PropagatorConfig &c) { c.telescope_pathlen_m = {{0, 1.0}}; }));
-  CHECK(rejected([](obdeect::propagation::PropagatorConfig &c) { c.telescope_pathlen_m = {{3, 1.0}}; }));
-  CHECK(!rejected([](obdeect::propagation::PropagatorConfig &c) { c.telescope_pathlen_m = {{2, 0.0}}; }));
+  CHECK(rejected(
+      [](obdeect::propagation::PropagatorConfig &c) { c.telescope_pathlen_m = {{0, 1.0}}; }));
+  CHECK(rejected(
+      [](obdeect::propagation::PropagatorConfig &c) { c.telescope_pathlen_m = {{3, 1.0}}; }));
+  CHECK(!rejected(
+      [](obdeect::propagation::PropagatorConfig &c) { c.telescope_pathlen_m = {{2, 0.0}}; }));
 }
 
 } // namespace

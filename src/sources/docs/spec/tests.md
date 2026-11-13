@@ -5,11 +5,11 @@ executable and CTest each, built with `check.hpp` (`CHECK`, `CHECK_NEAR`, `run_c
 helpers `program_stream.hpp` (`read_stream` -> `StreamContents{types, metadata, rows}`,
 `Row`, `count_type`) and `sky_stream_check.hpp` (`read_stream` -> `StreamSummary{types,
 photons per telescope, chunks, events, run metadata, ended}`, `write_to_string`) read streams
-back with `gstrickd::Reader`. All are kept unchanged. Python tests: `python -m pytest python/tests`.
+back with `obdeect::stream::Reader`. All are kept unchanged. Python tests: `python -m pytest python/tests`.
 
 ## Required C++ API (as used by the tests)
 
-| Header | Symbols (namespace `dlamb` unless stated) |
+| Header | Symbols (namespace `obdeect sources` unless stated) |
 | --- | --- |
 | `density.hpp` | `Uniforms`, `pi`, `two_pi`, `normal_quantile`, `LinearDensity(x, y)` (`integral`, `maximum`, `at`, `cdf`, `sample`), `Fixed`, `UniformRange`, `GaussianShape{mean_value, sigma}`, `Exponential{mean_value, tau}`, `ComplexPulse{flat_width, gauss_rms, decay, delay}`, `InverseSquare{low, high}` (`mean()`, `variance()`), `Tabulated{density}`, `Isotropic`, `FixedAngle{u0}`, `FilledCone{u0}`, `Lambertian`, `TabulatedAngular{density}` (each with `cdf`, `quantile`), variants `Spectrum`, `Pulse`, `Angular`, `angle_quantile`, `gaussian_angular_table`, `rayleigh_angular_table` |
 | `source.hpp` | `Vec3` helpers (`vec3.hpp`: `dot`, `norm`, `normalised`), `speed_of_light_m_per_ns`, `Emitter`, `Star`, `DiscTarget`, `SphereTarget`, `Source`, `Photon`, `source_columns`, `max_photon_count`, `validate`, `expected_count`, `photon_count(source, seed, event, telescope)`, `emit(source, seed, event, telescope, first_index, rows, PhotonChunk&)`, `sample_photon` |
@@ -18,8 +18,8 @@ back with `gstrickd::Reader`. All are kept unchanged. Python tests: `python -m p
 | `emission_stream.hpp` | `source_seed`, `StreamSummary{photons, weight, expected}`, `RunWriter`, `RunInfo`, `EventInfo`, `TelescopeSphere` |
 | `background.hpp` | `BackgroundSource`, `sample_background`, `emit_background`, `background_count` |
 | `sky_sources.hpp` | `SkyRun`, `SkyTelescope`, `SourceEmission`, `SkyPlan`, `write_plan`, `shared_telescope_key`, `direction_from_altitude`, `rotate_y`, `rotate_z`, `fiducial_super_radius` |
-| `cli.hpp` | `dlamb::cli::parse_number`, `parse_integer` |
-| `programs/stream_output.hpp` | `dlamb::programs`: `stage_programs`, `Emission`, `Event`, `RunSetup`, `derive_seed`, `write_stream(out, RunSetup, events)`, `parse_*` helpers |
+| `cli.hpp` | `obdeect::sources::cli::parse_number`, `parse_integer` |
+| `programs/stream_output.hpp` | `obdeect::sources::programs`: `stage_programs`, `Emission`, `Event`, `RunSetup`, `derive_seed`, `write_stream(out, RunSetup, events)`, `parse_*` helpers |
 | `programs/flasher.hpp` | `programs::flasher`: `Type`, `Options` (fields in the flasher page), `parse_type`, `require_type`, `observation_level_m`, `build_sources`, `write_stream(out, Options)` |
 | `programs/led.hpp` | `programs::led`: `Options`, `Camera`, `read_camera(istream, keep_slaves)`, `build_sources`, `write_stream`, `Event::labels` |
 | `programs/point-source.hpp` | `programs::XyzlsOptions` (`events`, `photons`, `bunch_size`, `z_cm`, `altitude_m`, `angular`, `pulse`, `spectrum`, ...), `TelposCm`, `plan_point_source`, `write_point_source` |
@@ -27,8 +27,8 @@ back with `gstrickd::Reader`. All are kept unchanged. Python tests: `python -m p
 | `programs/laser-beam.hpp` | `programs::LsBeamOptions`, `BeamGeometry{start_m, direction, path_m}`, `laser_beam_geometry`, `plan_laser_beam`, `write_laser_beam` |
 | `programs/night-sky.hpp` | `programs::NsbOptions`, `plan_night_sky`, `write_night_sky`; plan emissions expose `count(event)`, `fill(event, first, rows, chunk)` |
 | `programs/muon-track.hpp` | `muon_track::Options`, `IndexProfile`, `tracks`, `validate`, `alpha_fine`, `event_count`, `primary_id_from_name`, `mass_charge`, `read_index_profile`, `parse_command_line`, `write` |
-| `tools/sky_args.hpp` | `dlamb::cli`: `to_count`, `to_double`, `parse_spectrum`, `parse_pulse(text, option, bare_is_gauss)`, `parse_angular`, `is_number` |
-| `tools/telpos_file.hpp` | `dlamb::cli::read_telpos(istream, option, corsika)` |
+| `tools/sky_args.hpp` | `obdeect::sources::cli`: `to_count`, `to_double`, `parse_spectrum`, `parse_pulse(text, option, bare_is_gauss)`, `parse_angular`, `is_number` |
+| `tools/telpos_file.hpp` | `obdeect::sources::cli::read_telpos(istream, option, corsika)` |
 
 Struct field names and defaults are those of the corresponding tool page (`Options` of a tool:
 the option table with units as stated; `XyzlsOptions`: `run_number`, `events`,
@@ -91,7 +91,7 @@ Found while implementing from this specification; the implementation follows the
 | Test file | What it checks |
 | --- | --- |
 | `test_source.py` | float32 columns, unit directions, disc weights, plane-wave star, finite-distance star, angular mean cosines (cone, Lambertian, isotropic), Gaussian and exponential pulse moments, tables, Gaussian angular width, chunk independence, `iter_chunks`, counts, sphere target, every rejection listed in the python page, cone angle range, table angle range, representable Gauss width, counts above 2^53, complex pulse widths |
-| `test_gstrickd_contract.py` | Python constants equal the compiled gstrickd values (and the installed package when importable) |
+| `test_stream_contract.py` | Python constants equal the compiled obdeect stream values (and the installed package when importable) |
 | `test_plot.py` | three panels with the stated labels (skipped without matplotlib) |
 | `test_import.py` | package and extension import; `core_version()` has three entries |
 
@@ -101,14 +101,14 @@ No test runs the executables; the tool `main` functions only parse options and c
 functions above. Tool behaviour that no test covers (option parsing, messages, `--list-only`)
 is specified on the tool pages and checked by hand.
 
-## `dlamb/version.hpp`
+## `obdeect/sources/version.hpp`
 
-`dlamb::version_major`, `version_minor`, `version_patch` (non-negative integers, matching the
+`obdeect::sources::version_major`, `version_minor`, `version_patch` (non-negative integers, matching the
 project version); the Python `core_version()` returns them as a tuple.
 
 ## Not specified at code level
 
-- Exact Philox outputs are defined by gstrickd (`uniform4`), not here; the stream
+- Exact Philox outputs are defined by obdeect stream (`uniform4`), not here; the stream
   assignments and keys are specified in [conventions](conventions.md).
 - The numerically stable quadratic solver of the laser-beam and the normal quantile
   approximation are specified by their accuracy only.

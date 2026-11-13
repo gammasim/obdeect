@@ -1,12 +1,12 @@
-# dlufd
+# obdeect propagation
 
 Atmospheric propagation of Cherenkov and artificial-source photons.
 
-Atmospheric propagation for Cherenkov-telescope simulations: extinction, refraction and timing from the refractive-index profile, optional single scattering, and early photon thinning, as a standard-library-only C++20 core with a Python API, working on gstrickd photon streams.
+Atmospheric propagation for Cherenkov-telescope simulations: extinction, refraction and timing from the refractive-index profile, optional single scattering, and early photon thinning, as a standard-library-only C++20 core with a Python API, working on photon streams.
 
-`dlufd` is one module of a modular Cherenkov-telescope simulation chain
+`obdeect propagation` is one module of a modular Cherenkov-telescope simulation chain
 (CORSIKA7 or light sources, atmosphere, optics, camera). Modules exchange photons as
-[gstrickd](https://github.com/gernotmaier/gstrickd) photon streams;
+[obdeect stream](https://github.com/gammasim/obdeect) photon streams;
 [simtools](https://github.com/gammasim/simtools) configures and runs the chain.
 
 ## User Installation
@@ -14,7 +14,7 @@ Atmospheric propagation for Cherenkov-telescope simulations: extinction, refract
 ```sh
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install dlufd
+python -m pip install obdeect-propagation
 ```
 
 (requires python 3.14 or higher)
@@ -38,5 +38,5 @@ python -m pytest python/tests
 
 ## License and Citation
 
-BSD 3-Clause License, see [LICENSE](LICENSE). Please cite `dlufd` using the
+BSD 3-Clause License, see [LICENSE](LICENSE). Please cite `obdeect propagation` using the
 metadata in [CITATION.cff](CITATION.cff).

@@ -355,7 +355,8 @@ def test_cli_matches_python_api(tmp_path):
     )
     assert cli_out.read_bytes() == api_out.read_bytes()
 
-    # obdeect stream from-corsika reads the file from stdin and writes the stream to stdout; pipe it back.
+    # obdeect stream from-corsika reads the file from stdin and writes the stream to stdout;
+    # pipe it back.
     with cli_out.open("rb") as source:
         piped = subprocess.run(
             [_executable("obdeect-stream-from-corsika")],

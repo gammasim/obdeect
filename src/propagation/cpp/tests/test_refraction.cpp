@@ -105,7 +105,8 @@ int main() {
       CHECK(p.cx == 0. && p.cy == 0.);
       CHECK(p.x == 0. && p.y == 0.);
       const double vacuum_ns = (h - kObservationM) / obdeect::propagation::speed_of_light_m_per_ns;
-      const double air_ns = obdeect::propagation::straight_path_air_delay_ns(profile, kObservationM, h, 0.);
+      const double air_ns =
+          obdeect::propagation::straight_path_air_delay_ns(profile, kObservationM, h, 0.);
       CHECK(p.t > 0.);
       CHECK_NEAR(p.t - vacuum_ns, air_ns, 1e-6);
       CHECK(air_ns > 0.);
@@ -137,7 +138,8 @@ int main() {
 
     // A direction beyond the unit circle (upward or horizontal) is not handled.
     Photon upward{1.1, 0., 0., 0., 0.};
-    CHECK(!obdeect::propagation::bend(tables, 20000., upward.cx, upward.cy, upward.x, upward.y, upward.t));
+    CHECK(!obdeect::propagation::bend(tables, 20000., upward.cx, upward.cy, upward.x, upward.y,
+                                      upward.t));
 
     // The float instantiation agrees with double to single precision.
     Photon pd = start(40.);

@@ -7,12 +7,12 @@ the [user guide](optical-models.md#frames-and-units).
 ## Optical models
 
 ```{eval-rst}
-.. autoclass:: obdeect.model.OpticalModel
+.. autoclass:: obdeect.ray_tracing.model.OpticalModel
    :members:
 
-.. autofunction:: obdeect.model.trace_many
+.. autofunction:: obdeect.ray_tracing.model.trace_many
 
-.. autoexception:: obdeect.formats.ModelError
+.. autoexception:: obdeect.ray_tracing.formats.ModelError
 ```
 
 ## Photon streams
@@ -28,15 +28,15 @@ the [user guide](optical-models.md#frames-and-units).
 ## Analysis
 
 ```{eval-rst}
-.. autofunction:: obdeect.psf.containment
+.. autofunction:: obdeect.ray_tracing.psf.containment
 
-.. autofunction:: obdeect.psf.summary
+.. autofunction:: obdeect.ray_tracing.psf.summary
 ```
 
 ## Compilation
 
 ```{eval-rst}
-.. autofunction:: obdeect.compiler.compile_model
+.. autofunction:: obdeect.ray_tracing.compiler.compile_model
 
-.. autofunction:: obdeect.repository.read_telescope
+.. autofunction:: obdeect.ray_tracing.repository.read_telescope
 ```

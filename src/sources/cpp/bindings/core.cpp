@@ -1,4 +1,4 @@
-// nanobind extension dlamb._core: the only C++ file that depends on Python.
+// nanobind extension obdeect.sources._core: the only C++ file that depends on Python.
 
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
@@ -137,7 +137,7 @@ nb::object to_array(const std::vector<float> &values) {
 } // namespace
 
 NB_MODULE(_core, m) {
-  m.doc() = "dlamb native core";
+  m.doc() = "obdeect sources native core";
   m.def("core_version", [] { return nb::make_tuple(version_major, version_minor, version_patch); });
   m.def("stream_contract", [] {
     nb::dict d;

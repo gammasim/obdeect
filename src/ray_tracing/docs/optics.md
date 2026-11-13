@@ -1,6 +1,6 @@
 # Optics
 
-obdeect traces photons from an entrance surface to the camera entrance.
+obdeect ray tracing traces photons from an entrance surface to the camera entrance.
 The optical model describes mirrors, obscurers, the focal surface and optical
 responses.
 
@@ -27,7 +27,7 @@ limitations
    is tilted by half the angle.
 4. Secondary (dual mirror): same, with the after-primary obscurers.
 5. Focal surface: plane or polynomial; the photon's position, direction, time
-   and incidence angles are recorded. obdeect stops at the camera entrance;
+   and incidence angles are recorded. obdeect ray tracing stops at the camera entrance;
    pixels, light guides and the camera window are not part of the optical model.
 
 ## Mirror scatter conventions

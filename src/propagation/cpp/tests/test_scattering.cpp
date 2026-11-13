@@ -70,8 +70,9 @@ obdeect::propagation::TransmissionTable site_transmission() {
 //   Y = int dh exp(-(tau(h) - tau(h0)) [if attenuate]) beta_s(h) p_mix(theta) Omega(h) T(h)
 // beta from the table (finite difference of the vertical optical depths), T and Omega as in
 // scattering.hpp. Simpson's rule, 20000 intervals.
-double analytic_yield(const obdeect::propagation::ScatteringTable &table, const obdeect::propagation::TransmissionTable &tr,
-                      double lambda, double h0, bool attenuate) {
+double analytic_yield(const obdeect::propagation::ScatteringTable &table,
+                      const obdeect::propagation::TransmissionTable &tr, double lambda, double h0,
+                      bool attenuate) {
   using obdeect::propagation::henyey_greenstein_phase;
   using obdeect::propagation::rayleigh_phase;
   const auto integrand = [&](double h) {
@@ -110,7 +111,8 @@ double analytic_yield(const obdeect::propagation::ScatteringTable &table, const 
 // the same density; the sphere is hit with the solid angle Omega of the sphere). The sum
 // neglects the attenuation of the beam before the scattering point. Per-step sum, 1 m steps,
 // with q0 = w (K/H) exp(-obs/H) photons per metre at the observation level.
-double step_sum_yield(double k, double scale_m, const obdeect::propagation::TransmissionTable &tr, double lambda) {
+double step_sum_yield(double k, double scale_m, const obdeect::propagation::TransmissionTable &tr,
+                      double lambda) {
   using obdeect::propagation::rayleigh_phase;
   const double q0 = (k / scale_m) * std::exp(-obs_m / scale_m);
   const double ds = 1.0;
@@ -133,12 +135,13 @@ double step_sum_yield(double k, double scale_m, const obdeect::propagation::Tran
 // Per-primary scattered weight towards telescope 1: one vertical primary of weight 1 at
 // altitude h0 for each first_index in [0, n).
 std::vector<double> per_primary_totals(const obdeect::propagation::ScatteringTable &table,
-                                       const obdeect::propagation::TransmissionTable &tr, double lambda,
-                                       std::size_t n, std::uint32_t n_points) {
+                                       const obdeect::propagation::TransmissionTable &tr,
+                                       double lambda, std::size_t n, std::uint32_t n_points) {
   obdeect::propagation::ScatteringConfig config;
   config.enabled = true;
   config.points_per_photon = n_points;
-  const std::vector<obdeect::propagation::ScatterTelescope> sphere = {{1, distance_m, 0.0, 0.0, radius_m}};
+  const std::vector<obdeect::propagation::ScatterTelescope> sphere = {
+      {1, distance_m, 0.0, 0.0, radius_m}};
   std::vector<double> totals(n, 0.0);
   for (std::size_t i = 0; i < n; ++i) {
     obdeect::stream::PhotonChunk chunk;
@@ -179,8 +182,8 @@ void test_phase_functions() {
   CHECK_NEAR(mean_r, 0.0, 1e-8);
   CHECK_NEAR(mean_hg, g, 1e-5);
   // Mean cosine of the mixed phase with only aerosol scattering equals g.
-  CHECK_NEAR(obdeect::propagation::mixed_phase(0.3, 0.0, 1.0, 1.0, g), obdeect::propagation::henyey_greenstein_phase(0.3, g),
-             1e-15);
+  CHECK_NEAR(obdeect::propagation::mixed_phase(0.3, 0.0, 1.0, 1.0, g),
+             obdeect::propagation::henyey_greenstein_phase(0.3, g), 1e-15);
 }
 
 void test_zero_optical_depth() {
@@ -253,7 +256,8 @@ void test_vertical_beam_against_integral_and_step_sum() {
 // segment discretisation error falls about as N_s^-2 (32 points: 3e-4 relative; 128: 1e-5).
 void test_example_table_against_integral() {
   const obdeect::propagation::ScatteringTable table([] {
-    std::ifstream file(std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/scattering_exponential.dat");
+    std::ifstream file(std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) +
+                       "/scattering_exponential.dat");
     std::ostringstream buffer;
     buffer << file.rdbuf();
     return buffer.str();
@@ -283,8 +287,8 @@ void test_determinism_across_chunk_splits() {
   obdeect::propagation::ScatteringConfig config;
   config.enabled = true;
   config.points_per_photon = 8;
-  const std::vector<obdeect::propagation::ScatterTelescope> sphere = {{3, 3000.0, 0.0, 0.0, 12.5},
-                                                       {9, -800.0, 1200.0, 0.0, 6.0}};
+  const std::vector<obdeect::propagation::ScatterTelescope> sphere = {
+      {3, 3000.0, 0.0, 0.0, 12.5}, {9, -800.0, 1200.0, 0.0, 6.0}};
   const std::size_t n = 300;
   obdeect::stream::PhotonChunk all;
   all.frame = obdeect::stream::Frame::sky;
@@ -335,7 +339,8 @@ void test_determinism_across_chunk_splits() {
   obdeect::propagation::scatter_chunk(config, table, tr, sphere, all, seed, 4, 0, whole);
   std::vector<std::vector<obdeect::stream::PhotonChunk>> split;
   obdeect::propagation::scatter_chunk(config, table, tr, sphere, slice(0, 70), seed, 4, 0, split);
-  obdeect::propagation::scatter_chunk(config, table, tr, sphere, slice(70, 300), seed, 4, 70, split);
+  obdeect::propagation::scatter_chunk(config, table, tr, sphere, slice(70, 300), seed, 4, 70,
+                                      split);
 
   const auto a = flatten(whole);
   const auto b = flatten(split);
@@ -393,7 +398,8 @@ void test_scattered_time_is_at_scattering_point() {
   obdeect::propagation::ScatteringConfig config;
   config.enabled = true;
   config.points_per_photon = 16;
-  const std::vector<obdeect::propagation::ScatterTelescope> sphere = {{1, distance_m, 0.0, 0.0, radius_m}};
+  const std::vector<obdeect::propagation::ScatterTelescope> sphere = {
+      {1, distance_m, 0.0, 0.0, radius_m}};
   const double t_emit = 7.0;
   const double cx = 0.2;
   const double cy = 0.1;
@@ -466,7 +472,8 @@ void test_rejects_missing_and_non_finite_columns() {
   const obdeect::propagation::TransmissionTable tr = site_transmission();
   obdeect::propagation::ScatteringConfig config;
   config.enabled = true;
-  const std::vector<obdeect::propagation::ScatterTelescope> sphere = {{1, distance_m, 0.0, 0.0, radius_m}};
+  const std::vector<obdeect::propagation::ScatterTelescope> sphere = {
+      {1, distance_m, 0.0, 0.0, radius_m}};
   const auto run = [&](std::initializer_list<Column> columns, Column poison, double value) {
     obdeect::stream::PhotonChunk chunk;
     chunk.frame = obdeect::stream::Frame::sky;
@@ -571,18 +578,22 @@ void test_rejects_infinite_radius_and_nan_columns() {
   };
   std::vector<std::vector<obdeect::stream::PhotonChunk>> lists;
 
-  const std::vector<obdeect::propagation::ScatterTelescope> infinite = {{1, distance_m, 0.0, 0.0, inf}};
+  const std::vector<obdeect::propagation::ScatterTelescope> infinite = {
+      {1, distance_m, 0.0, 0.0, inf}};
   const obdeect::stream::PhotonChunk plain = make_chunk(Column::cz, -1.0);
-  CHECK(throws_invalid(
-      [&] { obdeect::propagation::scatter_chunk(config, table, tr, infinite, plain, seed, 1, 0, lists); }));
-
-  const std::vector<obdeect::propagation::ScatterTelescope> sphere = {{1, distance_m, 0.0, 0.0, radius_m}};
   CHECK(throws_invalid([&] {
-    obdeect::propagation::scatter_chunk(config, table, tr, sphere, make_chunk(Column::cz, nan), seed, 1, 0, lists);
+    obdeect::propagation::scatter_chunk(config, table, tr, infinite, plain, seed, 1, 0, lists);
+  }));
+
+  const std::vector<obdeect::propagation::ScatterTelescope> sphere = {
+      {1, distance_m, 0.0, 0.0, radius_m}};
+  CHECK(throws_invalid([&] {
+    obdeect::propagation::scatter_chunk(config, table, tr, sphere, make_chunk(Column::cz, nan),
+                                        seed, 1, 0, lists);
   }));
   CHECK(throws_invalid([&] {
-    obdeect::propagation::scatter_chunk(config, table, tr, sphere, make_chunk(Column::zem, nan), seed, 1, 0,
-                         lists);
+    obdeect::propagation::scatter_chunk(config, table, tr, sphere, make_chunk(Column::zem, nan),
+                                        seed, 1, 0, lists);
   }));
 }
 

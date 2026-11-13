@@ -1,4 +1,4 @@
-"""Convert older extinction tables to the dlufd transmission-table format.
+"""Convert older extinction tables to the obdeect propagation transmission-table format.
 
 Both legacy layouts give a cumulative vertical optical depth c(lambda, h) that rises with
 altitude. The optical depth between an observation level h_obs and an emission height h_e is
@@ -29,7 +29,7 @@ FORMATS: dict[str, float | None] = {
     "modtran5": 205.0,
 }
 
-MAX_HEIGHTS = 100  # most heights of a dlufd table, H2 included
+MAX_HEIGHTS = 100  # most heights of a obdeect propagation table, H2 included
 NEAR_OFFSETS_KM = (0.01, 0.02, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5)
 
 # corsika-atmabs: heights 0, 1, ..., 50 km per wavelength.
@@ -158,11 +158,11 @@ def convert_table(
     observation_level_m: float,
     min_wavelength_nm: float | None = None,
 ) -> Path:
-    """Convert a legacy extinction table to the dlufd transmission-table format.
+    """Convert a legacy extinction table to the obdeect propagation transmission-table format.
 
     Args:
         input_path: legacy table.
-        output_path: dlufd table (``# H2= ..., H1= ...``) to write.
+        output_path: obdeect propagation table (``# H2= ..., H1= ...``) to write.
         format: ``corsika-atmabs``, ``kascade``, ``modtran4`` or ``modtran5``.
         observation_level_m: observation level [m a.s.l.] H2; the optical depth is counted from
             it. Must lie inside the altitude range of the table.
@@ -205,7 +205,7 @@ def convert_table(
         raise ValueError("optical depth decreases with altitude above the observation level")
     tau_source = np.clip(tau_source, 0.0, None)
     lines = [
-        "# Converted by dlufd.convert_table",
+        "# Converted by obdeect.propagation.convert_table",
         f"# Source format: {format}",
         "# tau(lambda, h) = c(lambda, h) - c(lambda, H2), vertical optical depth above H2",
         f"# H2= {observation_km:.6f}, H1= " + " ".join(f"{h:.6f}" for h in heights),
@@ -222,13 +222,17 @@ def convert_table(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Command line: ``obdeect propagation convert-table --format FORMAT IN -o OUT --observation-level M``."""
+    """Command line: ``obdeect propagation convert-table --format FORMAT IN -o OUT
+    --observation-level M``."""
     parser = argparse.ArgumentParser(
         prog="obdeect propagation convert-table",
-        description="Convert a legacy extinction table to the dlufd transmission-table format.",
+        description=(
+            "Convert a legacy extinction table to the obdeect propagation "
+            "transmission-table format."
+        ),
     )
     parser.add_argument("input", help="legacy table")
-    parser.add_argument("-o", "--output", required=True, help="dlufd table to write")
+    parser.add_argument("-o", "--output", required=True, help="obdeect propagation table to write")
     parser.add_argument("--format", required=True, choices=list(FORMATS))
     parser.add_argument(
         "--observation-level",

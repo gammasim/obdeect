@@ -16,16 +16,16 @@ def test_required_commands_propagate_failure(tmp_path, corsika_status, adapter_s
     fragment = script.split("start=$(date +%s)", 1)[1].split("cmp -l run.iact", 1)[0]
     corsika = tmp_path / "corsika"
     corsika.write_text(f"#!/bin/sh\nprintf partial > run.iact\nexit {corsika_status}\n")
-    source = tmp_path / "obdeect stream from-corsika"
+    source = tmp_path / "obdeect-stream-from-corsika"
     source.write_text(f"#!/bin/sh\ncat\nexit {adapter_status}\n")
-    sink = tmp_path / "obdeect stream to-simtel"
+    sink = tmp_path / "obdeect-stream-to-simtel"
     sink.write_text("#!/bin/sh\ncat\n")
     for path in (corsika, source, sink):
         path.chmod(0o755)
     fragment = fragment.replace(
         "/workdir/simulation_software/corsika7/corsika_qgs2_urqmd_flat", shlex.quote(str(corsika))
-    ).replace("/out/bin/corsika2ps", shlex.quote(str(source)))
-    fragment = fragment.replace("/out/bin/ps2simtel", shlex.quote(str(sink)))
+    ).replace("/out/bin/obdeect-stream-from-corsika", shlex.quote(str(source)))
+    fragment = fragment.replace("/out/bin/obdeect-stream-to-simtel", shlex.quote(str(sink)))
     (tmp_path / "card.txt").write_text("")
     result = subprocess.run(
         ["bash", "-c", "set -uo pipefail\nstart=0\n" + fragment],

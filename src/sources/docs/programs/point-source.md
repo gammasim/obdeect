@@ -1,12 +1,12 @@
 # point-source
 
 Point light source above the telescope, sky-frame photons. Tool `obdeect sources point-source`,
-programme `cpp/include/dlamb/programs/point-source.hpp`. Replaces the earlier xyzls program;
+programme `cpp/include/obdeect/sources/programs/point-source.hpp`. Replaces the earlier xyzls program;
 options keep their names.
 
 ## Options
 
-| Option | Unit | Default | dlamb field |
+| Option | Unit | Default | obdeect sources field |
 | --- | --- | --- | --- |
 | `-R run` | | 1 | `run_number` |
 | `-N nevents` | | 1 | `events` (events per case) |
@@ -32,7 +32,7 @@ options keep their names.
   towards the origin that contains the sphere (`SphereTarget`).
 - Cone, Parallel: no restriction.
 - Other profiles beyond the sphere are rejected.
-- Time: emission time (pulse). Refraction and extinction are not applied; dlufd does them.
+- Time: emission time (pulse). Refraction and extinction are not applied; obdeect propagation does them.
 
 ## Output
 

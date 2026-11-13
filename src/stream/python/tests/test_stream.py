@@ -1,4 +1,4 @@
-"""Photon-stream round trips through the Python API and the obdeect stream cat / obdeect stream tee tools."""
+"""Photon-stream round trips through the Python API and the obdeect stream cat / tee tools."""
 
 import subprocess
 

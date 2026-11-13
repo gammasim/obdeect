@@ -16,8 +16,8 @@ try:
 except ImportError:
     obdeect_stream = None
 
-# gstrickd's own Reader and Writer are used when importable; the local codec below is only a
-# fallback. TODO: remove the local codec once gstrickd >= 0.1 is on PyPI.
+# obdeect stream's own Reader and Writer are used when importable; the local codec below is only a
+# fallback. TODO: remove the local codec once obdeect stream >= 0.1 is on PyPI.
 USE_GSTRICKD_CODEC = all(hasattr(obdeect_stream, name) for name in ("Reader", "Writer"))
 
 DATA = Path(__file__).resolve().parents[2] / "cpp" / "tests" / "data"
@@ -41,7 +41,8 @@ NAMES = {value: key for key, value in RECORD_TYPES.items()}
 COLUMNS = ["x", "y", "z", "cx", "cy", "cz", "t", "zem", "w", "wavelength", "p"]
 
 
-# Local writer and reader of the gstrickd stream format (docs/format.md of gstrickd); fallback only.
+# Local writer and reader of the photon stream format (docs/format.md of obdeect stream);
+# fallback only.
 def _metadata(values):
     out = [struct.pack("<I", len(values))]
     for key, value in values.items():
@@ -153,7 +154,7 @@ def _decode_metadata(payload):
 
 
 class _GstrickdStreamWriter:
-    """Writes through gstrickd.Writer into a temporary file; getvalue() returns its bytes."""
+    """Writes through obdeect.stream.Writer into a temporary file; getvalue() returns its bytes."""
 
     def __init__(self):
         self._directory = tempfile.TemporaryDirectory()

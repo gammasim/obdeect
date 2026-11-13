@@ -1,6 +1,6 @@
 # Distributions
 
-Header `dlamb/density.hpp`, namespace `dlamb`. `Uniforms = std::array<double,4>`; `sample(u)`
+Header `obdeect/sources/density.hpp`, namespace `obdeect sources`. `Uniforms = std::array<double,4>`; `sample(u)`
 of 1-D shapes uses `u[0]` (complex pulse `u[0..2]`).
 
 ## LinearDensity

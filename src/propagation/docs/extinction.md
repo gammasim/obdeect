@@ -73,7 +73,7 @@ column p.
 
 ## Legacy tables
 
-`obdeect propagation convert-table` (Python: `dlufd.convert_table`) converts older extinction tables to the
+`obdeect propagation convert-table` (Python: `obdeect.propagation.convert_table`) converts older extinction tables to the
 format above, so that existing setups can be used:
 
 ```console
@@ -89,7 +89,7 @@ every integer wavelength from the first to the last wavelength of the source (up
 for heights above `--observation-level` (= H2): every altitude of the source, eighth steps in
 the lowest 6 km above the observation level and points 10 m to 500 m above it. The absolute
 offset of $c$ does not matter. At the grid heights $\tau$ reproduces the source exactly; between
-them dlufd interpolates in $\log_{10} h$ instead of $h$, which differs by less than 1 % of
+them obdeect propagation interpolates in $\log_{10} h$ instead of $h$, which differs by less than 1 % of
 $\tau$. If the grid would exceed the 100 heights (H2 included) a table can hold, coarser steps are used, or the table is rejected. The observation level must lie inside the altitude range of the source and above 0 m.
 
 | `--format` | layout | wavelengths |
@@ -106,7 +106,7 @@ the observation level are rejected with `ValueError` (command line: message and 
 
 ## Random numbers
 
-Philox (gstrickd `uniform4`), key (seed, stage `DLUF`, event, telescope, photon index,
+Philox (obdeect stream `uniform4`), key (seed, stage `DLUF`, event, telescope, photon index,
 stream). Wavelength draws use stream 1, thinning stream 2. The binomial is a sum of
 Bernoulli trials, so bunches are limited to 2048 photons (split larger bunches upstream).
 Results are reproducible for a given seed; other generators agree in the probabilities, not
@@ -115,10 +115,10 @@ in the individual draws.
 ## Example
 
 ```python
-import dlufd
+import obdeect.propagation
 
-table = dlufd.TransmissionTable("atm_trans_2000_1_10_0_0_2000.dat", site_altitude_m=2000.0)
-out = dlufd.apply_extinction(
+table = obdeect.propagation.TransmissionTable("atm_trans_2000_1_10_0_0_2000.dat", site_altitude_m=2000.0)
+out = obdeect.propagation.apply_extinction(
     columns, table, telescope_altitude_m=2030.0,
     envelope_wavelength=[200.0, 800.0], envelope_value=[0.9, 0.3],
     seed=1, event=1, telescope=1, first_index=0,
@@ -129,4 +129,4 @@ out = dlufd.apply_extinction(
 ## References
 
 - Test reference values: `python/tests/test_extinction.py`, `cpp/tests/test_transmission.cpp`.
-- Photon stream and random numbers: gstrickd, `docs/format.md`.
+- Photon stream and random numbers: obdeect stream, `docs/format.md`.

@@ -1,6 +1,6 @@
 """Photon-stream stage: frames, focus, telescope filter, ledger, determinism and records.
 
-Tests that write or read gstrickd streams are skipped when gstrickd is not installed.
+Tests that write or read photon streams are skipped when obdeect.stream is not installed.
 """
 
 import math
@@ -531,7 +531,7 @@ def test_records_pass_through(model, tmp_path, obdeect_stream):
 
 def test_stream_without_gstrickd_is_a_clear_error(model, tmp_path, monkeypatch):
     monkeypatch.setitem(__import__("sys").modules, "obdeect.stream", None)
-    with pytest.raises(ModelError, match="obdeect\\[stream\\]"):
+    with pytest.raises(ModelError, match="obdeect-stream"):
         trace_stream(model, tmp_path / "x.ps", tmp_path / "y.ps", seed=SEED)
 
 

@@ -1,6 +1,7 @@
 #pragma once
 
-// Reads back a stream written by obdeect::sources::programs with obdeect::stream::Reader (test helper).
+// Reads back a stream written by obdeect::sources::programs with obdeect::stream::Reader (test
+// helper).
 
 #include "obdeect/stream/format.hpp"
 #include "obdeect/stream/photons.hpp"
@@ -50,8 +51,9 @@ inline StreamContents read_stream(const std::string &bytes) {
         row.cz = chunk[obdeect::stream::Column::cz][i];
         row.t = chunk[obdeect::stream::Column::t][i];
         row.w = chunk[obdeect::stream::Column::w][i];
-        row.wavelength =
-            chunk.has(obdeect::stream::Column::wavelength) ? chunk[obdeect::stream::Column::wavelength][i] : 0.0F;
+        row.wavelength = chunk.has(obdeect::stream::Column::wavelength)
+                             ? chunk[obdeect::stream::Column::wavelength][i]
+                             : 0.0F;
         row.has_zem = has_zem;
         row.zem = has_zem ? chunk[obdeect::stream::Column::zem][i] : 0.0F;
         row.frame = static_cast<std::uint32_t>(chunk.frame);

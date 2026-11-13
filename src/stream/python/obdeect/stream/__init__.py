@@ -1,4 +1,4 @@
-"""gstrickd: photon-stream format and I/O for Cherenkov-telescope simulation chains."""
+"""obdeect stream: photon-stream format and I/O for Cherenkov-telescope simulation chains."""
 
 import importlib
 from importlib.metadata import PackageNotFoundError, version
@@ -9,7 +9,7 @@ except PackageNotFoundError:
     __version__ = "0.0.0"
 
 # Imported on first use, so that reading the version needs neither NumPy nor the extension.
-# The format constants are read from the extension (gstrickd._core).
+# The format constants are read from the extension (obdeect.stream._core).
 _EXPORTS = {
     "COLUMNS": "obdeect.stream.stream",
     "column_names": "obdeect.stream._core",
@@ -32,4 +32,4 @@ __all__ = [*_EXPORTS, "__version__"]
 def __getattr__(name: str):
     if name in _EXPORTS:
         return getattr(importlib.import_module(_EXPORTS[name]), name)
-    raise AttributeError(f"module 'gstrickd' has no attribute {name!r}")
+    raise AttributeError(f"module 'obdeect.stream' has no attribute {name!r}")

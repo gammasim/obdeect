@@ -1,4 +1,4 @@
-"""dlamb: artificial light sources for Cherenkov-telescope simulations."""
+"""obdeect sources: artificial light sources for Cherenkov-telescope simulations."""
 
 from importlib.metadata import PackageNotFoundError, version
 

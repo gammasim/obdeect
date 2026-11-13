@@ -1,7 +1,8 @@
 """The CMake package: python -m obdeect.stream paths, and a consumer built against them.
 
 Set OBDEECT_STREAM_CMAKE_DIR to test another install, e.g. a `cmake --install` prefix:
-OBDEECT_STREAM_CMAKE_DIR=build/prefix/lib/cmake/obdeect_stream pytest python/tests/test_cmake_package.py
+OBDEECT_STREAM_CMAKE_DIR=build/prefix/lib/cmake/obdeect_stream \
+  pytest python/tests/test_cmake_package.py
 """
 
 import os

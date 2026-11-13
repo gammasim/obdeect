@@ -1,12 +1,12 @@
 # night-sky
 
 Night-sky background photons on one telescope sphere. Tool `obdeect sources night-sky`, programme
-`cpp/include/dlamb/programs/night-sky.hpp`, core `cpp/include/dlamb/background.hpp`.
+`cpp/include/obdeect/sources/programs/night-sky.hpp`, core `cpp/include/obdeect/sources/background.hpp`.
 Replaces the earlier nsbls program; options keep their names.
 
 ## Options
 
-| Option | Default | dlamb field |
+| Option | Default | obdeect sources field |
 | --- | --- | --- |
 | `-r`, `--radius` [m] | 15 | `telescope_radius_m` |
 | `-v`, `--viewcone` [deg] | 10 | `viewcone_deg` (half opening angle) |

@@ -1,36 +1,36 @@
 # laser-beam
 
 Laser beam crossing the field of view of a telescope. Tool `obdeect sources laser-beam`, programme
-`cpp/include/dlamb/programs/laser-beam.hpp`. Replaces the earlier ls-beam program; options
+`cpp/include/obdeect/sources/programs/laser-beam.hpp`. Replaces the earlier ls-beam program; options
 keep their names.
 
 ## Primary photons
 
-dlamb emits the **primary** photons along the beam inside the field-of-view cone. The
-scattered light is computed from them by dlufd (single scattering, plan step 6b).
+obdeect sources emits the **primary** photons along the beam inside the field-of-view cone. The
+scattered light is computed from them by obdeect propagation (single scattering, plan step 6b).
 
 - step point: `N = primary_photons_per_m x step` primary photons along the beam
 - `--primary-per-m` sets the primary photons per metre (a sampling choice, not physics)
 - `--angular-distribution` (Rayleigh) is recorded in the run key `scattering_angular`
-  for dlufd
-- time = path / c (vacuum); group delay is dlufd's
+  for obdeect propagation
+- time = path / c (vacuum); group delay is obdeect propagation's
 
 ## Yield per metre
 
-dlufd computes, for primary weight `w` at height h:
+obdeect propagation computes, for primary weight `w` at height h:
 `scattered per m = sum(w) x beta_s(h) x (phase function) x (transmission)`.
 With uniform primaries, `sum(w) per m = primary_photons_per_m`. To obtain a scattered
 yield per metre `B` at the ground, set `primary_photons_per_m = B / beta_s(ground)`, with
-`beta_s` the scattering coefficient per m at the laser wavelength. dlufd takes `beta_s(h)`
+`beta_s` the scattering coefficient per m at the laser wavelength. obdeect propagation takes `beta_s(h)`
 from the atmosphere profile.
 
-Parameters dlufd does not have: `beta_s(ground)` at 355 nm for the aerosol part (only
+Parameters obdeect propagation does not have: `beta_s(ground)` at 355 nm for the aerosol part (only
 molecular scattering follows from the density profile), the aerosol single-scattering
 albedo and phase-function asymmetry g. These come from simulation-models (step 6b).
 
 ## Options
 
-| Option | Default | dlamb field |
+| Option | Default | obdeect sources field |
 | --- | --- | --- |
 | `--events` | 1 | `events` |
 | `--step` [m] | 0.1 | `step_m` |

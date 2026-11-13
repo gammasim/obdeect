@@ -13,7 +13,7 @@
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "DLUFD_BUILD_TESTING": "ON"
+        "OBDEECT_PROPAGATION_BUILD_TESTING": "ON"
       }
     },
     {

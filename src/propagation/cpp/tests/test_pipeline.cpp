@@ -34,17 +34,20 @@ template <class Function> bool throws_invalid(Function function) {
 // Constant optical depth 0.5 above 3 km, zero at the observation level (one row, 400 nm;
 // other wavelengths are clamped to it).
 obdeect::propagation::TransmissionTable constant_table() {
-  return obdeect::propagation::TransmissionTable("# H2= 2.000, H1=    3.000     4.000\n400 0.5 0.5\n", 2000.0);
+  return obdeect::propagation::TransmissionTable(
+      "# H2= 2.000, H1=    3.000     4.000\n400 0.5 0.5\n", 2000.0);
 }
 
 // n photons, straight down (cx = cy = 0, cz = -1), zem 3500 m, weight 1, all at `wavelength`.
 obdeect::stream::PhotonChunk photons(std::size_t n, float wavelength) {
   obdeect::stream::PhotonChunk chunk;
   chunk.first_index = 0;
-  chunk.resize(n, obdeect::stream::column_bit(Column::x) | obdeect::stream::column_bit(Column::y) |
-                      obdeect::stream::column_bit(Column::cx) | obdeect::stream::column_bit(Column::cy) |
-                      obdeect::stream::column_bit(Column::t) | obdeect::stream::column_bit(Column::w) |
-                      obdeect::stream::column_bit(Column::zem) | obdeect::stream::column_bit(Column::wavelength));
+  chunk.resize(
+      n, obdeect::stream::column_bit(Column::x) | obdeect::stream::column_bit(Column::y) |
+             obdeect::stream::column_bit(Column::cx) | obdeect::stream::column_bit(Column::cy) |
+             obdeect::stream::column_bit(Column::t) | obdeect::stream::column_bit(Column::w) |
+             obdeect::stream::column_bit(Column::zem) |
+             obdeect::stream::column_bit(Column::wavelength));
   for (std::size_t r = 0; r < n; ++r) {
     chunk[Column::zem][r] = 3500.0F;
     chunk[Column::w][r] = 1.0F;
@@ -53,9 +56,10 @@ obdeect::stream::PhotonChunk photons(std::size_t n, float wavelength) {
   return chunk;
 }
 
-obdeect::propagation::ExtinctionSettings settings_for(const obdeect::propagation::TransmissionTable &table,
-                                       const obdeect::propagation::TelescopeDepths &depths,
-                                       const obdeect::propagation::Envelope &envelope, bool weighted) {
+obdeect::propagation::ExtinctionSettings
+settings_for(const obdeect::propagation::TransmissionTable &table,
+             const obdeect::propagation::TelescopeDepths &depths,
+             const obdeect::propagation::Envelope &envelope, bool weighted) {
   obdeect::propagation::ExtinctionSettings settings;
   settings.table = &table;
   settings.depths = &depths;
@@ -85,14 +89,16 @@ void test_cz_column_must_be_finite() {
 
   auto consistent = photons(4, 400.0F);
   consistent[Column::cz].assign(4, -1.0F);
-  CHECK(!throws_invalid([&] { (void)obdeect::propagation::apply_extinction_chunk(consistent, settings, 0); }));
+  CHECK(!throws_invalid(
+      [&] { (void)obdeect::propagation::apply_extinction_chunk(consistent, settings, 0); }));
 
   for (const float bad :
        {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(), 0.5F}) {
     auto chunk = photons(4, 400.0F);
     chunk[Column::cz].assign(4, -1.0F);
     chunk[Column::cz][2] = bad;
-    CHECK(throws_invalid([&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
+    CHECK(throws_invalid(
+        [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
   }
 }
 
@@ -108,12 +114,14 @@ void test_wavelength_must_be_integer() {
                           std::numeric_limits<float>::infinity(), -1.0F}) {
     auto chunk = photons(3, 400.0F);
     chunk[Column::wavelength][1] = bad;
-    CHECK(throws_invalid([&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
+    CHECK(throws_invalid(
+        [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
   }
   // Integer wavelengths and unassigned rows are accepted.
   auto valid = photons(3, 400.0F);
   valid[Column::wavelength][1] = 0.0F;
-  CHECK(!throws_invalid([&] { (void)obdeect::propagation::apply_extinction_chunk(valid, settings, 0); }));
+  CHECK(!throws_invalid(
+      [&] { (void)obdeect::propagation::apply_extinction_chunk(valid, settings, 0); }));
 }
 
 // Wavelengths at or above max_lambda_nm, including values beyond the int range, are dropped
@@ -128,8 +136,8 @@ void test_wavelength_above_max_is_dropped() {
               thinned, settings_for(table, depths, envelope, false), 0)) == 0);
 
     auto weighted = photons(50, lambda);
-    const auto out =
-        obdeect::propagation::apply_extinction_chunk(weighted, settings_for(table, depths, envelope, true), 0);
+    const auto out = obdeect::propagation::apply_extinction_chunk(
+        weighted, settings_for(table, depths, envelope, true), 0);
     CHECK(out.size() == 1);
     for (const float w : out.front()[Column::w]) {
       CHECK(w == 0.0F);
@@ -156,11 +164,13 @@ void test_atmospheric_acceptance_wavelength() {
   CHECK(p[1] == 0.0);
 
   chunk[Column::wavelength][1] = 400.5F;
-  CHECK(throws_invalid(
-      [&] { (void)obdeect::propagation::atmospheric_acceptance<double>(chunk, table, depths, p); }));
+  CHECK(throws_invalid([&] {
+    (void)obdeect::propagation::atmospheric_acceptance<double>(chunk, table, depths, p);
+  }));
   chunk[Column::wavelength][1] = std::numeric_limits<float>::quiet_NaN();
-  CHECK(throws_invalid(
-      [&] { (void)obdeect::propagation::atmospheric_acceptance<double>(chunk, table, depths, p); }));
+  CHECK(throws_invalid([&] {
+    (void)obdeect::propagation::atmospheric_acceptance<double>(chunk, table, depths, p);
+  }));
 }
 
 } // namespace

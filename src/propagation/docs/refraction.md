@@ -1,6 +1,6 @@
 # Refraction and timing
 
-dlufd reads an atmospheric table in the `atmprof` format and computes interpolation, ray
+obdeect propagation reads an atmospheric table in the `atmprof` format and computes interpolation, ray
 bending and air delay from it. Light sources and photons emitted in the air use this path;
 photons of a run with `refraction_applied` = 1 are not refracted again.
 
@@ -37,7 +37,7 @@ Heights are m a.s.l. (cm internally).
 5. Below the table the bottom values are used; above it density, thickness and n-1 are 0.
 
 ```python
-profile = dlufd.AtmosphereProfile("atmprof_ecmwf_north_winter_fixed.dat")
+profile = obdeect.propagation.AtmosphereProfile("atmprof_ecmwf_north_winter_fixed.dat")
 profile.density([0.0, 2180.0])        # [1.21171e-03, 9.75149e-04] g/cm^3
 profile.group_index(2180.0)           # 1.000225191893913
 ```

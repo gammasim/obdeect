@@ -1,4 +1,5 @@
-// obdeect stream to-simtel: photon stream (file or stdin) to sim_telarray input (EventIO) on stdout or -o FILE.
+// obdeect stream to-simtel: photon stream (file or stdin) to sim_telarray input (EventIO) on stdout
+// or -o FILE.
 
 #include "obdeect/stream/simtel.hpp"
 #include "obdeect/stream/stdin_buffer.hpp"

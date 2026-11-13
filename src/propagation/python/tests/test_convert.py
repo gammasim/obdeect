@@ -1,4 +1,4 @@
-"""Conversion of legacy extinction tables to the dlufd transmission-table format."""
+"""Conversion of legacy extinction tables to the obdeect propagation transmission-table format."""
 
 import numpy as np
 import pytest

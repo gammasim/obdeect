@@ -66,9 +66,9 @@ inline void bind_scatter(nb::module_ &module) {
   module.def(
       "scatter",
       [](const nb::dict &columns, const obdeect::propagation::ScatteringTable &table,
-         const obdeect::propagation::TransmissionTable &transmission, const std::vector<Telescope> &telescopes,
-         std::uint64_t seed, std::uint32_t event, std::uint64_t first_index,
-         std::uint32_t n_points) {
+         const obdeect::propagation::TransmissionTable &transmission,
+         const std::vector<Telescope> &telescopes, std::uint64_t seed, std::uint32_t event,
+         std::uint64_t first_index, std::uint32_t n_points) {
         std::vector<obdeect::propagation::ScatterTelescope> sphere;
         for (const auto &[id, x, y, z, radius] : telescopes) {
           sphere.push_back({id, x, y, z, radius});
@@ -81,13 +81,15 @@ inline void bind_scatter(nb::module_ &module) {
         // the output of each slice is appended in order, so the result does not depend on it.
         const InputColumns input = input_columns(columns);
         std::vector<std::vector<obdeect::stream::PhotonChunk>> lists(sphere.size());
-        for (std::size_t offset = 0; offset < input.rows; offset += obdeect::stream::max_chunk_rows) {
+        for (std::size_t offset = 0; offset < input.rows;
+             offset += obdeect::stream::max_chunk_rows) {
           const std::size_t rows =
               std::min<std::size_t>(obdeect::stream::max_chunk_rows, input.rows - offset);
-          obdeect::stream::PhotonChunk slice = slice_chunk(input, offset, rows, first_index + offset);
+          obdeect::stream::PhotonChunk slice =
+              slice_chunk(input, offset, rows, first_index + offset);
           slice.frame = obdeect::stream::Frame::sky; // primary photons of the sky frame
-          obdeect::propagation::scatter_chunk(config, table, transmission, sphere, slice, seed, event,
-                               first_index + offset, lists);
+          obdeect::propagation::scatter_chunk(config, table, transmission, sphere, slice, seed,
+                                              event, first_index + offset, lists);
         }
 
         // One dict of float32 columns per telescope, keyed by telescope id.

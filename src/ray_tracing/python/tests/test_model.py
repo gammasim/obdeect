@@ -246,7 +246,7 @@ def test_repository_and_command_line(tmp_path, capsys):
     result = main(f"plot --model {model} --arrivals {arrivals} --output {plot}".split())
     if importlib.util.find_spec("matplotlib") is None:
         assert result == 1
-        assert "obdeect[plot]" in capsys.readouterr().err
+        assert "obdeect-ray-tracing[plot]" in capsys.readouterr().err
     else:
         assert result == 0
         assert plot.stat().st_size > 0
@@ -428,4 +428,4 @@ def test_plot_without_matplotlib_reports_extra(monkeypatch, capsys):
     monkeypatch.setitem(sys.modules, "matplotlib", None)
     monkeypatch.delitem(sys.modules, "obdeect.ray_tracing.plot", raising=False)
     assert main(["plot", "--model", "unused.json", "--output", "unused.png"]) == 1
-    assert "obdeect[plot]" in capsys.readouterr().err
+    assert "obdeect-ray-tracing[plot]" in capsys.readouterr().err

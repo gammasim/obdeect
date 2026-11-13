@@ -1,10 +1,10 @@
-# Using dlamb with sim_telarray
+# Using obdeect sources with sim_telarray
 
-dlamb writes gstrickd photon streams. `obdeect stream to-simtel` (gstrickd) converts a stream into
-sim_telarray input, so dlamb replaces the light-emission package of sim_telarray. The frame of
-the stream decides which steps lie between dlamb and `obdeect stream to-simtel`.
+obdeect sources writes photon streams. `obdeect stream to-simtel` (obdeect stream) converts a stream into
+sim_telarray input, so obdeect sources replaces the light-emission package of sim_telarray. The frame of
+the stream decides which steps lie between obdeect sources and `obdeect stream to-simtel`.
 
-| Frame | Written by | Between dlamb and `obdeect stream to-simtel` |
+| Frame | Written by | Between obdeect sources and `obdeect stream to-simtel` |
 | --- | --- | --- |
 | camera (C) | `obdeect sources led`, `obdeect sources flasher --type dish --frame camera` | nothing; `--camera-map` lists the telescope |
 | telescope (T) | `obdeect sources flasher --type secondary` | nothing; needs the telescope-frame input of `obdeect stream to-simtel` |
@@ -39,7 +39,7 @@ $ obdeect sources flasher --type secondary --fire all --delays 0,0,0,0 \
     | obdeect stream to-simtel | sim_telarray -c cfg -
 ```
 
-This needs the telescope-frame input of `obdeect stream to-simtel`, which is added to gstrickd separately.
+This needs the telescope-frame input of `obdeect stream to-simtel`, which is added to obdeect stream separately.
 
 ## Point source, beam, laser, night sky, muon (sky frame)
 

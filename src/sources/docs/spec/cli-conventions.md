@@ -7,7 +7,7 @@
   planned in the sky tools; on error it may be left empty.
 - `--help` (`-h` in flasher and led): usage text to stdout, exit 0, nothing else.
 - Error: one line to stderr, exit 1, no usage dump (muon-track also prints its usage to stderr).
-  Prefix: flasher and led `<argv0>: <message>`; sky tools `dlamb-<tool>: <message>`.
+  Prefix: flasher and led `<argv0>: <message>`; sky tools `obdeect sources <tool>: <message>`.
 - Unknown option: flasher/led `unknown option <arg>`; sky tools `unknown option <arg> (see
   --help)`; muon-track `unknown option <arg>`. Missing value: flasher/led `option <arg> needs a
   value`; sky tools `<arg>: missing value`; muon-track `option <arg> needs a value`.

@@ -118,7 +118,7 @@ inline void bind_table(nb::module_ &module) {
           nb::arg("telescope_altitude_m"), nb::arg("pathlen_m") = 0.0);
 }
 
-// Map a column name of the Python API to its gstrickd column.
+// Map a column name of the Python API to its obdeect stream column.
 inline obdeect::stream::Column column_from_name(const std::string &name) {
   for (std::uint32_t c = 0; c < obdeect::stream::n_columns; ++c) {
     const auto column = static_cast<obdeect::stream::Column>(c);
@@ -155,7 +155,7 @@ inline InputColumns input_columns(const nb::dict &columns) {
 // Chunk of rows [offset, offset + count) of the input; first_index is the index of row
 // offset among all photons. count must be at most obdeect::stream::max_chunk_rows.
 inline obdeect::stream::PhotonChunk slice_chunk(const InputColumns &input, std::size_t offset,
-                                         std::size_t count, std::uint64_t first_index) {
+                                                std::size_t count, std::uint64_t first_index) {
   obdeect::stream::PhotonChunk chunk;
   chunk.first_index = first_index;
   chunk.resize(count, input.mask);
@@ -174,7 +174,8 @@ inline void bind_apply(nb::module_ &module) {
          const DoubleArray &envelope_value, std::uint64_t seed, std::uint32_t event,
          std::uint32_t telescope, std::uint64_t first_index, bool weighted,
          std::tuple<double, double> wavelength_range, double pathlen_m) {
-        const obdeect::propagation::Envelope envelope(to_vector(envelope_wavelength), to_vector(envelope_value));
+        const obdeect::propagation::Envelope envelope(to_vector(envelope_wavelength),
+                                                      to_vector(envelope_value));
         const auto depths = table.telescope_depths(telescope_altitude_m, pathlen_m);
         obdeect::propagation::ExtinctionSettings settings;
         settings.table = &table;
@@ -192,16 +193,19 @@ inline void bind_apply(nb::module_ &module) {
         const InputColumns input = input_columns(columns);
         // Output columns: the input columns plus the wavelength and p columns, which the
         // pipeline always produces, also when no photon survives.
-        const std::uint32_t output_mask = input.mask |
-                                          obdeect::stream::column_bit(obdeect::stream::Column::wavelength) |
-                                          obdeect::stream::column_bit(obdeect::stream::Column::p);
+        const std::uint32_t output_mask =
+            input.mask | obdeect::stream::column_bit(obdeect::stream::Column::wavelength) |
+            obdeect::stream::column_bit(obdeect::stream::Column::p);
         std::vector<std::vector<float>> out(obdeect::stream::n_columns);
         std::uint64_t out_index = 0;
-        for (std::size_t offset = 0; offset < input.rows; offset += obdeect::stream::max_chunk_rows) {
+        for (std::size_t offset = 0; offset < input.rows;
+             offset += obdeect::stream::max_chunk_rows) {
           const std::size_t rows =
               std::min<std::size_t>(obdeect::stream::max_chunk_rows, input.rows - offset);
-          obdeect::stream::PhotonChunk slice = slice_chunk(input, offset, rows, first_index + offset);
-          for (auto &chunk : obdeect::propagation::apply_extinction_chunk(std::move(slice), settings, out_index)) {
+          obdeect::stream::PhotonChunk slice =
+              slice_chunk(input, offset, rows, first_index + offset);
+          for (auto &chunk : obdeect::propagation::apply_extinction_chunk(std::move(slice),
+                                                                          settings, out_index)) {
             for (std::uint32_t c = 0; c < obdeect::stream::n_columns; ++c) {
               if (chunk.has(static_cast<obdeect::stream::Column>(c))) {
                 out[c].insert(out[c].end(), chunk.columns[c].begin(), chunk.columns[c].end());

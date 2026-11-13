@@ -58,7 +58,8 @@ def scatter(
     Args:
         columns: primary photon columns by name.
         table: scattering table.
-        transmission: dlufd.TransmissionTable of the site (gives the observation level and T).
+        transmission: obdeect.propagation.TransmissionTable of the site (gives the observation level
+            and T).
         telescopes: (telescope_id, x_m, y_m, z_m, radius_m) per telescope sphere; z above the
             observation level, z_m >= 0.
         seed, event: Philox key of the draws.

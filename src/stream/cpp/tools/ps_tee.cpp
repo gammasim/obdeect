@@ -64,7 +64,8 @@ int main(int argc, char **argv) {
       return 0;
     }
     if (arg == "-h" || arg == "--help") {
-      std::fprintf(stderr, "usage: obdeect stream tee file...  (copies stdin to stdout and to each file)\n");
+      std::fprintf(
+          stderr, "usage: obdeect stream tee file...  (copies stdin to stdout and to each file)\n");
       return 0;
     }
     if (arg.size() > 1 && arg[0] == '-') {
@@ -95,8 +96,8 @@ int main(int argc, char **argv) {
     std::vector<std::uint8_t> record;
     StreamOrder order;
     while (obdeect::stream::read_record_raw(in, record)) {
-      const auto type =
-          static_cast<obdeect::stream::RecordType>(obdeect::stream::stream_detail::load_le(record.data() + 4, 2));
+      const auto type = static_cast<obdeect::stream::RecordType>(
+          obdeect::stream::stream_detail::load_le(record.data() + 4, 2));
       order.accept(type);
       const auto *data = reinterpret_cast<const char *>(record.data());
       const auto size = static_cast<std::streamsize>(record.size());

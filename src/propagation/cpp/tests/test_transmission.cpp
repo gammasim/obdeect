@@ -98,7 +98,8 @@ template <class Function> bool throws_invalid(Function function) {
 
 // Constant optical depth 0.5 above 3 km, zero at the observation level.
 obdeect::propagation::TransmissionTable constant_table() {
-  return obdeect::propagation::TransmissionTable("# H2= 2.000, H1=    3.000     4.000\n400 0.5 0.5\n", 2000.0);
+  return obdeect::propagation::TransmissionTable(
+      "# H2= 2.000, H1=    3.000     4.000\n400 0.5 0.5\n", 2000.0);
 }
 
 void test_constant_optical_depth() {
@@ -116,8 +117,8 @@ void test_constant_optical_depth() {
 
 void test_hand_interpolation() {
   // Optical depth 1 at 3 km and 3 at 5 km; interpolation is linear in log10(height).
-  const obdeect::propagation::TransmissionTable table("# H2= 2.000, H1=    3.000     5.000\n400 1.0 3.0\n",
-                                       2000.0);
+  const obdeect::propagation::TransmissionTable table(
+      "# H2= 2.000, H1=    3.000     5.000\n400 1.0 3.0\n", 2000.0);
   const double fraction = (std::log10(4.0) - std::log10(3.0)) / (std::log10(5.0) - std::log10(3.0));
   const double expected = 1.0 * (1.0 - fraction) + 3.0 * fraction;
   CHECK_NEAR(table.optical_depth<double>(400.0, 4000.0), expected, 1e-13);
@@ -142,20 +143,22 @@ void test_telescope_transmission_matches_direct_path() {
 void test_airmass() {
   CHECK_NEAR(obdeect::propagation::airmass<double>(0.0, 0.0), 1.0, 1e-15);
   CHECK_NEAR(obdeect::propagation::airmass<double>(0.3, 0.4), 1.0 / std::sqrt(0.75), 1e-15);
-  CHECK_NEAR(obdeect::propagation::airmass<double>(1.0, 0.0), obdeect::propagation::unlimited_airmass, 0.0);
+  CHECK_NEAR(obdeect::propagation::airmass<double>(1.0, 0.0),
+             obdeect::propagation::unlimited_airmass, 0.0);
 }
 
 void test_extinction_kernel_constant_tau() {
   const auto table = constant_table();
   const auto depths = table.telescope_depths(2000.0, 0.0);
   obdeect::stream::PhotonChunk chunk;
-  chunk.resize(
-      3, obdeect::stream::column_bit(obdeect::stream::Column::x) | obdeect::stream::column_bit(obdeect::stream::Column::y) |
-             obdeect::stream::column_bit(obdeect::stream::Column::cx) |
-             obdeect::stream::column_bit(obdeect::stream::Column::cy) |
-             obdeect::stream::column_bit(obdeect::stream::Column::t) | obdeect::stream::column_bit(obdeect::stream::Column::w) |
-             obdeect::stream::column_bit(obdeect::stream::Column::zem) |
-             obdeect::stream::column_bit(obdeect::stream::Column::wavelength));
+  chunk.resize(3, obdeect::stream::column_bit(obdeect::stream::Column::x) |
+                      obdeect::stream::column_bit(obdeect::stream::Column::y) |
+                      obdeect::stream::column_bit(obdeect::stream::Column::cx) |
+                      obdeect::stream::column_bit(obdeect::stream::Column::cy) |
+                      obdeect::stream::column_bit(obdeect::stream::Column::t) |
+                      obdeect::stream::column_bit(obdeect::stream::Column::w) |
+                      obdeect::stream::column_bit(obdeect::stream::Column::zem) |
+                      obdeect::stream::column_bit(obdeect::stream::Column::wavelength));
   for (std::size_t row = 0; row < 3; ++row) {
     chunk[obdeect::stream::Column::cx][row] = 0.3F;
     chunk[obdeect::stream::Column::cy][row] = 0.4F;
@@ -176,14 +179,18 @@ void test_extinction_kernel_constant_tau() {
 }
 
 void test_invalid_tables() {
-  CHECK(throws_invalid(
-      [] { return obdeect::propagation::TransmissionTable("# H2= 1.835, H1= 3.0\n400 1\n", 2000.0); }));
+  CHECK(throws_invalid([] {
+    return obdeect::propagation::TransmissionTable("# H2= 1.835, H1= 3.0\n400 1\n", 2000.0);
+  }));
   CHECK(throws_invalid([] { return obdeect::propagation::TransmissionTable("400 1\n", 2000.0); }));
+  CHECK(throws_invalid([] {
+    return obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 4.0 3.0\n400 1 1\n", 2000.0);
+  }));
+  CHECK(throws_invalid([] {
+    return obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.0\n400 1\n402 1\n", 2000.0);
+  }));
   CHECK(throws_invalid(
-      [] { return obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 4.0 3.0\n400 1 1\n", 2000.0); }));
-  CHECK(throws_invalid(
-      [] { return obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.0\n400 1\n402 1\n", 2000.0); }));
-  CHECK(throws_invalid([] { return obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.0\n", 2000.0); }));
+      [] { return obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.0\n", 2000.0); }));
 }
 
 void test_reference_table() {
@@ -209,20 +216,25 @@ void test_reference_table() {
 // strtod accepts "nan" and "inf"; they must be rejected in H2, heights and optical depths.
 // A NaN H2 also used to pass the site altitude check (NaN > tolerance is false).
 void test_non_finite_tables_rejected() {
-  CHECK(throws_invalid(
-      [] { obdeect::propagation::TransmissionTable("# H2= nan, H1= 3.000 4.000\n400 0.5 0.5\n", 2000.0); }));
-  CHECK(throws_invalid(
-      [] { obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.000 inf\n400 0.5 0.5\n", 2000.0); }));
-  CHECK(throws_invalid(
-      [] { obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.000 4.000\n400 nan 0.5\n", 2000.0); }));
-  CHECK(throws_invalid(
-      [] { obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.000 4.000\n400 -inf 0.5\n", 2000.0); }));
+  CHECK(throws_invalid([] {
+    obdeect::propagation::TransmissionTable("# H2= nan, H1= 3.000 4.000\n400 0.5 0.5\n", 2000.0);
+  }));
+  CHECK(throws_invalid([] {
+    obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.000 inf\n400 0.5 0.5\n", 2000.0);
+  }));
+  CHECK(throws_invalid([] {
+    obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.000 4.000\n400 nan 0.5\n", 2000.0);
+  }));
+  CHECK(throws_invalid([] {
+    obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.000 4.000\n400 -inf 0.5\n", 2000.0);
+  }));
   // H2 = 0 would give log10(0) = -inf in the height grid.
-  CHECK(
-      throws_invalid([] { obdeect::propagation::TransmissionTable("# H2= 0.000, H1= 3.000\n400 0 0.5\n", 0.0); }));
+  CHECK(throws_invalid(
+      [] { obdeect::propagation::TransmissionTable("# H2= 0.000, H1= 3.000\n400 0 0.5\n", 0.0); }));
   // A finite table still parses.
-  CHECK(!throws_invalid(
-      [] { obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.000 4.000\n400 0.5 0.5\n", 2000.0); }));
+  CHECK(!throws_invalid([] {
+    obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.000 4.000\n400 0.5 0.5\n", 2000.0);
+  }));
 }
 
 // Wavelengths are floating point in the API: NaN throws; values far outside the table

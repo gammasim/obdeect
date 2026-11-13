@@ -368,7 +368,7 @@ inline EventioBlock parse_block(const std::vector<std::uint8_t> &raw) {
   EventioReader reader{in};
   EventioBlock block;
   if (!reader.next(block)) {
-    throw std::runtime_error("gstrickd: blob holds no EventIO block");
+    throw std::runtime_error("obdeect stream: blob holds no EventIO block");
   }
   return block;
 }
@@ -750,8 +750,8 @@ private:
       *warnings_ << "obdeect stream to-simtel: telescope " << chunk.telescope_id
                  << ": telescope frame, mirror class 2, Bypass_Optics=1\n";
     } else {
-      *warnings_ << "obdeect stream to-simtel: telescope " << chunk.telescope_id << ": camera frame, mirror class "
-                 << camera.mirror_class
+      *warnings_ << "obdeect stream to-simtel: telescope " << chunk.telescope_id
+                 << ": camera frame, mirror class " << camera.mirror_class
                  << ", Bypass_Optics=" << bypass_optics_level(camera.mirror_class)
                  << ", camera rotation " << camera.rotation_deg << " deg\n";
     }
@@ -971,7 +971,8 @@ private:
     if (warnings_ == nullptr || !warned_.insert("ATMPROF").second) {
       return;
     }
-    *warnings_ << "obdeect stream to-simtel: warning: no atmospheric table; sim_telarray cannot find profile "
+    *warnings_ << "obdeect stream to-simtel: warning: no atmospheric table; sim_telarray cannot "
+                  "find profile "
                << custom_profile_id << " (use --atmprof FILE)\n";
   }
 
@@ -1146,10 +1147,10 @@ inline void stream_to_simtel(std::istream &in, std::ostream &out, SimtelOptions 
     converter.write(record);
   }
   if (!reader.ended()) {
-    throw std::runtime_error("gstrickd: no stream_end (truncated stream)");
+    throw std::runtime_error("obdeect stream: no stream_end (truncated stream)");
   }
   if (in.peek() != std::char_traits<char>::eof()) {
-    throw std::runtime_error("gstrickd: data after stream_end");
+    throw std::runtime_error("obdeect stream: data after stream_end");
   }
   converter.finish();
 }

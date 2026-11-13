@@ -31,7 +31,7 @@ obdeect sources muon-track --help
 ## Output
 
 - Frame `sky`: positions relative to the observation level, z up, metres. No refraction
-  and no extinction: dlufd applies them on the way to the telescope.
+  and no extinction: obdeect propagation applies them on the way to the telescope.
 - One run, `--events` events, one telescope record (the sphere). `refraction_applied = 0`.
 
 ## Options

@@ -4,7 +4,7 @@
 
 - Lengths m, times ns, wavelengths nm, angles deg at every user interface (tool options may
   use cm where stated). Internally angles are rad; speed of light `c = 0.299792458 m/ns`.
-- Stream frames (gstrickd codes): sky 0, ground 1, telescope (T) 2, camera (C) 3. Sources may
+- Stream frames (obdeect stream codes): sky 0, ground 1, telescope (T) 2, camera (C) 3. Sources may
   emit in sky, T or C only.
 - Directions are unit propagation directions; `cz < 0` is downward. Sky frame: origin at the
   observation level above the telescope, z up. All z values in the sky frame are heights above
@@ -15,8 +15,8 @@
 
 ## Random numbers (contract)
 
-All draws are `gstrickd::uniform4(DrawKey{seed, stage, event, telescope, photon, stream})`,
-returning four doubles in (0, 1) (Philox-4x32-10). Stage `0x444C0001` (gstrickd
+All draws are `obdeect::stream::uniform4(DrawKey{seed, stage, event, telescope, photon, stream})`,
+returning four doubles in (0, 1) (Philox-4x32-10). Stage `0x444C0001` (obdeect stream
 `stage_sources`) for every photon, count and track draw; stage `0x444C0002` (`stage_programs`)
 for program-level choices. Streams of one photon (each one `uniform4` call, never shared):
 

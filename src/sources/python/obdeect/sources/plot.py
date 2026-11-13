@@ -1,6 +1,6 @@
-"""Plots of the emitted profiles of a light source (optional: needs ``dlamb[plot]``).
+"""Plots of the emitted profiles of a light source (optional: needs ``obdeect-sources[plot]``).
 
-The plots sample photons with ``dlamb.source.emit``: they show what a source emits,
+The plots sample photons with ``obdeect.sources.source.emit``: they show what a source emits,
 not the analytic profile. matplotlib is imported when a function is called.
 """
 

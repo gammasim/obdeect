@@ -1,9 +1,9 @@
-"""Trace a gstrickd photon stream through an optical model (``obdeect trace-stream``).
+"""Trace a photon stream through an optical model (``obdeect ray-tracing trace-stream``).
 
 Ground-frame (G) or telescope-frame (T) photons go in; camera-frame (C) photons
 come out. Records pass through unchanged, except that telescopes not selected
-are dropped and the efficiency ledger is updated. gstrickd is optional
-(``pip install obdeect[stream]``) and is imported only when a stream is traced.
+are dropped and the efficiency ledger is updated. The stream component
+(obdeect-stream) is always installed and is imported only when a stream is traced.
 The frames and the ledger rules are described in docs/photon-stream.md.
 """
 
@@ -21,7 +21,7 @@ from obdeect.ray_tracing.model import OpticalModel, ThreadPool, _obscurer_suppor
 
 FRAME_GROUND = 1
 FRAME_TELESCOPE = 2
-# Largest photon chunk written (gstrickd format limit).
+# Largest photon chunk written (photon stream format limit).
 MAX_CHUNK_ROWS = 2**16
 SPEED_OF_LIGHT_M_PER_NS = 0.299792458
 # Margin above the highest incoming obscurer for the input plane [m] (as simtools).
@@ -45,7 +45,9 @@ def _import_gstrickd():
     except ModuleNotFoundError as error:
         if error.name != "obdeect.stream":
             raise
-        raise ModelError("trace-stream needs gstrickd: pip install 'obdeect[stream]'") from error
+        raise ModelError(
+            "trace-stream needs the obdeect stream component: pip install obdeect-stream"
+        ) from error
     return obdeect_stream
 
 
@@ -566,7 +568,7 @@ class _Tracer:
 
 
 def _writer_path(output: Any) -> str:
-    # gstrickd's writer opens files only; "-" writes to the process's standard output.
+    # The stream writer opens files only; "-" writes to the process's standard output.
     return "/dev/stdout" if str(output) == "-" else str(output)
 
 
@@ -581,7 +583,7 @@ def trace_stream(
     pointing: tuple[float, float] | None = None,
     telescope_transmission: str = "full",
 ) -> dict[str, int]:
-    """Trace the photons of a gstrickd stream and write the camera-frame photons.
+    """Trace the photons of a photon stream and write the camera-frame photons.
 
     Parameters
     ----------

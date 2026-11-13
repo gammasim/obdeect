@@ -45,16 +45,17 @@ if [ ! -f /out/data/EGSDAT6_1. ]; then
 fi
 
 # Step 2: build the adapters from the mounted sources (no cmake in the image). CMake
-# generates gstrickd/version.hpp and defines GSTRICKD_PACKAGE_VERSION; do the same here.
-mkdir -p /out/gen/gstrickd
+# generates obdeect/stream/version.hpp and defines OBDEECT_STREAM_PACKAGE_VERSION; do the same here.
+mkdir -p /out/gen/obdeect/stream
 sed -e 's/@PROJECT_VERSION_MAJOR@/0/' -e 's/@PROJECT_VERSION_MINOR@/0/' \
-    -e 's/@PROJECT_VERSION_PATCH@/0/' /src/cmake/version.hpp.in > /out/gen/gstrickd/version.hpp
-for tool in obdeect stream from-corsika obdeect stream to-simtel; do
+    -e 's/@PROJECT_VERSION_PATCH@/0/' /src/cmake/version.hpp.in > /out/gen/obdeect/stream/version.hpp
+for pair in corsika2ps:obdeect-stream-from-corsika ps2simtel:obdeect-stream-to-simtel; do
+  src=${pair%%:*}; out=${pair##*:}
   g++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror -ffp-contract=off \
-      -DGSTRICKD_PACKAGE_VERSION='"0.0.0+validation"' -I/out/gen -I/src/cpp/include \
-      "/src/cpp/tools/$tool.cpp" -o "/out/bin/$tool" || exit 1
+      -DOBDEECT_STREAM_PACKAGE_VERSION='"0.0.0+validation"' -I/out/gen -I/src/cpp/include \
+      "/src/cpp/tools/$src.cpp" -o "/out/bin/$out" || exit 1
 done
-echo "== built: $(/out/bin/corsika2ps --help 2>&1 | head -1)"
+echo "== built: $(/out/bin/obdeect-stream-from-corsika --help 2>&1 | head -1)"
 
 # Step 1: CORSIKA run (card as simtools writes it: RUN, SITE, IACT, TELESCOPE, TELFIL lines).
 cd "$W" || exit 1
@@ -100,7 +101,7 @@ echo "== corsika exit=$status seconds=$(( $(date +%s) - start )) iact_bytes=$(st
 [ -s run.iact ] || { echo "CORSIKA produced no run.iact"; exit 1; }
 
 # Step 3: codec round trip.
-/out/bin/corsika2ps < run.iact | /out/bin/ps2simtel > roundtrip.corsika
+/out/bin/obdeect-stream-from-corsika < run.iact | /out/bin/obdeect-stream-to-simtel > roundtrip.corsika
 status=$?
 echo "== round trip exit=$status sizes: $(stat -c %s run.iact) $(stat -c %s roundtrip.corsika)"
 [ "$status" -eq 0 ] || exit "$status"

@@ -1,6 +1,6 @@
 # Photon-stream format
 
-This page defines format version 1.0. A gstrickd stream is a sequence of records. All integers and floats are
+This page defines format version 1.0. A photon stream is a sequence of records. All integers and floats are
 little-endian. Lengths are in metres, times in nanoseconds, wavelengths in
 nanometres, altitudes in metres above sea level.
 
@@ -58,7 +58,7 @@ A metadata payload is a u32 entry count followed by entries:
 
 Keys are unique within one payload. Unknown keys are kept, not dropped.
 
-Run keys (from CORSIKA RUNH and TELPOS, or from dlamb): `run_number`,
+Run keys (from CORSIKA RUNH and TELPOS, or from obdeect sources): `run_number`,
 `observation_level_m`, `energy_min_gev`, `energy_max_gev`, `spectral_index`,
 `n_telescopes`, `telescope_x_m`, `telescope_y_m`, `telescope_z_m`,
 `telescope_r_m` (float arrays), `atmosphere_id`, `wavelength_min_nm`,
@@ -158,21 +158,21 @@ Usage: docs/usage.md.
 
 ## Random numbers
 
-Philox-4x32-10 (`gstrickd/random.hpp`), keyed on (seed, stage id) with a
+Philox-4x32-10 (`obdeect/stream/random.hpp`), keyed on (seed, stage id) with a
 counter of disjoint bit fields: photon index (40 bits), block (24 bits),
 telescope (16 bits), stream (16 bits), event (32 bits). Out-of-range fields
 are rejected. Results do not depend on chunk size, photon order or thread
 count.
 
-Stage ids are defined once in `gstrickd/stages.hpp` (a `static_assert` checks
+Stage ids are defined once in `obdeect/stream/stages.hpp` (a `static_assert` checks
 that they are distinct). The values are fixed: changing one changes the random
 numbers.
 
 | Constant | Value | Module |
 |---|---|---|
-| `stage_sources` | `0x444C0001` | dlamb: light sources |
-| `stage_programs` | `0x444C0002` | dlamb: calibration programs |
-| `stage_obdeect` | `0x444C0003` | obdeect, reserved: obdeect still keys its draws on (seed, photon, stream, block); it uses this id once it uses `gstrickd::DrawKey` |
-| `stage_atmosphere` | `0x444C5546` | dlufd: atmosphere ("DLUF") |
+| `stage_sources` | `0x444C0001` | obdeect sources: light sources |
+| `stage_programs` | `0x444C0002` | obdeect sources: calibration programs |
+| `stage_obdeect` | `0x444C0003` | obdeect ray tracing, reserved: obdeect ray tracing still keys its draws on (seed, photon, stream, block); it uses this id once it uses `obdeect::stream::DrawKey` |
+| `stage_atmosphere` | `0x444C5546` | obdeect propagation: atmosphere ("DLUF") |
 
 A new module takes the next free value and is added to `stage_ids`.

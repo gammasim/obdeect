@@ -2,7 +2,7 @@
 
 Cherenkov light of one muon-like track, filtered to a telescope sphere at the origin, sky
 frame. Writer C, producer `obdeect sources muon-track`; source in [track](track.md). Namespace
-`dlamb::muon_track`.
+`obdeect::sources::muon_track`.
 
 ## Options (all take a value unless stated)
 

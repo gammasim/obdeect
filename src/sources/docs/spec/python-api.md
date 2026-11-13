@@ -1,9 +1,9 @@
 # Python API
 
-Package `dlamb`: `__version__` (distribution version or `"0.0.0"` if not installed);
-extension `dlamb._core` (nanobind) with `core_version()` (three-tuple), `gstrickd_contract()`
-(dict: `format_major`, `format_minor`, `max_chunk_rows`, `dlamb_format_major`, `frames`
-{sky 0, telescope 2, camera 3}, `emitted_columns` list in gstrickd order), `make_spectrum`,
+Package `obdeect sources`: `__version__` (distribution version or `"0.0.0"` if not installed);
+extension `obdeect.sources._core` (nanobind) with `core_version()` (three-tuple), `stream_contract()`
+(dict: `format_major`, `format_minor`, `max_chunk_rows`, `sources_format_major`, `frames`
+{sky 0, telescope 2, camera 3}, `emitted_columns` list in obdeect stream order), `make_spectrum`,
 `make_pulse`, `make_angular` (kind, params, x, y) and classes `Emitter(position, pointing,
 angular)`, `Star(towards_source, distance_m, disk_radius_m, disk_z_m, start_z_m)`, `Source(frame
 int, geometry, spectrum, pulse, photons)` with `set_disc_target`, `set_sphere_target`,
@@ -12,10 +12,10 @@ telescope, first_index, rows)` returning a dict of float32 numpy arrays (columns
 `source_columns` order). Core `invalid_argument` becomes `ValueError`; vectors must have
 three finite components; frame int must be 0, 2 or 3.
 
-## `dlamb.source`
+## `obdeect.sources.source`
 
 Constants: `CHUNK_ROWS = 65536`, `FRAMES = {"sky":0,"telescope":2,"camera":3}`, `COLUMNS =
-("x","y","z","cx","cy","cz","t","w","wavelength")` (tests compare with gstrickd).
+("x","y","z","cx","cy","cz","t","w","wavelength")` (tests compare with obdeect stream).
 
 Source dictionary (unknown keys at any level are `ValueError("unknown <label> key(s): ...")`;
 `kind` allowed only in profile and target sections):
@@ -49,7 +49,7 @@ contains `first_index`), `iter_chunks(spec, *, seed, event, telescope)` (chunks 
 count is 0). Semantics identical to [source-core](source-core.md) (the dictionary maps one to
 one; `photons` is the unnormalised source mean).
 
-## `dlamb.plot` (optional matplotlib)
+## `obdeect.sources.plot` (optional matplotlib)
 
 `profile_figure(spec, *, seed=1, photons=200000)` -> figure with three axes whose x labels
 start with `angle`, `wavelength`, `emission time`; histograms (60 bins) of the first

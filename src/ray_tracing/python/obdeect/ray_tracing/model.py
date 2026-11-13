@@ -17,7 +17,7 @@ from obdeect.ray_tracing.repository import read_telescope
 
 STATUS_NAMES: tuple[str, ...] = _core.STATUS_NAMES
 DETECTED = STATUS_NAMES.index("detected")
-# Path segments of obscurers (obdeect::Leg bits).
+# Path segments of obscurers (obdeect::ray_tracing::Leg bits).
 _LEGS = {"incoming": 1, "after_primary": 2, "after_secondary": 4}
 ThreadPool = _core.ThreadPool
 

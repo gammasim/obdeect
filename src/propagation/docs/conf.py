@@ -1,4 +1,4 @@
-"""Sphinx configuration of the dlufd documentation."""
+"""Sphinx configuration of the obdeect propagation documentation."""
 
 import tomllib
 from importlib.metadata import PackageNotFoundError, version
@@ -9,7 +9,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 
 project = "obdeect"
-copyright = "2026, dlufd developers"  # noqa: A001
+copyright = "2026, obdeect propagation developers"  # noqa: A001
 with open(ROOT / "CITATION.cff", encoding="utf-8") as file:
     author = ", ".join(
         f"{a['given-names']} {a['family-names']}" for a in yaml.safe_load(file)["authors"]
@@ -35,7 +35,7 @@ html_theme_options = {
     "icon_links": [
         {
             "name": "GitHub",
-            "url": "https://github.com/gammasim/dlufd",
+            "url": "https://github.com/gammasim/obdeect",
             "icon": "fa-brands fa-github",
         },
     ],

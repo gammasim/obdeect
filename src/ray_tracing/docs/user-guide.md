@@ -1,6 +1,6 @@
 # User Guide
 
-Install obdeect, compile an optical model and trace photons to the camera entrance.
+Install obdeect ray tracing, compile an optical model and trace photons to the camera entrance.
 Start with the command line or use Python to supply and analyse photon arrays.
 
 ```{toctree}

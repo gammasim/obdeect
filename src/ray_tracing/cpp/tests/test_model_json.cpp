@@ -147,8 +147,8 @@ void axes_offset_is_applied_by_the_tracer() {
 }
 
 // Numbers parse the same under a locale with a decimal comma. Without one installed the
-// test cannot exercise the path: it is skipped, unless OBDEECT_RAY_TRACING_REQUIRE_COMMA_LOCALE is set
-// (CI does), in which case a missing locale fails.
+// test cannot exercise the path: it is skipped, unless OBDEECT_RAY_TRACING_REQUIRE_COMMA_LOCALE is
+// set (CI does), in which case a missing locale fails.
 void decimal_comma_locale() {
   const std::string previous = std::setlocale(LC_NUMERIC, nullptr);
   bool comma = false;

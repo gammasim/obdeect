@@ -13,11 +13,11 @@ comparisons with sim_telarray:
 3. **Equivalence with sim_telarray** (below): the same simtools applications
    run with both backends on the same simulation models.
 
-![Deviation of obdeect from sim_telarray](_static/figures/validation_psf_area.png)
+![Deviation of obdeect ray tracing from sim_telarray](_static/figures/validation_psf_area.png)
 
 ## How to repeat the comparison
 
-In a simtools environment with sim_telarray and obdeect installed, for each
+In a simtools environment with sim_telarray and obdeect ray tracing installed, for each
 telescope and backend:
 
 ```sh
@@ -36,9 +36,9 @@ limit the agreement; repeating with other seeds shows the spread.
 
 ## Results (simulation models 6.0.2, zenith 20 deg, star at 10 km, 0-4 deg)
 
-obdeect at commit 7394e73 (after the performance rounds), simtools at commit
+obdeect ray tracing at commit 7394e73 (after the performance rounds), simtools at commit
 fcd73f6033 (`--instrument_seed 11 --simulation_seed 11`). Largest deviation
-of obdeect from sim_telarray over nine offsets:
+of obdeect ray tracing from sim_telarray over nine offsets:
 
 | Telescope | D80 | Effective area | Effective focal length |
 | --- | --- | --- | --- |
@@ -59,9 +59,9 @@ of obdeect from sim_telarray over nine offsets:
   mirror errors: each backend draws its own realisations. An earlier run with
   other seeds (simtools option `--obdeect_seed`) gave 0.3-1.1%;
   between the two seed sets sim_telarray's own D80 changes by up to 1.3%
-  (MSTN-01) and obdeect's by up to 1.0%. The telescopes of one type share the
+  (MSTN-01) and obdeect ray tracing's by up to 1.0%. The telescopes of one type share the
   optics and the seeds, hence the same largest deviations.
-- obdeect 0.3.0 and 7394e73, same simtools and seeds: LSTN-01 and MSTS-01
+- obdeect ray tracing 0.3.0 and 7394e73, same simtools and seeds: LSTN-01 and MSTS-01
   identical (D80 and focal length to 1e-15, the rounding of simtools' analysis);
   SSTS-01 and SCTS-design within 3e-9 (D80) and 8e-11 (focal length), the
   rounding-level changes below; effective areas identical.
@@ -74,7 +74,7 @@ of obdeect from sim_telarray over nine offsets:
   reflected by each mirror agree within statistics (pulls: mean 0.05,
   standard deviation 0.96), including the mirrors partly shadowed by the camera.
 - Single-mirror mode (29 MSTN-01 mirrors): mean D80 1.503 cm for both, spread
-  0.183 cm (sim_telarray) and 0.160 cm (obdeect).
+  0.183 cm (sim_telarray) and 0.160 cm (obdeect ray tracing).
 - Incident angles (SSTS-01, 1 deg, 10^6 photons, per photon): mean angles on
   the focal surface 46.656/46.658 deg, primary 9.899/9.898 deg, secondary
   33.184/33.183 deg; in bins of the primary radius they agree within 0.05 deg.
@@ -85,7 +85,7 @@ of obdeect from sim_telarray over nine offsets:
 The PSF applications, LSTN-01, measured PSF curves of the simtools test
 resources:
 
-| Application | sim_telarray | obdeect |
+| Application | sim_telarray | obdeect ray tracing |
 | --- | --- | --- |
 | `validate-cumulative-psf` (6.0.2, 20 deg, 7394e73) | D80 3.052 cm, area 365.7 m², 46 s | D80 3.050 cm, area 365.8 m², 3 s |
 | `derive-psf-parameters` (6.0.2, 20 deg) | RMSD 0.0131, D80 3.053 cm | RMSD 0.0127, D80 3.059 cm |
@@ -93,18 +93,18 @@ resources:
 | `derive-mirror-rnda` (7.0.0, full statistics) | first 20 mirrors: within 4.2% (median 1.7%), 848 s | all 198 mirrors: within 5% (median 2.4%), 241 s |
 
 The `derive-psf-parameters` and `derive-mirror-rnda` rows are from an earlier
-obdeect version and were not rerun; the PSF they use is checked above.
+obdeect ray tracing version and were not rerun; the PSF they use is checked above.
 Both backends start `derive-psf-parameters` below its RMSD threshold, so the
 optimisation stops at once. Its final D80-versus-offset plot (46 offsets in four
 directions, 2 million photons each) needed more than 2 GB of memory with either
 backend, because simtools kept every photon image (fixed in simtools#2664): at
 full statistics it takes 2120 s with sim_telarray (RMSD 0.0132 to 0.0101 in
-one step, peak 0.3 GB) and 115 s with obdeect (0.0127 to 0.0107, peak 1.45
+one step, peak 0.3 GB) and 115 s with obdeect ray tracing (0.0127 to 0.0107, peak 1.45
 GB); in `--test` mode the whole application takes 11 s
-(sim_telarray) and 6 s (obdeect). With 5000 photons per evaluation the
+(sim_telarray) and 6 s (obdeect ray tracing). With 5000 photons per evaluation the
 `derive-mirror-rnda` fits differ by their noise; with a fixed `--simulation_seed`
-every evaluation reuses the same photons, so the obdeect objective is smooth.
-On the 20 mirrors fitted by both, the fitted random reflection angle of obdeect
+every evaluation reuses the same photons, so the obdeect ray tracing objective is smooth.
+On the 20 mirrors fitted by both, the fitted random reflection angle of obdeect ray tracing
 is 2.8% below sim_telarray's on average, with a spread of 6.6% between mirrors
 (fit noise). These sim_telarray fits used `--max_workers 1`: parallel mirror
 jobs shared one model directory and rewrote its files, including the trial
@@ -118,18 +118,18 @@ origin (0.02% plate-scale difference for the SCT at 10 km).
 
 `telescope_transmission` is sim_telarray's fit of the ratio of the effective
 mirror area of a detailed ray tracing (with masts) to its own (camera body
-only), versus the off-axis angle. The same ratio from obdeect, the same photons
+only), versus the off-axis angle. The same ratio from obdeect ray tracing, the same photons
 traced with and without the structure (geometry only, mean of four azimuths),
 for MSTx-FlashCam (`telescope_structure` 1.0.0 on simulation-models branch
 `simulation-model-masts`):
 
 | Off axis | 0 deg | 1 deg | 2 deg | 3 deg | 4 deg |
 | --- | --- | --- | --- | --- | --- |
-| obdeect structure | 0.8945 | 0.8917 | 0.8897 | 0.8866 | 0.8855 |
+| obdeect ray tracing structure | 0.8945 | 0.8917 | 0.8897 | 0.8866 | 0.8855 |
 | `telescope_transmission` 2.0.0 | 0.8980 | 0.8967 | 0.8939 | 0.8898 | 0.8846 |
 
 `simtools-validate-optics` for MSTS-01 (production 7.0.0, both backends)
-agrees in effective area within 0.4% on axis and 1.2% up to 4 deg; obdeect
+agrees in effective area within 0.4% on axis and 1.2% up to 4 deg; obdeect ray tracing
 shows the azimuthal dependence (up to 2% between N and E) that the radial
 parameterisation cannot. The structure also widens D80 by 1.4% on axis (same
 photons with and without structure), since it shades the dish unevenly.
@@ -147,7 +147,7 @@ keyword `secondary_baffle`). The container's sim_telarray build allows at most
 
 Effective area with the baffle divided by that without it:
 
-| Off axis | SSTS-design sim_telarray | obdeect | SCTS-design sim_telarray | obdeect |
+| Off axis | SSTS-design sim_telarray | obdeect ray tracing | SCTS-design sim_telarray | obdeect ray tracing |
 | --- | --- | --- | --- | --- |
 | 0 deg | 0.9983 | 0.9982 | 0.9898 | 0.9903 |
 | 1 deg | 0.9974 | 0.9974 | 0.9807 | 0.9808 |
@@ -159,7 +159,7 @@ Both codes lose the same light on the baffles: within 0.01% for the SST and
 0.14% for the SCT, where the baffle costs up to 5.5%. The SST baffle costs
 little because most light meeting it would also meet the secondary shadow
 plate (see [shadowing](shadowing.md)). The effective areas themselves agree
-within 0.36% (obdeect higher, with and without baffle).
+within 0.36% (obdeect ray tracing higher, with and without baffle).
 
 ## Calibration light (Phase 2)
 
@@ -168,7 +168,7 @@ within 0.36% (obdeect higher, with and without baffle).
 
 - sim_telarray backend: `ff-1m` or `xyzls` make the light, sim_telarray traces it
   through its optics and simulates the camera;
-- obdeect backend: obdeect makes and traces the light to the camera entrance,
+- obdeect ray tracing backend: obdeect ray tracing makes and traces the light to the camera entrance,
   simtools writes the photons as photon bunches, sim_telarray simulates the
   camera with its optics bypassed (`Bypass_Optics=1` single mirror,
   `Bypass_Optics=2` dual mirror).
@@ -181,7 +181,7 @@ pixel the summed images scaled to the same total, (b - a) / sqrt(a + b), whose
 spread is 1 for Poisson fluctuations only ("shape pull"). Flashers: 100 pulses;
 illuminators: 10 pulses of 10^9 photons.
 
-| Case | p.e./event sim_telarray | p.e./event obdeect | obdeect / sim_telarray | centre shift [mm] | width ratio | time rms [ns] sim_telarray / obdeect | shape pull, cross / same backend | wall time [s] sim_telarray / obdeect |
+| Case | p.e./event sim_telarray | p.e./event obdeect ray tracing | obdeect ray tracing / sim_telarray | centre shift [mm] | width ratio | time rms [ns] sim_telarray / obdeect ray tracing | shape pull, cross / same backend | wall time [s] sim_telarray / obdeect ray tracing |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Flasher LSFN-design, LSTN-01 | 665228 | 665272 | 1.0001 ± 0.0001 | 0.1 | 1.0000 | 0.60 / 0.60 | 1.01 / 12.2 | 512 / 397 |
 | Flasher LSFS-design, LSTS-01 | 669651 | 666603 | 0.9954 ± 0.0001 (a) | 0.0 | 1.0001 | 0.60 / 0.60 | 1.00 / 12.3 | 508 / 385 |
@@ -196,7 +196,7 @@ illuminators: 10 pulses of 10^9 photons.
 | ILLS-03 to SSTS-17, 400 nm | 22702 | 24840 | 1.0942 ± 0.0018 (d) | 0.1 | 1.0004 | 0.08 / 0.01 (c) | 0.99 / 1.54 | 647 / 9 |
 | SSTS-17, source 1.7 deg off axis at 400 m | 251 | 452 | 1.80 ± 0.03 (d) | 0.1 | 1.005 | 0.02 / 0.00 | 0.91 / 0.84 | 504 / 6 |
 
-- Flashers and pixels: with the same seeds, obdeect and sim_telarray agree per
+- Flashers and pixels: with the same seeds, obdeect ray tracing and sim_telarray agree per
   pixel at the Poisson level (shape pull 0.97-1.01) in all four flasher cases;
   other seeds change the pixel efficiencies of the camera simulation, which
   dominates the run-to-run scatter (1.4-12).
@@ -206,7 +206,7 @@ illuminators: 10 pulses of 10^9 photons.
   places the flasher at the camera (simtools#2667); the LSTN-01 and MSTS-04 rows
   are rerun with it and agree within 0.02%.
 - (b) Random mirror errors: each realisation shapes the defocused image of a
-  source at a few hundred metres; obdeect and sim_telarray draw different
+  source at a few hundred metres; obdeect ray tracing and sim_telarray draw different
   realisations, as do two seeds of one backend, so all pairs differ by the same
   7-8 times Poisson.
 - (c) `xyzls` hands the light over at the horizontal plane through the
@@ -217,7 +217,7 @@ illuminators: 10 pulses of 10^9 photons.
   at 2.3 deg, for bunches handed over 100-1000 m in front of the telescope.
   sim_telarray's photoelectron times inherit this, at 2.3 deg also its image
   centre (8.7 mm, 64 arcsec; refraction over 929 m bends the light by about 3
-  arcsec) and its readout charge. obdeect's times follow the geometry; the
+  arcsec) and its readout charge. obdeect ray tracing's times follow the geometry; the
   SST optics are isochronous to 0.01 ns.
 - (d) sim_telarray reflectivity for 2-D (wavelength, incidence angle) tables:
   it applies R(lambda, 0) R(lambda, theta) / R_max(lambda) instead of
@@ -234,14 +234,14 @@ The scripts are in the validation workspace (`val/phase2`: `cases.sh`,
 
 ## Air-shower photons (Phase 3)
 
-CORSIKA + sim_telarray against CORSIKA + obdeect + sim_telarray, simulation
+CORSIKA + sim_telarray against CORSIKA + obdeect ray tracing + sim_telarray, simulation
 models 7.0.0, 1 TeV gammas, 50 showers with 10 core reuses per point. Both
-chains read the same CORSIKA IACT file. In the obdeect chain the simtools
+chains read the same CORSIKA IACT file. In the obdeect ray tracing chain the simtools
 shower route traces the photon bunches to the camera and sim_telarray simulates
 the camera with its optics bypassed (`Bypass_Optics=1`). Native sim_telarray
 runs with three seeds; their mean is the reference.
 
-| Telescope | Zenith [deg] | p.e. sim_telarray | p.e. obdeect | obdeect / sim_telarray |
+| Telescope | Zenith [deg] | p.e. sim_telarray | p.e. obdeect ray tracing | obdeect ray tracing / sim_telarray |
 | --- | --- | --- | --- | --- |
 | LSTS-01 | 20 | 1678606 | 1677207 | 0.9992 |
 | LSTS-01 | 40 | 1196284 | 1197360 | 1.0009 |
@@ -261,7 +261,7 @@ runs with three seeds; their mean is the reference.
   correction this gave 7% too many photoelectrons at 40 deg and 33-39% at
   60 deg. The route therefore scales each photon weight by the ratio of the native
   transmission to the one sim_telarray applies, using sim_telarray's own
-  transmission formula. obdeect returns the telescope transmission in its
+  transmission formula. obdeect ray tracing returns the telescope transmission in its
   weights (`normalise_transmission=False`), so the total equals the native chain. A sim_telarray option to switch off its absorption with
   bypassed optics would remove this workaround.
 - Images agree as well as two native seeds agree with each other: pixel
@@ -276,24 +276,24 @@ The scripts and full results are in the validation workspace (`phase3`:
 ## Single-core speed
 
 Both codes pinned to one core of the validation container (aarch64 Linux VM,
-Apple silicon host; obdeect Release build), simulation models 7.0.0, the same
+Apple silicon host; obdeect ray tracing Release build), simulation models 7.0.0, the same
 telescope models and photon numbers. Per-photon costs are the slope between
 2*10^5 and 2*10^6 photons (best of three runs), which removes start-up:
-sim_telarray 0.01-0.09 s, obdeect model compilation 0.17-0.28 s. obdeect at
+sim_telarray 0.01-0.09 s, obdeect ray tracing model compilation 0.17-0.28 s. obdeect ray tracing at
 commit 7394e73; best of two such runs (LSTN-01: four) on a host that was
 partly busy, which also slowed sim_telarray by up to 7% against earlier runs.
 
 Star light (zenith 20 deg, star on axis at 10 km, photons sampled on the
 entrance disk), microseconds per photon:
 
-| Telescope | sim_telarray as simtools runs it (imaging list) | sim_telarray, no imaging list | obdeect sampling + tracing | obdeect tracing only |
+| Telescope | sim_telarray as simtools runs it (imaging list) | sim_telarray, no imaging list | obdeect ray tracing sampling + tracing | obdeect ray tracing tracing only |
 | --- | --- | --- | --- | --- |
 | LSTN-01 | 1.86 | 0.33 | 0.34 | 0.26 |
 | MSTN-07 | 1.68 | 0.31 | 0.31 | 0.24 |
 | MSTS-04 (with `telescope_structure`) | 1.69 | 0.31 | 0.44 | 0.36 |
 | SSTS-17 | 1.29 | 0.30 | 0.58 | 0.50 |
 
-- Per core, obdeect samples and traces single-mirror telescopes as fast as
+- Per core, obdeect ray tracing samples and traces single-mirror telescopes as fast as
   sim_telarray without its imaging list; the applications gain from writing no
   photon lists (sim_telarray spends 80% of its time on them) and from using
   every core. The earlier factors of 6-18 (Phase 1, whole applications, wall
@@ -325,12 +325,12 @@ entrance disk), microseconds per photon:
 Calibration light, the stage before sim_telarray's camera simulation (which is
 the same for both):
 
-| Case | LightEmission | obdeect making and tracing | writing photon bunches | ratio |
+| Case | LightEmission | obdeect ray tracing making and tracing | writing photon bunches | ratio |
 | --- | --- | --- | --- | --- |
 | Flasher MSFx-FlashCam on MSTS-04, 10^8 photons, 4.0*10^7 at the camera | `ff-1m` 58.6 s | 23.8 s | 22.1 s | 1.3 |
 | Illuminator 600 m above LSTN-01, 10^10 photons, 8.3*10^5 at the camera | `xyzls` 14.7 s | 0.8 s | 0.5 s | 11.8 |
 
-`xyzls` follows every emitted photon; obdeect makes only the photons crossing
+`xyzls` follows every emitted photon; obdeect ray tracing makes only the photons crossing
 the telescope entrance (see [Light sources](light-sources.md#flashers-and-illuminators)), and its cost scales with those.
 Scripts: `val/phase2/bench_star.py`, `bench_light.py`.
 
@@ -367,7 +367,7 @@ What changed, and what was measured:
   a transmission (max relative table error 1.9e-7 MSTN-07, 6.7e-6 SCTS-design,
   6.5e-4 SSTS-17), so no model uses a table. The replay is bit-identical, and the
   change gave no speed gain: reverted.
-- **`OBDEECT_USE_FMA`** (CMake option, default OFF): see the user guide.
+- **`OBDEECT_RAY_TRACING_USE_FMA`** (CMake option, default OFF): see the user guide.
 
 Total change of the round (final state against 13daac1, tier G, 6 * 10^6 photons
 per model):

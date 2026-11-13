@@ -26,8 +26,9 @@ template <class T> [[nodiscard]] T airmass(T cx, T cy) {
 
 // p[row] = atmospheric transmission of every row; 0 for wavelengths at or above max_lambda.
 template <class T>
-void atmospheric_acceptance(const obdeect::stream::PhotonChunk &chunk, const TransmissionTable &table,
-                            const TelescopeDepths &depths, std::span<T> p) {
+void atmospheric_acceptance(const obdeect::stream::PhotonChunk &chunk,
+                            const TransmissionTable &table, const TelescopeDepths &depths,
+                            std::span<T> p) {
   using obdeect::stream::Column;
   const std::size_t rows = chunk.rows();
   if (p.size() != rows) {

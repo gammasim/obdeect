@@ -1,6 +1,6 @@
 # Source core
 
-Headers `dlamb/source.hpp`, `streams.hpp`, `vec3.hpp`. Namespace `dlamb`.
+Headers `obdeect/sources/source.hpp`, `streams.hpp`, `vec3.hpp`. Namespace `obdeect sources`.
 
 ## Types
 
@@ -16,7 +16,7 @@ Headers `dlamb/source.hpp`, `streams.hpp`, `vec3.hpp`. Namespace `dlamb`.
   photons, target}`.
 - `Photon{position, direction, time_ns, weight=1, wavelength_nm}`.
 - `Stream` enum 1..5 (see conventions), `stage_sources`, `photon_stream_format_major = 1`,
-  `source_columns` = x y z cx cy cz t w wavelength (gstrickd bit mask).
+  `source_columns` = x y z cx cy cz t w wavelength (obdeect stream bit mask).
 
 ## Validation (`validate(source)`, `invalid_argument`)
 

@@ -6,26 +6,26 @@ types and fields.
 ## C++
 
 ```cpp
-#include "gstrickd/stream.hpp"
+#include "obdeect/stream/stream.hpp"
 
 #include <fstream>
 
 std::ofstream file("run.ps", std::ios::binary);
-gstrickd::Writer writer(file, "my-module");           // writes the stream record
-gstrickd::PhotonChunk chunk;
+obdeect::stream::Writer writer(file, "my-module");           // writes the stream record
+obdeect::stream::PhotonChunk chunk;
 chunk.telescope_id = 1;
-chunk.frame = gstrickd::Frame::telescope;
-chunk.resize(3, gstrickd::required_columns);          // x y cx cy t w
-chunk[gstrickd::Column::x] = {0.0F, 1.0F, 2.0F};      // fill the columns, then:
+chunk.frame = obdeect::stream::Frame::telescope;
+chunk.resize(3, obdeect::stream::required_columns);          // x y cx cy t w
+chunk[obdeect::stream::Column::x] = {0.0F, 1.0F, 2.0F};      // fill the columns, then:
 writer.write_chunk(chunk);
 writer.finish();                                      // writes stream_end
 
 std::ifstream in("run.ps", std::ios::binary);
-gstrickd::Reader reader(in);
-gstrickd::Record record;
+obdeect::stream::Reader reader(in);
+obdeect::stream::Record record;
 while (reader.next(record)) {
-  if (record.type == gstrickd::RecordType::photons) {
-    // record.chunk.rows(), record.chunk[gstrickd::Column::w], ...
+  if (record.type == obdeect::stream::RecordType::photons) {
+    // record.chunk.rows(), record.chunk[obdeect::stream::Column::w], ...
   }
 }
 ```
@@ -34,9 +34,9 @@ while (reader.next(record)) {
 
 ```python
 import numpy as np
-import gstrickd
+import obdeect stream
 
-with gstrickd.Writer("run.ps", "my-module") as writer:
+with obdeect.stream.Writer("run.ps", "my-module") as writer:
     writer.write("run", {"run_number": 1, "telescope_x_m": [0.0, 10.0]})
     writer.write_photons(
         1,
@@ -48,14 +48,14 @@ with gstrickd.Writer("run.ps", "my-module") as writer:
     )
     writer.write_blob(1204, 0, b"...")                # raw EventIO block
 
-for record in gstrickd.Reader("run.ps"):
+for record in obdeect.stream.Reader("run.ps"):
     print(record["type"])                             # stream, run, photons, blob, ...
     if record["type"] == "photons":
         w = record["columns"]["w"]                    # numpy float32 array
 ```
 
 Metadata values: `int`, `float`, `str`, or a list or array of floats. Photon columns
-must be float32 arrays; the names are `gstrickd.COLUMNS`, the frames are `gstrickd.FRAMES`.
+must be float32 arrays; the names are `obdeect.stream.COLUMNS`, the frames are `obdeect.stream.FRAMES`.
 
 `Reader("-")` reads from stdin.
 
@@ -184,7 +184,7 @@ uses the event zenith and azimuth in the same way.
 within 0.5 m of its position (transformed as above); other telescopes are skipped and
 their number is reported on stderr. Without the file, `tel` is the stream telescope id.
 
-In Python: `gstrickd.stream_to_grisu(run.ps, run.grisu, telescope_config="TLLOC.dat")`.
+In Python: `obdeect.stream.stream_to_grisu(run.ps, run.grisu, telescope_config="TLLOC.dat")`.
 
 ### Efficiency status
 
@@ -205,7 +205,7 @@ each frame is listed in docs/format.md ("Efficiency status").
 $ obdeect stream to-simtel --camera-map cam.txt --allow-pending telescope_transmission_constant run.ps > sim.simtel
 ```
 
-In Python: `gstrickd.stream_to_simtel(run.ps, sim.simtel, cam, allow_pending=["telescope_transmission_constant"])`.
+In Python: `obdeect.stream.stream_to_simtel(run.ps, sim.simtel, cam, allow_pending=["telescope_transmission_constant"])`.
 
 When the QE envelope was applied upstream (efficiency status state `envelope`) and the
 sim_telarray QE table is divided by that envelope, declare it:
@@ -226,42 +226,42 @@ automated tests.
 ## CMake package
 
 `cmake --install` puts the headers and a CMake package in the install prefix; a wheel
-carries the same files under `gstrickd/include` and `gstrickd/cmake`:
+carries the same files under `obdeect/stream/include` and `obdeect/stream/cmake`:
 
 ```console
-$ python -m gstrickd --cmake-dir      # directory of gstrickd-config.cmake
-$ python -m gstrickd --include-dir    # directory of the gstrickd/ headers
+$ python -m obdeect.stream --cmake-dir      # directory of obdeect_stream-config.cmake
+$ python -m obdeect.stream --include-dir    # directory of the obdeect/stream/ headers
 ```
 
-A consumer (e.g. dlufd or dlamb) links the header-only core:
+A consumer (e.g. obdeect propagation or obdeect sources) links the header-only core:
 
 ```cmake
-find_package(gstrickd 0.1 CONFIG REQUIRED)   # SameMinorVersion: any 0.1.x
-target_link_libraries(<target> PRIVATE gstrickd::gstrickd_core)
+find_package(obdeect stream 0.1 CONFIG REQUIRED)   # SameMinorVersion: any 0.1.x
+target_link_libraries(<target> PRIVATE obdeect::stream)
 ```
 
-Configure with `-Dgstrickd_DIR=$(python -m gstrickd --cmake-dir)`, or with
-`-Dgstrickd_DIR=<prefix>/lib/cmake/gstrickd` for a `cmake --install` prefix.
+Configure with `-Dobdeect_stream_DIR=$(python -m obdeect.stream --cmake-dir)`, or with
+`-Dobdeect_stream_DIR=<prefix>/lib/cmake/obdeect_stream` for a `cmake --install` prefix.
 
 The version is defined once. Wheels and sdists take it from the git tag (setuptools-scm,
 passed by scikit-build-core as `SKBUILD_PROJECT_VERSION`). Other builds take the newest
 `v*` tag, or 0.0.0 without one. CMake derives `project()` and the C++ `version.hpp` from it.
 
-## Using gstrickd from other languages
+## Using obdeect stream from other languages
 
-`libgstrickd_c` exposes the reader and writer through a plain C ABI
-(`gstrickd/gstrickd.h`, `gstrickd::gstrickd_c` in the CMake package), so Rust (`bindgen`
+`libobdeect_stream_c` exposes the reader and writer through a plain C ABI
+(`obdeect/stream/obdeect_stream.h`, `obdeect::stream_c` in the CMake package), so Rust (`bindgen`
 or hand-written `extern "C"`), Julia (`ccall`) or Go (cgo) can use it. Every returned
 pointer, including the photon columns, belongs to the reader and is valid until the next
-`gstrickd_reader_next()`; nothing is copied. Errors are negative codes with a message in
-`gstrickd_last_error()`. Build scripts find the files with `python -m gstrickd --include-dir`,
+`obdeect_stream_reader_next()`; nothing is copied. Errors are negative codes with a message in
+`obdeect_stream_last_error()`. Build scripts find the files with `python -m obdeect.stream --include-dir`,
 `--lib-dir` and `--cmake-dir`.
 
 A ray tracer in Python reads ground-frame photons and writes camera-frame photons:
 
 ```python
 import numpy as np
-from gstrickd.stage import transform
+from obdeect.stream.stage import transform
 
 def trace(telescope_id, columns, metadata):
     # columns: x, y, cx, cy, t, w, ... as float32 arrays (ground frame, metres)
@@ -282,27 +282,27 @@ telescope records, and appends one `efficiency_status` record per run (it refuse
 The same in C (error handling shortened):
 
 ```c
-#include <gstrickd/gstrickd.h>
+#include <obdeect/stream/obdeect_stream.h>
 
-gstrickd_reader *in;  gstrickd_writer *out;
-gstrickd_reader_open("ground.ps", &in);
-gstrickd_writer_open("camera.ps", "my-tracer", &out);
+obdeect_stream_reader *in;  obdeect_stream_writer *out;
+obdeect_stream_reader_open("ground.ps", &in);
+obdeect_stream_writer_open("camera.ps", "my-tracer", &out);
 int type;
-while (gstrickd_reader_next(in, &type) == GSTRICKD_OK) {
-  if (type == GSTRICKD_RECORD_PHOTONS) {
+while (obdeect_stream_reader_next(in, &type) == OBDEECT_STREAM_OK) {
+  if (type == OBDEECT_STREAM_RECORD_PHOTONS) {
     uint32_t telescope, rows;  uint64_t first;
-    gstrickd_reader_photons(in, &telescope, NULL, &first, &rows, NULL);
-    const float *columns[GSTRICKD_N_COLUMNS];
-    for (int c = 0; c < GSTRICKD_N_COLUMNS; ++c)
-      columns[c] = gstrickd_reader_column(in, c);        /* NULL if absent; trace here */
-    gstrickd_writer_write_photons(out, telescope, GSTRICKD_FRAME_CAMERA, first, rows, columns);
-  }                       /* copy other records with gstrickd_reader_meta_* / write_record */
-}                         /* the loop ends with GSTRICKD_END, anything else is an error */
-gstrickd_writer_close(out);  gstrickd_reader_close(in);
+    obdeect_stream_reader_photons(in, &telescope, NULL, &first, &rows, NULL);
+    const float *columns[OBDEECT_STREAM_N_COLUMNS];
+    for (int c = 0; c < OBDEECT_STREAM_N_COLUMNS; ++c)
+      columns[c] = obdeect_stream_reader_column(in, c);        /* NULL if absent; trace here */
+    obdeect_stream_writer_write_photons(out, telescope, OBDEECT_STREAM_FRAME_CAMERA, first, rows, columns);
+  }                       /* copy other records with obdeect_stream_reader_meta_* / write_record */
+}                         /* the loop ends with OBDEECT_STREAM_END, anything else is an error */
+obdeect_stream_writer_close(out);  obdeect_stream_reader_close(in);
 ```
 
-Link with `-L$(python -m gstrickd --lib-dir) -lgstrickd_c` or, in CMake,
-`target_link_libraries(tracer PRIVATE gstrickd::gstrickd_c)`.
+Link with `-L$(python -m obdeect.stream --lib-dir) -lobdeect_stream_c` or, in CMake,
+`target_link_libraries(tracer PRIVATE obdeect::stream_c)`.
 
 ### Conformance streams
 

@@ -331,9 +331,10 @@ inline constexpr std::size_t n_scatter_columns = 10;
 
 // Output columns of the scattered photons, in this order.
 inline constexpr std::array<obdeect::stream::Column, n_scatter_columns> scatter_output_columns = {
-    obdeect::stream::Column::x,  obdeect::stream::Column::y,         obdeect::stream::Column::z, obdeect::stream::Column::cx,
-    obdeect::stream::Column::cy, obdeect::stream::Column::cz,        obdeect::stream::Column::t, obdeect::stream::Column::zem,
-    obdeect::stream::Column::w,  obdeect::stream::Column::wavelength};
+    obdeect::stream::Column::x,         obdeect::stream::Column::y,   obdeect::stream::Column::z,
+    obdeect::stream::Column::cx,        obdeect::stream::Column::cy,  obdeect::stream::Column::cz,
+    obdeect::stream::Column::t,         obdeect::stream::Column::zem, obdeect::stream::Column::w,
+    obdeect::stream::Column::wavelength};
 
 namespace detail {
 
@@ -599,7 +600,8 @@ inline void scatter_chunk(const ScatteringConfig &config, const ScatteringTable 
     }
     const auto &photons = out[i];
     for (std::size_t first = 0; first < photons.size(); first += obdeect::stream::max_chunk_rows) {
-      const std::size_t n = std::min<std::size_t>(obdeect::stream::max_chunk_rows, photons.size() - first);
+      const std::size_t n =
+          std::min<std::size_t>(obdeect::stream::max_chunk_rows, photons.size() - first);
       obdeect::stream::PhotonChunk piece;
       piece.telescope_id = telescopes[i].id;
       piece.frame = obdeect::stream::Frame::sky;

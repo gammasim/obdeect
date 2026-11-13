@@ -295,7 +295,8 @@ private:
       photons(record.chunk, sink);
       break;
     case RecordType::telescope_end: {
-      const auto id = checked_integer(record.metadata, "telescope_id", obdeect::stream::max_telescope);
+      const auto id =
+          checked_integer(record.metadata, "telescope_id", obdeect::stream::max_telescope);
       if (!telescope_.open || static_cast<std::int64_t>(telescope_.id) != id) {
         throw std::invalid_argument("telescope_end of a telescope that is not open");
       }
@@ -520,7 +521,7 @@ private:
   }
 
   [[nodiscard]] obdeect::stream::Metadata make_ledger(const WavelengthRange &range,
-                                               const std::vector<double> &pathlen_m) const {
+                                                      const std::vector<double> &pathlen_m) const {
     obdeect::stream::Metadata ledger;
     std::string factors = "atmosphere,wavelength";
     if (config_.geometry_only) {
@@ -638,7 +639,8 @@ private:
     sink(out);
   }
 
-  static obdeect::stream::PhotonChunk without_zero_weight(const obdeect::stream::PhotonChunk &chunk) {
+  static obdeect::stream::PhotonChunk
+  without_zero_weight(const obdeect::stream::PhotonChunk &chunk) {
     using obdeect::stream::Column;
     std::size_t kept = 0;
     for (const float weight : chunk[Column::w]) {
@@ -690,7 +692,7 @@ private:
   // The chunk without column `dropped`; the other columns, telescope, frame and first_index are
   // kept.
   static obdeect::stream::PhotonChunk without_column(const obdeect::stream::PhotonChunk &input,
-                                              obdeect::stream::Column dropped) {
+                                                     obdeect::stream::Column dropped) {
     using obdeect::stream::Column;
     obdeect::stream::PhotonChunk out;
     out.telescope_id = input.telescope_id;
@@ -710,7 +712,8 @@ private:
   // Primary photons for the scattering kernel: the input without cz (the kernel takes
   // cz = -sqrt(1 - cx^2 - cy^2)), with a wavelength column. Rows of upward or horizontal photons
   // get w = 0 (they are not scattered, as sky_to_ground drops them).
-  static obdeect::stream::PhotonChunk scattering_primaries(const obdeect::stream::PhotonChunk &input) {
+  static obdeect::stream::PhotonChunk
+  scattering_primaries(const obdeect::stream::PhotonChunk &input) {
     using obdeect::stream::Column;
     // Checked before the loop below writes out.w; scatter_chunk checks the rest later.
     for (const Column required :
@@ -758,8 +761,9 @@ private:
       }
       obdeect::stream::PhotonChunk primaries = scattering_primaries(input);
       assign_wavelengths(primaries, run_->wavelengths, config_.seed, event, input.telescope_id);
-      obdeect::propagation::scatter_chunk(config_.scattering, *config_.scattering_table, *config_.transmission,
-                           sphere_, primaries, config_.seed, event, scatter_index_, scattered_);
+      obdeect::propagation::scatter_chunk(config_.scattering, *config_.scattering_table,
+                                          *config_.transmission, sphere_, primaries, config_.seed,
+                                          event, scatter_index_, scattered_);
       scatter_index_ += input.rows();
     }
   }
@@ -772,7 +776,8 @@ private:
       // Scattered photons point downwards by construction. Their cz column (float32) can disagree
       // with cx, cy by more than the tolerance of sky_to_ground for nearly horizontal photons, so
       // their direction is taken from cx, cy, scaled inside the unit disc (float32 rounding).
-      obdeect::stream::PhotonChunk plane_input = without_column(scattered, obdeect::stream::Column::cz);
+      obdeect::stream::PhotonChunk plane_input =
+          without_column(scattered, obdeect::stream::Column::cz);
       auto &cx = plane_input[obdeect::stream::Column::cx];
       auto &cy = plane_input[obdeect::stream::Column::cy];
       for (std::size_t row = 0; row < plane_input.rows(); ++row) {
@@ -827,7 +832,8 @@ private:
     std::vector<bool> has_block(sphere_.size(), false);
     for (const auto &record : records) {
       if (record.type == obdeect::stream::RecordType::telescope) {
-        const auto id = checked_integer(record.metadata, "telescope_id", obdeect::stream::max_telescope);
+        const auto id =
+            checked_integer(record.metadata, "telescope_id", obdeect::stream::max_telescope);
         if (id >= 1 && static_cast<std::size_t>(id) <= has_block.size()) {
           has_block[static_cast<std::size_t>(id - 1)] = true;
         }
@@ -835,7 +841,8 @@ private:
     }
     for (const auto &record : records) {
       if (record.type == obdeect::stream::RecordType::telescope_end) {
-        const auto id = checked_integer(record.metadata, "telescope_id", obdeect::stream::max_telescope);
+        const auto id =
+            checked_integer(record.metadata, "telescope_id", obdeect::stream::max_telescope);
         if (telescope_.open && static_cast<std::int64_t>(telescope_.id) == id) {
           emit_scattered(sink);
         }
@@ -918,7 +925,7 @@ private:
 // stream record of the input is not copied. Throws on malformed input or invalid settings.
 inline PropagationSummary propagate_stream(std::istream &in, std::ostream &out,
                                            PropagatorConfig config,
-                                           const std::string &producer = "dlufd") {
+                                           const std::string &producer = "obdeect propagation") {
   obdeect::stream::Writer writer(out, producer);
   Propagator propagator(std::move(config));
   const auto sink = [&writer](const obdeect::stream::Record &record) {

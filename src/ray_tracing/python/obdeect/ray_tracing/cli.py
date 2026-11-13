@@ -16,7 +16,7 @@ from obdeect.ray_tracing.psf import summary
 from obdeect.ray_tracing.stream import TRANSMISSION_PARTS, trace_stream
 from obdeect.stream.cli import Command, Group
 
-# Columns of `obdeect obscurers` (see OpticalModel.obscurer_hits).
+# Columns of `obdeect ray-tracing obscurers` (see OpticalModel.obscurer_hits).
 CENSUS = ("crossed", "first", "sole")
 
 
@@ -139,7 +139,9 @@ def _plot(args: argparse.Namespace) -> None:
     except ModuleNotFoundError as error:
         if error.name != "matplotlib":
             raise
-        raise ModelError("plotting requires Matplotlib; install obdeect[plot]") from error
+        raise ModelError(
+            "plotting requires Matplotlib; install obdeect-ray-tracing[plot]"
+        ) from error
 
     arrivals = dict(np.load(args.arrivals)) if args.arrivals else None
     plot(OpticalModel.load(args.model), arrivals, args.output)
@@ -201,7 +203,7 @@ def main(argv: list[str] | None = None, prog: str = "obdeect ray-tracing") -> in
 
     s = commands.add_parser(
         "trace-stream",
-        help="trace a gstrickd photon stream (G or T photons) to camera-frame (C) photons",
+        help="trace a photon stream (G or T photons) to camera-frame (C) photons",
     )
     s.add_argument("--model", type=Path, required=True)
     s.add_argument("--seed", type=int, required=True, help="run seed of the random draws")
@@ -237,7 +239,7 @@ def main(argv: list[str] | None = None, prog: str = "obdeect ray-tracing") -> in
 
     p = commands.add_parser("plot", help="plot the dish layout and the focal-plane image")
     p.add_argument("--model", type=Path, required=True)
-    p.add_argument("--arrivals", type=Path, help="results of 'obdeect trace' (.npz)")
+    p.add_argument("--arrivals", type=Path, help="results of 'obdeect ray-tracing trace' (.npz)")
     p.add_argument("--output", type=Path, required=True)
     p.set_defaults(run=_plot)
 

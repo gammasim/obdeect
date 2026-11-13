@@ -1,5 +1,5 @@
 /*
- * gstrickd C API: read and write photon streams (docs/format.md) from C and from any
+ * obdeect stream C API: read and write photon streams (docs/format.md) from C and from any
  * language with a C FFI (Rust, Julia, Python ctypes, ...). Pure C, no exceptions cross
  * the boundary.
  *
@@ -17,8 +17,8 @@
  *   column; no copy is made. An absent column is NULL.
  * - All integers and floats of the stream are converted to host byte order by the library.
  */
-#ifndef OBDEECT_STREAM_GSTRICKD_H
-#define OBDEECT_STREAM_GSTRICKD_H
+#ifndef OBDEECT_STREAM_OBDEECT_STREAM_H
+#define OBDEECT_STREAM_OBDEECT_STREAM_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -215,4 +215,4 @@ OBDEECT_STREAM_C_API int obdeect_stream_writer_close(obdeect_stream_writer *writ
 }
 #endif
 
-#endif /* OBDEECT_STREAM_GSTRICKD_H */
+#endif /* OBDEECT_STREAM_OBDEECT_STREAM_H */

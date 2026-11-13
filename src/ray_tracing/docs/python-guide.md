@@ -1,7 +1,7 @@
 # Python usage
 
 ```python
-from obdeect import DETECTED, OpticalModel
+from obdeect.ray_tracing import DETECTED, OpticalModel
 
 model = OpticalModel.from_simulation_models(
     "../simulation-models", "LSTN-01", "7.0.0", configuration_seed=1, zenith_deg=20.0

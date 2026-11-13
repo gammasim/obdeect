@@ -20,7 +20,8 @@ def _locate(subdirectory: str, marker: str) -> Path | None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m obdeect.stream",
-        description="Print the directory of the obdeect stream CMake package, headers or C library.",
+        description="Print the directory of the obdeect stream CMake package, headers or C "
+        "library.",
     )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(

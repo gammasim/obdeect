@@ -1,6 +1,6 @@
 #pragma once
 
-// Random-number streams and the photon-stream format version used by dlamb.
+// Random-number streams and the photon-stream format version used by obdeect sources.
 
 #include "obdeect/stream/format.hpp"
 #include "obdeect/stream/stages.hpp"
@@ -12,7 +12,7 @@ namespace obdeect::sources {
 // Philox stage of all photon, count and track draws (obdeect::stream::stage_sources).
 inline constexpr std::uint32_t stage_sources = obdeect::stream::stage_sources;
 
-// Major version of the photon-stream format that dlamb writes.
+// Major version of the photon-stream format that obdeect sources writes.
 inline constexpr int photon_stream_format_major = 1;
 
 // Streams of one photon: each is one uniform4 call and is never shared.

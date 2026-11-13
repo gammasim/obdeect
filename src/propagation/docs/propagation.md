@@ -1,7 +1,7 @@
 # Atmosphere stage
 
-`obdeect propagation run` (C++ tool) and `dlufd.propagate` (Python) run the atmosphere stage on a
-gstrickd photon stream: sky photons are brought to the telescope plane, then every chunk
+`obdeect propagation run` (C++ tool) and `obdeect.propagation.propagate` (Python) run the atmosphere stage on a
+photon stream: sky photons are brought to the telescope plane, then every chunk
 gets the atmospheric effects in a fixed order. Each effect is recorded in the efficiency
 ledger of the output.
 
@@ -37,7 +37,7 @@ unchanged.
 An event is held until its `event_end` record, because the scattered photons of a telescope come
 from the primaries of all telescopes of the event. Memory: one event of the input.
 
-Adding an effect means adding a step in `Propagator::photons` (`cpp/include/dlufd/propagator.hpp`)
+Adding an effect means adding a step in `Propagator::photons` (`cpp/include/obdeect/propagation/propagator.hpp`)
 and an entry in `make_ledger`.
 
 ## Frames and positions
@@ -144,9 +144,9 @@ The summary goes to stderr.
 ## Python
 
 ```python
-import dlufd
+import obdeect.propagation
 
-summary = dlufd.propagate(
+summary = obdeect.propagation.propagate(
     "in.ps", "out.ps",
     transmission="atm_trans_2000_1_10_0_0_2000.dat", site_altitude_m=2000.0,
     seed=1, profile="atmprof.dat",
@@ -165,7 +165,7 @@ Files are paths only (no `-`).
 `--no-extinction` (Python: `extinction=False`) moves sky photons to the ground frame G and
 assigns wavelengths, and does nothing else: no extinction, no envelope, no thinning. Use it
 when a later program applies the atmospheric transmission itself, for example a light source
-(dlamb) feeding the camera simulation directly.
+(obdeect sources) feeding the camera simulation directly.
 
 ```console
 $ obdeect propagation run --no-extinction --site-altitude 2000 --profile atmprof.dat --seed 1 \

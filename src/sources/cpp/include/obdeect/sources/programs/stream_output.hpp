@@ -256,7 +256,8 @@ inline void write_stream(std::ostream &out, const RunSetup &setup,
   obdeect::stream::PhotonChunk chunk;
   for (const auto &event : events) {
     const auto event_key = static_cast<std::uint32_t>(event.event_number);
-    writer.write_metadata(obdeect::stream::RecordType::event, {{"event_number", event.event_number}});
+    writer.write_metadata(obdeect::stream::RecordType::event,
+                          {{"event_number", event.event_number}});
     obdeect::stream::Metadata tm;
     tm["telescope_id"] = static_cast<std::int64_t>(setup.telescope_id);
     tm["frame"] = static_cast<std::int64_t>(setup.frame);

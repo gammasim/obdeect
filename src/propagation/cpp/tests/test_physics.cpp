@@ -67,8 +67,8 @@ struct Result {
   double x, y, cx, cy, t;
 };
 
-Result bend_from(const obdeect::propagation::RefractionTables &tables, double height_m, double zenith,
-                 double azimuth) {
+Result bend_from(const obdeect::propagation::RefractionTables &tables, double height_m,
+                 double zenith, double azimuth) {
   const double s = std::sin(zenith);
   double cx = s * std::cos(azimuth), cy = s * std::sin(azimuth), x = 0., y = 0., t = 0.;
   CHECK(obdeect::propagation::bend(tables, height_m, cx, cy, x, y, t));
@@ -77,8 +77,8 @@ Result bend_from(const obdeect::propagation::RefractionTables &tables, double he
 
 // Direct integration of Snell's law: displacement relative to the straight line [m] and
 // travel time minus the straight vacuum path [ns].
-void direct_integrals(const obdeect::propagation::AtmosphereProfile &profile, double obs, double h_e,
-                      double zenith, double &displacement, double &excess_ns) {
+void direct_integrals(const obdeect::propagation::AtmosphereProfile &profile, double obs,
+                      double h_e, double zenith, double &displacement, double &excess_ns) {
   const double nu_e = profile.refractive_index_minus_one(h_e);
   const double invariant = (1. + nu_e) * std::sin(zenith);
   auto sine = [&](double h) { return invariant / (1. + profile.refractive_index_minus_one(h)); };
@@ -130,7 +130,10 @@ void test_constant_index_is_straight() {
     CHECK_NEAR(r.y, 0., 1e-9);
     CHECK_NEAR(r.cx, std::sin(zenith) * std::cos(0.4), 1e-15);
     CHECK_NEAR(r.cy, std::sin(zenith) * std::sin(0.4), 1e-15);
-    CHECK_NEAR(r.t, 14000. * (1. + nu) / (obdeect::propagation::speed_of_light_m_per_ns * std::cos(zenith)), 1e-9);
+    CHECK_NEAR(r.t,
+               14000. * (1. + nu) /
+                   (obdeect::propagation::speed_of_light_m_per_ns * std::cos(zenith)),
+               1e-9);
   }
 }
 
@@ -156,7 +159,8 @@ void test_against_direct_integration() {
       direct_integrals(profile, obs, h_e, zenith, displacement, excess);
       const auto r = bend_from(tables, h_e, zenith, 0.);
       CHECK_NEAR(r.x, displacement, 1e-7 + 1e-8 * std::fabs(displacement));
-      const double straight_ns = (h_e - obs) / (obdeect::propagation::speed_of_light_m_per_ns * std::cos(zenith));
+      const double straight_ns =
+          (h_e - obs) / (obdeect::propagation::speed_of_light_m_per_ns * std::cos(zenith));
       CHECK_NEAR(r.t - straight_ns, excess, 1e-7 + 1e-8 * std::fabs(excess));
       // Snell's law at the observation level.
       const double nu_e = profile.refractive_index_minus_one(h_e);
@@ -167,8 +171,8 @@ void test_against_direct_integration() {
 }
 
 void test_real_profile_against_direct_integration() {
-  const auto profile = obdeect::propagation::AtmosphereProfile::from_file(std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) +
-                                                           "/atmprof_ecmwf_north_winter_fixed.dat");
+  const auto profile = obdeect::propagation::AtmosphereProfile::from_file(
+      std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/atmprof_ecmwf_north_winter_fixed.dat");
   const double obs = 2180.;
   const obdeect::propagation::RefractionTables tables(profile, obs);
   for (double h_e : {10000., 20000., 40000.}) {
@@ -178,8 +182,9 @@ void test_real_profile_against_direct_integration() {
       direct_integrals(profile, obs, h_e, zenith, displacement, excess);
       const auto r = bend_from(tables, h_e, zenith, 0.);
       CHECK_NEAR(r.x, displacement, 1e-6);
-      CHECK_NEAR(r.t - (h_e - obs) / (obdeect::propagation::speed_of_light_m_per_ns * std::cos(zenith)), excess,
-                 1e-6);
+      CHECK_NEAR(r.t - (h_e - obs) /
+                           (obdeect::propagation::speed_of_light_m_per_ns * std::cos(zenith)),
+                 excess, 1e-6);
     }
   }
 }
@@ -282,13 +287,14 @@ bool throws_invalid(const std::function<void()> &action) {
 void test_overflow_and_reflection() {
   // Absurd altitudes are rejected, not converted to a cell count.
   CHECK(throws_invalid([] {
-    obdeect::propagation::AtmosphereProfile("0 1e-3 100 2e-4\n1e304 9e-4 90 2e-4\n1e305 8e-4 80 2e-4\n"
-                             "1e306 7e-4 70 2e-4\n1e307 6e-4 60 2e-4\n");
+    obdeect::propagation::AtmosphereProfile(
+        "0 1e-3 100 2e-4\n1e304 9e-4 90 2e-4\n1e305 8e-4 80 2e-4\n"
+        "1e306 7e-4 70 2e-4\n1e307 6e-4 60 2e-4\n");
   }));
   // Altitudes beyond 1000 km would make the fine grid unbounded.
   CHECK(throws_invalid([] {
     obdeect::propagation::AtmosphereProfile("0 1e-3 100 2e-4\n1 9e-4 90 2e-4\n2 8e-4 80 2e-4\n"
-                             "3 7e-4 70 2e-4\n2000 6e-4 60 2e-4\n");
+                                            "3 7e-4 70 2e-4\n2000 6e-4 60 2e-4\n");
   }));
   // n-1 rising with height (valid table, unphysical): a ray from the layer above the denser
   // ground would need sin(theta_obs) > 1 and is not bent.
@@ -347,7 +353,8 @@ void test_table_header_comments() {
     header += " " + std::to_string(2.0 + 0.1 * i);
     row += " 0.5";
   }
-  CHECK(throws_invalid([&] { obdeect::propagation::TransmissionTable(header + "\n" + row + "\n", 2000.0); }));
+  CHECK(throws_invalid(
+      [&] { obdeect::propagation::TransmissionTable(header + "\n" + row + "\n", 2000.0); }));
   CHECK_NEAR(table.optical_depth<double>(400., 4000.), 0.2, 1e-14);
 }
 

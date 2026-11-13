@@ -49,7 +49,7 @@ inline void assign_wavelengths(obdeect::stream::PhotonChunk &chunk, const Wavele
       continue;
     }
     const obdeect::stream::DrawKey key{seed,      stage_atmosphere,        event,
-                                telescope, chunk.first_index + row, stream_wavelength};
+                                       telescope, chunk.first_index + row, stream_wavelength};
     const double u = obdeect::stream::uniform4(key)[0];
     wavelength[row] = static_cast<float>(std::floor(wavelength_from_uniform(u, range)));
   }

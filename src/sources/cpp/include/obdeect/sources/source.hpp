@@ -28,10 +28,14 @@ inline constexpr double min_positive = 1e-30;
 
 // Columns written for the photons of a source (no zem; the stream writer adds it).
 inline constexpr std::uint32_t source_columns =
-    obdeect::stream::column_bit(obdeect::stream::Column::x) | obdeect::stream::column_bit(obdeect::stream::Column::y) |
-    obdeect::stream::column_bit(obdeect::stream::Column::z) | obdeect::stream::column_bit(obdeect::stream::Column::cx) |
-    obdeect::stream::column_bit(obdeect::stream::Column::cy) | obdeect::stream::column_bit(obdeect::stream::Column::cz) |
-    obdeect::stream::column_bit(obdeect::stream::Column::t) | obdeect::stream::column_bit(obdeect::stream::Column::w) |
+    obdeect::stream::column_bit(obdeect::stream::Column::x) |
+    obdeect::stream::column_bit(obdeect::stream::Column::y) |
+    obdeect::stream::column_bit(obdeect::stream::Column::z) |
+    obdeect::stream::column_bit(obdeect::stream::Column::cx) |
+    obdeect::stream::column_bit(obdeect::stream::Column::cy) |
+    obdeect::stream::column_bit(obdeect::stream::Column::cz) |
+    obdeect::stream::column_bit(obdeect::stream::Column::t) |
+    obdeect::stream::column_bit(obdeect::stream::Column::w) |
     obdeect::stream::column_bit(obdeect::stream::Column::wavelength);
 
 struct Photon {

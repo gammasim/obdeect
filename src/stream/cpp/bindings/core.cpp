@@ -119,10 +119,10 @@ public:
   nb::dict next() {
     if (!reader_->next(record_)) {
       if (!reader_->ended()) {
-        throw std::runtime_error("gstrickd: truncated stream (no stream_end record)");
+        throw std::runtime_error("obdeect stream: truncated stream (no stream_end record)");
       }
       if (!reader_->at_clean_end()) {
-        throw std::runtime_error("gstrickd: data after stream_end");
+        throw std::runtime_error("obdeect stream: data after stream_end");
       }
       throw nb::stop_iteration();
     }
@@ -231,7 +231,8 @@ public:
     if (file_->is_open()) {
       file_->close();
       if (file_->fail()) {
-        throw std::runtime_error("gstrickd: writing the photon stream failed (e.g. disk full)");
+        throw std::runtime_error(
+            "obdeect stream: writing the photon stream failed (e.g. disk full)");
       }
     }
   }
@@ -266,7 +267,8 @@ private:
 
 std::string producer_name(const char *tool = "obdeect stream from-corsika") {
   return std::string(tool) + " " + std::to_string(obdeect::stream::version_major) + "." +
-         std::to_string(obdeect::stream::version_minor) + "." + std::to_string(obdeect::stream::version_patch);
+         std::to_string(obdeect::stream::version_minor) + "." +
+         std::to_string(obdeect::stream::version_patch);
 }
 
 using CameraEntries = std::vector<std::tuple<std::uint32_t, int, double>>;
@@ -274,7 +276,7 @@ using CameraEntries = std::vector<std::tuple<std::uint32_t, int, double>>;
 } // namespace
 
 NB_MODULE(_core, module) {
-  module.doc() = "gstrickd native core";
+  module.doc() = "obdeect stream native core";
   module.def("core_version", [] {
     return std::make_tuple(obdeect::stream::version_major, obdeect::stream::version_minor,
                            obdeect::stream::version_patch);

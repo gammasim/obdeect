@@ -28,7 +28,7 @@ Dual-mirror segments are traced at their design positions.
 ## Refracting elements
 
 Refracting elements, such as lenses and camera windows, bend light at a material
-boundary. obdeect currently does not trace them. The optical path ends at the
+boundary. obdeect ray tracing currently does not trace them. The optical path ends at the
 camera entrance; camera-window transmission belongs to the downstream camera
 simulation. Refraction in air is also omitted.
 
@@ -70,7 +70,7 @@ Columns `id`, `group` (optional) and `shape` are text. A row leaves the
 columns it does not use as `nan`; unused points come last.
 
 Which elements actually shade the light is shown by
-`OpticalModel.obscurer_hits` and `obdeect obscurers` (see
+`OpticalModel.obscurer_hits` and `obdeect ray-tracing obscurers` (see
 [shadowing](shadowing.md)): per obscurer, the light whose path meets it, that
 it absorbs, and that only it stops.
 

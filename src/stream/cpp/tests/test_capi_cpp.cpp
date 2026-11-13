@@ -35,7 +35,8 @@ void compare_with_c_reader(const std::string &path) {
     if (record.type == RecordType::photons) {
       std::uint32_t telescope = 0, frame = 0, rows = 0, mask = 0;
       std::uint64_t first = 0;
-      CHECK(obdeect_stream_reader_photons(c, &telescope, &frame, &first, &rows, &mask) == OBDEECT_STREAM_OK);
+      CHECK(obdeect_stream_reader_photons(c, &telescope, &frame, &first, &rows, &mask) ==
+            OBDEECT_STREAM_OK);
       CHECK(telescope == record.chunk.telescope_id);
       CHECK(frame == static_cast<std::uint32_t>(record.chunk.frame));
       CHECK(first == record.chunk.first_index);
@@ -68,20 +69,24 @@ void compare_with_c_reader(const std::string &path) {
         CHECK(value_type == static_cast<int>(value.index()) + 1);
         if (const auto *integer = std::get_if<std::int64_t>(&value)) {
           std::int64_t got = 0;
-          CHECK(obdeect_stream_reader_meta_int(c, key.c_str(), &got) == OBDEECT_STREAM_OK && got == *integer);
+          CHECK(obdeect_stream_reader_meta_int(c, key.c_str(), &got) == OBDEECT_STREAM_OK &&
+                got == *integer);
         } else if (const auto *real = std::get_if<double>(&value)) {
           double got = 0.0;
-          CHECK(obdeect_stream_reader_meta_float(c, key.c_str(), &got) == OBDEECT_STREAM_OK && got == *real);
+          CHECK(obdeect_stream_reader_meta_float(c, key.c_str(), &got) == OBDEECT_STREAM_OK &&
+                got == *real);
         } else if (const auto *text = std::get_if<std::string>(&value)) {
           const char *got = nullptr;
           std::size_t length = 0;
-          CHECK(obdeect_stream_reader_meta_string(c, key.c_str(), &got, &length) == OBDEECT_STREAM_OK);
+          CHECK(obdeect_stream_reader_meta_string(c, key.c_str(), &got, &length) ==
+                OBDEECT_STREAM_OK);
           CHECK(*text == std::string(got, length));
         } else {
           const auto &array = std::get<std::vector<double>>(value);
           const double *got = nullptr;
           std::size_t length = 0;
-          CHECK(obdeect_stream_reader_meta_array(c, key.c_str(), &got, &length) == OBDEECT_STREAM_OK);
+          CHECK(obdeect_stream_reader_meta_array(c, key.c_str(), &got, &length) ==
+                OBDEECT_STREAM_OK);
           CHECK(length == array.size() &&
                 std::memcmp(got, array.data(), length * sizeof(double)) == 0);
         }
@@ -103,7 +108,7 @@ std::vector<Record> read_all(const std::string &path) {
     records.push_back(record);
   }
   if (!reader.ended()) {
-    throw std::runtime_error("gstrickd: truncated stream (no stream_end record)");
+    throw std::runtime_error("obdeect stream: truncated stream (no stream_end record)");
   }
   return records;
 }

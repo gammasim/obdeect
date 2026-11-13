@@ -2,7 +2,7 @@
 
 A source is a dictionary with the keys below. Values are SI-like units (metres, ns,
 nm, degrees); the frame and direction conventions are those of the photon stream
-(gstrickd): ``cz < 0`` is downward, and the frames are ``sky``, ``telescope`` (T) and
+(obdeect stream): ``cz < 0`` is downward, and the frames are ``sky``, ``telescope`` (T) and
 ``camera`` (C). Exactly one of ``emitter`` or ``star`` is given.
 
 .. code-block:: python
@@ -36,16 +36,16 @@ from typing import Any
 import numpy as np
 from obdeect.sources import _core
 
-# Copies of gstrickd constants (no runtime dependency on gstrickd). The tests in
-# python/tests/test_gstrickd_contract.py compare them with the compiled gstrickd headers.
+# Copies of obdeect stream constants (no runtime dependency on obdeect stream). The tests in
+# python/tests/test_stream_contract.py compare them with the compiled obdeect stream headers.
 
-#: Largest number of photons in one chunk (gstrickd photon chunk limit).
+#: Largest number of photons in one chunk (photon stream chunk limit).
 CHUNK_ROWS = 1 << 16
 
-#: Frames a source can be emitted in (gstrickd frame codes; G is not a source frame).
+#: Frames a source can be emitted in (obdeect stream frame codes; G is not a source frame).
 FRAMES = {"sky": 0, "telescope": 2, "camera": 3}
 
-#: Columns of the emitted photons, in gstrickd column names.
+#: Columns of the emitted photons, in obdeect stream column names.
 COLUMNS = ("x", "y", "z", "cx", "cy", "cz", "t", "w", "wavelength")
 
 # kind -> parameter names (in the order passed to the native core).
@@ -253,7 +253,7 @@ def iter_chunks(
 def emit(
     spec: Mapping[str, Any], *, seed: int, event: int = 0, telescope: int = 0
 ) -> dict[str, np.ndarray]:
-    """All photons of a source as float32 columns (gstrickd names; see ``COLUMNS``).
+    """All photons of a source as float32 columns (obdeect stream names; see ``COLUMNS``).
 
     The arrays hold every photon in memory; use ``iter_chunks`` for large counts.
     """

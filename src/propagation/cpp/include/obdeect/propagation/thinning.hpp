@@ -122,7 +122,7 @@ thin_chunk(const obdeect::stream::PhotonChunk &in, std::span<const double> p, st
       throw std::invalid_argument("bunch weight must be within [0, max_bunch_photons]");
     }
     const obdeect::stream::DrawKey key{seed,      stage_atmosphere,     event,
-                                telescope, in.first_index + row, stream};
+                                       telescope, in.first_index + row, stream};
     const std::uint64_t count = surviving_photons(w, p[row], key);
     source.insert(source.end(), count, row);
   }
@@ -133,7 +133,8 @@ thin_chunk(const obdeect::stream::PhotonChunk &in, std::span<const double> p, st
   }
   std::vector<obdeect::stream::PhotonChunk> out;
   for (std::size_t first = 0; first < source.size(); first += obdeect::stream::max_chunk_rows) {
-    const std::size_t rows = std::min<std::size_t>(obdeect::stream::max_chunk_rows, source.size() - first);
+    const std::size_t rows =
+        std::min<std::size_t>(obdeect::stream::max_chunk_rows, source.size() - first);
     obdeect::stream::PhotonChunk chunk;
     chunk.telescope_id = in.telescope_id;
     chunk.frame = in.frame;
@@ -160,7 +161,8 @@ thin_chunk(const obdeect::stream::PhotonChunk &in, std::span<const double> p, st
 
 // Weighted mode. Each row is kept with w multiplied by p; p is written as column p if
 // write_p. Returns the chunk in place; all input is checked before the chunk changes.
-inline void weight_chunk(obdeect::stream::PhotonChunk &chunk, std::span<const double> p, bool write_p) {
+inline void weight_chunk(obdeect::stream::PhotonChunk &chunk, std::span<const double> p,
+                         bool write_p) {
   using obdeect::stream::Column;
   if (chunk.has(Column::p)) {
     throw std::invalid_argument("input already has an acceptance column p");

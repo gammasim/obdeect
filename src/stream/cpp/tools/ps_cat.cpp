@@ -135,7 +135,8 @@ int main(int argc, char **argv) {
       std::printf("records:\n");
       for (std::size_t t = 0; t < result.records.size(); ++t) {
         if (result.records[t] > 0) {
-          std::printf("  %-14s %llu\n", obdeect::stream::record_name(static_cast<obdeect::stream::RecordType>(t)),
+          std::printf("  %-14s %llu\n",
+                      obdeect::stream::record_name(static_cast<obdeect::stream::RecordType>(t)),
                       static_cast<unsigned long long>(result.records[t]));
         }
       }

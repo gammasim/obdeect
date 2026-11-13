@@ -1,7 +1,7 @@
 #pragma once
 
-// Python API of the atmosphere stage: dlufd.propagate on stream files (the stream I/O is
-// the C++ core's). Included by core.cpp after the nanobind headers.
+// Python API of the atmosphere stage: obdeect.propagation.propagate on stream files (the stream I/O
+// is the C++ core's). Included by core.cpp after the nanobind headers.
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/map.h>
@@ -46,8 +46,8 @@ inline void bind_propagator(nb::module_ &module) {
           config.telescope_pathlen_m[static_cast<std::uint32_t>(id)] = metres;
         }
         if (transmission_path) {
-          config.transmission.emplace(
-              obdeect::propagation::TransmissionTable::from_file(*transmission_path, site_altitude_m));
+          config.transmission.emplace(obdeect::propagation::TransmissionTable::from_file(
+              *transmission_path, site_altitude_m));
           config.transmission_source = *transmission_path;
         }
         config.site_altitude_m = site_altitude_m;
@@ -59,16 +59,18 @@ inline void bind_propagator(nb::module_ &module) {
           config.envelope.push_back(obdeect::propagation::read_envelope_file(name, path));
         }
         if (wavelength_range) {
-          config.wavelength_range = obdeect::propagation::WavelengthRange{std::get<0>(*wavelength_range),
-                                                           std::get<1>(*wavelength_range)};
+          config.wavelength_range = obdeect::propagation::WavelengthRange{
+              std::get<0>(*wavelength_range), std::get<1>(*wavelength_range)};
         }
         config.seed = seed;
-        config.mode = weighted ? obdeect::propagation::OutputMode::weighted : obdeect::propagation::OutputMode::thinned;
+        config.mode = weighted ? obdeect::propagation::OutputMode::weighted
+                               : obdeect::propagation::OutputMode::thinned;
         config.store_p = store_p;
         if (scattering_path) {
           config.scattering.enabled = true;
           config.scattering.points_per_photon = scattering_points;
-          config.scattering_table.emplace(obdeect::propagation::ScatteringTable::from_file(*scattering_path));
+          config.scattering_table.emplace(
+              obdeect::propagation::ScatteringTable::from_file(*scattering_path));
           config.scattering_source = *scattering_path;
         }
 

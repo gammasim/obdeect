@@ -1,13 +1,12 @@
 # Photon streams
 
-`obdeect trace-stream` traces a [gstrickd](https://pypi.org/project/gstrickd/)
-photon stream through an optical model and writes the camera-frame photons.
-Install the optional extra with `pip install 'obdeect[stream]'`; it requires
-gstrickd 0.1.0.
+`obdeect ray-tracing trace-stream` traces a photon stream through an optical model
+and writes the camera-frame photons. The stream component (`obdeect-stream`) is
+always installed with obdeect.
 
 ```bash
-obdeect trace-stream --model telescope.json --seed 7 -i ground.ps -o camera.ps
-obdeect trace-stream --model telescope.json --seed 7 --telescopes 1,2 < in.ps > out.ps
+obdeect ray-tracing trace-stream --model telescope.json --seed 7 -i ground.ps -o camera.ps
+obdeect ray-tracing trace-stream --model telescope.json --seed 7 --telescopes 1,2 < in.ps > out.ps
 ```
 
 Records pass through, except that telescopes not listed in `--telescopes` are
@@ -62,7 +61,7 @@ output does not depend on the chunking or the number of threads.
 
 The optical model applies `mirror_reflectivity` and, when present,
 `telescope_transmission` (or structure shadowing).
-Their states are carried in gstrickd `efficiency_status` records.
+Their states are carried in `efficiency_status` records of the photon stream.
 The stage reads each factor's state from the ledger, run level or telescope level
 (the telescope level overrides the run level):
 

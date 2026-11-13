@@ -1,6 +1,6 @@
 # Light sources
 
-Choose a source by the light path you want to study. obdeect provides star and
+Choose a source by the light path you want to study. obdeect ray tracing provides star and
 point-source sampling, calibration emitters, and an interface for externally
 generated shower photons.
 
@@ -29,7 +29,7 @@ arrivals = model.trace(photons, seed=2)
 ```
 
 Use `towards_source` for an off-axis source. On the command line, use
-`obdeect trace --field-deg X Y` and optionally `--distance-m`.
+`obdeect ray-tracing trace --field-deg X Y` and optionally `--distance-m`.
 This sampler fixes the number of incident photons; it does not describe an
 emitter's luminosity or pulse shape.
 
@@ -73,7 +73,7 @@ the target disk. The sum of weights estimates their mean number.
 `trace_bunches` accepts photon bunches produced by an external air-shower
 simulation. Supply their positions, directions, times, wavelengths, sizes and
 unique bunch ids, together with an explicit frame transformation and length
-unit. obdeect samples and traces these photons; it does not generate the shower.
+unit. obdeect ray tracing samples and traces these photons; it does not generate the shower.
 See [Shower photon bunches](batch-tracing.md#shower-photon-bunches).
 
 For other sources, supply photon arrays directly to `trace`. The required fields

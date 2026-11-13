@@ -96,8 +96,8 @@ Vec3 at_plane(const Photons &c, std::size_t i, double z0) {
 }
 
 void stars() {
-  // Plane wave over a 5 m disc (obdeect test_kernels.cpp sources): all rays start at the
-  // start plane z = 30 m, a quarter of the photons land within 2.5 m of the centre.
+  // Plane wave over a 5 m disc (obdeect ray tracing test_kernels.cpp sources): all rays start at
+  // the start plane z = 30 m, a quarter of the photons land within 2.5 m of the centre.
   const auto c = emit_all(star_source(inf, 100000.0), 3, 100000);
   double inside = 0.0;
   for (std::size_t i = 0; i < c.rows(); ++i) {
@@ -116,7 +116,7 @@ void stars() {
     CHECK_NEAR(c[Column::t][i], dot(start, dir) / speed_of_light_m_per_ns, 1e-3);
   }
   // Point source at 20 m, 1.5 m above the entrance plane, below the start plane:
-  // photons leave the source itself (obdeect PointSource, finite distance).
+  // photons leave the source itself (obdeect ray tracing PointSource, finite distance).
   Source lamp;
   lamp.frame = obdeect::stream::Frame::telescope;
   lamp.photons = 50.0;
@@ -133,7 +133,7 @@ void stars() {
 }
 
 void emitters_isotropic_disc() {
-  // Isotropic emitter 10 m above a 2 m disc (obdeect test_kernels.cpp emitters): the
+  // Isotropic emitter 10 m above a 2 m disc (obdeect ray tracing test_kernels.cpp emitters): the
   // candidates per emitted photon are R^2 / (4 h^2) = 1/100.
   Source s = lamp_source(4e5);
   s.target = DiscTarget{{0.0, 0.0, 0.0}, {0.0, 0.0, 1.0}, 2.0};
@@ -159,7 +159,7 @@ void emitters_isotropic_disc() {
 }
 
 void disc_target_angular_profile() {
-  // A 5 deg filled cone lights only the inner part of the disc (obdeect test: weight is
+  // A 5 deg filled cone lights only the inner part of the disc (obdeect ray tracing test: weight is
   // positive inside the cone and zero outside it).
   Source s = lamp_source(1e5);
   s.geometry =

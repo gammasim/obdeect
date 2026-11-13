@@ -1,6 +1,6 @@
 # Sky-level layer
 
-Header `dlamb/sky_sources.hpp`. Shared by point-source, beam-scan, laser-beam, night-sky.
+Header `obdeect/sources/sky_sources.hpp`. Shared by point-source, beam-scan, laser-beam, night-sky.
 
 ## Helpers
 
