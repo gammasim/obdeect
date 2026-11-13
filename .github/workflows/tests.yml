@@ -15,12 +15,35 @@ permissions:
   contents: read
 
 jobs:
-  build-and-test:
+  # C++ tests of all components, once per platform (they do not depend on Python).
+  native:
     strategy:
       fail-fast: false
       matrix:
         runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
-        python-version: ['3.14', '3.15']
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          fetch-depth: 0  # component versions come from the repository tags
+      - name: Configure and build all components
+        run: >-
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          && cmake --build build --parallel
+      - name: Run native tests
+        run: ctest --test-dir build --output-on-failure --parallel 4
+
+  # Python packages, native programs and the end-to-end chain. Python 3.15 (prerelease)
+  # on one platform only.
+  python:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: ubuntu-24.04, python-version: '3.14'}
+          - {runner: ubuntu-24.04-arm, python-version: '3.14'}
+          - {runner: macos-15, python-version: '3.14'}
+          - {runner: ubuntu-24.04, python-version: '3.15'}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
@@ -30,17 +53,13 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           allow-prereleases: true
+      # Build tools once instead of once per component (build isolation).
       - name: Install all components and test dependencies
         run: >-
           python -m pip install --upgrade pip
-          && python -m pip install ./src/stream ./src/propagation ./src/sources
-          "./src/ray_tracing[plot]" pytest
-      - name: Configure and build all components
-        run: >-
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-          && cmake --build build --parallel
-      - name: Run native tests
-        run: ctest --test-dir build --output-on-failure
+          && python -m pip install "scikit-build-core>=0.11" "setuptools-scm>=8" "nanobind>=3.1"
+          && python -m pip install --no-build-isolation ./src/stream ./src/propagation
+          ./src/sources "./src/ray_tracing[plot]" pytest
       # One run per component (test modules of different components share file names),
       # then the end-to-end chain.
       - name: Run Python tests
@@ -51,50 +70,57 @@ jobs:
           done
           pytest validation || status=1
           exit "${status}"
-  fma:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
-        with:
-          fetch-depth: 0
-      - name: Configure, build, and test with OBDEECT_RAY_TRACING_USE_FMA
-        run: >-
-          cmake -S . -B build-fma -DCMAKE_BUILD_TYPE=Release -DOBDEECT_RAY_TRACING_USE_FMA=ON
-          && cmake --build build-fma --parallel
-          && ctest --test-dir build-fma --output-on-failure
+
+  # Each component on its own, in parallel.
   sanitizers:
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [stream, propagation, sources, ray_tracing]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # component versions come from the repository tags
       - name: Install a decimal-comma locale
         run: sudo locale-gen de_DE.UTF-8
       - name: Configure, build, and test with sanitizers
         env:
           OBDEECT_RAY_TRACING_REQUIRE_COMMA_LOCALE: "1"
         run: >-
-          cmake -S . -B build-sanitize -DCMAKE_BUILD_TYPE=Debug
+          cmake -S src/${{ matrix.component }} -B build-sanitize -DCMAKE_BUILD_TYPE=Debug
           -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
           -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
           -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined"
           && cmake --build build-sanitize --parallel
-          && ctest --test-dir build-sanitize --output-on-failure
+          && ctest --test-dir build-sanitize --output-on-failure --parallel 4
+
+  # Ray tracing only: the only component with an FMA option and with threads.
+  fma:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          fetch-depth: 0  # component versions come from the repository tags
+      - name: Configure, build, and test ray tracing with OBDEECT_RAY_TRACING_USE_FMA
+        run: >-
+          cmake -S src/ray_tracing -B build-fma -DCMAKE_BUILD_TYPE=Release
+          -DOBDEECT_RAY_TRACING_USE_FMA=ON
+          && cmake --build build-fma --parallel
+          && ctest --test-dir build-fma --output-on-failure
   thread-sanitizer:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # component versions come from the repository tags
       # GCC 13 reports a false free-nonheap-object warning in std::vector under TSan.
-      - name: Configure, build, and test with ThreadSanitizer
+      - name: Configure, build, and test ray tracing with ThreadSanitizer
         run: >-
-          cmake -S . -B build-tsan -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake -S src/ray_tracing -B build-tsan -DCMAKE_BUILD_TYPE=RelWithDebInfo
           -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -Wno-free-nonheap-object"
-          -DCMAKE_C_FLAGS="-fsanitize=thread -fno-omit-frame-pointer"
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
-          -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=thread"
           && cmake --build build-tsan --parallel
           && ctest --test-dir build-tsan --output-on-failure
   clang-tidy:
@@ -113,4 +139,4 @@ jobs:
           find src/stream/cpp/tests src/stream/cpp/bench src/propagation/cpp/tests
           src/sources/cpp/tests src/ray_tracing/cpp/tests src/ray_tracing/cpp/bench
           -name '*.cpp' -print0
-          | xargs -0 clang-tidy -p build-tidy --extra-arg=-Wno-unknown-warning-option
+          | xargs -0 -P 4 -n 4 clang-tidy -p build-tidy --extra-arg=-Wno-unknown-warning-option
