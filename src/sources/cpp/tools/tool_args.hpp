@@ -66,15 +66,8 @@ template <class F> auto read_input(F &&f) -> decltype(f()) {
 template <class Body>
 int run_tool(const std::string &prefix, int argc, char **argv, Body body,
              const std::function<void()> &usage = {}) {
-  return stream::cli::run_tool(prefix, stream::cli::core_version(), argc, argv, usage, [&] {
-    try {
-      return body();
-    } catch (const UsageError &) {
-      throw;
-    } catch (const std::invalid_argument &error) {
-      throw UsageError(error.what());
-    }
-  });
+  return stream::cli::run_tool(prefix, stream::cli::core_version(), argc, argv, usage,
+                               std::forward<Body>(body));
 }
 
 } // namespace obdeect::sources::cli
