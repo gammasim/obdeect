@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-24.04  # builds the C++ extensions for autodoc
     permissions:
       contents: read
     steps:
@@ -27,15 +27,11 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7
         with:
           python-version: "3.14"
-      - name: Install all components with the documentation tools
+      # Autodoc imports only obdeect.ray_tracing (and obdeect.stream, which it requires).
+      - name: Install the documented packages with the documentation tools
         run: >-
           python -m pip install --upgrade pip
-          && python -m pip install ./src/stream ./src/propagation ./src/sources
-          "./src/ray_tracing[docs]"
-      - name: Test documentation publishing
-        run: |
-          python -m pip install pytest
-          python -m pytest -q src/ray_tracing/python/tests/test_docs_versions.py
+          && python -m pip install ./src/stream "./src/ray_tracing[docs]"
       - name: Build versioned site
         env:
           DOCS_BASE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
