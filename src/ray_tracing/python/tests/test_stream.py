@@ -535,6 +535,37 @@ def test_output_chunks_are_capped_and_numbered(model, tmp_path, obdeect_stream, 
     )
 
 
+def test_output_index_continues_across_blocks_and_resets_per_event(model, tmp_path, obdeect_stream):
+    """CORSIKA array reuse gives one event several blocks of the same telescope."""
+    photons = beam(500, (0.0, 0.0))
+    source = tmp_path / "reuse.in"
+    with obdeect_stream.Writer(str(source), "pytest") as writer:
+        writer.write("run", RUN)
+        for event_number in (1, 2):
+            writer.write("event", {"event_number": event_number})
+            for first_index in (0, 500):
+                writer.write("telescope", {"telescope_id": 1, "frame": 1})
+                writer.write_photons(1, 1, first_index, photons)
+                writer.write("telescope_end", {"telescope_id": 1, "photons": 500.0})
+            writer.write("event_end", {})
+        writer.write("run_end", {})
+    output = tmp_path / "reuse.out"
+    trace_stream(model, source, output, seed=SEED, pointing=(0.0, 0.0))
+    events: list[list[dict]] = []
+    for record in read_records(output, obdeect_stream):
+        if record["type"] == "event":
+            events.append([])
+        elif record["type"] == "photons":
+            events[-1].append(record)
+    assert len(events) == 2
+    for chunks in events:
+        expected_index = 0
+        for chunk in chunks:
+            assert chunk["first_index"] == expected_index
+            expected_index += len(chunk["columns"]["w"])
+        assert expected_index > 0
+
+
 def test_records_pass_through(model, tmp_path, obdeect_stream):
     source = write_stream(
         tmp_path / "pass.pst",

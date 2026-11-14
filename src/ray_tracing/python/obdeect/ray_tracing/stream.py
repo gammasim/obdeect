@@ -315,6 +315,8 @@ class _Tracer:
         self.event: dict[str, Any] | None = None
         self.geometry: tuple[np.ndarray, float] | None = None
         self.telescope: _Telescope | None = None
+        # Row indices continue across repeated blocks of one telescope in an event.
+        self.next_index: dict[int, int] = {}
         self.counts = {"events": 0, "photons_in": 0, "photons_out": 0}
         self.run_status_pending = False
         top = model.max_incoming_obscurer_z_m()
@@ -386,13 +388,15 @@ class _Tracer:
         self.event = dict(metadata)
         self.geometry = None
         self.telescope = None
+        self.next_index = {}
         self.counts["events"] += 1
         self.writer.write("event", metadata)
 
     def _telescope(self, metadata: Mapping[str, Any]) -> None:
         telescope_id = _int_key(metadata, "telescope_id", "telescope")
         kept = self.telescopes is None or telescope_id in self.telescopes
-        self.telescope = _Telescope(telescope_id, kept)
+        start = self.next_index.get(telescope_id, 0)
+        self.telescope = _Telescope(telescope_id, kept, out_index=start)
         if kept:
             self.writer.write("telescope", {**metadata, "frame": FRAME_CAMERA})
 
@@ -406,6 +410,7 @@ class _Tracer:
             # Applies the efficiency status checks even for a telescope without photons.
             self._config(telescope)
             self.writer.write("telescope_end", {**metadata, "photons": telescope.weight})
+            self.next_index[telescope.telescope_id] = telescope.out_index
         self.telescope = None
 
     def _config(self, telescope: _Telescope) -> _Config:
