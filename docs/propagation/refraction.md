@@ -4,9 +4,10 @@ Air bends light and slows it down. This page describes how obdeect computes the 
 the air delay from an atmospheric profile. The atmosphere stage uses it for light sources and for
 photons emitted in the air. Photons of a run with `refraction_applied` = 1 are not refracted again.
 
-Bending and air delay are plane-parallel (layers of constant height, no Earth curvature). They are
-rejected with the `spherical` curvature mode for now; in the `corsika` mode CORSIKA has already
-applied the curved refraction ([](curvature.md)).
+The bending and air delay described on this page are plane-parallel (layers of constant height, no
+Earth curvature). This is the expansion used in mode `none`. In mode `spherical` the same
+quantities come from integrals over spherical shells ([](curvature.md#refraction-in-the-spherical-mode)).
+In mode `corsika` CORSIKA has already applied the curved refraction.
 
 ## Input table
 
@@ -96,6 +97,14 @@ Vertical photons have no displacement. Their travel-time excess over vacuum equa
 At large zenith angles the excess can be negative: the ray bends towards the vertical, so its path
 is shorter than the straight line, which outweighs the slower speed in air. The series agrees with a numerical integration of the exact integrands to 1e-6 m and 1e-6 ns on
 the ECMWF table.
+
+## Spherical mode
+
+Mode `spherical` of the [curvature](curvature.md) option does not use the expansion above. It bends
+the ray in spherical shells, with Bouguer's law $n r \sin\theta = K$, and adds the air delay along
+the bent ray. The equations, the lookup tables and their accuracy are on the
+[curvature page](curvature.md#refraction-in-the-spherical-mode). The plane-parallel bending above
+is the limit of that mode for an infinite Earth radius.
 
 ## Timing
 

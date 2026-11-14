@@ -30,7 +30,7 @@ CORSIKA's CURVED option, constant `obdeect::stream::earth_radius_m`.
 |---|---|---|---|
 | `none` (default) | 0, or absent (1 is rejected) | Plane-parallel airmass and straight-line geometry | sky → G |
 | `corsika` | 1 (required) | CORSIKA has already applied curvature to emission geometry, positions, directions, timing and refraction. The stage only replaces the airmass by the curved slant depth. | G only |
-| `spherical` | 0 (required) | The stage applies curvature: emission altitude from the sphere, per-telescope local vertical and telescope altitude, curved extinction. The output run record gets `curvature_applied` = 1. | sky → G |
+| `spherical` | 0 (required) | The stage applies curvature: emission altitude from the sphere, per-telescope local vertical and telescope altitude, curved extinction, and curved refraction (bending and air delay, see [](#refraction-in-the-spherical-mode)) when an atmospheric profile is given. With `refraction_applied` = 1 in the input only the air delay is applied. The output run record gets `curvature_applied` = 1. | sky → G |
 
 The run flag `curvature_applied` is read from the EventIO input: the EventIO importer sets it to 1
 when EVTH word 79 equals 2 (CORSIKA CURVED). The stage requires the flag in `corsika` mode and
@@ -100,6 +100,99 @@ $$
 where $\mathbf{p}$ is the emission point. The local vertical $\mathbf{n}$ of each telescope is the
 unit radial vector at the telescope, and $h_t$ its altitude a.s.l.
 
+## Refraction in the spherical mode
+
+In `spherical` mode the ray is bent in spherical shells and the air delay is taken along the bent
+ray. Without an atmospheric profile neither is applied. The ray and the straight line are compared
+between the same two levels: the telescope level $r_t = R + h_t$ and the emission level
+$r_e = R + h_e$, with $r = R + h$ and $n(r) = 1 + \nu(h)$.
+
+A photon is emitted at altitude $h_e$ with a given direction. Its vacuum straight line passes the
+telescope level at zenith angle $\theta_s$, with impact parameter $b$ about the Earth centre $C$:
+
+$$
+\sin\theta_s = \frac{b}{r_t}, \qquad K = n_e\, b, \qquad n_e = 1 + \nu(h_e).
+$$
+
+Along the vacuum line $\sin\theta_{vac} = b/r$. The bent ray follows Bouguer's law
+$n(r)\, r \sin\theta_{ref} = K$, with $\theta$ measured from the local radial direction. The
+integrals over $r$ from $r_t$ to $r_e$ are
+
+$$
+\begin{aligned}
+\text{shift} &= r_t \int_{r_t}^{r_e} \frac{\tan\theta_{ref} - \tan\theta_{vac}}{r}\, dr, \\
+\Delta t_{\text{bent}} &= \frac{1}{c} \int_{r_t}^{r_e} \left(\frac{n}{\cos\theta_{ref}}
+  - \frac{1}{\cos\theta_{vac}}\right) dr, \\
+\Delta t_{\text{straight}} &= \frac{1}{c} \int_{r_t}^{r_e} \frac{\nu}{\cos\theta_{vac}}\, dr,
+\end{aligned}
+$$
+
+with $\sin\theta_{ref} = K/(n r)$ and $\cos\theta_{vac} = \sqrt{(r^2 - r_t^2 + r_t^2\cos^2\theta_s)}/r$.
+
+- `shift` is the displacement of the arrival point along the horizontal direction of motion. It is
+  zero or negative: the ray ends nearer the point below the emission.
+- $\Delta t_{\text{bent}}$ is the travel time of the bent ray minus that of the vacuum straight line
+  between the same levels. It can be negative at large zenith angles, where the bent ray is steeper
+  and its shorter path outweighs the slower speed in air. This is the same sign convention as the
+  plane-parallel `bend` ([](refraction.md)).
+- $\Delta t_{\text{straight}}$ is the air delay along the straight line, used when the input has
+  `refraction_applied` = 1.
+
+The arrival direction needs no integral: $\sin\theta_t'/\sin\theta_s = n_e/n_t$ at the telescope.
+The horizontal direction cosines $(c_x, c_y)$ are scaled by $f = (1 + \nu_e)/(1 + \nu_t)$, as in the
+plane-parallel case.
+
+Because $n$ decreases with height, there is no total reflection for emission from above. For
+emission heights above the profile top the integrals take their values at the top, so they are
+constant.
+
+### Tables
+
+The integrals are evaluated by quadrature and stored in tables over $(\theta_s, h_e)$, one per level
+of a 10 m altitude grid. Each table is built once for its level and looked up per photon with a
+$4 \times 4$ Lagrange stencil, with no allocation.
+
+- Quadrature: 8-point Gauss-Legendre on sub-intervals of at most 500 m in $r$. Near the telescope,
+  for $\cos\theta_s < 0.2$, the substitution $r = r_t + u^2$ removes the square-root singularity of
+  $1/\cos\theta_{vac}$ for grazing rays.
+- Zenith grid: steps of 0.25 deg up to 80 deg, then geometric steps in $\cos\theta_s$ down to
+  $10^{-4}$, then 90 deg (698 nodes). The interpolation is in $\ln(\cos\theta_s + 10^{-4})$.
+- Height grid: geometric steps of 5 % up to 20 km above the telescope, then 1 km steps up to
+  $\min(\text{top}, 120\,\text{km})$ (350 nodes).
+- Telescope altitude: a telescope at altitude $h_t$ between two grid levels uses the two tables
+  that bracket it, and the integrals are interpolated linearly in $h_t$ between them. Spherical
+  telescope altitudes differ from the level of the telescope plane by about lateral$^2/(2R)$; the
+  second-order error of the linear interpolation over the 10 m spacing is about $3\times10^{-6}$
+  relative in the grazing-ray delay and about $10^{-3}$ m in position at 80 deg. At 85 deg with
+  emission at 20 km it is 0.02 to 0.03 m and 0.06 to 0.12 ns on a delay of $3.6\times10^4$ ns.
+- Build time is about 3 s per table. Tables are cached by level.
+- CORSIKA's CURVED build also tabulates integrated rays, on a 0.25 deg by 0.25 km grid. The grid
+  here is finer than that below 20 km above the telescope and near the horizon, and coarser above
+  20 km. The integrals are evaluated directly, not by ray tracing.
+
+### Accuracy and limits
+
+- Quadrature against an independent composite Simpson reference: agreement within the $10^{-6}$
+  relative tolerance asserted by the tests.
+- Table against direct quadrature: about $10^{-6}$ relative. The tests check 2000 random points over
+  all zenith angles and emission heights: `shift` within the larger of 0.01 m and $10^{-3}$
+  relative, and each time within 0.01 ns plus $10^{-3}$ relative. Near the horizon, with emission
+  close to the telescope, the table is the weakest part of the approximation; the tolerance above
+  applies there too.
+- Flat limit ($R \to \infty$) against `bend()` and `straight_path_air_delay_ns()`: agreement to
+  $10^{-4}$ relative, or 1 mm and $10^{-3}$ ns.
+- Physical effect: at zenith 80 deg and emission at 20 km the curved shift is 7 % smaller than the
+  plane-parallel one (-234 m against -252 m, ratio 0.93).
+- Output precision: the time column of the stream is float32. Its spacing near $3.8\times10^5$ ns is
+  0.031 ns (rounding error up to 0.016 ns), so very long grazing-ray delays are limited by the
+  resolution of the column.
+- Edge case: a photon whose straight line reaches the telescope level by a margin of less than
+  10 m in impact parameter, at grazing incidence, can be dropped (counted in `dropped`). Its
+  impact parameter is then too close to the level for the stage to decide reliably.
+- The telescope plane is the Cartesian plane $z$ = telescope $z$. The local vertical tilt of
+  laterally displaced telescopes (at most lateral$/R$) is neglected in the direction of the
+  displacement.
+
 ## Efficiency status
 
 The efficiency status of the [atmosphere](../stream/efficiency-status.md) records the geometry:
@@ -134,13 +227,11 @@ default is therefore one constant, the CORSIKA radius. The user can override it 
 
 ## Limitations
 
-- Curved refraction (bending) and curved air delay are not implemented. The `spherical` mode
-  rejects an atmospheric profile; the `corsika` mode relies on CORSIKA having applied them
-  ([](refraction.md)).
 - Single scattering is rejected in both curved modes; it is plane-parallel ([](scattering.md)).
 - The in-telescope path is not curved ([](propagation.md)).
 - The Earth is a sphere, not an ellipsoid.
-- Planned: two-dimensional ray tables for curved bending in a follow-up.
+- The `corsika` mode does not apply refraction itself; CORSIKA has already applied it
+  ([](refraction.md)).
 
 ## Validation
 

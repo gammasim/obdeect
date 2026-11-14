@@ -1,11 +1,17 @@
 // Curvature modes of the atmosphere stage (propagator): input checks and rejections, efficiency
 // status keys, the CORSIKA CURVED extinction, the spherical sky geometry (limit R -> infinity and
-// the Earth-radius correction), and independence of chunk size and row order in the curved modes.
+// the Earth-radius correction), the spherical refraction and air delay with a profile, the
+// dropped photons above the telescope level, and independence of chunk size and row order in the
+// curved modes.
 #include "check.hpp"
 
+#include "obdeect/propagation/curved_refraction.hpp"
 #include "obdeect/propagation/profile.hpp"
 #include "obdeect/propagation/propagator.hpp"
+#include "obdeect/propagation/refraction.hpp"
 #include "obdeect/propagation/scattering.hpp"
+#include "obdeect/propagation/sky.hpp"
+#include "obdeect/propagation/timing.hpp"
 #include "obdeect/propagation/transmission.hpp"
 
 #include "obdeect/stream/constants.hpp"
@@ -99,6 +105,7 @@ struct GPhoton {
 struct SkyPhoton {
   double x{}, y{}, z{}, cx{}, cy{}, w{1.0};
   bool upward{};
+  double wavelength{}; // [nm] as input column when > 0 (else drawn from the photon index)
 };
 
 // Downward photons at zenith angles from 0 to 85 degrees. x is the photon id (kept in the output).
@@ -170,11 +177,16 @@ obdeect::stream::PhotonChunk sky_chunk(std::uint32_t telescope, std::size_t firs
   chunk.telescope_id = telescope;
   chunk.frame = Frame::sky;
   chunk.first_index = first;
-  const std::uint32_t mask =
+  // A wavelength column is written when the first photon of the chunk has one (all do in a stream).
+  const bool has_wavelength = photons[first].wavelength > 0.0;
+  std::uint32_t mask =
       obdeect::stream::column_bit(Column::x) | obdeect::stream::column_bit(Column::y) |
       obdeect::stream::column_bit(Column::z) | obdeect::stream::column_bit(Column::cx) |
       obdeect::stream::column_bit(Column::cy) | obdeect::stream::column_bit(Column::cz) |
       obdeect::stream::column_bit(Column::t) | obdeect::stream::column_bit(Column::w);
+  if (has_wavelength) {
+    mask |= obdeect::stream::column_bit(Column::wavelength);
+  }
   chunk.resize(rows, mask);
   for (std::size_t r = 0; r < rows; ++r) {
     const SkyPhoton &photon = photons[first + r];
@@ -187,6 +199,9 @@ obdeect::stream::PhotonChunk sky_chunk(std::uint32_t telescope, std::size_t firs
     chunk[Column::cz][r] = static_cast<float>(photon.upward ? magnitude : -magnitude);
     chunk[Column::t][r] = 0.0F;
     chunk[Column::w][r] = static_cast<float>(photon.w);
+    if (has_wavelength) {
+      chunk[Column::wavelength][r] = static_cast<float>(photon.wavelength);
+    }
   }
   return chunk;
 }
@@ -348,6 +363,106 @@ PropagatorConfig config_of(Curvature curvature, double earth_radius_m) {
   return config;
 }
 
+// The atmospheric profile of test_propagator.cpp (same site altitude).
+obdeect::propagation::AtmosphereProfile ecmwf_profile() {
+  return obdeect::propagation::AtmosphereProfile::from_file(
+      data_file("atmprof_ecmwf_north_winter_fixed.dat"));
+}
+
+// Weighted output with the acceptance column and the profile (spherical or CORSIKA curved runs).
+PropagatorConfig profile_config(Curvature curvature, double earth_radius_m) {
+  PropagatorConfig config = config_of(curvature, earth_radius_m);
+  config.profile.emplace(ecmwf_profile());
+  config.profile_source = "ecmwf";
+  return config;
+}
+
+// Run keys with telescopes at (x_m, y_m, 0) and the key refraction_applied (profile runs).
+obdeect::stream::Metadata lateral_run_keys(std::int64_t curvature_applied,
+                                           std::int64_t refraction_applied,
+                                           const std::vector<double> &x_m,
+                                           const std::vector<double> &y_m) {
+  obdeect::stream::Metadata m = run_keys(curvature_applied);
+  m["telescope_x_m"] = x_m;
+  m["telescope_y_m"] = y_m;
+  m["telescope_z_m"] = std::vector<double>(x_m.size(), 0.0);
+  m["refraction_applied"] = refraction_applied;
+  return m;
+}
+
+// As above with the telescope altitudes z_m (m above the observation level).
+obdeect::stream::Metadata lateral_run_keys(std::int64_t curvature_applied,
+                                           std::int64_t refraction_applied,
+                                           const std::vector<double> &x_m,
+                                           const std::vector<double> &y_m,
+                                           const std::vector<double> &z_m) {
+  obdeect::stream::Metadata m = lateral_run_keys(curvature_applied, refraction_applied, x_m, y_m);
+  m["telescope_z_m"] = z_m;
+  return m;
+}
+
+// One block of a sky stream: a run record with its own keys, one event with the photons sent to
+// telescopes 1 to `telescopes`, in chunks of chunk_rows rows.
+struct SkyBlock {
+  obdeect::stream::Metadata run;
+  std::uint32_t event;
+  std::vector<SkyPhoton> photons;
+  std::size_t chunk_rows;
+  std::uint32_t telescopes;
+};
+
+std::string sky_blocks(const std::vector<SkyBlock> &blocks) {
+  std::ostringstream out;
+  {
+    obdeect::stream::Writer writer(out, "test");
+    for (const auto &block : blocks) {
+      writer.write_metadata(RecordType::run, block.run);
+      obdeect::stream::Metadata event;
+      event["event_number"] = static_cast<std::int64_t>(block.event);
+      writer.write_metadata(RecordType::event, event);
+      for (std::uint32_t telescope = 1; telescope <= block.telescopes; ++telescope) {
+        writer.write_metadata(RecordType::telescope, telescope_keys(telescope, Frame::sky));
+        for (std::size_t first = 0; first < block.photons.size(); first += block.chunk_rows) {
+          const std::size_t rows = std::min(block.chunk_rows, block.photons.size() - first);
+          writer.write_chunk(sky_chunk(telescope, first, block.photons, rows));
+        }
+        writer.write_metadata(RecordType::telescope_end, telescope_end_keys(telescope));
+      }
+      writer.write_metadata(RecordType::event_end, {});
+      writer.write_metadata(RecordType::run_end, {});
+    }
+    writer.finish();
+  }
+  return out.str();
+}
+
+// The records of the output, split before each event record: [0] holds the records before the
+// first event, [n] the records of event n (event numbers 1, 2, ... in the order of the input).
+std::vector<std::vector<obdeect::stream::Record>>
+split_events(const std::vector<obdeect::stream::Record> &records) {
+  std::vector<std::vector<obdeect::stream::Record>> events(1);
+  for (const auto &record : records) {
+    if (record.type == RecordType::event) {
+      events.emplace_back();
+    }
+    events.back().push_back(record);
+  }
+  return events;
+}
+
+// Sky-frame photon at (x, y, z) above the observation level, zenith angle zenith_deg of its
+// direction of motion (downwards) and azimuth phi_rad.
+SkyPhoton sky_at(double x, double y, double z_m, double zenith_deg, double phi_rad = 0.0) {
+  const double zenith = zenith_deg * kPi / 180.0;
+  SkyPhoton photon;
+  photon.x = x;
+  photon.y = y;
+  photon.z = z_m;
+  photon.cx = std::sin(zenith) * std::cos(phi_rad);
+  photon.cy = std::sin(zenith) * std::sin(phi_rad);
+  return photon;
+}
+
 bool throws_invalid(const std::function<void()> &fn) {
   try {
     fn();
@@ -396,13 +511,19 @@ void test_rejections() {
       (void)propagator;
     }));
   }
-  auto profile = config_of(Curvature::spherical, R);
-  profile.profile.emplace(obdeect::propagation::AtmosphereProfile::from_file(
-      data_file("atmprof_ecmwf_north_winter_fixed.dat")));
-  profile.profile_source = "fixture";
+  // A profile is accepted in the spherical and the CORSIKA curved modes (refraction and air delay
+  // of the spherical mode: test_profile_* below). A spherical run without refraction_applied is
+  // refused when the run record is read.
+  for (const Curvature curvature : {Curvature::corsika, Curvature::spherical}) {
+    auto with_profile = profile_config(curvature, R);
+    CHECK(!throws_invalid([&] {
+      obdeect::propagation::Propagator propagator(with_profile);
+      (void)propagator;
+    }));
+  }
   CHECK(throws_invalid([&] {
-    obdeect::propagation::Propagator propagator(profile);
-    (void)propagator;
+    propagate(sky_stream(run_keys(0), sky_photons(10), 10),
+              profile_config(Curvature::spherical, R));
   }));
 
   // Earth radius: finite and above 1e6 m, in every mode.
@@ -617,6 +738,383 @@ void test_chunk_and_order_independence() {
   CHECK(value_by_x(sky_whole, 1, Column::zem) == value_by_x(sky_small, 1, Column::zem));
 }
 
+// Spherical refraction and air delay with R = 1e12 m reduce to the flat tables of mode none: the
+// same rows, positions within 2 mm, directions within 1e-6, times within 1e-3 ns and acceptance
+// within 1e-5 relative. Telescopes at the reference and 1 km east; emission 5 and 20 km above the
+// plane at zenith angles 0 to 70 degrees.
+void test_profile_limit_matches_none() {
+  const std::vector<double> lateral{0.0, 1000.0};
+  const std::vector<double> zero(2, 0.0);
+  std::vector<SkyPhoton> photons;
+  for (const double zenith : {0.0, 30.0, 60.0, 70.0}) {
+    for (const double height : {5000.0, 20000.0}) {
+      for (const double phi : {0.0, 0.7}) {
+        for (const double x : {-300.0, 0.0, 300.0}) {
+          photons.push_back(sky_at(x, 0.0, height, zenith, phi));
+        }
+      }
+    }
+  }
+  const std::size_t n = photons.size();
+  const auto none =
+      records_of(propagate(sky_stream(lateral_run_keys(no_key, 0, lateral, zero), photons, n),
+                           profile_config(Curvature::none, kEarthRadius))
+                     .bytes);
+  const auto spherical =
+      records_of(propagate(sky_stream(lateral_run_keys(0, 0, lateral, zero), photons, n),
+                           profile_config(Curvature::spherical, 1e12))
+                     .bytes);
+  for (const std::uint32_t telescope : {1U, 2U}) {
+    const auto compare = [&](Column c, double abs_tol, double rel_tol) {
+      const auto flat = photon_column(none, telescope, c);
+      const auto curved = photon_column(spherical, telescope, c);
+      // Photons of zero acceptance are removed by the weighted output in both runs alike.
+      CHECK(!flat.empty());
+      CHECK(curved.size() == flat.size());
+      if (curved.size() != flat.size()) {
+        return;
+      }
+      for (std::size_t i = 0; i < flat.size(); ++i) {
+        const auto e = static_cast<double>(flat[i]);
+        CHECK_NEAR(static_cast<double>(curved[i]), e, abs_tol + rel_tol * std::abs(e));
+      }
+    };
+    compare(Column::x, 2e-3, 0.0);
+    compare(Column::y, 2e-3, 0.0);
+    compare(Column::cx, 1e-6, 0.0);
+    compare(Column::cy, 1e-6, 0.0);
+    compare(Column::t, 1e-3, 0.0);
+    compare(Column::p, 1e-12, 1e-5);
+  }
+}
+
+// Photons of the real-radius and off-grid checks (event 1): indices 0 (zenith 0) and 1 (zenith 80
+// degrees) at 5 km, and 2 to 7 (zenith 60, 80, 85 degrees from 7 and 20 km), all on the axis of
+// the telescope at the reference point.
+std::vector<SkyPhoton> real_radius_photons() {
+  std::vector<SkyPhoton> photons{sky_at(0.0, 0.0, 5000.0, 0.0), sky_at(0.0, 0.0, 5000.0, 80.0)};
+  for (const double zenith : {60.0, 80.0, 85.0}) {
+    for (const double height : {7000.0, 20000.0}) {
+      photons.push_back(sky_at(0.0, 0.0, height, zenith));
+    }
+  }
+  return photons;
+}
+
+// Output of one propagation with the real Earth radius and the profile (one table cache for all
+// checks): run A (refraction not applied, telescopes 1 to 4 at z = 0, 0, 3.7, 9.9 m) with events
+// 1 to 6, run B (refraction applied) with event 7. Geometry only (no extinction), so the rows of
+// the output follow the input order, apart from the dropped photons.
+struct Batch {
+  obdeect::propagation::PropagationSummary summary{};
+  std::vector<std::vector<obdeect::stream::Record>> events;
+  std::vector<obdeect::stream::Record> records;
+};
+
+Batch real_radius_batch() {
+  const std::vector<double> zero(4, 0.0);
+  const auto run_a = lateral_run_keys(0, 0, {0.0, 1000.0, 0.0, 0.0}, zero, {0.0, 0.0, 3.7, 9.9});
+  const auto run_b = lateral_run_keys(0, 1, {0.0, 1000.0, 0.0, 0.0}, zero, zero);
+  const auto photons = real_radius_photons();
+  // Chunk and order checks: explicit wavelengths, so reordering does not change the draws.
+  auto sorted = sky_photons(300);
+  for (std::size_t i = 0; i < sorted.size(); ++i) {
+    sorted[i].wavelength = 300.0 + static_cast<double>(i % 400);
+  }
+  auto reversed = sorted;
+  std::reverse(reversed.begin(), reversed.end());
+  const std::vector<SkyPhoton> dropped{sky_at(0.0, 0.0, 5000.0, 0.0),
+                                       sky_at(0.0, 0.0, 17000.0, 89.0)};
+  const std::string bytes = sky_blocks({
+      {run_a, 1, photons, photons.size(), 4},             // real radius and off-grid telescopes
+      {run_a, 2, sorted, 300, 2},                         // whole chunk
+      {run_a, 3, sorted, 7, 2},                           // chunks of 7 rows
+      {run_a, 4, reversed, 300, 2},                       // reversed order
+      {run_a, 5, sorted, 300, 2},                         // the same input again (repeat)
+      {run_a, 6, dropped, 2, 2},                          // one photon above the telescope level
+      {run_b, 7, {sky_at(0.0, 0.0, 4000.0, 60.0)}, 1, 1}, // refraction applied in the input
+  });
+  auto config = profile_config(Curvature::spherical, kEarthRadius);
+  config.geometry_only = true;
+  config.transmission.reset();
+  config.store_p = false;
+  const auto result = propagate(bytes, config);
+  Batch batch;
+  batch.summary = result.summary;
+  batch.records = records_of(result.bytes);
+  batch.events = split_events(batch.records);
+  CHECK(batch.events.size() == 8);
+  return batch;
+}
+
+// Real Earth radius with a profile (refraction_applied = 0): on the telescope axis, zenith 0 equals
+// the flat result; at zenith 80 degrees the arrival point is the straight-line position plus the
+// shift of curved_ray_integrals, and the direction is scaled by (1 + nu_e) / (1 + nu_t).
+void check_real_radius(const Batch &batch) {
+  const double R = kEarthRadius;
+  const auto profile = ecmwf_profile();
+  const std::vector<double> zero(2, 0.0);
+  const auto photons = real_radius_photons();
+  auto flat_config = profile_config(Curvature::none, R);
+  flat_config.geometry_only = true;
+  flat_config.transmission.reset();
+  flat_config.store_p = false;
+  const std::string flat_bytes = sky_blocks(
+      {{lateral_run_keys(no_key, 0, {0.0, 1000.0}, zero), 1, {photons[0], photons[1]}, 2, 1}});
+  const auto none = records_of(propagate(flat_bytes, flat_config).bytes);
+  const auto &event = batch.events[1];
+  const auto x_flat = photon_column(none, 1, Column::x);
+  const auto x_curved = photon_column(event, 1, Column::x);
+  CHECK(x_flat.size() == 2 && x_curved.size() == photons.size());
+  if (x_flat.size() != 2 || x_curved.size() != photons.size()) {
+    return;
+  }
+
+  // Zenith 0: no bending, the same air delay.
+  CHECK_NEAR(static_cast<double>(x_curved[0]), static_cast<double>(x_flat[0]), 1e-3);
+  CHECK_NEAR(static_cast<double>(photon_column(event, 1, Column::y)[0]),
+             static_cast<double>(photon_column(none, 1, Column::y)[0]), 1e-3);
+  CHECK_NEAR(static_cast<double>(photon_column(event, 1, Column::t)[0]),
+             static_cast<double>(photon_column(none, 1, Column::t)[0]), 1e-3);
+
+  // Zenith 80 degrees: the chunk stores cx as float32, the reference uses the same value.
+  const double cx = static_cast<double>(static_cast<float>(photons[1].cx));
+  const double cz = std::sqrt(1.0 - cx * cx);
+  const double straight = 5000.0 / cz * cx; // telescope 1 at the reference point
+  const double emission_m = site_m + 5000.0;
+  const double r_t = R + site_m;
+  const double b =
+      obdeect::propagation::impact_parameter_m(0.0, 0.0, 5000.0, site_m, R, cx, 0.0, cz);
+  const double theta = std::atan2(b, std::sqrt((r_t - b) * (r_t + b)));
+  const auto direct =
+      obdeect::propagation::curved_ray_integrals(profile, R, site_m, theta, emission_m);
+  CHECK_NEAR(static_cast<double>(x_curved[1]), straight + direct.shift_m, 1e-3);
+  const double shift_flat = static_cast<double>(x_flat[1]) - straight;
+  const double shift_curved = static_cast<double>(x_curved[1]) - straight;
+  std::fprintf(stderr, "zenith 80 deg: shift flat %.4f m, spherical %.4f m\n", shift_flat,
+               shift_curved);
+  CHECK(std::abs(shift_curved - shift_flat) > 0.01 * std::abs(shift_flat));
+
+  const double nu_e = profile.index_minus_one_cm(100.0 * emission_m);
+  const double nu_t = profile.index_minus_one_cm(100.0 * site_m);
+  const auto cx_out = photon_column(event, 1, Column::cx);
+  CHECK(cx_out.size() == photons.size());
+  if (cx_out.size() == photons.size()) {
+    CHECK_NEAR(static_cast<double>(cx_out[1]) / cx, (1.0 + nu_e) / (1.0 + nu_t), 1e-6);
+  }
+  const auto zem = photon_column(event, 1, Column::zem);
+  CHECK(zem.size() == photons.size());
+  if (zem.size() == photons.size()) {
+    CHECK_NEAR(static_cast<double>(zem[1]), emission_m, 1e-2);
+  }
+}
+
+// refraction_applied = 1 in the input (run B): no bending, only the air delay of the straight path.
+void check_refraction_applied(const Batch &batch) {
+  const double R = kEarthRadius;
+  const auto profile = ecmwf_profile();
+  const double cx = static_cast<double>(static_cast<float>(sky_at(0.0, 0.0, 4000.0, 60.0).cx));
+  const double cz = std::sqrt(1.0 - cx * cx);
+  const double path = 4000.0 / cz;
+  const double b =
+      obdeect::propagation::impact_parameter_m(0.0, 0.0, 4000.0, site_m, R, cx, 0.0, cz);
+  const double r_t = R + site_m;
+  const double theta = std::atan2(b, std::sqrt((r_t - b) * (r_t + b)));
+  const auto direct =
+      obdeect::propagation::curved_ray_integrals(profile, R, site_m, theta, site_m + 4000.0);
+  const auto &event = batch.events[7];
+  const auto x = photon_column(event, 1, Column::x);
+  const auto t = photon_column(event, 1, Column::t);
+  const auto cx_out = photon_column(event, 1, Column::cx);
+  CHECK(x.size() == 1 && t.size() == 1 && cx_out.size() == 1);
+  if (x.size() == 1 && t.size() == 1 && cx_out.size() == 1) {
+    CHECK_NEAR(static_cast<double>(x[0]), path * cx, 1e-3);
+    CHECK_NEAR(static_cast<double>(cx_out[0]), cx, 1e-7);
+    CHECK_NEAR(static_cast<double>(t[0]),
+               path / obdeect::propagation::speed_of_light_m_per_ns + direct.excess_straight_ns,
+               1e-3);
+    CHECK(direct.excess_straight_ns > 0.0);
+  }
+  // The output run record of run B says that refraction is applied.
+  const obdeect::stream::Metadata *last_run = nullptr;
+  for (const auto &record : batch.records) {
+    if (record.type == RecordType::run) {
+      last_run = &record.metadata;
+    }
+  }
+  CHECK(last_run != nullptr);
+  if (last_run != nullptr) {
+    CHECK(std::get<std::int64_t>(last_run->at("refraction_applied")) == 1);
+  }
+}
+
+// A photon whose line does not reach the telescope level (b >= r_t) is dropped with w = 0: zenith
+// 89 degrees from 19 km altitude passes above the telescope at 2 km. Event 6 of the batch, and the
+// total of the batch: the same drops as the upward photons of events 2 to 5 at two telescopes.
+// Without a profile (no tables) the same photon is dropped in a separate run.
+void check_dropped(const Batch &batch) {
+  const auto &event = batch.events[6];
+  for (const std::uint32_t telescope : {1U, 2U}) {
+    const auto zem = photon_column(event, telescope, Column::zem);
+    CHECK(zem.size() == 1);
+    if (zem.size() == 1) {
+      CHECK_NEAR(static_cast<double>(zem[0]), site_m + 5000.0, 1e-2);
+    }
+  }
+  std::uint64_t upward = 0;
+  for (const auto &photon : sky_photons(300)) {
+    upward += photon.upward ? 1U : 0U;
+  }
+  CHECK(batch.summary.dropped == 2 + 4 * 2 * upward);
+
+  const std::vector<double> lateral{0.0, 1000.0};
+  const std::vector<double> zero(2, 0.0);
+  const std::vector<SkyPhoton> photons{sky_at(0.0, 0.0, 5000.0, 0.0),
+                                       sky_at(0.0, 0.0, 17000.0, 89.0)};
+  const auto result =
+      propagate(sky_blocks({{lateral_run_keys(0, 0, lateral, zero), 1, photons, 2, 2}}),
+                config_of(Curvature::spherical, kEarthRadius));
+  // Two telescopes, one dropped photon each; the weighted output keeps the other photon.
+  CHECK(result.summary.dropped == 2);
+  CHECK(result.summary.photons_in == 4);
+  CHECK(result.summary.photons_out == 2);
+  CHECK(photon_column(records_of(result.bytes), 1, Column::x).size() == 1);
+}
+
+// Spherical refraction with a profile: the same photons in whole chunks, chunks of 7 rows, reversed
+// order and again (repeat) give the same output per photon; the upward photons are dropped.
+void check_chunk_order(const Batch &batch) {
+  std::uint64_t upward = 0;
+  for (const auto &photon : sky_photons(300)) {
+    upward += photon.upward ? 1U : 0U;
+  }
+  const auto whole = value_by_x(batch.events[2], 1, Column::t);
+  CHECK(whole.size() == 300 - upward);
+  CHECK(!whole.empty());
+  for (const std::size_t event : {3U, 4U, 5U}) {
+    for (const Column c : {Column::t, Column::zem, Column::cx, Column::cy}) {
+      CHECK(value_by_x(batch.events[2], 1, c) == value_by_x(batch.events[event], 1, c));
+    }
+  }
+}
+
+// SkyPlane contract of sky_to_ground in the spherical geometry: a profile needs the two curved
+// tables bracketing the telescope altitude, flat tables are refused, and the tables must match the
+// plane's altitude, weight and radius.
+void test_sky_plane_validation() {
+  const double R = kEarthRadius;
+  const auto profile = ecmwf_profile();
+  const obdeect::propagation::RefractionTables flat(profile, site_m);
+  const obdeect::propagation::CurvedRefractionTables lower(profile, R, site_m);
+  const obdeect::propagation::CurvedRefractionTables upper(profile, R, site_m + 10.0);
+  const auto sky_one = [] {
+    return sky_chunk(1, 0, {SkyPhoton{0.0, 0.0, 5000.0, 0.0, 0.0, 1.0, false, 0.0}}, 1);
+  };
+  const auto plane = [&](bool with_profile) {
+    obdeect::propagation::SkyPlane p;
+    p.observation_m = site_m;
+    p.earth_radius_m = R;
+    p.telescope_altitude_m = site_m;
+    if (with_profile) {
+      p.profile = &profile;
+    }
+    return p;
+  };
+  const auto convert = [&](const obdeect::propagation::SkyPlane &p) {
+    auto chunk = sky_one();
+    obdeect::propagation::sky_to_ground(chunk, p);
+  };
+
+  CHECK(throws_invalid([&] { convert(plane(true)); })); // profile without curved tables
+  auto with_tables = plane(true);
+  with_tables.curved_tables = &lower;
+  with_tables.curved_tables_upper = &upper;
+  with_tables.curved_bending = true;
+  CHECK(!throws_invalid([&] { convert(with_tables); }));
+  auto one_table = with_tables;
+  one_table.curved_tables_upper = nullptr;
+  CHECK(throws_invalid([&] { convert(one_table); }));
+  auto flat_tables = plane(true);
+  flat_tables.tables = &flat;
+  CHECK(throws_invalid([&] { convert(flat_tables); }));
+  auto wrong_altitude = with_tables;
+  wrong_altitude.telescope_altitude_m = site_m + 100.0; // outside [lower, upper)
+  CHECK(throws_invalid([&] { convert(wrong_altitude); }));
+  auto wrong_weight = with_tables;
+  wrong_weight.telescope_altitude_m = site_m + 3.0; // weight must be 0.3
+  CHECK(throws_invalid([&] { convert(wrong_weight); }));
+  auto no_profile = plane(false);
+  no_profile.curved_tables = &lower;
+  no_profile.curved_tables_upper = &upper;
+  CHECK(throws_invalid([&] { convert(no_profile); }));
+  auto flat_radius = plane(true);
+  flat_radius.earth_radius_m = 0.0;
+  flat_radius.curved_tables = &lower;
+  flat_radius.curved_tables_upper = &upper;
+  CHECK(throws_invalid([&] { convert(flat_radius); }));
+}
+
+// Telescope altitudes that are not on the 10 m grid (observation level 2000 m, telescope z = 3.7
+// and 9.9 m, event 1 of the batch). Photons at zenith 60, 80 and 85 degrees from 7 and 20 km, on
+// the telescope axis: x, y and t against curved_ray_integrals at the exact altitude plus the
+// straight-line values. The time tolerance is 0.01 ns plus the float32 half ulp of the output t at
+// that value (the output t column is float32, not changed here) plus 5e-6 of the bent excess, the
+// design accuracy of the linear interpolation in the 10 m spacing (measured 2e-6 to 3e-6 at 85
+// degrees); the rounding of the output and the interpolation error add up. The position tolerances
+// are 1 cm at 60 and 80 degrees, 5 cm at 85.
+void check_off_grid(const Batch &batch) {
+  const double R = kEarthRadius;
+  const auto profile = ecmwf_profile();
+  const double c = obdeect::propagation::speed_of_light_m_per_ns;
+  const auto photons = real_radius_photons();
+  const auto &event = batch.events[1];
+  for (const std::uint32_t telescope : {3U, 4U}) {
+    const double z = telescope == 3U ? 3.7 : 9.9;
+    const auto x_out = photon_column(event, telescope, Column::x);
+    const auto y_out = photon_column(event, telescope, Column::y);
+    const auto t_out = photon_column(event, telescope, Column::t);
+    CHECK(x_out.size() == photons.size() && y_out.size() == x_out.size() &&
+          t_out.size() == x_out.size());
+    if (x_out.size() != photons.size() || y_out.size() != photons.size() ||
+        t_out.size() != photons.size()) {
+      continue;
+    }
+    const double h_t = site_m + z; // exact telescope altitude
+    for (std::size_t i = 2; i < photons.size(); ++i) {
+      const SkyPhoton &photon = photons[i];
+      const double zenith = i < 4 ? 60.0 : (i < 6 ? 80.0 : 85.0);
+      const double cx = static_cast<double>(static_cast<float>(photon.cx));
+      const double cz = std::sqrt(1.0 - cx * cx);
+      const double path = (photon.z - z) / cz;
+      const double b =
+          obdeect::propagation::impact_parameter_m(0.0, 0.0, photon.z, site_m, R, cx, 0.0, cz);
+      const double r_t = R + h_t;
+      const double theta = std::atan2(b, std::sqrt((r_t - b) * (r_t + b)));
+      const auto direct =
+          obdeect::propagation::curved_ray_integrals(profile, R, h_t, theta, site_m + photon.z);
+      const double x_expected = path * cx + direct.shift_m;
+      const double t_expected = path / c + direct.excess_bent_ns;
+      const float t_float = static_cast<float>(t_expected);
+      const double half_ulp =
+          0.5 *
+          (static_cast<double>(std::nextafter(t_float, std::numeric_limits<float>::infinity())) -
+           static_cast<double>(t_float));
+      const double pos_tol = zenith == 85.0 ? 5e-2 : 1e-2;
+      const double time_tol = 0.01 + half_ulp + 5e-6 * std::abs(direct.excess_bent_ns);
+      const double ex = std::abs(static_cast<double>(x_out[i]) - x_expected);
+      const double ey = std::abs(static_cast<double>(y_out[i]));
+      const double et = std::abs(static_cast<double>(t_out[i]) - t_expected);
+      std::fprintf(stderr,
+                   "z %.1f m, zenith %2.0f, H %6.0f m: |dx| %.2e m (tol %.0e), |dy| %.2e m, "
+                   "|dt| %.2e ns (tol %.2e)\n",
+                   z, zenith, photon.z, ex, pos_tol, ey, et, time_tol);
+      CHECK(ex <= pos_tol);
+      CHECK(ey <= pos_tol);
+      CHECK(et <= time_tol);
+    }
+  }
+}
+
 } // namespace
 
 int main() {
@@ -627,5 +1125,14 @@ int main() {
     test_spherical_limit_matches_none();
     test_sky_emission_altitude();
     test_chunk_and_order_independence();
+    test_profile_limit_matches_none();
+    // One propagation with the real radius and a profile; its tables serve all checks below.
+    const Batch batch = real_radius_batch();
+    check_real_radius(batch);
+    check_off_grid(batch);
+    check_refraction_applied(batch);
+    check_dropped(batch);
+    check_chunk_order(batch);
+    test_sky_plane_validation();
   });
 }

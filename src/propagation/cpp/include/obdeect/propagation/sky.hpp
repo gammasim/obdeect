@@ -5,6 +5,7 @@
 // bent by the refraction tables if given, and written in frame G relative to the telescope.
 // Per photon: no allocation and no I/O.
 
+#include "obdeect/propagation/curved_refraction.hpp"
 #include "obdeect/propagation/profile.hpp"
 #include "obdeect/propagation/refraction.hpp"
 #include "obdeect/propagation/timing.hpp"
@@ -12,6 +13,7 @@
 #include "obdeect/stream/format.hpp"
 #include "obdeect/stream/photons.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -43,9 +45,96 @@ struct SkyPlane {
   const RefractionTables *tables{};
   // Earth radius R [m] for curved emission altitudes (spherical curvature), 0: flat. The emission
   // altitude is then |p - C| - R with C = (0, 0, -(R + observation_m)) and p = (x, y, z) of the
-  // emission point. Not combined with profile or tables.
+  // emission point. Then tables must be null; the bending and air delay come from curved_tables.
   double earth_radius_m{0.0};
+  // Spherical bending and air delay (earth_radius_m > 0, profile set). The telescope altitude h_t
+  // lies between the levels of the two tables: curved_tables at a_lo <= h_t and curved_tables_upper
+  // at a_hi > h_t (both built for earth_radius_m). The integrals are interpolated linearly in h_t
+  // with curved_weight = (h_t - a_lo) / (a_hi - a_lo). Both null if profile is null.
+  const CurvedRefractionTables *curved_tables{};
+  const CurvedRefractionTables *curved_tables_upper{};
+  double curved_weight{};
+  // True: bend the photons (refraction not applied in the input). False: air delay only.
+  bool curved_bending{};
+  // Spherical altitude [m a.s.l.] of the telescope plane h_t (earth_radius_m > 0): r_t = R + h_t
+  // gives the telescope level of the straight line, nu_t of the direction scale. Ignored in flat
+  // geometry.
+  double telescope_altitude_m{};
 };
+
+// Impact parameter b = |(P - C) x d| [m] of the straight line from the emission point P = (x, y, z)
+// (run frame, z above the observation level) with direction d = (cx, cy, -cz_magnitude), about the
+// Earth centre C = (0, 0, -(R + observation_m)). The line reaches the telescope level r_t = R + h_t
+// if b < r_t, at zenith angle theta_s with sin(theta_s) = b / r_t.
+inline double impact_parameter_m(double x, double y, double z, double observation_m,
+                                 double earth_radius_m, double cx, double cy, double cz_magnitude) {
+  const double vertical = earth_radius_m + observation_m + z; // (P - C) z-component
+  const double u = y * cz_magnitude + vertical * cy;
+  const double v = vertical * cx + x * cz_magnitude;
+  const double w = x * cy - y * cx;
+  return std::sqrt(u * u + v * v + w * w);
+}
+
+// Integrals of one curved table for a photon with impact parameter b [m] (about the Earth centre)
+// emitted at emission_altitude_m. The table is looked up at its own level a: the zenith angle there
+// is asin(b / (R + a)). False if the line does not reach that level (b >= R + a) or the lookup
+// fails (emission below the level).
+inline bool curved_table_integrals(const CurvedRefractionTables &table, double impact_m,
+                                   double emission_altitude_m, CurvedRayIntegrals &out) {
+  const double radius = table.earth_radius_m() + table.telescope_altitude_m();
+  if (!(impact_m < radius)) {
+    return false;
+  }
+  const double theta = std::atan2(impact_m, std::sqrt((radius - impact_m) * (radius + impact_m)));
+  return table.lookup(theta, emission_altitude_m, out);
+}
+
+// Spherical bending and air delay of one sky-frame photon with impact parameter impact_m that
+// reaches the telescope level (plane.curved_tables required). Input: the straight-line position
+// x_out, y_out (already relative to the telescope), direction cx, cy of the emission, the vacuum
+// path [m] to the plane and the time t_in [ns]. Output: the bent position, direction and time.
+// Returns false if the photon is dropped (a lookup fails, or the bent direction leaves the unit
+// disc). No allocation, no exceptions.
+inline bool curved_arrival(const SkyPlane &plane, double emission_altitude_m, double impact_m,
+                           double cx, double cy, double path_m, double t_in, double &x_out,
+                           double &y_out, double &cx_out, double &cy_out, double &t_out) {
+  CurvedRayIntegrals lower{};
+  CurvedRayIntegrals upper{};
+  if (!curved_table_integrals(*plane.curved_tables, impact_m, emission_altitude_m, lower) ||
+      !curved_table_integrals(*plane.curved_tables_upper, impact_m, emission_altitude_m, upper)) {
+    return false;
+  }
+  const double w = plane.curved_weight;
+  CurvedRayIntegrals v{};
+  v.shift_m = (1.0 - w) * lower.shift_m + w * upper.shift_m;
+  v.excess_bent_ns = (1.0 - w) * lower.excess_bent_ns + w * upper.excess_bent_ns;
+  v.excess_straight_ns = (1.0 - w) * lower.excess_straight_ns + w * upper.excess_straight_ns;
+  const double vacuum_ns = path_m / speed_of_light_m_per_ns;
+  if (!plane.curved_bending) {
+    t_out = t_in + vacuum_ns + v.excess_straight_ns;
+    return true;
+  }
+  // Lateral shift of the arrival point along the horizontal direction of motion.
+  const double s = std::sqrt(cx * cx + cy * cy);
+  if (s > 0.0) {
+    x_out += v.shift_m * cx / s;
+    y_out += v.shift_m * cy / s;
+  }
+  // Snell's law at the ends of the ray: s_obs / s_e = (1 + nu_e) / (1 + nu_t), with the true
+  // telescope altitude for nu_t; the emission altitude is clamped to the profile top as in the
+  // integrals.
+  const double top = plane.profile->top_m();
+  const double nu_e = plane.profile->index_minus_one_cm(100.0 * std::min(emission_altitude_m, top));
+  const double nu_t = plane.profile->index_minus_one_cm(100.0 * plane.telescope_altitude_m);
+  const double scale = (1.0 + nu_e) / (1.0 + nu_t);
+  cx_out = cx * scale;
+  cy_out = cy * scale;
+  if (!(cx_out * cx_out + cy_out * cy_out < 1.0)) {
+    return false;
+  }
+  t_out = t_in + vacuum_ns + v.excess_bent_ns;
+  return true;
+}
 
 // Converts a chunk in frame sky to frame G in place and returns the number of photons that do
 // not reach the plane: photons moving upwards or horizontally, emitted below the plane, or not
@@ -69,8 +158,34 @@ inline std::uint64_t sky_to_ground(obdeect::stream::PhotonChunk &chunk, const Sk
     throw std::invalid_argument("earth radius must be finite and not negative (0: flat)");
   }
   const bool curved = plane.earth_radius_m > 0.0;
-  if (curved && (plane.profile != nullptr || plane.tables != nullptr)) {
-    throw std::invalid_argument("curved air delay and bending are not implemented");
+  if (curved) {
+    if (plane.tables != nullptr) {
+      throw std::invalid_argument(
+          "curved geometry takes curved tables, not flat refraction tables");
+    }
+    if (!std::isfinite(plane.telescope_altitude_m)) {
+      throw std::invalid_argument("telescope altitude must be finite");
+    }
+    if ((plane.profile != nullptr) != (plane.curved_tables != nullptr) ||
+        (plane.curved_tables == nullptr) != (plane.curved_tables_upper == nullptr)) {
+      throw std::invalid_argument(
+          "curved bending needs a profile and the two curved tables together");
+    }
+    if (plane.curved_tables != nullptr) {
+      const double lower = plane.curved_tables->telescope_altitude_m();
+      const double upper = plane.curved_tables_upper->telescope_altitude_m();
+      if (!(upper > lower) || !(lower <= plane.telescope_altitude_m) ||
+          !(plane.telescope_altitude_m < upper) ||
+          plane.curved_tables->earth_radius_m() != plane.earth_radius_m ||
+          plane.curved_tables_upper->earth_radius_m() != plane.earth_radius_m ||
+          std::abs(plane.curved_weight - (plane.telescope_altitude_m - lower) / (upper - lower)) >
+              1e-9) {
+        throw std::invalid_argument(
+            "curved tables must bracket the telescope altitude, with its weight and radius");
+      }
+    }
+  } else if (plane.curved_tables != nullptr || plane.curved_tables_upper != nullptr) {
+    throw std::invalid_argument("curved tables need an Earth radius above 0");
   }
   const std::size_t rows = chunk.rows();
   const double plane_z = plane.telescope_z_m;
@@ -138,7 +253,23 @@ inline std::uint64_t sky_to_ground(obdeect::stream::PhotonChunk &chunk, const Sk
       y_out = static_cast<double>(y[row]) + path * dy - plane.telescope_y_m;
       cx_out = dx;
       cy_out = dy;
-      if (plane.tables != nullptr) {
+      if (curved) {
+        // The straight line must reach the telescope level r_t = R + h_t (impact parameter b).
+        const double r_t = plane.earth_radius_m + plane.telescope_altitude_m;
+        const double b =
+            impact_parameter_m(static_cast<double>(x[row]), static_cast<double>(y[row]), emission_z,
+                               plane.observation_m, plane.earth_radius_m, dx, dy, cz_magnitude);
+        reaches = b < r_t;
+        if (reaches) {
+          const double t_in = static_cast<double>(t[row]);
+          if (plane.curved_tables != nullptr) {
+            reaches = curved_arrival(plane, emission_altitude, b, dx, dy, path, t_in, x_out, y_out,
+                                     cx_out, cy_out, t_out);
+          } else {
+            t_out = t_in + path / speed_of_light_m_per_ns;
+          }
+        }
+      } else if (plane.tables != nullptr) {
         double travel_ns = 0.0;
         reaches = bend(*plane.tables, emission_altitude, cx_out, cy_out, x_out, y_out, travel_ns);
         t_out = static_cast<double>(t[row]) + travel_ns;
