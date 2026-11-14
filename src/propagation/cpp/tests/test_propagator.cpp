@@ -252,8 +252,9 @@ std::string ground_stream(std::size_t n, std::size_t chunk_rows, int refraction 
   });
 }
 
-// Ledger record that follows the run record (first one), or nullptr.
-const obdeect::stream::Metadata *first_ledger(const std::vector<obdeect::stream::Record> &records) {
+// Efficiency status record that follows the run record (first one), or nullptr.
+const obdeect::stream::Metadata *
+first_efficiency_status(const std::vector<obdeect::stream::Record> &records) {
   for (const auto &record : records) {
     if (record.type == RecordType::efficiency_status) {
       return &record.metadata;
@@ -287,8 +288,8 @@ bool throws_invalid(const std::function<void()> &fn) {
   return false;
 }
 
-// Ledger keys and record order: stream, run, ledger, event, ...
-void test_ledger_layout() {
+// Efficiency status keys and record order: stream, run, efficiency_status, event, ...
+void test_efficiency_status_layout() {
   const auto input = ground_stream(1000, 1000);
   auto config = config_for(zero_table());
   config.envelope = {constant_factor("qe", 0.9), constant_factor("mirror", 0.5)};
@@ -302,20 +303,20 @@ void test_ledger_layout() {
   CHECK(records[1].type == RecordType::run);
   CHECK(records[2].type == RecordType::efficiency_status);
   CHECK(records[3].type == RecordType::event);
-  const auto *ledger = first_ledger(records);
-  CHECK(ledger != nullptr);
-  if (ledger == nullptr) {
+  const auto *efficiency_status = first_efficiency_status(records);
+  CHECK(efficiency_status != nullptr);
+  if (efficiency_status == nullptr) {
     return;
   }
-  CHECK(text_of(*ledger, "factors") == "atmosphere,wavelength,qe,mirror");
-  CHECK(text_of(*ledger, "atmosphere.state") == "applied");
-  CHECK(text_of(*ledger, "atmosphere.source") == "test table");
-  CHECK(text_of(*ledger, "wavelength.state") == "applied");
-  CHECK(text_of(*ledger, "qe.state") == "envelope");
-  CHECK(text_of(*ledger, "qe.source") == "qe.dat");
-  CHECK(array_size_of(*ledger, "qe.wavelength_nm") == 2);
-  CHECK(array_size_of(*ledger, "mirror.value") == 2);
-  CHECK(text_of(*ledger, "mirror.state") == "envelope");
+  CHECK(text_of(*efficiency_status, "factors") == "atmosphere,wavelength,qe,mirror");
+  CHECK(text_of(*efficiency_status, "atmosphere.state") == "applied");
+  CHECK(text_of(*efficiency_status, "atmosphere.source") == "test table");
+  CHECK(text_of(*efficiency_status, "wavelength.state") == "applied");
+  CHECK(text_of(*efficiency_status, "qe.state") == "envelope");
+  CHECK(text_of(*efficiency_status, "qe.source") == "qe.dat");
+  CHECK(array_size_of(*efficiency_status, "qe.wavelength_nm") == 2);
+  CHECK(array_size_of(*efficiency_status, "mirror.value") == 2);
+  CHECK(text_of(*efficiency_status, "mirror.state") == "envelope");
   // Run keys: no profile, so refraction_applied is passed through unchanged.
   CHECK(std::get<std::int64_t>(records[1].metadata.at("refraction_applied")) == 0);
   CHECK(result.summary.photons_in == 2000);
@@ -383,13 +384,13 @@ void test_weighted_analytic() {
   CHECK_NEAR(static_cast<double>(thinned.summary.photons_out), 0.4 * expected_weight, 4.0 * sigma);
 }
 
-// The input ledger must not show a factor applied already; pending or absent is fine.
+// The input efficiency status must not show a factor applied already; pending or absent is fine.
 void test_never_apply_twice() {
   const auto table = zero_table();
-  const auto run_then_ledger = [](const obdeect::stream::Metadata &ledger) {
+  const auto run_then_efficiency_status = [](const obdeect::stream::Metadata &efficiency_status) {
     return make_stream([&](obdeect::stream::Writer &writer) {
       writer.write_metadata(RecordType::run, run_keys(0));
-      writer.write_metadata(RecordType::efficiency_status, ledger);
+      writer.write_metadata(RecordType::efficiency_status, efficiency_status);
       writer.write_metadata(RecordType::event, event_keys());
       writer.write_metadata(RecordType::event_end, {});
       writer.write_metadata(RecordType::run_end, {});
@@ -398,14 +399,14 @@ void test_never_apply_twice() {
   obdeect::stream::Metadata applied;
   applied["factors"] = std::string("atmosphere");
   applied["atmosphere.state"] = std::string("applied");
-  CHECK(throws_invalid([&] { propagate(run_then_ledger(applied), config_for(table)); }));
+  CHECK(throws_invalid([&] { propagate(run_then_efficiency_status(applied), config_for(table)); }));
 
   obdeect::stream::Metadata qe_applied;
   qe_applied["factors"] = std::string("qe");
   qe_applied["qe.state"] = std::string("applied");
   auto config = config_for(table);
   config.envelope = {constant_factor("qe", 0.9)};
-  CHECK(throws_invalid([&] { propagate(run_then_ledger(qe_applied), config); }));
+  CHECK(throws_invalid([&] { propagate(run_then_efficiency_status(qe_applied), config); }));
 
   obdeect::stream::Metadata pending;
   pending["factors"] = std::string("atmosphere,qe");
@@ -413,7 +414,7 @@ void test_never_apply_twice() {
   pending["qe.state"] = std::string("pending");
   bool accepted = true;
   try {
-    propagate(run_then_ledger(pending), config);
+    propagate(run_then_efficiency_status(pending), config);
   } catch (const std::exception &) {
     accepted = false;
   }
@@ -860,22 +861,22 @@ void test_scattered_time_reaches_plane() {
   }
 }
 
-void test_scattering_ledger() {
+void test_scattering_efficiency_status() {
   const auto table = real_table();
   const std::string input = beam_stream(100, 100, false);
   const auto on = records_of(propagate(input, scattering_config(table, false)).bytes);
-  const auto *ledger = first_ledger(on);
-  CHECK(ledger != nullptr);
-  CHECK(text_of(*ledger, "factors") == "atmosphere,wavelength,scattering,qe");
-  CHECK(text_of(*ledger, "scattering.state") == "applied");
-  CHECK(text_of(*ledger, "scattering.source") == "scattering_exponential.dat");
-  CHECK(std::get<std::int64_t>(ledger->at("scattering.points_per_photon")) == 8);
+  const auto *efficiency_status = first_efficiency_status(on);
+  CHECK(efficiency_status != nullptr);
+  CHECK(text_of(*efficiency_status, "factors") == "atmosphere,wavelength,scattering,qe");
+  CHECK(text_of(*efficiency_status, "scattering.state") == "applied");
+  CHECK(text_of(*efficiency_status, "scattering.source") == "scattering_exponential.dat");
+  CHECK(std::get<std::int64_t>(efficiency_status->at("scattering.points_per_photon")) == 8);
 
   auto off = scattering_config(table, false);
   off.scattering = obdeect::propagation::ScatteringConfig{};
   off.scattering_table.reset();
   const auto plain_records = records_of(propagate(input, off).bytes);
-  const auto *plain = first_ledger(plain_records);
+  const auto *plain = first_efficiency_status(plain_records);
   CHECK(plain != nullptr);
   CHECK(plain == nullptr || text_of(*plain, "factors") == "atmosphere,wavelength,qe");
   CHECK(plain == nullptr || plain->count("scattering.state") == 0);
@@ -954,7 +955,7 @@ void test_scattering_needs_w_column() {
       [&] { propagator.process(metadata_record(RecordType::event_end, {}), sink); }));
 }
 
-// Stream of n sky photons of telescope 1 with the given run keys.
+// Stream of n sky-frame photons of telescope 1 with the given run keys.
 std::string sky_stream(const obdeect::stream::Metadata &run, std::size_t n,
                        const std::function<Row(std::size_t)> &rows) {
   return make_stream([&](obdeect::stream::Writer &writer) {
@@ -1071,8 +1072,8 @@ double expected_acceptance(const obdeect::propagation::TransmissionTable &table,
 }
 
 // Telescope 1 gets the default path (28 m), telescope 2 its override (0 m). The acceptance p of
-// every output row matches the formula with that telescope's path, and the ledger lists both.
-// A CORSIKA array reuse is another record of the same telescope in the event: the output
+// every output row matches the formula with that telescope's path, and the efficiency status lists
+// both. A CORSIKA array reuse is another record of the same telescope in the event: the output
 // first_index continues across the records and starts again at 0 in the next event.
 void test_output_index_continues_across_array_reuses() {
   const std::size_t n = 100;
@@ -1114,24 +1115,24 @@ void test_pathlen_per_telescope() {
   config.default_pathlen_m = 28.0;
   config.telescope_pathlen_m = {{2, 0.0}};
   const auto records = records_of(propagate(input, config).bytes);
-  const auto *ledger = first_ledger(records);
-  CHECK(ledger != nullptr);
-  if (ledger != nullptr) {
-    const auto it = ledger->find("atmosphere.pathlen_m");
-    CHECK(it != ledger->end());
-    if (it != ledger->end()) {
+  const auto *efficiency_status = first_efficiency_status(records);
+  CHECK(efficiency_status != nullptr);
+  if (efficiency_status != nullptr) {
+    const auto it = efficiency_status->find("atmosphere.pathlen_m");
+    CHECK(it != efficiency_status->end());
+    if (it != efficiency_status->end()) {
       CHECK(std::get<std::vector<double>>(it->second) == std::vector<double>({28.0, 0.0}));
     }
   }
-  // Without overrides the ledger holds the default for every telescope (0 unless set).
+  // Without overrides the efficiency status holds the default for every telescope (0 unless set).
   auto plain = config_for(table);
   plain.store_p = true;
   plain.mode = obdeect::propagation::OutputMode::weighted;
   const auto plain_records = records_of(propagate(input, plain).bytes);
-  const auto *plain_ledger = first_ledger(plain_records);
-  CHECK(plain_ledger != nullptr);
-  if (plain_ledger != nullptr) {
-    CHECK(std::get<std::vector<double>>(plain_ledger->at("atmosphere.pathlen_m")) ==
+  const auto *plain_efficiency_status = first_efficiency_status(plain_records);
+  CHECK(plain_efficiency_status != nullptr);
+  if (plain_efficiency_status != nullptr) {
+    CHECK(std::get<std::vector<double>>(plain_efficiency_status->at("atmosphere.pathlen_m")) ==
           std::vector<double>({0.0, 0.0}));
   }
 
@@ -1262,7 +1263,7 @@ int main() {
     test_pathlen_per_telescope();
     test_scattered_pathlen();
     test_pathlen_rejects();
-    test_ledger_layout();
+    test_efficiency_status_layout();
     test_expected_count();
     test_weighted_analytic();
     test_never_apply_twice();
@@ -1273,7 +1274,7 @@ int main() {
     test_scattering_weights();
     test_scattering_not_attenuated_twice();
     test_scattered_time_reaches_plane();
-    test_scattering_ledger();
+    test_scattering_efficiency_status();
     test_scattering_chunk_determinism();
     test_scattering_rejects();
     test_scattering_needs_w_column();

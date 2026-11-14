@@ -20,7 +20,7 @@ class StreamWriter:
 
     def __init__(self):
         self._directory = tempfile.TemporaryDirectory()
-        self._path = Path(self._directory.name) / "stream.ps"
+        self._path = Path(self._directory.name) / "stream.pst"
         self._writer = obdeect_stream.Writer(str(self._path), "test")
 
     def metadata(self, kind, values=None):
@@ -40,7 +40,7 @@ class StreamWriter:
 
 def read_records(data):
     with tempfile.TemporaryDirectory() as directory:
-        path = Path(directory) / "stream.ps"
+        path = Path(directory) / "stream.pst"
         path.write_bytes(data)
         return list(obdeect_stream.Reader(str(path)))
 
@@ -100,7 +100,7 @@ def envelope_files(tmp_path):
     return {"qe": qe, "mirror": mirror}
 
 
-def _ledger(records):
+def _efficiency_status(records):
     return next(r["metadata"] for r in records if r["type"] == "efficiency_status")
 
 
@@ -109,12 +109,12 @@ def test_export_is_lazy():
     assert "propagate" in obdeect_propagation.__all__
 
 
-def test_ledger_and_counts(tmp_path, envelope_files):
+def test_efficiency_status_and_counts(tmp_path, envelope_files):
     n = 30000
-    source = tmp_path / "in.ps"
+    source = tmp_path / "in.pst"
     source.write_bytes(ground_stream(n, seed=1))
-    thinned_out = tmp_path / "thinned.ps"
-    weighted_out = tmp_path / "weighted.ps"
+    thinned_out = tmp_path / "thinned.pst"
+    weighted_out = tmp_path / "weighted.pst"
     options = {
         "transmission": TABLE_PATH,
         "site_altitude_m": SITE_M,
@@ -128,15 +128,15 @@ def test_ledger_and_counts(tmp_path, envelope_files):
     assert thinned["photons_in"] == 2 * n
     assert thinned["dropped"] == 0
     records = read_records(thinned_out.read_bytes())
-    ledger = _ledger(records)
-    assert ledger["factors"] == "atmosphere,wavelength,qe,mirror"
-    assert ledger["atmosphere.state"] == "applied"
-    assert ledger["atmosphere.source"] == str(TABLE_PATH)
-    assert ledger["wavelength.state"] == "applied"
-    assert ledger["qe.state"] == "envelope"
-    assert ledger["mirror.state"] == "envelope"
-    assert len(ledger["qe.wavelength_nm"]) == len(ledger["qe.value"]) == 2
-    # The ledger follows the run record.
+    efficiency_status = _efficiency_status(records)
+    assert efficiency_status["factors"] == "atmosphere,wavelength,qe,mirror"
+    assert efficiency_status["atmosphere.state"] == "applied"
+    assert efficiency_status["atmosphere.source"] == str(TABLE_PATH)
+    assert efficiency_status["wavelength.state"] == "applied"
+    assert efficiency_status["qe.state"] == "envelope"
+    assert efficiency_status["mirror.state"] == "envelope"
+    assert len(efficiency_status["qe.wavelength_nm"]) == len(efficiency_status["qe.value"]) == 2
+    # The efficiency status follows the run record.
     assert [r["type"] for r in records[:3]] == ["stream", "run", "efficiency_status"]
 
     # Thinned count against the weighted expectation: w_out = w p, so the variance of the
@@ -155,7 +155,7 @@ def test_ledger_and_counts(tmp_path, envelope_files):
     assert weighted["weight_out"] == pytest.approx(mean, rel=1e-6)
 
 
-def test_input_ledger_showing_atmosphere_applied_is_rejected(tmp_path):
+def test_input_efficiency_status_showing_atmosphere_applied_is_rejected(tmp_path):
     writer = StreamWriter()
     writer.metadata(
         "run",
@@ -174,12 +174,12 @@ def test_input_ledger_showing_atmosphere_applied_is_rejected(tmp_path):
     writer.metadata("event", {"event_number": 1})
     writer.metadata("event_end")
     writer.metadata("run_end")
-    source = tmp_path / "tampered.ps"
+    source = tmp_path / "tampered.pst"
     source.write_bytes(writer.getvalue())
     with pytest.raises(ValueError, match="already applied"):
         obdeect_propagation.propagate(
             source,
-            tmp_path / "out.ps",
+            tmp_path / "out.pst",
             transmission=TABLE_PATH,
             site_altitude_m=SITE_M,
             seed=1,
@@ -188,9 +188,9 @@ def test_input_ledger_showing_atmosphere_applied_is_rejected(tmp_path):
 
 def test_executable_matches_api(tmp_path, envelope_files):
     exe = _executable()
-    source = tmp_path / "in.ps"
+    source = tmp_path / "in.pst"
     source.write_bytes(ground_stream(5000, seed=2, chunk_rows=2048))
-    api_out = tmp_path / "api.ps"
+    api_out = tmp_path / "api.pst"
     obdeect_propagation.propagate(
         source,
         api_out,
@@ -199,7 +199,7 @@ def test_executable_matches_api(tmp_path, envelope_files):
         seed=7,
         envelope=envelope_files,
     )
-    cli_out = tmp_path / "cli.ps"
+    cli_out = tmp_path / "cli.pst"
     command = [
         exe,
         "--transmission",
@@ -278,7 +278,7 @@ def mirror_file(tmp_path):
 
 def test_scattering_adds_kernel_weight_times_envelope(tmp_path, mirror_file):
     n = 400
-    source = tmp_path / "beam.ps"
+    source = tmp_path / "beam.pst"
     source.write_bytes(beam_stream(n))
     options = {
         "transmission": TABLE_PATH,
@@ -287,8 +287,8 @@ def test_scattering_adds_kernel_weight_times_envelope(tmp_path, mirror_file):
         "envelope": {"mirror": mirror_file},
         "mode": "weighted",
     }
-    base = obdeect_propagation.propagate(source, tmp_path / "off.ps", **options)
-    on_out = tmp_path / "on.ps"
+    base = obdeect_propagation.propagate(source, tmp_path / "off.pst", **options)
+    on_out = tmp_path / "on.pst"
     on = obdeect_propagation.propagate(
         source, on_out, scattering=SCATTERING_TABLE, scattering_points=8, **options
     )
@@ -324,22 +324,22 @@ def test_scattering_adds_kernel_weight_times_envelope(tmp_path, mirror_file):
 
     records = read_records(on_out.read_bytes())
     assert any(r["type"] == "photons" and r["telescope_id"] == 2 for r in records)
-    ledger = _ledger(records)
-    assert ledger["factors"] == "atmosphere,wavelength,scattering,mirror"
-    assert ledger["scattering.state"] == "applied"
-    assert ledger["scattering.source"] == str(SCATTERING_TABLE)
-    assert ledger["scattering.points_per_photon"] == 8
+    efficiency_status = _efficiency_status(records)
+    assert efficiency_status["factors"] == "atmosphere,wavelength,scattering,mirror"
+    assert efficiency_status["scattering.state"] == "applied"
+    assert efficiency_status["scattering.source"] == str(SCATTERING_TABLE)
+    assert efficiency_status["scattering.points_per_photon"] == 8
 
 
 def test_scattering_chunk_sizes_agree(tmp_path, mirror_file):
     results = []
     for chunk_rows in (3000, 333):
-        source = tmp_path / f"beam_{chunk_rows}.ps"
+        source = tmp_path / f"beam_{chunk_rows}.pst"
         source.write_bytes(beam_stream(3000, chunk_rows=chunk_rows))
         results.append(
             obdeect_propagation.propagate(
                 source,
-                tmp_path / f"out_{chunk_rows}.ps",
+                tmp_path / f"out_{chunk_rows}.pst",
                 transmission=TABLE_PATH,
                 site_altitude_m=SITE_M,
                 seed=3,
@@ -352,25 +352,29 @@ def test_scattering_chunk_sizes_agree(tmp_path, mirror_file):
 
 
 def test_scattering_rejects_invalid_settings(tmp_path):
-    source = tmp_path / "beam.ps"
+    source = tmp_path / "beam.pst"
     source.write_bytes(beam_stream(10, radii=False))
     options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 1}
     with pytest.raises(ValueError, match="telescope_r_m"):
         obdeect_propagation.propagate(
-            source, tmp_path / "out.ps", scattering=SCATTERING_TABLE, **options
+            source, tmp_path / "out.pst", scattering=SCATTERING_TABLE, **options
         )
     source.write_bytes(beam_stream(10))
     with pytest.raises(ValueError):
         obdeect_propagation.propagate(
-            source, tmp_path / "out.ps", scattering=SCATTERING_TABLE, scattering_points=0, **options
+            source,
+            tmp_path / "out.pst",
+            scattering=SCATTERING_TABLE,
+            scattering_points=0,
+            **options,
         )
 
 
 def test_executable_matches_api_with_scattering(tmp_path):
     exe = _executable()
-    source = tmp_path / "beam.ps"
+    source = tmp_path / "beam.pst"
     source.write_bytes(beam_stream(300))
-    api_out = tmp_path / "api.ps"
+    api_out = tmp_path / "api.pst"
     obdeect_propagation.propagate(
         source,
         api_out,
@@ -380,7 +384,7 @@ def test_executable_matches_api_with_scattering(tmp_path):
         scattering=SCATTERING_TABLE,
         scattering_points=4,
     )
-    cli_out = tmp_path / "cli.ps"
+    cli_out = tmp_path / "cli.pst"
     command = [
         exe,
         "--transmission",
@@ -404,10 +408,10 @@ def test_executable_matches_api_with_scattering(tmp_path):
 
 
 def test_rejects_identical_paths(tmp_path):
-    source = tmp_path / "same.ps"
+    source = tmp_path / "same.pst"
     original = ground_stream(100, seed=3, chunk_rows=64)
     source.write_bytes(original)
-    alias = tmp_path / ".." / tmp_path.name / "same.ps"
+    alias = tmp_path / ".." / tmp_path.name / "same.pst"
     for output in (source, alias):
         with pytest.raises(ValueError, match="same file"):
             obdeect_propagation.propagate(
@@ -422,7 +426,7 @@ def test_rejects_identical_paths(tmp_path):
 
 def test_executable_rejects_identical_paths(tmp_path):
     exe = _executable()
-    source = tmp_path / "same.ps"
+    source = tmp_path / "same.pst"
     original = ground_stream(100, seed=3, chunk_rows=64)
     source.write_bytes(original)
     command = [
@@ -453,9 +457,9 @@ def _photon_block(records, telescope, name):
 
 
 def test_pathlen_default_and_override(tmp_path):
-    source = tmp_path / "in.ps"
+    source = tmp_path / "in.pst"
     source.write_bytes(ground_stream(4000, seed=3))
-    out = tmp_path / "out.ps"
+    out = tmp_path / "out.pst"
     obdeect_propagation.propagate(
         source,
         out,
@@ -468,7 +472,7 @@ def test_pathlen_default_and_override(tmp_path):
         telescope_pathlen_m={2: 0.0},
     )
     records = read_records(out.read_bytes())
-    assert list(_ledger(records)["atmosphere.pathlen_m"]) == [28.0, 0.0]
+    assert list(_efficiency_status(records)["atmosphere.pathlen_m"]) == [28.0, 0.0]
 
     # Acceptance of each row with od_focus = tau(h + l) - tau(h).
     table = obdeect_propagation.TransmissionTable(str(TABLE_PATH), SITE_M)
@@ -487,10 +491,10 @@ def test_pathlen_default_and_override(tmp_path):
 
 
 def test_pathlen_changes_acceptance(tmp_path):
-    source = tmp_path / "in.ps"
+    source = tmp_path / "in.pst"
     source.write_bytes(ground_stream(4000, seed=3))
-    with_path = tmp_path / "with.ps"
-    without = tmp_path / "without.ps"
+    with_path = tmp_path / "with.pst"
+    without = tmp_path / "without.pst"
     base = {
         "transmission": TABLE_PATH,
         "site_altitude_m": SITE_M,
@@ -504,7 +508,8 @@ def test_pathlen_changes_acceptance(tmp_path):
     p_without = _photon_block(read_records(without.read_bytes()), 1, "p")
     assert p_with.shape == p_without.shape
     assert np.abs(p_with - p_without).max() > 1e-5
-    assert list(_ledger(read_records(without.read_bytes()))["atmosphere.pathlen_m"]) == [0.0, 0.0]
+    status = _efficiency_status(read_records(without.read_bytes()))
+    assert list(status["atmosphere.pathlen_m"]) == [0.0, 0.0]
 
 
 @pytest.mark.parametrize(
@@ -520,12 +525,12 @@ def test_pathlen_changes_acceptance(tmp_path):
     ],
 )
 def test_pathlen_rejects_invalid(tmp_path, options):
-    source = tmp_path / "in.ps"
+    source = tmp_path / "in.pst"
     source.write_bytes(ground_stream(100, seed=5))
     with pytest.raises(ValueError):
         obdeect_propagation.propagate(
             source,
-            tmp_path / "out.ps",
+            tmp_path / "out.pst",
             transmission=TABLE_PATH,
             site_altitude_m=SITE_M,
             seed=1,
@@ -534,12 +539,12 @@ def test_pathlen_rejects_invalid(tmp_path, options):
 
 
 def test_pathlen_ids_must_be_integers(tmp_path):
-    source = tmp_path / "in.ps"
+    source = tmp_path / "in.pst"
     source.write_bytes(ground_stream(100, seed=5))
     with pytest.raises(TypeError):
         obdeect_propagation.propagate(
             source,
-            tmp_path / "out.ps",
+            tmp_path / "out.pst",
             transmission=TABLE_PATH,
             site_altitude_m=SITE_M,
             seed=1,
@@ -549,9 +554,9 @@ def test_pathlen_ids_must_be_integers(tmp_path):
 
 def test_executable_pathlen_matches_api(tmp_path):
     exe = _executable()
-    source = tmp_path / "in.ps"
+    source = tmp_path / "in.pst"
     source.write_bytes(ground_stream(5000, seed=6, chunk_rows=2048))
-    api_out = tmp_path / "api.ps"
+    api_out = tmp_path / "api.pst"
     obdeect_propagation.propagate(
         source,
         api_out,
@@ -561,7 +566,7 @@ def test_executable_pathlen_matches_api(tmp_path):
         pathlen_m=28.0,
         telescope_pathlen_m={2: 0.0},
     )
-    cli_out = tmp_path / "cli.ps"
+    cli_out = tmp_path / "cli.pst"
     command = [
         exe,
         "--transmission",
@@ -582,7 +587,8 @@ def test_executable_pathlen_matches_api(tmp_path):
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
     assert cli_out.read_bytes() == api_out.read_bytes()
-    assert list(_ledger(read_records(cli_out.read_bytes()))["atmosphere.pathlen_m"]) == [28.0, 0.0]
+    status = _efficiency_status(read_records(cli_out.read_bytes()))
+    assert list(status["atmosphere.pathlen_m"]) == [28.0, 0.0]
 
 
 @pytest.mark.parametrize(
@@ -669,10 +675,10 @@ def _geometry_options(**extra):
 
 
 def test_geometry_only_matches_geometry_of_normal_run(tmp_path):
-    source = tmp_path / "in.ps"
+    source = tmp_path / "in.pst"
     source.write_bytes(sky_stream(3000, seed=8))
-    normal_out = tmp_path / "normal.ps"
-    geometry_out = tmp_path / "geometry.ps"
+    normal_out = tmp_path / "normal.pst"
+    geometry_out = tmp_path / "geometry.pst"
     obdeect_propagation.propagate(
         source,
         normal_out,
@@ -704,22 +710,22 @@ def test_geometry_only_matches_geometry_of_normal_run(tmp_path):
     )
 
 
-def test_geometry_only_ledger_is_pending(tmp_path):
-    source = tmp_path / "in.ps"
+def test_geometry_only_efficiency_status_is_pending(tmp_path):
+    source = tmp_path / "in.pst"
     source.write_bytes(sky_stream(500, seed=9))
-    out = tmp_path / "out.ps"
+    out = tmp_path / "out.pst"
     obdeect_propagation.propagate(source, out, extinction=False, **_geometry_options())
-    ledger = _ledger(read_records(out.read_bytes()))
-    assert ledger["factors"] == "atmosphere,wavelength"
-    assert ledger["atmosphere.state"] == "pending"
-    assert "atmosphere.source" not in ledger
-    assert ledger["wavelength.state"] == "applied"
+    efficiency_status = _efficiency_status(read_records(out.read_bytes()))
+    assert efficiency_status["factors"] == "atmosphere,wavelength"
+    assert efficiency_status["atmosphere.state"] == "pending"
+    assert "atmosphere.source" not in efficiency_status
+    assert efficiency_status["wavelength.state"] == "applied"
 
 
 def test_geometry_only_on_ground_stream_keeps_every_photon(tmp_path):
-    source = tmp_path / "in.ps"
+    source = tmp_path / "in.pst"
     source.write_bytes(ground_stream(1000, seed=2))
-    out = tmp_path / "out.ps"
+    out = tmp_path / "out.pst"
     summary = obdeect_propagation.propagate(
         source, out, extinction=False, site_altitude_m=SITE_M, seed=1, mode="weighted"
     )
@@ -750,12 +756,12 @@ def test_geometry_only_on_ground_stream_keeps_every_photon(tmp_path):
     ],
 )
 def test_geometry_only_rejects_extinction_options(tmp_path, options, message):
-    source = tmp_path / "in.ps"
+    source = tmp_path / "in.pst"
     source.write_bytes(ground_stream(10, seed=1))
     with pytest.raises(ValueError, match=message):
         obdeect_propagation.propagate(
             source,
-            tmp_path / "out.ps",
+            tmp_path / "out.pst",
             extinction=False,
             site_altitude_m=SITE_M,
             seed=1,
@@ -764,19 +770,19 @@ def test_geometry_only_rejects_extinction_options(tmp_path, options, message):
 
 
 def test_transmission_is_required_with_extinction(tmp_path):
-    source = tmp_path / "in.ps"
+    source = tmp_path / "in.pst"
     source.write_bytes(ground_stream(10, seed=1))
     with pytest.raises(ValueError, match="transmission is required"):
-        obdeect_propagation.propagate(source, tmp_path / "out.ps", site_altitude_m=SITE_M, seed=1)
+        obdeect_propagation.propagate(source, tmp_path / "out.pst", site_altitude_m=SITE_M, seed=1)
 
 
 def test_executable_geometry_only_matches_api(tmp_path):
     exe = _executable()
-    source = tmp_path / "in.ps"
+    source = tmp_path / "in.pst"
     source.write_bytes(sky_stream(2000, seed=4))
-    api_out = tmp_path / "api.ps"
+    api_out = tmp_path / "api.pst"
     obdeect_propagation.propagate(source, api_out, extinction=False, **_geometry_options())
-    cli_out = tmp_path / "cli.ps"
+    cli_out = tmp_path / "cli.pst"
     command = [
         exe,
         "--no-extinction",
@@ -797,7 +803,7 @@ def test_executable_geometry_only_matches_api(tmp_path):
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
     assert cli_out.read_bytes() == api_out.read_bytes()
-    assert _ledger(read_records(cli_out.read_bytes()))["atmosphere.state"] == "pending"
+    assert _efficiency_status(read_records(cli_out.read_bytes()))["atmosphere.state"] == "pending"
 
 
 @pytest.mark.parametrize(
@@ -823,7 +829,7 @@ def test_executable_geometry_only_rejects_extinction_options(args):
 
 def test_executable_geometry_only_accepts_weighted_mode(tmp_path):
     exe = _executable()
-    source = tmp_path / "in.ps"
+    source = tmp_path / "in.pst"
     source.write_bytes(ground_stream(100, seed=1))
     command = [
         exe,
@@ -837,6 +843,6 @@ def test_executable_geometry_only_accepts_weighted_mode(tmp_path):
         "-i",
         str(source),
         "-o",
-        str(tmp_path / "out.ps"),
+        str(tmp_path / "out.pst"),
     ]
     assert subprocess.run(command, capture_output=True, check=False).returncode == 0

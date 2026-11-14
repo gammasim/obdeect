@@ -231,7 +231,7 @@ def main(argv: list[str] | None = None, prog: str = "obdeect ray-tracing") -> in
         choices=TRANSMISSION_PARTS,
         default="full",
         help="full: apply the telescope transmission, including its on-axis value; angular: "
-        "only t(theta)/t0, leaving t0 pending in the ledger for the camera",
+        "only t(theta)/t0, leaving t0 pending in the efficiency status for the camera",
     )
     s.add_argument("-i", "--input", default="-", help="input stream (default: standard input)")
     s.add_argument("-o", "--output", default="-", help="output stream (default: standard output)")

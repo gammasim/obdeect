@@ -1,4 +1,4 @@
-"""Photon-stream stage: frames, focus, telescope filter, ledger, determinism and records.
+"""Photon-stream stage: frames, focus, telescope filter, efficiency_status, determinism and records.
 
 Tests that write or read photon streams are skipped when obdeect.stream is not installed.
 """
@@ -58,8 +58,8 @@ def write_stream(
     frame=1,
     run=RUN,
     event=None,
-    run_ledgers=(),
-    telescope_ledgers=None,
+    run_efficiency_statuses=(),
+    telescope_efficiency_statuses=None,
     blob=False,
 ):
     """Write a stream: `photons` maps telescope ids to photon columns (one chunk per call)."""
@@ -68,15 +68,15 @@ def write_stream(
     obdeect_stream = pytest.importorskip("obdeect.stream")
     with obdeect_stream.Writer(str(path), "pytest") as writer:
         writer.write("run", run)
-        for ledger in run_ledgers:
-            writer.write("efficiency_status", ledger)
+        for efficiency_status in run_efficiency_statuses:
+            writer.write("efficiency_status", efficiency_status)
         if blob:
             writer.write_blob(1204, 7, b"\x01\x02\x03")
         writer.write("event", event)
         for telescope_id, columns in photons.items():
             writer.write("telescope", {"telescope_id": telescope_id, "frame": frame})
-            if telescope_ledgers and telescope_id in telescope_ledgers:
-                writer.write("efficiency_status", telescope_ledgers[telescope_id])
+            if telescope_efficiency_statuses and telescope_id in telescope_efficiency_statuses:
+                writer.write("efficiency_status", telescope_efficiency_statuses[telescope_id])
             writer.write_photons(telescope_id, frame, 0, columns)
             writer.write(
                 "telescope_end",
@@ -102,7 +102,7 @@ def camera_photons(path, obdeect_stream, telescope_id=None):
     return {name: np.concatenate([c["columns"][name] for c in chunks]) for name in names}
 
 
-def ledger_of(path, obdeect_stream):
+def efficiency_status_of(path, obdeect_stream):
     return [
         r["metadata"]
         for r in read_records(path, obdeect_stream)
@@ -117,7 +117,7 @@ def focus(
     photons,
     *,
     pointing=None,
-    name="s.ps",
+    name="s.pst",
     telescope_transmission="full",
     **options,
 ):
@@ -230,21 +230,21 @@ def test_pointing_is_read_from_the_run_record(model, tmp_path, obdeect_stream):
 
 def test_run_pointing_needs_both_keys(model, tmp_path, obdeect_stream):
     run = dict(RUN, telescope_pointing_zenith_rad=0.1)
-    source = write_stream(tmp_path / "half.ps", {1: beam(10, (0.0, 0.0))}, run=run)
+    source = write_stream(tmp_path / "half.pst", {1: beam(10, (0.0, 0.0))}, run=run)
     with pytest.raises(ModelError, match="telescope_pointing_azimuth_rad"):
-        trace_stream(model, source, tmp_path / "out.ps", seed=SEED)
+        trace_stream(model, source, tmp_path / "out.pst", seed=SEED)
 
 
 @pytest.mark.parametrize("alias", ["same", "symlink", "hardlink"])
 def test_trace_stream_rejects_input_aliases(model, tmp_path, obdeect_stream, alias):
-    source = write_stream(tmp_path / "input.ps", {1: beam(10, (0.0, 0.0))})
+    source = write_stream(tmp_path / "input.pst", {1: beam(10, (0.0, 0.0))})
     if alias == "same":
         output = source
     elif alias == "symlink":
-        output = tmp_path / "alias.ps"
+        output = tmp_path / "alias.pst"
         output.symlink_to(source)
     else:
-        output = tmp_path / "alias.ps"
+        output = tmp_path / "alias.pst"
         output.hardlink_to(source)
 
     with pytest.raises(ModelError, match="same file"):
@@ -254,9 +254,9 @@ def test_trace_stream_rejects_input_aliases(model, tmp_path, obdeect_stream, ali
 def test_ground_photons_need_a_pointing(model, tmp_path, obdeect_stream):
     # The event header carries no telescope pointing: its CORSIKA azimuth is ignored.
     event = {"event_number": 1, "zenith_rad": 0.3, "azimuth_rad": 1.0}
-    source = write_stream(tmp_path / "nopointing.ps", {1: beam(10, (0.0, 0.0))}, event=event)
+    source = write_stream(tmp_path / "nopointing.pst", {1: beam(10, (0.0, 0.0))}, event=event)
     with pytest.raises(ModelError, match="no telescope pointing"):
-        trace_stream(model, source, tmp_path / "out.ps", seed=SEED)
+        trace_stream(model, source, tmp_path / "out.pst", seed=SEED)
 
 
 def test_on_axis_beam_at_a_tilted_pointing_focuses_at_the_centre(model, tmp_path, obdeect_stream):
@@ -302,8 +302,8 @@ def test_unsupported_frame_and_column_are_rejected(model, tmp_path, obdeect_stre
     with pytest.raises(ModelError, match="column p"):
         focus(model, tmp_path, obdeect_stream, photons, pointing=(0.0, 0.0), name="p")
     with pytest.raises(ModelError, match="frame 0"):
-        write_stream(tmp_path / "sky.ps", {1: beam(10, (0.0, 0.0))}, frame=0)
-        trace_stream(model, tmp_path / "sky.ps", tmp_path / "x.ps", seed=SEED, pointing=(0, 0))
+        write_stream(tmp_path / "sky.pst", {1: beam(10, (0.0, 0.0))}, frame=0)
+        trace_stream(model, tmp_path / "sky.pst", tmp_path / "x.pst", seed=SEED, pointing=(0, 0))
 
 
 def test_unknown_photon_column_is_rejected():
@@ -316,12 +316,12 @@ def test_unknown_photon_column_is_rejected():
 
 def test_telescope_filter_drops_other_telescopes(model, tmp_path, obdeect_stream):
     source = write_stream(
-        tmp_path / "two.ps",
+        tmp_path / "two.pst",
         {1: beam(500, (0.0, 0.0), seed=1), 2: beam(300, (0.0, 0.0), seed=2)},
         blob=True,
-        telescope_ledgers={1: {"factors": "qe", "qe.state": "pending"}},
+        telescope_efficiency_statuses={1: {"factors": "qe", "qe.state": "pending"}},
     )
-    output = tmp_path / "two.out.ps"
+    output = tmp_path / "two.out.pst"
     counts = trace_stream(model, source, output, seed=SEED, pointing=(0.0, 0.0), telescopes=[2])
     records = read_records(output, obdeect_stream)
     telescopes = [r["metadata"]["telescope_id"] for r in records if r["type"] == "telescope"]
@@ -334,7 +334,9 @@ def test_telescope_filter_drops_other_telescopes(model, tmp_path, obdeect_stream
     assert counts["photons_in"] == 300
 
 
-def test_ledger_pending_and_absent_apply_the_factors_in_full(model, tmp_path, obdeect_stream):
+def test_efficiency_status_pending_and_absent_apply_the_factors_in_full(
+    model, tmp_path, obdeect_stream
+):
     photons = beam(3000, (0.0, 0.0))
     _, absent, _ = focus(model, tmp_path, obdeect_stream, photons, pointing=(0, 0), name="absent")
     pending = {
@@ -350,13 +352,13 @@ def test_ledger_pending_and_absent_apply_the_factors_in_full(model, tmp_path, ob
         photons,
         pointing=(0, 0),
         name="pend",
-        run_ledgers=[pending],
+        run_efficiency_statuses=[pending],
     )
     assert np.array_equal(absent["w"], with_pending["w"])
     assert np.array_equal(absent["x"], with_pending["x"])
 
 
-def test_ledger_envelope_divides_by_the_envelope(model, tmp_path, obdeect_stream):
+def test_efficiency_status_envelope_divides_by_the_envelope(model, tmp_path, obdeect_stream):
     photons = beam(3000, (0.0, 0.0))
     _, plain, _ = focus(model, tmp_path, obdeect_stream, photons, pointing=(0, 0), name="plain")
     # Envelope 2 on both factors at every wavelength; the traced photons carry 1/2.
@@ -367,7 +369,13 @@ def test_ledger_envelope_divides_by_the_envelope(model, tmp_path, obdeect_stream
         "mirror_reflectivity.value": np.array([2.0, 2.0]),
     }
     _, flat_out, _ = focus(
-        model, tmp_path, obdeect_stream, photons, pointing=(0, 0), name="flat", run_ledgers=[flat]
+        model,
+        tmp_path,
+        obdeect_stream,
+        photons,
+        pointing=(0, 0),
+        name="flat",
+        run_efficiency_statuses=[flat],
     )
     # The same envelope written as a steeper table: at 400 nm both give 1/2.
     sloped = dict(flat, **{"mirror_reflectivity.value": np.array([1.0, 4.0])})
@@ -378,7 +386,7 @@ def test_ledger_envelope_divides_by_the_envelope(model, tmp_path, obdeect_stream
         photons,
         pointing=(0, 0),
         name="sloped",
-        run_ledgers=[sloped],
+        run_efficiency_statuses=[sloped],
     )
     assert np.array_equal(flat_out["x"], sloped_out["x"])
     assert np.array_equal(flat_out["w"], sloped_out["w"])
@@ -387,7 +395,7 @@ def test_ledger_envelope_divides_by_the_envelope(model, tmp_path, obdeect_stream
     assert float(flat_out["w"].sum()) == pytest.approx(0.5 * plain["w"].sum(), rel=0.05)
 
 
-def test_ledger_applied_is_rejected(model, tmp_path, obdeect_stream):
+def test_efficiency_status_applied_is_rejected(model, tmp_path, obdeect_stream):
     applied = {"factors": "telescope_transmission", "telescope_transmission.state": "applied"}
     with pytest.raises(ModelError, match="already applied"):
         focus(
@@ -397,11 +405,13 @@ def test_ledger_applied_is_rejected(model, tmp_path, obdeect_stream):
             beam(10, (0, 0)),
             pointing=(0, 0),
             name="applied",
-            run_ledgers=[applied],
+            run_efficiency_statuses=[applied],
         )
 
 
-def test_telescope_ledger_overrides_the_run_ledger(model, tmp_path, obdeect_stream):
+def test_telescope_efficiency_status_overrides_the_run_efficiency_status(
+    model, tmp_path, obdeect_stream
+):
     run_pending = {"factors": "mirror_reflectivity", "mirror_reflectivity.state": "pending"}
     tel_envelope = {
         "factors": "mirror_reflectivity",
@@ -410,17 +420,19 @@ def test_telescope_ledger_overrides_the_run_ledger(model, tmp_path, obdeect_stre
         "mirror_reflectivity.value": np.array([2.0, 2.0]),
     }
     source = write_stream(
-        tmp_path / "tel.ps",
+        tmp_path / "tel.pst",
         {1: beam(2000, (0.0, 0.0))},
-        run_ledgers=[run_pending],
-        telescope_ledgers={1: tel_envelope},
+        run_efficiency_statuses=[run_pending],
+        telescope_efficiency_statuses={1: tel_envelope},
     )
-    output = tmp_path / "tel.out.ps"
+    output = tmp_path / "tel.out.pst"
     trace_stream(model, source, output, seed=SEED, pointing=(0, 0))
     assert np.all(camera_photons(output, obdeect_stream)["w"] <= 0.5 + 1e-6)
 
 
-def test_ledger_output_marks_own_factors_and_keeps_others(model, tmp_path, obdeect_stream):
+def test_efficiency_status_output_marks_own_factors_and_keeps_others(
+    model, tmp_path, obdeect_stream
+):
     qe = {
         "factors": "qe,mirror_reflectivity",
         "qe.state": "envelope",
@@ -436,7 +448,7 @@ def test_ledger_output_marks_own_factors_and_keeps_others(model, tmp_path, obdee
         beam(10, (0, 0)),
         pointing=(0, 0),
         name="out",
-        run_ledgers=[qe],
+        run_efficiency_statuses=[qe],
     )
     records = read_records(output, obdeect_stream)
     types = [r["type"] for r in records]
@@ -467,7 +479,7 @@ def test_invalid_envelope_table_is_rejected(model, tmp_path, obdeect_stream):
             beam(10, (0, 0)),
             pointing=(0, 0),
             name="bad",
-            run_ledgers=[bad],
+            run_efficiency_statuses=[bad],
         )
 
 
@@ -525,12 +537,12 @@ def test_output_chunks_are_capped_and_numbered(model, tmp_path, obdeect_stream, 
 
 def test_records_pass_through(model, tmp_path, obdeect_stream):
     source = write_stream(
-        tmp_path / "pass.ps",
+        tmp_path / "pass.pst",
         {1: beam(20, (0.0, 0.0))},
         blob=True,
         event={"event_number": 9, "zenith_rad": 0.0, "azimuth_rad": 0.0, "energy_gev": 1.5},
     )
-    output = tmp_path / "pass.out.ps"
+    output = tmp_path / "pass.out.pst"
     trace_stream(model, source, output, seed=SEED, pointing=(0.0, 0.0))
     records = read_records(output, obdeect_stream)
     types = [r["type"] for r in records]
@@ -548,8 +560,8 @@ def test_records_pass_through(model, tmp_path, obdeect_stream):
 def test_cli_trace_stream(model, tmp_path, obdeect_stream, capsys):
     model_path = tmp_path / "model.json"
     model.save(model_path)
-    source = write_stream(tmp_path / "cli.in.ps", {1: beam(500, (0.0, 0.0))})
-    output = tmp_path / "cli.out.ps"
+    source = write_stream(tmp_path / "cli.in.pst", {1: beam(500, (0.0, 0.0))})
+    output = tmp_path / "cli.out.pst"
     code = main([
         "trace-stream",
         "--model",
@@ -573,7 +585,7 @@ def test_cli_trace_stream(model, tmp_path, obdeect_stream, capsys):
 def test_cli_needs_a_pointing_for_ground_photons(model, tmp_path, capsys):
     model_path = tmp_path / "model.json"
     model.save(model_path)
-    source = write_stream(tmp_path / "cli.nop.ps", {1: beam(10, (0.0, 0.0))})
+    source = write_stream(tmp_path / "cli.nop.pst", {1: beam(10, (0.0, 0.0))})
     code = main([
         "trace-stream",
         "--model",
@@ -583,7 +595,7 @@ def test_cli_needs_a_pointing_for_ground_photons(model, tmp_path, capsys):
         "-i",
         str(source),
         "-o",
-        str(tmp_path / "cli.nop.out.ps"),
+        str(tmp_path / "cli.nop.out.pst"),
     ])
     assert code == 1
     assert "--pointing-zenith-deg" in capsys.readouterr().err
@@ -601,7 +613,7 @@ def test_cli_rejects_half_a_pointing(model, tmp_path, capsys):
         "--pointing-zenith-deg",
         "5",
         "-i",
-        str(tmp_path / "none.ps"),
+        str(tmp_path / "none.pst"),
     ])
     assert code == 1
     assert "pointing" in capsys.readouterr().err
@@ -636,11 +648,11 @@ def test_angular_transmission_drops_the_on_axis_value_from_on_axis_photons(
     assert sum_angular > 1.05 * sum_full
 
 
-def test_ledger_records_the_transmission_part(model, tmp_path, obdeect_stream):
+def test_efficiency_status_records_the_transmission_part(model, tmp_path, obdeect_stream):
     _, _, full_out = focus(
         model, tmp_path, obdeect_stream, beam(10, (0, 0)), pointing=(0, 0), name="lfull"
     )
-    full = ledger_of(full_out, obdeect_stream)[0]
+    full = efficiency_status_of(full_out, obdeect_stream)[0]
     assert full["telescope_transmission.part"] == "full"
     assert full["telescope_transmission.state"] == "applied"
     assert CONSTANT_FACTOR not in full["factors"]
@@ -653,7 +665,7 @@ def test_ledger_records_the_transmission_part(model, tmp_path, obdeect_stream):
         name="lang",
         telescope_transmission="angular",
     )
-    angular = ledger_of(angular_out, obdeect_stream)[0]
+    angular = efficiency_status_of(angular_out, obdeect_stream)[0]
     assert angular["telescope_transmission.part"] == "angular"
     assert angular["telescope_transmission.state"] == "applied"
     assert angular["factors"] == (
@@ -663,15 +675,17 @@ def test_ledger_records_the_transmission_part(model, tmp_path, obdeect_stream):
     assert float(angular[f"{CONSTANT_FACTOR}.value"]) == pytest.approx(0.9)
 
 
-def test_angular_ledger_marks_telescope_level_transmission(model, tmp_path, obdeect_stream):
+def test_angular_efficiency_status_marks_telescope_level_transmission(
+    model, tmp_path, obdeect_stream
+):
     source = write_stream(
-        tmp_path / "tl.ps",
+        tmp_path / "tl.pst",
         {1: beam(10, (0.0, 0.0))},
-        telescope_ledgers={
+        telescope_efficiency_statuses={
             1: {"factors": "telescope_transmission", "telescope_transmission.state": "pending"}
         },
     )
-    output = tmp_path / "tl.out.ps"
+    output = tmp_path / "tl.out.pst"
     trace_stream(
         model,
         source,
@@ -680,10 +694,12 @@ def test_angular_ledger_marks_telescope_level_transmission(model, tmp_path, obde
         pointing=(0, 0),
         telescope_transmission="angular",
     )
-    run_ledger, telescope_ledger = ledger_of(output, obdeect_stream)[:2]
-    assert run_ledger["telescope_transmission.part"] == "angular"
-    assert telescope_ledger["telescope_transmission.part"] == "angular"
-    assert telescope_ledger[f"{CONSTANT_FACTOR}.state"] == "pending"
+    run_efficiency_status, telescope_efficiency_status = efficiency_status_of(
+        output, obdeect_stream
+    )[:2]
+    assert run_efficiency_status["telescope_transmission.part"] == "angular"
+    assert telescope_efficiency_status["telescope_transmission.part"] == "angular"
+    assert telescope_efficiency_status[f"{CONSTANT_FACTOR}.state"] == "pending"
 
 
 def test_angular_transmission_needs_a_model_with_transmission(model, tmp_path, obdeect_stream):
@@ -704,7 +720,10 @@ def test_angular_transmission_needs_a_model_with_transmission(model, tmp_path, o
         bare, tmp_path, obdeect_stream, beam(10, (0, 0)), pointing=(0, 0), name="bare-full"
     )
     if not bare.has_structure:
-        assert "telescope_transmission" not in ledger_of(output, obdeect_stream)[0]["factors"]
+        assert (
+            "telescope_transmission"
+            not in efficiency_status_of(output, obdeect_stream)[0]["factors"]
+        )
 
 
 def test_unknown_transmission_part_and_existing_constant_are_rejected(
@@ -734,7 +753,7 @@ def test_unknown_transmission_part_and_existing_constant_are_rejected(
             obdeect_stream,
             beam(10, (0, 0)),
             pointing=(0, 0),
-            run_ledgers=[constant_only],
+            run_efficiency_statuses=[constant_only],
             telescope_transmission="angular",
             name="constant-only",
         )
@@ -746,7 +765,7 @@ def test_unknown_transmission_part_and_existing_constant_are_rejected(
             beam(10, (0, 0)),
             pointing=(0, 0),
             name="named",
-            run_ledgers=[named],
+            run_efficiency_statuses=[named],
             telescope_transmission="angular",
         )
 
@@ -754,7 +773,7 @@ def test_unknown_transmission_part_and_existing_constant_are_rejected(
 def test_cli_telescope_transmission_option(model, tmp_path, obdeect_stream, capsys):
     model_path = tmp_path / "model.json"
     model.save(model_path)
-    source = write_stream(tmp_path / "opt.in.ps", {1: beam(50, (0.0, 0.0))})
+    source = write_stream(tmp_path / "opt.in.pst", {1: beam(50, (0.0, 0.0))})
     base = [
         "trace-stream",
         "--model",
@@ -771,13 +790,15 @@ def test_cli_telescope_transmission_option(model, tmp_path, obdeect_stream, caps
     ]
     parts = {}
     for label, extra in (("default", []), ("angular", ["--telescope-transmission", "angular"])):
-        output = tmp_path / f"opt.{label}.ps"
+        output = tmp_path / f"opt.{label}.pst"
         assert main([*base, str(output), *extra]) == 0
-        parts[label] = ledger_of(output, obdeect_stream)[0]["telescope_transmission.part"]
+        parts[label] = efficiency_status_of(output, obdeect_stream)[0][
+            "telescope_transmission.part"
+        ]
     assert parts == {"default": "full", "angular": "angular"}
     capsys.readouterr()
     with pytest.raises(SystemExit) as error:
-        main([*base, str(tmp_path / "bad.ps"), "--telescope-transmission", "partial"])
+        main([*base, str(tmp_path / "bad.pst"), "--telescope-transmission", "partial"])
     assert error.value.code == 2
     assert "invalid choice" in capsys.readouterr().err
 

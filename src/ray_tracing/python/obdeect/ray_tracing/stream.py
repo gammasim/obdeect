@@ -2,9 +2,9 @@
 
 Ground-frame (G) or telescope-frame (T) photons go in; camera-frame (C) photons
 come out. Records pass through unchanged, except that telescopes not selected
-are dropped and the efficiency ledger is updated. The stream component
+are dropped and the efficiency status is updated. The stream component
 (obdeect-stream) is a required dependency; its frame and chunk constants are used here.
-The frames and the ledger rules are described in docs/photon-stream.md.
+The frames and the efficiency status rules are described in docs/ray-tracing/photon-stream.md.
 """
 
 from __future__ import annotations
@@ -32,12 +32,11 @@ SPEED_OF_LIGHT_M_PER_NS = 0.299792458
 INPUT_PLANE_MARGIN_M = 1.0
 # Largest allowed difference between a cz column and -sqrt(1 - cx^2 - cy^2).
 CZ_TOLERANCE = 1e-5
-# Ledger factors that the optical model applies, in full, in its trace.
+# Efficiency status factors that the optical model applies, in full, in its trace.
 OWN_FACTORS = ("mirror_reflectivity", "telescope_transmission")
-LEDGER_STATES = EFFICIENCY_STATUS_STATES
 # Parts of the telescope transmission: all of it, or t(theta) / t0 only.
 TRANSMISSION_PARTS = ("full", "angular")
-# Ledger factor left for a downstream module when only the angular part is applied.
+# Efficiency status factor left for a downstream module when only the angular part is applied.
 CONSTANT_FACTOR = "telescope_transmission_constant"
 # Run-record keys with the telescope pointing [rad]: zenith and azimuth in the array frame.
 RUN_POINTING_KEYS = ("telescope_pointing_zenith_rad", "telescope_pointing_azimuth_rad")
@@ -136,9 +135,11 @@ def _transmission(model: OpticalModel, part: str) -> _Transmission:
     return _Transmission(part, on_axis)
 
 
-def _own_ledger(model: OpticalModel, transmission: _Transmission) -> dict[str, Any]:
-    """The ledger record that marks the factors obdeect applies as applied."""
-    return _ledger_with_applied({"factors": ",".join(_own_factors(model))}, model, transmission)
+def _own_efficiency_status(model: OpticalModel, transmission: _Transmission) -> dict[str, Any]:
+    """The efficiency status record that marks the factors obdeect applies as applied."""
+    return _efficiency_status_with_applied(
+        {"factors": ",".join(_own_factors(model))}, model, transmission
+    )
 
 
 def _own_factors(model: OpticalModel) -> tuple[str, ...]:
@@ -150,13 +151,13 @@ def _own_factors(model: OpticalModel) -> tuple[str, ...]:
     return ("mirror_reflectivity",)
 
 
-def _ledger_with_applied(
+def _efficiency_status_with_applied(
     metadata: Mapping[str, Any], model: OpticalModel, transmission: _Transmission
 ) -> Mapping[str, Any]:
-    """The ledger record with the factors obdeect applies marked applied; others unchanged."""
+    """The efficiency status record with the factors obdeect applies marked applied."""
     all_names = _names(metadata.get("factors", ""))
     if transmission.normalise and CONSTANT_FACTOR in all_names:
-        raise ModelError(f"the ledger already names {CONSTANT_FACTOR}")
+        raise ModelError(f"the efficiency status already names {CONSTANT_FACTOR}")
     names = [name for name in all_names if name in _own_factors(model)]
     if not names:
         return metadata
@@ -175,19 +176,19 @@ def _ledger_with_applied(
 
 @dataclass
 class _Factor:
-    """One ledger entry; for `envelope`, the envelope table of the factor."""
+    """One efficiency status entry; for `envelope`, the envelope table of the factor."""
 
     state: str
     wavelength_nm: Any = None
     value: Any = None
 
 
-def _ledger_factors(metadata: Mapping[str, Any]) -> dict[str, _Factor]:
+def _efficiency_status_factors(metadata: Mapping[str, Any]) -> dict[str, _Factor]:
     factors = {}
     for name in _names(metadata.get("factors", "")):
         state = str(metadata.get(f"{name}.state", "pending"))
-        if state not in LEDGER_STATES:
-            raise ModelError(f"ledger factor {name!r}: unknown state {state!r}")
+        if state not in EFFICIENCY_STATUS_STATES:
+            raise ModelError(f"efficiency_status factor {name!r}: unknown state {state!r}")
         factors[name] = _Factor(
             state, metadata.get(f"{name}.wavelength_nm"), metadata.get(f"{name}.value")
         )
@@ -197,7 +198,8 @@ def _ledger_factors(metadata: Mapping[str, Any]) -> dict[str, _Factor]:
 def _envelope_table(name: str, factor: _Factor) -> tuple[np.ndarray, np.ndarray]:
     if factor.wavelength_nm is None or factor.value is None:
         raise ModelError(
-            f"ledger factor {name!r} is 'envelope' but has no {name}.wavelength_nm and {name}.value"
+            f"efficiency status factor {name!r} is 'envelope' but has no "
+            f"{name}.wavelength_nm and {name}.value"
         )
     nodes = np.asarray(factor.wavelength_nm, dtype=np.float64).ravel()
     values = np.asarray(factor.value, dtype=np.float64).ravel()
@@ -208,7 +210,7 @@ def _envelope_table(name: str, factor: _Factor) -> tuple[np.ndarray, np.ndarray]
         or not np.all(values > 0)
     ):
         raise ModelError(
-            f"ledger factor {name!r}: the envelope needs increasing wavelengths and "
+            f"efficiency_status factor {name!r}: the envelope needs increasing wavelengths and "
             "positive values of the same length"
         )
     return nodes, values
@@ -228,7 +230,7 @@ class _Envelopes:
                 wavelength_nm.min() < nodes[0] or wavelength_nm.max() > nodes[-1]
             ):
                 raise ModelError(
-                    f"photon wavelengths lie outside the ledger envelope "
+                    f"photon wavelengths lie outside the efficiency status envelope "
                     f"[{nodes[0]:g}, {nodes[-1]:g}] nm"
                 )
             result /= np.interp(wavelength_nm, nodes, values)
@@ -322,12 +324,14 @@ class _Tracer:
     def handle(self, record: dict[str, Any]) -> None:
         kind = record["type"]
         if self.run_status_pending and kind in ("event", "run_end"):
-            self.writer.write("efficiency_status", _own_ledger(self.model, self.transmission))
+            self.writer.write(
+                "efficiency_status", _own_efficiency_status(self.model, self.transmission)
+            )
             self.run_status_pending = False
         if kind == "run":
             self._run(record["metadata"])
         elif kind == "efficiency_status":
-            self._ledger(record["metadata"])
+            self._efficiency_status(record["metadata"])
         elif kind == "event":
             self._event(record["metadata"])
         elif kind == "telescope":
@@ -354,24 +358,27 @@ class _Tracer:
         self.writer.write("run", metadata)
         self.run_status_pending = True
 
-    def _ledger(self, metadata: Mapping[str, Any]) -> None:
+    def _efficiency_status(self, metadata: Mapping[str, Any]) -> None:
         if self.telescope is None:
-            self.run_factors = {**self.run_factors, **_ledger_factors(metadata)}
+            self.run_factors = {**self.run_factors, **_efficiency_status_factors(metadata)}
             if self.transmission.normalise and CONSTANT_FACTOR in _names(
                 metadata.get("factors", "")
             ):
-                raise ModelError(f"the ledger already names {CONSTANT_FACTOR}")
+                raise ModelError(f"the efficiency status already names {CONSTANT_FACTOR}")
             self.writer.write("efficiency_status", metadata)
             return
         else:
             telescope = self.telescope
             if telescope.photons_seen:
-                raise ModelError(f"telescope {telescope.telescope_id}: ledger after its photons")
+                raise ModelError(
+                    f"telescope {telescope.telescope_id}: efficiency_status after its photons"
+                )
             if not telescope.kept:
                 return
-            telescope.factors = {**telescope.factors, **_ledger_factors(metadata)}
+            telescope.factors = {**telescope.factors, **_efficiency_status_factors(metadata)}
         self.writer.write(
-            "efficiency_status", _ledger_with_applied(metadata, self.model, self.transmission)
+            "efficiency_status",
+            _efficiency_status_with_applied(metadata, self.model, self.transmission),
         )
 
     def _event(self, metadata: Mapping[str, Any]) -> None:
@@ -396,7 +403,7 @@ class _Tracer:
         ):
             raise ModelError("telescope_end record without its telescope record")
         if telescope.kept:
-            # Applies the ledger checks even for a telescope without photons.
+            # Applies the efficiency status checks even for a telescope without photons.
             self._config(telescope)
             self.writer.write("telescope_end", {**metadata, "photons": telescope.weight})
         self.telescope = None
@@ -411,7 +418,7 @@ class _Tracer:
                     continue
                 if factor.state == "applied":
                     raise ModelError(
-                        f"telescope {telescope.telescope_id}: the ledger says {name} is "
+                        f"telescope {telescope.telescope_id}: the efficiency status says {name} is "
                         "already applied; trace-stream applies it in its trace and cannot skip it"
                     )
                 tables.append(_envelope_table(name, factor))
@@ -596,7 +603,7 @@ def trace_stream(
         Ground-frame photons need one of the two; the event header has no pointing.
     telescope_transmission: "full" or "angular"
         "full" applies the telescope transmission t(theta), including its on-axis
-        value t0. "angular" applies t(theta) / t0 only; the ledger then leaves
+        value t0. "angular" applies t(theta) / t0 only; the efficiency status then leaves
         t0 as the pending factor ``telescope_transmission_constant`` for the
         downstream camera module. Models without telescope transmission reject
         "angular".
@@ -611,7 +618,7 @@ def trace_stream(
     ModelError
         For an invalid stream, a missing pointing (ground-frame photons only), an
         unsupported frame or column,
-        or a ledger that says a factor is already applied, and for an unknown
+        or an efficiency status that says a factor is already applied, and for an unknown
         telescope_transmission or "angular" with a model that has none.
     """
     transmission = _transmission(model, telescope_transmission)

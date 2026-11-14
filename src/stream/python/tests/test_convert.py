@@ -77,9 +77,9 @@ def _column(records, name):
 
 
 def test_stream_to_simtel_and_back(tmp_path):
-    stream = tmp_path / "light.ps"
+    stream = tmp_path / "light.pst"
     simtel = tmp_path / "light.simtel"
-    back = tmp_path / "back.ps"
+    back = tmp_path / "back.pst"
     _write_light_source_stream(stream)
     obdeect_stream.stream_to_simtel(stream, simtel, {2: (1, 0.0)})
     assert simtel.read_bytes()[:4] == bytes.fromhex("378a1fd4")  # EventIO sync tag
@@ -96,9 +96,9 @@ def test_stream_to_simtel_and_back(tmp_path):
 
 @pytest.mark.parametrize("camera_map", ["dict", "file"])
 def test_camera_frame_conversion(tmp_path, camera_map):
-    stream = tmp_path / "light.ps"
+    stream = tmp_path / "light.pst"
     simtel = tmp_path / "light.simtel"
-    back = tmp_path / "back.ps"
+    back = tmp_path / "back.pst"
     _write_light_source_stream(stream)
     original = _photons_by_telescope(stream)[2]
     if camera_map == "dict":
@@ -156,9 +156,9 @@ def _write_flasher_stream(path):
 
 
 def test_telescope_frame_conversion(tmp_path):
-    stream = tmp_path / "flasher.ps"
+    stream = tmp_path / "flasher.pst"
     simtel = tmp_path / "flasher.simtel"
-    back = tmp_path / "back.ps"
+    back = tmp_path / "back.pst"
     _write_flasher_stream(stream)
     obdeect_stream.stream_to_simtel(stream, simtel, {1: (2, 0.0)})
     obdeect_stream.corsika_to_stream(simtel, back)
@@ -171,7 +171,7 @@ def test_telescope_frame_conversion(tmp_path):
 
 
 def test_telescope_frame_needs_dual_mirror_entry(tmp_path):
-    stream = tmp_path / "flasher.ps"
+    stream = tmp_path / "flasher.pst"
     _write_flasher_stream(stream)
     with pytest.raises(RuntimeError, match="camera map entry"):
         obdeect_stream.stream_to_simtel(stream, tmp_path / "a.simtel")
@@ -180,7 +180,7 @@ def test_telescope_frame_needs_dual_mirror_entry(tmp_path):
 
 
 def test_rejects_sky_frame(tmp_path):
-    stream = tmp_path / "sky.ps"
+    stream = tmp_path / "sky.pst"
     with obdeect_stream.Writer(str(stream), "pytest") as writer:
         writer.write(
             "run",
@@ -204,7 +204,7 @@ def test_rejects_sky_frame(tmp_path):
 
 
 def test_rejects_invalid_mirror_class(tmp_path):
-    stream = tmp_path / "light.ps"
+    stream = tmp_path / "light.pst"
     _write_light_source_stream(stream)
     with pytest.raises(ValueError):
         obdeect_stream.stream_to_simtel(stream, tmp_path / "bad.simtel", {2: (3, 0.0)})
@@ -231,7 +231,7 @@ REJECTED_EFFICIENCY_STATUSES = [
 
 @pytest.mark.parametrize("efficiency_status", ACCEPTED_EFFICIENCY_STATUSES)
 def test_efficiency_status_accepted_in_camera_frame(tmp_path, efficiency_status):
-    stream = tmp_path / "light.ps"
+    stream = tmp_path / "light.pst"
     simtel = tmp_path / "light.simtel"
     _write_light_source_stream(stream, telescope_efficiency_status=efficiency_status)
     obdeect_stream.stream_to_simtel(stream, simtel, {2: (1, 0.0)})
@@ -240,14 +240,14 @@ def test_efficiency_status_accepted_in_camera_frame(tmp_path, efficiency_status)
 
 @pytest.mark.parametrize("efficiency_status", REJECTED_EFFICIENCY_STATUSES)
 def test_efficiency_status_rejected_in_camera_frame(tmp_path, efficiency_status):
-    stream = tmp_path / "light.ps"
+    stream = tmp_path / "light.pst"
     _write_light_source_stream(stream, telescope_efficiency_status=efficiency_status)
     with pytest.raises(RuntimeError, match=efficiency_status["factors"]):
         obdeect_stream.stream_to_simtel(stream, tmp_path / "bad.simtel", {2: (1, 0.0)})
 
 
 def test_efficiency_status_pending_accepted_with_allow_pending(tmp_path):
-    stream = tmp_path / "light.ps"
+    stream = tmp_path / "light.pst"
     simtel = tmp_path / "light.simtel"
     constant = _efficiency_status("telescope_transmission_constant", "pending")
     _write_light_source_stream(stream, telescope_efficiency_status=constant)
@@ -261,7 +261,7 @@ def test_efficiency_status_pending_accepted_with_allow_pending(tmp_path):
 
 def test_efficiency_status_scaled_factor_accepts_envelope(tmp_path):
     # A QE table divided by the QE envelope: sim_telarray applies f/f_env.
-    stream = tmp_path / "light.ps"
+    stream = tmp_path / "light.pst"
     simtel = tmp_path / "light.simtel"
     _write_light_source_stream(
         stream,
@@ -287,7 +287,7 @@ def test_efficiency_status_scaled_factor_accepts_envelope(tmp_path):
 def test_efficiency_status_scaled_factor_needs_envelope_applied_by_sim_telarray(
     tmp_path, efficiency_status
 ):
-    stream = tmp_path / "light.ps"
+    stream = tmp_path / "light.pst"
     _write_light_source_stream(
         stream,
         run_efficiency_status=_efficiency_status(efficiency_status["factors"], "envelope"),
@@ -303,7 +303,7 @@ def test_efficiency_status_scaled_factor_needs_envelope_applied_by_sim_telarray(
 def test_run_efficiency_status_applies_to_camera_telescope(tmp_path):
     # A run-level factor applies to every telescope; mirror reflectivity is applied by
     # sim_telarray in ground frame only, so the camera telescope must reject it.
-    stream = tmp_path / "light.ps"
+    stream = tmp_path / "light.pst"
     _write_light_source_stream(
         stream, run_efficiency_status=_efficiency_status("mirror_reflectivity", "pending")
     )
@@ -312,9 +312,9 @@ def test_run_efficiency_status_applies_to_camera_telescope(tmp_path):
 
 
 def test_rejects_truncated_stream(tmp_path):
-    stream = tmp_path / "light.ps"
+    stream = tmp_path / "light.pst"
     _write_light_source_stream(stream)
-    truncated = tmp_path / "truncated.ps"
+    truncated = tmp_path / "truncated.pst"
     truncated.write_bytes(stream.read_bytes()[:-40])
     with pytest.raises(RuntimeError):
         obdeect_stream.stream_to_simtel(truncated, tmp_path / "truncated.simtel")
@@ -326,7 +326,7 @@ def test_rejects_truncated_stream(tmp_path):
     reason="obdeect stream from-corsika and obdeect stream to-simtel are not installed",
 )
 def test_cli_matches_python_api(tmp_path):
-    stream = tmp_path / "light.ps"
+    stream = tmp_path / "light.pst"
     camera = tmp_path / "camera.txt"
     api_out = tmp_path / "api.simtel"
     cli_out = tmp_path / "cli.simtel"
@@ -357,7 +357,7 @@ def test_cli_matches_python_api(tmp_path):
             capture_output=True,
         ).stdout
     assert piped[:4] == b"GSTR"
-    back = tmp_path / "piped.ps"
+    back = tmp_path / "piped.pst"
     back.write_bytes(piped)
     assert set(_photons_by_telescope(back)) == {1, 2}
     assert _column(_photons_by_telescope(back)[1], "x").size == 50
@@ -368,7 +368,7 @@ def test_cli_matches_python_api(tmp_path):
     reason="obdeect stream to-simtel is not installed",
 )
 def test_cli_allow_pending_option(tmp_path):
-    stream = tmp_path / "light.ps"
+    stream = tmp_path / "light.pst"
     camera = tmp_path / "camera.txt"
     camera.write_text("2 1 0.0\n")
     constant = _efficiency_status("telescope_transmission_constant", "pending")
@@ -400,7 +400,7 @@ def test_cli_allow_pending_option(tmp_path):
 
 @pytest.mark.parametrize("camera", [{0: (1, 0.0)}, {2: (2, float("nan"))}, {2: (2, float("inf"))}])
 def test_rejects_invalid_camera_mapping(tmp_path, camera):
-    stream = tmp_path / "light.ps"
+    stream = tmp_path / "light.pst"
     _write_light_source_stream(stream)
     with pytest.raises((ValueError, RuntimeError)):
         obdeect_stream.stream_to_simtel(stream, tmp_path / "bad.simtel", camera)
@@ -408,7 +408,7 @@ def test_rejects_invalid_camera_mapping(tmp_path, camera):
 
 @pytest.mark.parametrize("operation", ["stream_to_simtel", "corsika_to_stream"])
 def test_conversion_reports_output_failure(tmp_path, operation):
-    stream = tmp_path / "light.ps"
+    stream = tmp_path / "light.pst"
     simtel = tmp_path / "light.simtel"
     _write_light_source_stream(stream)
     obdeect_stream.stream_to_simtel(stream, simtel, {2: (1, 0.0)})
@@ -459,7 +459,7 @@ sys.exit(1)
     reason="obdeect stream to-simtel is not installed",
 )
 def test_cli_scaled_factor_option(tmp_path):
-    stream = tmp_path / "light.ps"
+    stream = tmp_path / "light.pst"
     camera = tmp_path / "camera.txt"
     camera.write_text("2 1 0.0\n")
     _write_light_source_stream(

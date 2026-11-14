@@ -1,6 +1,6 @@
-# obdeect sources point-source (implementation)
+# point-source: specification
 
-User options and examples: [point-source](../programs/point-source.md). Writer B, producer
+Options and examples: [point-source](../programs/point-source.md). Writer B, producer
 `obdeect sources point-source`.
 
 ## Validation and defaults
@@ -33,13 +33,3 @@ User options and examples: [point-source](../programs/point-source.md). Writer B
     radius is not supported (use isotropic or Cone/Parallel)`.
 - Every telescope block gets the same photons (telescope key 0), `w = b` (float32),
   `zem = observation_level + z`.
-
-## Acceptance (`test_point-source`)
-
-- Default: one SphereTarget; mean count over 4000 events matches
-  `1e7 x 0.5 (1 - sqrt(1 - (1.02 x 15/1000)^2))` within `4 x 0.5 / sqrt(4000)`; every row
-  `w = 1`, `wavelength = 400`, `t = 0`, `z = 1000`, `cz <= -cos_max`.
-- Non-default (Cone 30 deg, `-b 2`, `2e5` photons, 2 events): exactly `2 x 100000` rows,
-  `w = 2`, `cz = -cos 30 deg`, exponential pulse moments.
-- Lambertian at default distance is rejected; negative photons rejected; `zem - z = altitude`;
-  telescope-file cases: see [CLI conventions](cli-conventions.md).

@@ -2,10 +2,10 @@
 
 Laser beam crossing the field of view of a telescope. obdeect sources emits the **primary**
 photons along the beam inside the field-of-view cone. The scattered light is computed from
-them by [obdeect propagation](../../propagation/index.md) (single scattering, plan step 6b).
+them by [obdeect propagation](../../propagation/index.md) (single scattering).
 
 ```console
-$ obdeect sources laser-beam --events 1 --primary-per-m 1e4 -o laser.ps
+$ obdeect sources laser-beam --events 1 --primary-per-m 1e4 -o laser.pst
 ```
 
 Replaces the earlier ls-beam program; options keep their names.
@@ -39,10 +39,4 @@ atmosphere profile.
 
 Not available in obdeect propagation: `beta_s(ground)` at 355 nm for the aerosol part (only
 molecular scattering follows from the density profile), the aerosol single-scattering albedo
-and the phase-function asymmetry g. These come from simulation-models (step 6b).
-
-## Checks
-
-- Default: all step points lie in the cone (angle to axis = fov/2 at the ends, within 1e-9).
-- Non-default (fov 20, step 0.5 m, Gauss sigma 0.5 ns): residual time moments match the pulse.
-- A beam that misses the cone is rejected.
+and the phase-function asymmetry g. These come from the simulation models.

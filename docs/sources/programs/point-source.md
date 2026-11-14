@@ -3,8 +3,8 @@
 Point light source above the telescope, sky-frame photons.
 
 ```console
-$ obdeect sources point-source -N 50 -o point-source.ps
-$ obdeect stream cat --summary point-source.ps
+$ obdeect sources point-source -N 50 -o point-source.pst
+$ obdeect stream cat --summary point-source.pst
 ```
 
 - Source at `(x, y, z)` (cm, `z` above the observation level), emitting `-n` photons into 4 pi
@@ -31,11 +31,3 @@ $ obdeect stream cat --summary point-source.ps
 | `-d cx,cy,cz` | | `0,0,-1` | direction (normalised) |
 | `--telpos-file`, `--corsika-telpos-file` | cm | one telescope | telescopes `x y z r` |
 | `--seed` | | 1 | seed |
-
-## Checks
-
-- Mean count per event equals `1e7 x 0.5 (1 - cos(asin(1.02 R / d)))` (4 sigma).
-- Non-default (Cone:30, bunch 2, Exp:2, 300 nm): exact counts, cone angle, weight,
-  exponential moments.
-- Reference-program run (50 events): 561.8 bunches per event vs 585.0 expected from the
-  formula (not explained yet).

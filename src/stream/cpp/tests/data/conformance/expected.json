@@ -1,7 +1,7 @@
 {
  "format": "records in file order; the unknown-type record is skipped; stream_end is not listed",
  "valid": {
-  "file": "valid.ps",
+  "file": "valid.pst",
   "records": [
    {
     "type": "stream",
@@ -122,9 +122,9 @@
   ]
  },
  "invalid": {
-  "bad_magic.ps": "bad magic",
-  "unknown_major.ps": "unsupported format major version",
-  "truncated_chunk.ps": "truncated",
-  "too_many_rows.ps": "2^16 rows"
+  "bad_magic.pst": "bad magic",
+  "unknown_major.pst": "unsupported format major version",
+  "truncated_chunk.pst": "truncated",
+  "too_many_rows.pst": "2^16 rows"
  }
 }

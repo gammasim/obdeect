@@ -320,7 +320,7 @@ path, 1e-9 for direction, 1e-7 ns for time and 1e-9 (relative) for weight.
   validation for every model with a transmission (max relative table error 1.9e-7 MSTN-07, 6.7e-6
   SCTS-design, 6.5e-4 SSTS-17), so no model uses a table. The replay is bit-identical and the change gave
   no speed gain: reverted.
-- **`OBDEECT_RAY_TRACING_USE_FMA`** (CMake option, default OFF): see [Installation](installation.md).
+- **`OBDEECT_RAY_TRACING_USE_FMA`** (CMake option, default OFF): see [Installation](../user-guide/installation.md#from-source).
 
 Total change of the round (final state against 13daac1, tier G, 6 * 10^6 photons per model):
 

@@ -3,7 +3,7 @@
 LED in front of selected camera pixels, to test trigger definitions.
 
 ```console
-$ obdeect sources led --camera-file cam.dat --use "0 1 2" --photons 500 > led.gst
+$ obdeect sources led --camera-file cam.dat --use "0 1 2" --photons 500 > led.pst
 $ obdeect sources led --camera-file cam.dat --use-trg-all --list-only
 ```
 
@@ -42,10 +42,3 @@ $ obdeect sources led --camera-file cam.dat --use-trg-all --list-only
 - A non-isotropic pixel outside the fiducial sphere is rejected (no camera-plane disc target).
 - Events: all listed pixels (no `--require`), `--random` draws, or one event per combination of
   `--require` pixels in increasing order. Required (`+`) pixels are always lit.
-
-## Checks
-
-- `ctest`: `test_led` (camera-plane positions and directions, combinations, slaves, trigger
-  groups, random pixels, errors).
-- Reference-program run (`validation/sources/compare_led.sh`, 3 events of 2 pixels, 10 photons
-  each): 20 photons per event in both; direction (0, 0, -1) and time 0 in both.

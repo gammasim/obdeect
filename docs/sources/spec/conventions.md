@@ -12,7 +12,8 @@ User-facing units are in [sources](../sources.md#frames-and-units). Here:
 
 ## Random numbers (contract)
 
-All draws are `obdeect::stream::uniform4(DrawKey{seed, stage, event, telescope, photon, stream})`,
+The generator, the key fields and the stage ids are described in
+[](../../stream/random-numbers.md). All draws are `obdeect::stream::uniform4(DrawKey{seed, stage, event, telescope, photon, stream})`,
 returning four doubles in (0, 1) (Philox-4x32-10). Stage `0x444C0001` (obdeect stream
 `stage_sources`) for every photon, count and track draw; stage `0x444C0002` (`stage_programs`)
 for program-level choices. Streams of one photon (each one `uniform4` call, never shared):

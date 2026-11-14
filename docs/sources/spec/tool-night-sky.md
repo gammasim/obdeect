@@ -1,6 +1,6 @@
-# obdeect sources night-sky (implementation)
+# night-sky: specification
 
-User options and examples: [night-sky](../programs/night-sky.md). Source:
+Options and examples: [night-sky](../programs/night-sky.md). Source:
 [background](background.md). Writer B, producer `obdeect sources night-sky`.
 
 ## Validation (at plan time, also with `--photons 0`)
@@ -23,13 +23,3 @@ User options and examples: [night-sky](../programs/night-sky.md). Source:
 - Run extra keys: `viewcone_deg` (f64), `background` (string `night sky`). `atmosphere_id` = `-A`.
 - `cos(theta)` from the downward axis is uniform in `[cos v, 1]`; photons travel with
   `cz <= -cos v`; all positions lie at distance `r` from the origin.
-
-## Acceptance (`test_night-sky`)
-
-- Count `3e4` for `6e4` photons with bunch 2; directions inside the cone to 1e-6; `|position| = 15`
-  to 1e-3; `w = 2`; cos moments to 4 sigma.
-- Mean time `= delay - E[zi] r / c` with pulse width 4 and delay 10.
-- Uniform 300..600 table spectrum moments; tilted viewing axes always enter the sphere.
-- Stream layout: 2 events, `2 x 20000` rows, `telescope_r_m = [15]`; `zem - z = altitude`.
-- Negative photons, radius `<= 0`, viewcone `0` or `200`, negative pulse width, NaN delay,
-  bunch 0, NaN altitude all throw at plan time; viewcone 180 is accepted.

@@ -17,7 +17,7 @@ Sky-layer writers write, per event, one `telescope` block per telescope; the pro
 and event (photon indices run over all emissions of the block in emission order). An emission
 with zero photons writes no chunk. In writers A and B every emission is chunked separately (a chunk never spans two emissions, at most 65536 rows each); writer C buffers across segments and flushes full chunks of 65536 rows.
 
-Record order is exact; the row split into chunks is not tested.
+Record order is exact; the split into chunks is not part of the contract.
 
 ## Writer A: program writer (flasher, led)
 
