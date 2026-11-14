@@ -1,6 +1,6 @@
-# obdeect sources muon-track (implementation)
+# muon-track: specification
 
-User options and examples: [muon-track](../programs/muon-track.md). Source: [track](track.md).
+Options and examples: [muon-track](../programs/muon-track.md). Source: [track](track.md).
 Writer C, producer `obdeect sources muon-track`. Namespace `obdeect::sources::muon_track`.
 
 ## Option parsing
@@ -61,18 +61,3 @@ Writer C, producer `obdeect sources muon-track`. Namespace `obdeect::sources::mu
 - In each event, segment `k` in order: `emit_track(segment, source_seed(seed, k), event, 1, ...)`.
 - Stderr after the stream: `obdeect sources muon-track: expected weight <%.6g>, wrote <rows>
   photons, weight <%.6g>` (expected = sum of `expected_track_weight` over segments times events).
-
-## Acceptance (`test_muon-track`)
-
-- Arc kernel versus brute force; on-axis arcs.
-- Default: one segment with the exact Frank-Tamm photons and `time = -3000/c`; all weights in
-  `[0,1]`; all `t <= 0`; weight sum within 4 sigma of the expectation.
-- Non-default (theta 20, phi 30, impact (40,-30), h 2000, band 300-600, n-1 0.00028): length
-  `2000/cos 20 deg`; track ends at the impact point; emission angle exact; 1/lambda^2 moments;
-  times between `-dist/c` and 0.
-- Profile: 300 segments of 10 m; first uses `n-1` at 5 m altitude, `time = -10/c`.
-- Scatter and `--rscat` rejected. Stream round trip: 2 events, `refraction_applied = 0`,
-  `r_m = 15`, sky-frame chunks, `telescope_end` sums; `zem - z = obslev`.
-- Magnitude limits above 1e30 and counts above 2^53 rejected; `event_count`; primary names
-  (`mu+` charge +1, `muon` charge -1, `tau` rejected); index-profile reader errors; momentum
-  option order; `-p 0` rejected.

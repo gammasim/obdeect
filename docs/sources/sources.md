@@ -1,4 +1,4 @@
-# Light sources
+# Source model
 
 A source emits photons from a point (an emitter) or as a parallel beam (a star). Photons
 are written as photon stream chunks in the frame of the source.
@@ -64,15 +64,6 @@ can reach it.
 - `sphere`: directions sampled in the cone containing the sphere, `w = 1`, count
   `photons (1 - cos theta_max) / 2`. Isotropic emitters only.
 
-## Random numbers
-
-Each photon draws from Philox (obdeect stream `uniform4`) keyed on `(seed, stage, event,
-telescope, photon index, stream)`, stage `obdeect::sources::stage_sources` (alias of
-`obdeect::stream::stage_sources`, `0x444C0001`). Stream ids are in
-`cpp/include/obdeect/sources/streams.hpp`. Results do not depend on chunk size or order.
-Sources with the same seed, event and telescope share draws: give each independent source its
-own seed.
-
 ## Conventions
 
 - Emitter count: `floor(mean)` plus one with probability equal to the fraction (not Poisson).
@@ -86,3 +77,5 @@ own seed.
 - Tables are passed as arrays, not read from files.
 - Refraction and airlight belong to [obdeect propagation](../propagation/index.md). The
   Gaussian spectrum is not available.
+
+Random numbers: [](../stream/random-numbers.md).

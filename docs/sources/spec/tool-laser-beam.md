@@ -1,6 +1,6 @@
-# obdeect sources laser-beam (implementation)
+# laser-beam: specification
 
-User options and examples: [laser-beam](../programs/laser-beam.md). Writer B, producer
+Options and examples: [laser-beam](../programs/laser-beam.md). Writer B, producer
 `obdeect sources laser-beam`. Only primary photons are generated; scattering is in
 [obdeect propagation](../../propagation/index.md).
 
@@ -47,13 +47,3 @@ User options and examples: [laser-beam](../programs/laser-beam.md). Writer B, pr
 - Extra keys: `scattering_angular` (string = angular text), `primary_photons_per_m` (f64),
   `beam_step_m`, `beam_path_m` (= L), `fov_deg`, `telescope_zenith_deg`,
   `telescope_azimuth_deg` (f64; the last two are the stored mathematical-sense values).
-
-## Acceptance (`test_laser-beam`)
-
-- Geometry at default; step count; time offsets `k step / c` to 1e-9.
-- `cz` of all photons `= dir.z`, wavelength 355, `w = 3`.
-- One event; `scattering_angular == "Rayleigh"`; `beam_path_m == L`.
-- Gaussian pulse residual moments (sigma 0.5 ns, fov 20, step 0.5, bunch 1, `1e3` per m).
-- fov in `{-15, 0, 90, 180, nan, inf}` rejected; `{15, 89.9}` accepted.
-- Geometry: both ends have angle `h` to the axis (cosine to 1e-9); misses, behind-laser
-  intersections and unbounded intervals are rejected.

@@ -1,6 +1,6 @@
-# obdeect sources beam-scan (implementation)
+# beam-scan: specification
 
-User options and examples: [beam-scan](../programs/beam-scan.md). Writer B, producer
+Options and examples: [beam-scan](../programs/beam-scan.md). Writer B, producer
 `obdeect sources beam-scan`.
 
 ## Validation

@@ -1,6 +1,6 @@
-# obdeect sources led (implementation)
+# led: specification
 
-User options and examples: [led](../programs/led.md). Frame C. Writer A, producer
+Options and examples: [led](../programs/led.md). Frame C. Writer A, producer
 `obdeect sources led`.
 
 ## Validation (prefix `led: `)
@@ -66,13 +66,3 @@ User options and examples: [led](../programs/led.md). Frame C. Writer A, produce
 For every event print `(@) ` followed by, for each label in ascending numeric order, a blank
 and the id (`(@)  0 1`), then a newline. Labels are the listed pixels only (never slaves). No
 stream is written.
-
-## Acceptance (`test_led`)
-
-- Combinations of `0 1 2` with require 2: three events of 2 x 10 photons, sets {0,1}, {0,2},
-  {1,2}.
-- Trigger groups with and without slaves: 40 vs 30 + 20 rows; labels exclude slaves.
-- Random mode: 5 events of two distinct pixels; `+0 1` fires both; require above list size
-  gives no events; unknown pixel id throws; non-contiguous ids keep their own position;
-  duplicate pixel definition throws.
-- Spectrum `400`, `400.5`, `4e2` accepted; `1e5`, `100`, `400x`, `table.dat` rejected.

@@ -1,11 +1,11 @@
 # Photon streams
 
 `obdeect ray-tracing trace-stream` traces a photon stream through an optical model and
-writes the camera-frame photons. The stream component (`obdeect-stream`) is always installed.
+writes the camera-frame photons. Frames and records are defined in the [photon-stream format](../stream/format.md).
 
 ```bash
-obdeect ray-tracing trace-stream --model telescope.json --seed 7 -i ground.ps -o camera.ps
-obdeect ray-tracing trace-stream --model telescope.json --seed 7 --telescopes 1,2 < in.ps > out.ps
+obdeect ray-tracing trace-stream --model telescope.json --seed 7 -i ground.pst -o camera.pst
+obdeect ray-tracing trace-stream --model telescope.json --seed 7 --telescopes 1,2 < in.pst > out.pst
 ```
 
 Records pass through; telescopes not listed in `--telescopes` are dropped. A summary (events,
@@ -42,20 +42,15 @@ Do not pass the CORSIKA shower azimuth (EVTH PHIP); it is a different quantity.
 | `x`, `y` | m | Position on the focal surface, telescope frame; z = 0 is implicit |
 | `cx`, `cy`, `cz` | 1 | Direction in the telescope frame; reflected photons have cz > 0 (towards the camera) |
 | `t` | ns | Arrival time |
-| `w` | photons | Weight (1 per survivor, or the envelope-corrected weight) |
+| `w` | photons | Weight (1 per survivor, or the weight corrected for the efficiency bound) |
 | `wavelength` | nm | Wavelength |
 | `zem` | m a.s.l. | Only if the input has it |
 
 Axes follow the telescope frame of the [optical models](optical-models.md#frames-and-units).
 Chunks hold at most 2^16 rows; `first_index` counts the output rows of each telescope and event.
+Random numbers: [](../stream/random-numbers.md).
 
-## Random numbers
-
-Each (event, telescope) block draws from a seed derived from `--seed`, the event number and the
-telescope id. Bunch ids are `(event_number << 32) | photon_index`, where `photon_index` is the
-index of the photon in its telescope and event. The output does not depend on chunking or threads.
-
-## Efficiency ledger
+## Efficiency status
 
 The optical model applies `mirror_reflectivity` and, when present, `telescope_transmission` (or
 structure shadowing). Their states are carried in `efficiency_status` records. The stage reads
@@ -65,13 +60,13 @@ run level.
 | State | Action |
 | --- | --- |
 | absent or `pending` | The factor is applied in full by the trace. |
-| `envelope` | The stream carries the envelope f_env, so the output weight is multiplied by 1 / f_env(λ). The trace then gives f / f_env. Photons are traced with `roulette=False` (weights min(1, w / bound) per survivor), so weights stay unbiased; the table is interpolated at each photon's wavelength. |
+| `envelope` | The stream carries the efficiency bound f_env, so the output weight is multiplied by 1 / f_env(λ). The trace then gives f / f_env. Photons are traced with `roulette=False` (weights min(1, w / bound) per survivor), so weights stay unbiased; the table is interpolated at each photon's wavelength. |
 | `applied` | An error: the trace would apply the factor again. |
 
 Other factors (for example `qe`) pass on unchanged. After the run record, the stage writes a
-ledger record after the incoming run statuses, marking the factors it applies `applied`, with
-`source` set to obdeect and the model hash. Input ledgers naming these factors are rewritten the
-same way. For example, a run ledger with `mirror_reflectivity.state = envelope` (table over 300
+efficiency-status record after the incoming run statuses, marking the factors it applies `applied`, with
+`source` set to obdeect and the model hash. Input records naming these factors are rewritten the
+same way. For example, a run record with `mirror_reflectivity.state = envelope` (table over 300
 to 600 nm) becomes:
 
 ```text
@@ -91,8 +86,8 @@ telescope_transmission.state = applied
 itself. The weight per photon is unchanged; the expected sum of output weights of an on-axis
 photon is 1 / t0 times that of `full`, so the camera multiplies by t0 to recover it. `angular`
 needs a model with telescope transmission and a positive on-axis value. Both modes write the same
-ledger keys, with the choice recorded in `telescope_transmission.part`. In `angular` mode the
-ledger also lists the remaining factor and its on-axis value:
+keys, with the choice recorded in `telescope_transmission.part`. In `angular` mode the
+status also lists the remaining factor and its on-axis value:
 
 ```text
 factors = mirror_reflectivity,telescope_transmission,telescope_transmission_constant
@@ -102,7 +97,7 @@ telescope_transmission_constant.state = pending
 telescope_transmission_constant.value = 0.9
 ```
 
-A telescope-level ledger naming `telescope_transmission` gets the same entries. A ledger that
+A telescope-level record naming `telescope_transmission` gets the same entries. A record that
 already names `telescope_transmission_constant` is rejected in `angular` mode.
 
 ## Not applied here

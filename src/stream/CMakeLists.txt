@@ -161,7 +161,7 @@ if(OBDEECT_STREAM_BUILD_TESTING)
   enable_testing()
   if(OBDEECT_STREAM_BUILD_BENCH)
     add_test(NAME bench_stream_partial_chunk COMMAND bench_stream 65537
-             ${CMAKE_CURRENT_BINARY_DIR}/bench_stream_test.ps)
+             ${CMAKE_CURRENT_BINARY_DIR}/bench_stream_test.pst)
   endif()
   if(OBDEECT_STREAM_BUILD_CAPI)
     enable_language(C)
@@ -172,13 +172,13 @@ if(OBDEECT_STREAM_BUILD_TESTING)
     target_link_libraries(test_capi PRIVATE obdeect_stream_c)
     target_compile_options(test_capi PRIVATE -Wall -Wextra -Wpedantic -Werror)
     set(OBDEECT_STREAM_CONFORMANCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/cpp/tests/data/conformance)
-    add_test(NAME capi COMMAND test_capi ${CMAKE_CURRENT_BINARY_DIR}/capi_roundtrip.ps
+    add_test(NAME capi COMMAND test_capi ${CMAKE_CURRENT_BINARY_DIR}/capi_roundtrip.pst
              ${OBDEECT_STREAM_CONFORMANCE_DIR})
     set_tests_properties(capi PROPERTIES FIXTURES_SETUP capi_stream)
     add_executable(test_capi_cpp cpp/tests/test_capi_cpp.cpp)
     target_link_libraries(test_capi_cpp PRIVATE obdeect_stream_c obdeect_stream_core)
     obdeect_stream_enable_warnings(test_capi_cpp)
-    add_test(NAME capi_cpp COMMAND test_capi_cpp ${CMAKE_CURRENT_BINARY_DIR}/capi_roundtrip.ps
+    add_test(NAME capi_cpp COMMAND test_capi_cpp ${CMAKE_CURRENT_BINARY_DIR}/capi_roundtrip.pst
              ${OBDEECT_STREAM_CONFORMANCE_DIR})
     set_tests_properties(capi_cpp PROPERTIES FIXTURES_REQUIRED capi_stream)
   endif()

@@ -60,7 +60,7 @@ def _body(text):
 
 
 def test_stream_to_grisu_text(tmp_path):
-    stream = tmp_path / "run.ps"
+    stream = tmp_path / "run.pst"
     _write_stream(stream)
     config = tmp_path / "TLLOC.dat"
     config.write_text("* a comment\n* TLLOC 4 -20.1 -10.0 0 0 0 0\n")
@@ -77,7 +77,7 @@ def test_stream_to_grisu_text(tmp_path):
 
 
 def test_unmatched_telescope_warns(tmp_path):
-    stream = tmp_path / "run.ps"
+    stream = tmp_path / "run.pst"
     _write_stream(stream)
     config = tmp_path / "TLLOC.dat"
     config.write_text("* TLLOC 4 100 100 0 0 0 0\n")
@@ -96,14 +96,14 @@ def test_unmatched_telescope_warns(tmp_path):
     ],
 )
 def test_errors(tmp_path, options, message):
-    stream = tmp_path / "run.ps"
+    stream = tmp_path / "run.pst"
     _write_stream(stream, **options)
     with pytest.raises(RuntimeError, match=message):
         obdeect_stream.stream_to_grisu(stream, tmp_path / "run.grisu")
 
 
 def test_expand_bunches(tmp_path):
-    stream = tmp_path / "run.ps"
+    stream = tmp_path / "run.pst"
     _write_stream(stream, weight=3.0)
     obdeect_stream.stream_to_grisu(stream, tmp_path / "run.grisu", expand_bunches=True)
     assert (tmp_path / "run.grisu").read_text().count("\nP ") == 3
@@ -114,7 +114,7 @@ def test_expand_bunches(tmp_path):
     reason="obdeect stream to-grisu is not installed",
 )
 def test_cli_matches_python(tmp_path):
-    stream = tmp_path / "run.ps"
+    stream = tmp_path / "run.pst"
     _write_stream(stream)
     obdeect_stream.stream_to_grisu(stream, tmp_path / "py.grisu")
     result = subprocess.run(

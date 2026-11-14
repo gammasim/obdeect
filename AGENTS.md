@@ -34,6 +34,9 @@ Root `docs/changes/` is the Towncrier input for all components.
 
 - Never modify the main `README.md`. Suggest changes instead, do not apply them.
 - Terminology: call a compiled telescope geometry and optical-response artifact an "optical model".
+  In documentation, say "efficiency status", never "ledger"; say "photons in the sky frame", not
+  "sky photons"; call the `--envelope` tables "efficiency bounds". Photon-stream files use `.pst`,
+  never `.ps` (PostScript).
 - Keep it simple, efficient, deterministic and portable. Prefer small, explicit data
   structures and testable kernels over frameworks, global state, hidden defaults or
   abstraction in the hot path.
@@ -61,7 +64,7 @@ Root `docs/changes/` is the Towncrier input for all components.
 - `stream`: Results must not depend on photon ordering, chunk size or thread count.
   Record each efficiency in the stream.
 - `propagation`: Atmospheric effects are an ordered list of independent effects, each
-  recorded in the efficiency ledger of the stream. Extinction follows `docs/extinction.md`;
+  recorded in the efficiency status of the stream. Extinction follows `docs/extinction.md`;
   its tests hold the reference values.
 - `sources`: Sources are defined by validated input (position, direction, angular,
   spectral and pulse profiles), never by hardwired device names. Sources emit at sky,

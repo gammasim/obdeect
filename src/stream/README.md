@@ -18,8 +18,8 @@ Requires Python 3.14 or higher.
 obdeect stream cat [FILE ...]               # concatenate streams; --summary for record counts
 obdeect stream tee FILE                     # copy a stream passing through
 obdeect stream from-corsika < run.iact      # CORSIKA IACT EventIO to photon stream
-obdeect stream to-simtel --camera-map cam.txt run.ps > sim.simtel   # photon stream to sim_telarray input
-obdeect stream to-grisu --telescope-config TLLOC.dat run.ps > run.grisu  # GrISU photon text
+obdeect stream to-simtel --camera-map cam.txt run.pst > sim.simtel   # photon stream to sim_telarray input
+obdeect stream to-grisu --telescope-config TLLOC.dat run.pst > run.grisu  # GrISU photon text
 ```
 
 Full documentation and the repository README: https://github.com/gammasim/obdeect

@@ -52,8 +52,8 @@ def propagate(
             output is always weighted and ``"thinned"`` is an error.
         store_p: keep the acceptance column p in the output.
         scattering: optional scattering table (docs/scattering.md). Enables single scattering of
-            the sky photons before extinction; scattered photons go to their telescope's block.
-            The run needs telescope_r_m. Off when None.
+            the sky-frame photons before extinction; scattered photons go to their telescope's
+            block. The run needs telescope_r_m. Off when None.
         scattering_points: scattering points per photon (1 to 1024); used only with scattering.
             Default None: 8 points.
         pathlen_m: optical path inside each telescope [m] (the in-telescope part of the
@@ -62,15 +62,17 @@ def propagate(
             overrides pathlen_m for those telescopes. Default None.
         extinction: False for geometry only: sky to ground frame (refraction, air delay) and
             wavelength assignment, no extinction, envelope or thinning. All photons keep their
-            weight and the ledger records ``atmosphere`` as pending. Cannot be combined with
-            transmission, envelope, mode="thinned", scattering, store_p or the path options.
+            weight and the efficiency status records ``atmosphere`` as pending. Cannot be
+            combined with transmission, envelope, mode="thinned", scattering, store_p or the
+            path options.
 
     Returns:
-        Dict with photons_in, photons_out, dropped (sky photons not reaching the telescope
-        plane) and weight_out (sum of w of the output).
+        Dict with photons_in, photons_out, dropped (sky-frame photons not reaching the
+        telescope plane) and weight_out (sum of w of the output).
 
     Raises:
-        ValueError: invalid settings or input, or an input ledger that shows a factor as applied.
+        ValueError: invalid settings or input, or an input efficiency status that shows a
+            factor as applied.
         RuntimeError: unreadable or truncated files.
     """
     if mode is not None and mode not in MODES:

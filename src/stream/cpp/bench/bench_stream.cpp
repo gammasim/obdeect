@@ -28,7 +28,7 @@ static int run(int argc, char **argv) {
   const std::uint64_t photons = argc > 1 ? std::strtoull(argv[1], nullptr, 10) : 100000000ULL;
   const std::filesystem::path path =
       argc > 2 ? std::filesystem::path(argv[2])
-               : std::filesystem::temp_directory_path() / "obdeect_stream_bench.ps";
+               : std::filesystem::temp_directory_path() / "obdeect_stream_bench.pst";
   const std::uint64_t n_chunks = (photons + chunk_rows - 1) / chunk_rows;
 
   obdeect::stream::PhotonChunk chunk;

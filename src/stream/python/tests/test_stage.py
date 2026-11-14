@@ -36,7 +36,7 @@ def _write(path, *, efficiency_status=None):
 
 
 def test_transform(tmp_path):
-    _write(tmp_path / "in.ps")
+    _write(tmp_path / "in.pst")
     seen = []
 
     def func(telescope_id, columns, metadata):
@@ -45,8 +45,8 @@ def test_transform(tmp_path):
         return {name: values[keep] * np.float32(2) for name, values in columns.items()}
 
     transform(
-        tmp_path / "in.ps",
-        tmp_path / "out.ps",
+        tmp_path / "in.pst",
+        tmp_path / "out.pst",
         func,
         stage_id=0x444C0001,
         frame_out="camera",
@@ -59,7 +59,7 @@ def test_transform(tmp_path):
             }
         },
     )
-    records = list(obdeect_stream.Reader(str(tmp_path / "out.ps")))
+    records = list(obdeect_stream.Reader(str(tmp_path / "out.pst")))
     assert [r["type"] for r in records] == [
         "stream", "run", "efficiency_status", "event", "telescope", "photons", "photons", "blob",
         "telescope_end", "event_end", "run_end",
@@ -87,12 +87,12 @@ def test_transform(tmp_path):
 
 def test_transform_keeps_existing_efficiency_status_first(tmp_path):
     _write(
-        tmp_path / "in.ps",
+        tmp_path / "in.pst",
         efficiency_status={"factors": "atmosphere", "atmosphere.state": "applied"},
     )
     transform(
-        tmp_path / "in.ps",
-        tmp_path / "out.ps",
+        tmp_path / "in.pst",
+        tmp_path / "out.pst",
         lambda t, c, m: c,
         stage_id=1,
         frame_out=2,
@@ -100,18 +100,18 @@ def test_transform_keeps_existing_efficiency_status_first(tmp_path):
     )
     efficiency_statuses = [
         r
-        for r in obdeect_stream.Reader(str(tmp_path / "out.ps"))
+        for r in obdeect_stream.Reader(str(tmp_path / "out.pst"))
         if r["type"] == "efficiency_status"
     ]
     assert [r["metadata"]["factors"] for r in efficiency_statuses] == ["atmosphere", "qe"]
 
 
 def test_transform_rejects_reapplied_factor(tmp_path):
-    _write(tmp_path / "in.ps", efficiency_status={"factors": "qe", "qe.state": "applied"})
+    _write(tmp_path / "in.pst", efficiency_status={"factors": "qe", "qe.state": "applied"})
     with pytest.raises(ValueError, match="already applied"):
         transform(
-            tmp_path / "in.ps",
-            tmp_path / "out.ps",
+            tmp_path / "in.pst",
+            tmp_path / "out.pst",
             lambda t, c, m: c,
             stage_id=1,
             frame_out="camera",
@@ -120,18 +120,18 @@ def test_transform_rejects_reapplied_factor(tmp_path):
 
 
 def test_transform_rejects_bad_arguments(tmp_path):
-    _write(tmp_path / "in.ps")
+    _write(tmp_path / "in.pst")
     for kwargs in (
         {"stage_id": -1, "frame_out": "camera"},
         {"stage_id": 1, "frame_out": "moon"},
         {"stage_id": 1, "frame_out": 9},
     ):
         with pytest.raises(ValueError):
-            transform(tmp_path / "in.ps", tmp_path / "o.ps", lambda t, c, m: c, **kwargs)
+            transform(tmp_path / "in.pst", tmp_path / "o.pst", lambda t, c, m: c, **kwargs)
     with pytest.raises(TypeError, match="float32"):
         transform(
-            tmp_path / "in.ps",
-            tmp_path / "o.ps",
+            tmp_path / "in.pst",
+            tmp_path / "o.pst",
             lambda t, c, m: {k: v.astype(np.float64) for k, v in c.items()},
             stage_id=1,
             frame_out="camera",
@@ -179,7 +179,7 @@ def test_conformance_streams():
 
 
 def test_transform_rejects_reapplied_factor_in_telescope_efficiency_status(tmp_path):
-    with obdeect_stream.Writer(str(tmp_path / "in.ps"), "pytest") as writer:
+    with obdeect_stream.Writer(str(tmp_path / "in.pst"), "pytest") as writer:
         writer.write("run", {})
         writer.write("event", {})
         writer.write("telescope", {"telescope_id": 1, "frame": 1})
@@ -189,8 +189,8 @@ def test_transform_rejects_reapplied_factor_in_telescope_efficiency_status(tmp_p
         writer.write("run_end", {})
     with pytest.raises(ValueError, match="already applied"):
         transform(
-            tmp_path / "in.ps",
-            tmp_path / "out.ps",
+            tmp_path / "in.pst",
+            tmp_path / "out.pst",
             lambda t, c, m: c,
             stage_id=1,
             frame_out="camera",
@@ -199,10 +199,10 @@ def test_transform_rejects_reapplied_factor_in_telescope_efficiency_status(tmp_p
 
 
 def test_transform_rejects_same_file_and_alias(tmp_path):
-    source = tmp_path / "in.ps"
+    source = tmp_path / "in.pst"
     _write(source)
     original = source.read_bytes()
-    link = tmp_path / "link.ps"
+    link = tmp_path / "link.pst"
     link.symlink_to(source)
     for target in (source, link):
         with pytest.raises(ValueError, match="same file"):
@@ -211,7 +211,7 @@ def test_transform_rejects_same_file_and_alias(tmp_path):
 
 
 def test_failed_writer_has_no_stream_end(tmp_path):
-    path = tmp_path / "partial.ps"
+    path = tmp_path / "partial.pst"
     with pytest.raises(RuntimeError, match="boom"):
         with obdeect_stream.Writer(str(path), "pytest") as writer:
             writer.write("run", {"run_number": 5})
@@ -221,7 +221,7 @@ def test_failed_writer_has_no_stream_end(tmp_path):
 
 
 def test_transform_indices_continue_across_array_reuses(tmp_path):
-    source = tmp_path / "reuse.ps"
+    source = tmp_path / "reuse.pst"
     with obdeect_stream.Writer(str(source), "pytest") as writer:
         writer.write("run", {"run_number": 5})
         writer.write("event", {"event_number": 1})
@@ -233,7 +233,7 @@ def test_transform_indices_continue_across_array_reuses(tmp_path):
             writer.write("telescope_end", {"telescope_id": 4, "photons": 6.0})
         writer.write("event_end", {})
         writer.write("run_end", {})
-    output = tmp_path / "out.ps"
+    output = tmp_path / "out.pst"
     transform(source, output, lambda tel, cols, info: cols, stage_id=1, frame_out="ground")
     firsts = [
         r["first_index"] for r in obdeect_stream.Reader(str(output)) if r["type"] == "photons"

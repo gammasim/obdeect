@@ -52,7 +52,5 @@ a1 and a2 with that width:
 Both are uncorrelated between photons, equal over the whole mirror and independent of
 wavelength. They describe the PSF core; a wide scattering halo is not modelled.
 
-Weights multiply the responses met (unless geometry only). Each random number comes from
-the Philox-4x32-10 generator, keyed by the seed, event and telescope (photon streams; 0
-otherwise), photon id (below 2^40) and stream. Results therefore do not depend on threads,
-blocks or photon order. Times use the group index stored in the model.
+Weights multiply the responses met (unless geometry only). Random numbers follow the common rules of
+[](../stream/random-numbers.md), so results do not depend on threads, blocks or photon order. Times use the group index stored in the model.

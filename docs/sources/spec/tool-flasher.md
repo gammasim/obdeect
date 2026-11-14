@@ -1,6 +1,6 @@
-# obdeect sources flasher (implementation)
+# flasher: specification
 
-User options and examples: [flasher](../programs/flasher.md). Writer A, producer
+Options and examples: [flasher](../programs/flasher.md). Writer A, producer
 `obdeect sources flasher`, `telescope_id = 1`, telescope at (0, 0, 0).
 
 ## Option parsing
@@ -54,14 +54,3 @@ User options and examples: [flasher](../programs/flasher.md). Writer A, producer
 
 Writer A. `observation_level_m` = `--altitude` or the type default; `atmosphere_id` =
 `--atmosphere`; `run_number` = `--run`; `wavelength_*` from the spectrum range.
-
-## Reference values
-
-- Dish defaults (20 events): rows per event about `2.5e6 umax / 2`, with
-  `umax = 1 - sqrt(1 - (R/d)^2)`, `R = 1.2`, `d = 16`. Every photon has `x = y = 0`,
-  `z = 16`, `zem = 2166`, `w = 1`, `t = 0`, `wavelength = 400`; `1 + cz` is uniform on
-  `[0, umax]`.
-- Secondary `--photons 1e5`: exactly `4 x 100000` rows, frame 2; first block of 100000 rows at
-  `(0.1462, 0.1462, 0.5353)` m.
-- `--fire demo --photons 1e3`: 8000 rows; row 0 `t = 0`, row 1000 `t = 10`, row 2000
-  `t = 20`, row 3000 `t = 30`, rows 4000..7999 `t = 50`.

@@ -1,6 +1,7 @@
 # Single scattering
 
-Optional single scattering of light-source photons (off by default). Each primary photon is
+Light that a source emits can scatter in the air towards the telescope. obdeect computes this
+optional single scattering (off by default) for light-source photons. Each primary photon is
 scattered at N_s points along its path. Each scattering point gives one photon per telescope
 sphere, aimed at the sphere. The primary photon is unchanged.
 
@@ -32,7 +33,7 @@ integer nm (clamped to the table); each quantity linear in log10(altitude), clam
 altitudes. The table is site independent. The depth above the top node is taken as the top value,
 so the top node must be high enough that tau there is negligible.
 
-`cpp/tests/data/scattering_exponential.dat` is an exponential example, not a fitted model:
+`cpp/tests/data/scattering_exponential.dat` is an exponential example table, not a fitted model:
 tau_mol(h) = 0.00865 (lambda/um)^-4.05 exp(-h/8 km), tau_aer(h) = 0.1 (lambda/550 nm)^-1.3
 exp(-h/1.5 km), ssa = 0.9, g = 0.65, 340 to 400 nm, nodes 0.1 to 60 km.
 
@@ -105,14 +106,7 @@ t_in = 0 ns, emission -> point 15000 m  =>  t = 15000 / c = 50034.6 ns
 - Scattered photons need wavelengths; assign them before this step.
 - The primary photon is not changed; its extinction is applied by the extinction step.
 
-## Random numbers
-
-Philox (obdeect stream `uniform4`), stage `DLUF`, stream `stream_scattering` (3), keyed on (seed,
-event, photon index = index of the primary photon in the event). Deviates 0..N_s-1 place the
-scattering points; deviates N_s + 2 (j n_tel + t) and +1 are the aim-point offsets of point j and
-telescope t. The output does not depend on chunk splits when chunks are passed in order.
-
-## Example
+## Python example
 
 ```python
 import obdeect.propagation
@@ -128,23 +122,4 @@ out = obdeect.propagation.scatter(
 photons = out[1]  # dict of float32 arrays
 ```
 
-## Checks
-
-- Phase functions: normalisation and mean cosine (`test_scattering.cpp`).
-- Vertical beam, one telescope at 3 km, ground level, 355 nm, molecular only: Monte Carlo per-primary
-  mean 1.736507e-8 ± 1.5e-12 against the numerical integral 1.736294e-8 (1.4 sigma). The numerical
-  integral without beam attenuation is 1.755344e-8; the sum over beam steps (below) gives 1.755214e-8
-  (7e-5 relative). The beam attenuation (1.1 %) is the only difference, as the sum neglects it.
-- Example table, aerosol and molecular, 355 nm, 128 points: MC 4.041856e-7 ± 4.7e-12 against the
-  integral 4.041797e-7 (1.3 sigma).
-- Chunk splits give bit-identical output; zero optical depth gives no photons.
-
-Sum over beam steps: the expected photons per primary, summed over 1 m steps. Density per step is
-`nphot_per_cm * hscale * steplength_cm` with `hscale = exp(-z/7500 m)`; the angular distribution is
-Rayleigh, (3/16π)(1 + cos²) integrated over azimuth; each photon reaches the sphere with its solid
-angle. It matches the analytic integral without attenuation to 1e-4.
-
-## References
-
-- `cpp/include/obdeect/propagation/scattering.hpp`, `python/obdeect/propagation/scattering.py`.
-- Transmission table and optical depths: [extinction](extinction.md).
+Random numbers: [](../stream/random-numbers.md). The transmission table and the optical depths are described in [](extinction.md).

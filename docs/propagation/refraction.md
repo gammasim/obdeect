@@ -1,7 +1,8 @@
 # Refraction and timing
 
-Ray bending and air delay from an atmospheric profile. Light sources and photons emitted in the air
-use this path. Photons of a run with `refraction_applied` = 1 are not refracted again.
+Air bends light and slows it down. This page describes how obdeect computes the bending of a ray and
+the air delay from an atmospheric profile. The atmosphere stage uses it for light sources and for
+photons emitted in the air. Photons of a run with `refraction_applied` = 1 are not refracted again.
 
 ## Input table
 
@@ -89,9 +90,8 @@ Vertical photons have no displacement. Their travel-time excess over vacuum equa
 `straight_path_air_delay_ns` (4.02 ns from 10 km, 5.77 ns from 20 km).
 
 At large zenith angles the excess can be negative: the ray bends towards the vertical, so its path
-is shorter than the straight line, which outweighs the slower speed in air. Cross-check: the tests
-integrate the exact integrands numerically and agree with the series to 1e-6 m and 1e-6 ns on the
-ECMWF table.
+is shorter than the straight line, which outweighs the slower speed in air. The series agrees with a numerical integration of the exact integrands to 1e-6 m and 1e-6 ns on
+the ECMWF table.
 
 ## Timing
 
@@ -118,11 +118,3 @@ ECMWF table.
 Refraction tables depend on the observation level: build one `RefractionTables` per level.
 `RefractionTables.etadsn` is the Gladstone-Dale ratio `(n-1)/density` (about 0.23 cm³/g) at the
 first level more than 1.5 km above the observation level.
-
-## Tests
-
-Analytic checks in `cpp/tests/test_physics.cpp`: constant n gives a straight line and `T = L n / c`;
-exponential atmosphere with analytic integrals of density, thickness and n-1; small-angle limit;
-rotation symmetry; monotonic growth with zenith angle and height; agreement with direct numerical
-integration of Snell's law (synthetic and ECMWF profile). Example profile:
-`cpp/tests/data/atmprof_ecmwf_north_winter_fixed.dat`.

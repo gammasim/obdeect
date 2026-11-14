@@ -3,15 +3,13 @@
 Cherenkov light of one muon-like track, as a sky-frame photon stream filtered to a telescope
 sphere at the origin. Replaces the earlier fake-muon program; options keep their names.
 
-```bash
-obdeect sources muon-track -x 70 -h 3000 --theta 0 -o muon-track.ps
-obdeect sources muon-track --help
+```console
+$ obdeect sources muon-track -x 70 -h 3000 --theta 0 -o muon-track.pst
+$ obdeect sources muon-track -x 70 -N 10 --seed 3 -o muon-track.pst 2> summary.txt
+$ obdeect sources muon-track -x 70 --index-profile atm_index.txt | obdeect stream cat --summary -
 ```
 
-```bash
-obdeect sources muon-track -x 70 -N 10 --seed 3 -o muon-track.ps 2> summary.txt
-obdeect sources muon-track -x 70 --index-profile atm_index.txt | obdeect stream cat --summary -
-```
+The output is a photon stream, not an image; `.pst` is only a naming convention.
 
 ## Geometry and yield
 
