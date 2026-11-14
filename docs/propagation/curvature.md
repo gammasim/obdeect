@@ -33,7 +33,8 @@ CORSIKA's CURVED option, constant `obdeect::stream::earth_radius_m`.
 | `spherical` | 0 (required) | The stage applies curvature: emission altitude from the sphere, per-telescope local vertical and telescope altitude, curved extinction. The output run record gets `curvature_applied` = 1. | sky → G |
 
 The run flag `curvature_applied` is read from the EventIO input: the EventIO importer sets it to 1
-when EVTH word 79 equals 2 (CORSIKA CURVED). The stage requires the flag in `corsika` mode and
+when EVTH word 79 equals 1 (CORSIKA CURVED, downgoing primaries) or 2 (CURVED with upgoing
+primaries also allowed). The stage requires the flag in `corsika` mode and
 rejects it in the other two modes, so curvature is neither applied twice nor forgotten.
 
 ## Slant depth

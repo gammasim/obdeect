@@ -44,7 +44,7 @@ inline constexpr std::size_t evth_first_height = 6; // word 7 [cm]
 inline constexpr std::size_t evth_zenith = 10;      // word 11 [rad]
 inline constexpr std::size_t evth_azimuth = 11;     // word 12 [rad, CORSIKA convention]
 inline constexpr std::size_t evth_flags = 76;       // word 77: integer flags (see below)
-// Word 79: CURVED flag (0 = standard, 2 = curved).
+// Word 79: CURVED flag (0 = standard, 1 = curved, 2 = curved with upgoing primaries).
 inline constexpr std::size_t evth_curved_flag = 78;
 inline constexpr std::size_t evth_wavelength_min = 95; // word 96 [nm]
 inline constexpr std::size_t evth_wavelength_max = 96; // word 97 [nm]
@@ -333,10 +333,10 @@ private:
       metadata["atmosphere_id"] = (flags >> corsika_word::evth_flag_atmosphere_shift) &
                                   corsika_word::evth_flag_atmosphere_mask;
       metadata["refraction_applied"] = (flags >> corsika_word::evth_flag_refraction_bit) & 1;
+      // CURVED: 1 = downgoing primaries, 2 = upgoing primaries also allowed.
+      const int curved = round_to_int(header_word(*evth, corsika_word::evth_curved_flag, "EVTH"));
       metadata["curvature_applied"] =
-          round_to_int(header_word(*evth, corsika_word::evth_curved_flag, "EVTH")) == 2
-              ? std::int64_t{1}
-              : std::int64_t{0};
+          (curved == 1 || curved == 2) ? std::int64_t{1} : std::int64_t{0};
       metadata["wavelength_min_nm"] =
           static_cast<double>(header_word(*evth, corsika_word::evth_wavelength_min, "EVTH"));
       metadata["wavelength_max_nm"] =

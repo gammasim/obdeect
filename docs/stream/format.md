@@ -62,7 +62,7 @@ Run keys (from CORSIKA RUNH and TELPOS, or from obdeect sources): `run_number`,
 `telescope_r_m` (float arrays), `atmosphere_id`, `wavelength_min_nm`,
 `wavelength_max_nm`, `refraction_applied` (int 0/1), `curvature_applied` (int 0/1).
 `curvature_applied` is 1 if the producer already applied Earth curvature (CORSIKA CURVED
-option, EVTH word 79 = 2); sources write 0.
+option, EVTH word 79 = 1 or 2); sources write 0.
 
 Event keys (from CORSIKA EVTH and TELOFF): `event_number`,
 `primary_id` (CORSIKA particle code), `energy_gev`, `zenith_rad`,
