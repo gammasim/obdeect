@@ -895,9 +895,9 @@ void test_atmprof_before_stream_telpos() {
   for (const EventioBlock &block : read_blocks(run_adapter_with(records, options))) {
     types.push_back(block.type);
   }
-  const std::vector<std::uint32_t> expected = {iact::runh,   iact::inputcfg, iact::atmprof,
-                                               iact::telpos, iact::evth,     iact::teloff,
-                                               iact::telarray, iact::evte,   iact::rune};
+  const std::vector<std::uint32_t> expected = {iact::runh,     iact::inputcfg, iact::atmprof,
+                                               iact::telpos,   iact::evth,     iact::teloff,
+                                               iact::telarray, iact::evte,     iact::rune};
   CHECK(types == expected);
 }
 

@@ -909,7 +909,7 @@ private:
     end_event();
     ensure_run_headers();
     emit_atmprof(custom_profile_id); // only a run without events still has it pending
-    ensure_telpos(); // a run without events still has its telescope positions
+    ensure_telpos();                 // a run without events still has its telescope positions
     if (!have_rune_) {
       note_synthesised("RUNE");
       emit(run_end_block());
