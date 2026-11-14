@@ -86,7 +86,7 @@ valid = b"".join([
     record("stream_end"),
 ])
 
-#A record of unknown type(99) between two known ones must be skipped by readers.
+# A record of unknown type (99) between two known ones must be skipped by readers.
 unknown = struct.pack("<IHHQ", MAGIC, 99, 0, 3) + b"abc"
 valid = valid.replace(
     record("event_end", metadata({})), unknown + record("event_end", metadata({}))
