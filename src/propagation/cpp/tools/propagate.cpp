@@ -32,6 +32,7 @@ void usage() {
       "                       --seed N [--mode thinned|weighted] [--store-p]\n"
       "                       [--scattering FILE] [--scattering-points N]\n"
       "                       [--pathlen M] [--telescope-pathlen ID=M]...\n"
+      "                       [--curvature none|corsika|spherical] [--earth-radius-m M]\n"
       "                       [-i FILE|-] [-o FILE|-]\n");
 }
 
@@ -64,6 +65,15 @@ std::pair<std::uint32_t, double> parse_telescope_pathlen(const std::string &spec
   }
   return {static_cast<std::uint32_t>(id),
           parse_pathlen(spec.substr(equals + 1), "--telescope-pathlen M")};
+}
+
+// --curvature NAME: none, corsika or spherical.
+Curvature parse_curvature_flag(const std::string &text) {
+  try {
+    return parse_curvature(text);
+  } catch (const std::invalid_argument &) {
+    throw UsageError("--curvature is none, corsika or spherical: " + text);
+  }
 }
 
 std::uint32_t parse_points(const std::string &text) {
@@ -103,6 +113,8 @@ int main(int argc, char **argv) {
         double pathlen = 0.0;
         bool pathlen_given = false;
         std::map<std::uint32_t, double> telescope_pathlen;
+        Curvature curvature = Curvature::none;
+        std::optional<double> earth_radius;
         std::string input = "-";
         std::string output = "-";
 
@@ -157,6 +169,10 @@ int main(int argc, char **argv) {
                                  std::to_string(id));
               }
               telescope_pathlen[id] = metres;
+            } else if (arg == "--curvature") {
+              curvature = parse_curvature_flag(value("--curvature"));
+            } else if (arg == "--earth-radius-m") {
+              earth_radius = parse_double(value("--earth-radius-m"), "--earth-radius-m");
             } else if (arg == "-i") {
               input = value("-i");
             } else if (arg == "-o") {
@@ -207,6 +223,10 @@ int main(int argc, char **argv) {
           config.site_altitude_m = *site_altitude;
           config.default_pathlen_m = pathlen;
           config.telescope_pathlen_m = telescope_pathlen;
+          config.curvature = curvature;
+          if (earth_radius) {
+            config.earth_radius_m = *earth_radius;
+          }
           if (profile) {
             config.profile.emplace(AtmosphereProfile::from_file(*profile));
             config.profile_source = *profile;

@@ -52,24 +52,27 @@ def _executable():
     return exe
 
 
-def ground_stream(n, seed, telescopes=(1, 2), chunk_rows=65536):
-    """G-frame photons with positions, directions, altitudes and integer weights."""
+def ground_stream(n, seed, telescopes=(1, 2), chunk_rows=65536, curvature_applied=None):
+    """G-frame photons with positions, directions, altitudes and integer weights.
+
+    curvature_applied: run key (0 or 1) if not None, absent otherwise.
+    """
     rng = np.random.default_rng(seed)
     writer = StreamWriter()
-    writer.metadata(
-        "run",
-        {
-            "run_number": 1,
-            "observation_level_m": SITE_M,
-            "telescope_x_m": [100.0, -50.0],
-            "telescope_y_m": [0.0, 300.0],
-            "telescope_z_m": [0.0, 0.0],
-            "telescope_r_m": [12.0, 12.0],
-            "refraction_applied": 0,
-            "wavelength_min_nm": 250.0,
-            "wavelength_max_nm": 700.0,
-        },
-    )
+    run = {
+        "run_number": 1,
+        "observation_level_m": SITE_M,
+        "telescope_x_m": [100.0, -50.0],
+        "telescope_y_m": [0.0, 300.0],
+        "telescope_z_m": [0.0, 0.0],
+        "telescope_r_m": [12.0, 12.0],
+        "refraction_applied": 0,
+        "wavelength_min_nm": 250.0,
+        "wavelength_max_nm": 700.0,
+    }
+    if curvature_applied is not None:
+        run["curvature_applied"] = curvature_applied
+    writer.metadata("run", run)
     writer.metadata("event", {"event_number": 5})
     for telescope in telescopes:
         writer.metadata("telescope", {"telescope_id": telescope, "frame": 1})
@@ -624,23 +627,26 @@ def test_executable_rejects_invalid_pathlen(args):
 PROFILE_PATH = DATA / "atmprof_ecmwf_north_winter_fixed.dat"
 
 
-def sky_stream(n, seed):
-    """Sky-frame photons with random positions and downward directions, telescope 1 and 2."""
+def sky_stream(n, seed, curvature_applied=None):
+    """Sky-frame photons with random positions and downward directions, telescope 1 and 2.
+
+    curvature_applied: run key (0 or 1) if not None, absent otherwise.
+    """
     rng = np.random.default_rng(seed)
     writer = StreamWriter()
-    writer.metadata(
-        "run",
-        {
-            "run_number": 1,
-            "observation_level_m": SITE_M,
-            "telescope_x_m": [100.0, -50.0],
-            "telescope_y_m": [0.0, 300.0],
-            "telescope_z_m": [0.0, 0.0],
-            "refraction_applied": 0,
-            "wavelength_min_nm": 250.0,
-            "wavelength_max_nm": 700.0,
-        },
-    )
+    run = {
+        "run_number": 1,
+        "observation_level_m": SITE_M,
+        "telescope_x_m": [100.0, -50.0],
+        "telescope_y_m": [0.0, 300.0],
+        "telescope_z_m": [0.0, 0.0],
+        "refraction_applied": 0,
+        "wavelength_min_nm": 250.0,
+        "wavelength_max_nm": 700.0,
+    }
+    if curvature_applied is not None:
+        run["curvature_applied"] = curvature_applied
+    writer.metadata("run", run)
     writer.metadata("event", {"event_number": 5})
     for telescope in (1, 2):
         writer.metadata("telescope", {"telescope_id": telescope, "frame": 0})
@@ -846,3 +852,166 @@ def test_executable_geometry_only_accepts_weighted_mode(tmp_path):
         str(tmp_path / "out.pst"),
     ]
     assert subprocess.run(command, capture_output=True, check=False).returncode == 0
+
+
+def test_curvature_default_refuses_corsika_curved_input(tmp_path):
+    source = tmp_path / "in.pst"
+    source.write_bytes(ground_stream(100, seed=1, curvature_applied=1))
+    out = tmp_path / "out.pst"
+    options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 1}
+    with pytest.raises(ValueError, match="CORSIKA CURVED"):
+        obdeect_propagation.propagate(source, out, **options)
+    summary = obdeect_propagation.propagate(source, out, curvature="corsika", **options)
+    assert summary["photons_in"] == 200
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"curvature": "curved"}, "curvature must be one of"),
+        ({"curvature": "Corsika"}, "curvature must be one of"),
+        ({"curvature": "corsika", "earth_radius_m": 1e5}, "above 1e6 m"),
+        ({"curvature": "spherical", "earth_radius_m": float("nan")}, "above 1e6 m"),
+    ],
+)
+def test_curvature_rejects_invalid_settings(tmp_path, kwargs, message):
+    source = tmp_path / "in.pst"
+    source.write_bytes(ground_stream(10, seed=1, curvature_applied=1))
+    with pytest.raises(ValueError, match=message):
+        obdeect_propagation.propagate(
+            source,
+            tmp_path / "out.pst",
+            transmission=TABLE_PATH,
+            site_altitude_m=SITE_M,
+            seed=1,
+            **kwargs,
+        )
+
+
+def test_spherical_needs_uncurved_input_and_no_profile(tmp_path):
+    source = tmp_path / "in.pst"
+    options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 1}
+    source.write_bytes(sky_stream(10, seed=1, curvature_applied=1))
+    with pytest.raises(ValueError, match="already applied"):
+        obdeect_propagation.propagate(
+            source, tmp_path / "out.pst", curvature="spherical", **options
+        )
+    source.write_bytes(sky_stream(10, seed=1))
+    with pytest.raises(ValueError, match="curvature_applied"):
+        obdeect_propagation.propagate(
+            source, tmp_path / "out.pst", curvature="spherical", **options
+        )
+    source.write_bytes(sky_stream(10, seed=1, curvature_applied=0))
+    with pytest.raises(ValueError, match="not implemented"):
+        obdeect_propagation.propagate(
+            source, tmp_path / "out.pst", curvature="spherical", profile=PROFILE_PATH, **options
+        )
+
+
+def test_spherical_status_and_run_record(tmp_path):
+    source = tmp_path / "in.pst"
+    source.write_bytes(sky_stream(500, seed=3, curvature_applied=0))
+    out = tmp_path / "out.pst"
+    obdeect_propagation.propagate(
+        source,
+        out,
+        transmission=TABLE_PATH,
+        site_altitude_m=SITE_M,
+        seed=3,
+        curvature="spherical",
+        earth_radius_m=6.0e6,
+    )
+    records = read_records(out.read_bytes())
+    status = _efficiency_status(records)
+    assert status["atmosphere.geometry"] == "spherical"
+    assert status["atmosphere.earth_radius_m"] == pytest.approx(6.0e6)
+    run = next(r["metadata"] for r in records if r["type"] == "run")
+    assert run["curvature_applied"] == 1
+
+
+def test_corsika_status_and_no_status_without_curvature(tmp_path):
+    options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 2}
+    corsika_in = tmp_path / "corsika.pst"
+    corsika_in.write_bytes(ground_stream(100, seed=2, curvature_applied=1))
+    corsika_out = tmp_path / "corsika_out.pst"
+    obdeect_propagation.propagate(corsika_in, corsika_out, curvature="corsika", **options)
+    status = _efficiency_status(read_records(corsika_out.read_bytes()))
+    assert status["atmosphere.geometry"] == "corsika-curved"
+    assert status["atmosphere.earth_radius_m"] == pytest.approx(6371315.0)
+
+    plain_in = tmp_path / "plain.pst"
+    plain_in.write_bytes(ground_stream(100, seed=2))
+    plain_out = tmp_path / "plain_out.pst"
+    obdeect_propagation.propagate(plain_in, plain_out, **options)
+    status = _efficiency_status(read_records(plain_out.read_bytes()))
+    assert "atmosphere.geometry" not in status
+    assert "atmosphere.earth_radius_m" not in status
+
+
+def test_spherical_geometry_only_is_allowed(tmp_path):
+    source = tmp_path / "in.pst"
+    source.write_bytes(sky_stream(200, seed=4, curvature_applied=0))
+    summary = obdeect_propagation.propagate(
+        source,
+        tmp_path / "out.pst",
+        site_altitude_m=SITE_M,
+        seed=4,
+        extinction=False,
+        curvature="spherical",
+    )
+    assert summary["photons_in"] == 400
+
+
+def test_executable_curvature_matches_api(tmp_path):
+    exe = _executable()
+    source = tmp_path / "in.pst"
+    source.write_bytes(sky_stream(2000, seed=5, curvature_applied=0))
+    api_out = tmp_path / "api.pst"
+    obdeect_propagation.propagate(
+        source,
+        api_out,
+        transmission=TABLE_PATH,
+        site_altitude_m=SITE_M,
+        seed=7,
+        curvature="spherical",
+        earth_radius_m=6.0e6,
+    )
+    cli_out = tmp_path / "cli.pst"
+    command = [
+        exe,
+        "--transmission",
+        str(TABLE_PATH),
+        "--site-altitude",
+        str(SITE_M),
+        "--seed",
+        "7",
+        "--curvature",
+        "spherical",
+        "--earth-radius-m",
+        "6000000",
+        "-i",
+        str(source),
+        "-o",
+        str(cli_out),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert cli_out.read_bytes() == api_out.read_bytes()
+
+
+def test_executable_rejects_unknown_curvature(tmp_path):
+    exe = _executable()
+    command = [
+        exe,
+        "--transmission",
+        str(TABLE_PATH),
+        "--site-altitude",
+        str(SITE_M),
+        "--seed",
+        "1",
+        "--curvature",
+        "flat",
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, input="", check=False)
+    assert result.returncode == 2, result.stderr
+    assert "--curvature" in result.stderr

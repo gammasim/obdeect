@@ -81,7 +81,7 @@ endif()
 if(OBDEECT_PROPAGATION_BUILD_TESTING)
   enable_testing()
   foreach(test_name version transmission thinning pipeline profile refraction timing
-                    propagator scattering stream_contract physics)
+                    propagator scattering stream_contract physics curvature curvature_modes)
     add_executable(obdeect_propagation_test_${test_name} cpp/tests/test_${test_name}.cpp)
     target_link_libraries(obdeect_propagation_test_${test_name} PRIVATE obdeect_propagation_core)
     # check.hpp lives with the stream tests; tests are built from the repository only, never from an sdist.

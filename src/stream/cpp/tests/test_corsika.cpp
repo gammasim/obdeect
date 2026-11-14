@@ -42,16 +42,17 @@ EventioBlock runh_block() {
   return make_float_block(iact::runh, 12345, w);
 }
 
-EventioBlock evth_block(float event) {
+EventioBlock evth_block(float event, float curved_flag = 0.0F) {
   std::vector<float> w(273, 0.0F);
   w[1] = event;
-  w[2] = 14.0F;      // gamma
-  w[3] = 1000.0F;    // energy [GeV]
-  w[6] = 2500000.0F; // first interaction at 25 km [cm]
-  w[10] = 0.3F;      // zenith [rad]
-  w[11] = 1.2F;      // azimuth [rad]
-  w[76] = 5136.0F;   // atmosphere 5 (bits 11-20), refraction (bit 5)
-  w[95] = 250.0F;    // Cherenkov wavelength range [nm]
+  w[2] = 14.0F;        // gamma
+  w[3] = 1000.0F;      // energy [GeV]
+  w[6] = 2500000.0F;   // first interaction at 25 km [cm]
+  w[10] = 0.3F;        // zenith [rad]
+  w[11] = 1.2F;        // azimuth [rad]
+  w[76] = 5136.0F;     // atmosphere 5 (bits 11-20), refraction (bit 5)
+  w[78] = curved_flag; // word 79: CURVED flag (0 = standard, 1 = curved, 2 = curved with upgoing)
+  w[95] = 250.0F;      // Cherenkov wavelength range [nm]
   w[96] = 800.0F;
   return make_float_block(iact::evth, static_cast<std::uint32_t>(event), w);
 }
@@ -110,10 +111,10 @@ std::string serialize(const std::vector<EventioBlock> &blocks) {
   return out.str();
 }
 
-std::string build_stream_a() {
+std::string build_stream_a(float curved_flag = 0.0F) {
   return serialize(
       {runh_block(), make_block(iact::inputcfg, 0, 0, Bytes{'R', 'U', 'N', '\n'}), telpos_block(),
-       evth_block(1), teloff_block(),
+       evth_block(1, curved_flag), teloff_block(),
        make_container(iact::telarray, 0, 0,
                       {long_block(0, 3.0F, tel0_bunches), long_block(1, 2.0F, tel1_bunches)}),
        evte_block(1), rune_block()});
@@ -219,6 +220,7 @@ void stream_a_records() {
   CHECK(meta<std::vector<double>>(run, "telescope_z_m") == (std::vector<double>{18.0, 19.0, 20.0}));
   CHECK(meta<std::int64_t>(run, "atmosphere_id") == 5);
   CHECK(meta<std::int64_t>(run, "refraction_applied") == 1);
+  CHECK(meta<std::int64_t>(run, "curvature_applied") == 0);
   CHECK(meta<double>(run, "wavelength_min_nm") == 250.0);
   CHECK(meta<double>(run, "wavelength_max_nm") == 800.0);
 
@@ -265,6 +267,24 @@ void stream_a_records() {
   const Record &telpos = records[3];
   CHECK(telpos.blob_eventio_type == iact::telpos);
   CHECK(telpos.blob == telpos_block().raw());
+}
+
+void curvature_flag_is_read_from_evth() {
+  const std::vector<Record> standard = convert(build_stream_a(0.0F));
+  CHECK(!standard.empty() && standard.front().type == RecordType::run);
+  if (standard.empty() || standard.front().type != RecordType::run) {
+    return;
+  }
+  CHECK(meta<std::int64_t>(standard.front().metadata, "curvature_applied") == 0);
+
+  for (const float flag : {1.0F, 2.0F}) {
+    const std::vector<Record> curved = convert(build_stream_a(flag));
+    CHECK(!curved.empty() && curved.front().type == RecordType::run);
+    if (curved.empty() || curved.front().type != RecordType::run) {
+      return;
+    }
+    CHECK(meta<std::int64_t>(curved.front().metadata, "curvature_applied") == 1);
+  }
 }
 
 void stream_a_round_trips_byte_identically() {
@@ -521,6 +541,7 @@ int main() {
     units_are_double_then_float();
     float_round_trip_is_within_one_ulp();
     stream_a_records();
+    curvature_flag_is_read_from_evth();
     stream_a_round_trips_byte_identically();
     stream_b_records_and_split_mode();
     split_mode_is_written_as_normal_container();

@@ -11,6 +11,7 @@ from collections.abc import Mapping, Sequence
 from obdeect.propagation import _core
 
 MODES = ("thinned", "weighted")
+CURVATURES = ("none", "corsika", "spherical")
 DEFAULT_SCATTERING_POINTS = 8
 
 
@@ -31,6 +32,8 @@ def propagate(
     pathlen_m: float | None = None,
     telescope_pathlen_m: Mapping[int, float] | None = None,
     extinction: bool = True,
+    curvature: str = "none",
+    earth_radius_m: float | None = None,
 ) -> dict[str, float]:
     """Run the atmosphere stage on a photon stream file.
 
@@ -65,6 +68,15 @@ def propagate(
             weight and the efficiency status records ``atmosphere`` as pending. Cannot be
             combined with transmission, envelope, mode="thinned", scattering, store_p or the
             path options.
+        curvature: Earth curvature of the atmosphere (extinction only). ``"none"`` (default):
+            plane-parallel, input with ``curvature_applied = 1`` is rejected. ``"corsika"``:
+            photons from CORSIKA with the CURVED option (``curvature_applied = 1``, frame G);
+            the curved slant depth replaces the plane-parallel airmass. ``"spherical"``: photons
+            without curvature (``curvature_applied = 0``); the curvature is applied to the
+            emission altitudes and the local vertical of each telescope. Not combined with
+            scattering; ``"spherical"`` is also rejected with a profile.
+        earth_radius_m: Earth radius [m] for the curved modes; must be above 1e6 m. Default
+            None: the CORSIKA CURVED radius (6371315 m).
 
     Returns:
         Dict with photons_in, photons_out, dropped (sky-frame photons not reaching the
@@ -77,6 +89,8 @@ def propagate(
     """
     if mode is not None and mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, not {mode!r}")
+    if curvature not in CURVATURES:
+        raise ValueError(f"curvature must be one of {CURVATURES}, not {curvature!r}")
     if extinction:
         if transmission is None:
             raise ValueError("transmission is required (or extinction=False)")
@@ -117,6 +131,8 @@ def propagate(
             0.0 if pathlen_m is None else float(pathlen_m),
             pathlens,
             not extinction,
+            curvature,
+            None if earth_radius_m is None else float(earth_radius_m),
         )
     )
 

@@ -29,6 +29,7 @@
 #include "obdeect/propagation/transmission.hpp"
 #include "obdeect/propagation/wavelength.hpp"
 
+#include "obdeect/stream/constants.hpp"
 #include "obdeect/stream/format.hpp"
 #include "obdeect/stream/photons.hpp"
 #include "obdeect/stream/stream.hpp"
@@ -54,6 +55,30 @@
 namespace obdeect::propagation {
 
 enum class OutputMode { thinned, weighted };
+
+// Earth curvature of the atmosphere (extinction only; see docs/extinction.md). The modes are
+// explicit: the input run key curvature_applied says which geometry the photons have.
+//   none:      plane-parallel atmosphere. Input with curvature_applied = 1 is rejected.
+//   corsika:   photons from CORSIKA with the CURVED option (curvature_applied = 1, frame G, zem
+//              above sea level). Only the airmass is replaced by the curved slant depth.
+//   spherical: photons not from CORSIKA CURVED (curvature_applied = 0). The stage applies the
+//              curvature to the sky-to-ground geometry (emission altitudes, local vertical).
+enum class Curvature { none, corsika, spherical };
+
+// "none", "corsika" or "spherical"; throws std::invalid_argument for any other text.
+inline Curvature parse_curvature(std::string_view text) {
+  if (text == "none") {
+    return Curvature::none;
+  }
+  if (text == "corsika") {
+    return Curvature::corsika;
+  }
+  if (text == "spherical") {
+    return Curvature::spherical;
+  }
+  throw std::invalid_argument("curvature must be none, corsika or spherical: '" +
+                              std::string(text) + "'");
+}
 
 // An envelope factor f^env(lambda) of a later efficiency (efficiency_status state `envelope`).
 // The stage applies the product of all envelope factors. name: [A-Za-z0-9_-]+.
@@ -95,6 +120,10 @@ struct PropagatorConfig {
   ScatteringConfig scattering;
   std::optional<ScatteringTable> scattering_table;
   std::string scattering_source; // efficiency_status provenance, e.g. the table file name
+  // Earth curvature (see Curvature). earth_radius_m: Earth radius R [m], used by corsika (the
+  // efficiency status) and spherical. Must be finite and above 1e6 m.
+  Curvature curvature{Curvature::none};
+  double earth_radius_m{obdeect::stream::earth_radius_m};
 };
 
 struct PropagationSummary {
@@ -196,6 +225,7 @@ public:
          config_.scattering.points_per_photon > max_points_per_photon)) {
       throw std::invalid_argument("scattering needs 1 to 1024 points per photon");
     }
+    check_curvature();
     for (std::size_t i = 0; i < config_.envelope.size(); ++i) {
       const auto &name = config_.envelope[i].name;
       if (!valid_factor_name(name)) {
@@ -258,6 +288,7 @@ public:
 
 private:
   static constexpr std::int64_t max_u32 = 0xFFFFFFFFLL;
+  static constexpr double min_earth_radius_m = 1e6;
 
   // One record of the stream (process without the event hold).
   template <class Sink> void process_record(const obdeect::stream::Record &record, Sink &sink) {
@@ -333,8 +364,9 @@ private:
     double altitude_m{}; // a.s.l. of the telescope plane
     double pathlen_m{};  // path inside the telescope [m]
     double x_m{}, y_m{}, z_m{};
-    const TelescopeDepths *depths{}; // cached per (altitude, pathlen) (depths_cache_)
-    std::uint64_t out_index{};       // output rows so far (first_index of the next chunk)
+    double nx{0.0}, ny{0.0}, nz{1.0}; // local vertical of the telescope (frame G)
+    const TelescopeDepths *depths{};  // cached per (altitude, pathlen) (depths_cache_)
+    std::uint64_t out_index{};        // output rows so far (first_index of the next chunk)
     double weight_out{};
   };
 
@@ -363,6 +395,52 @@ private:
   static void check_pathlen(double pathlen_m) {
     if (!std::isfinite(pathlen_m) || pathlen_m < 0.0) {
       throw std::invalid_argument("pathlen must be finite and not negative");
+    }
+  }
+
+  // Config-only checks of the curvature modes (the input is checked in begin_run).
+  void check_curvature() const {
+    if (!std::isfinite(config_.earth_radius_m) || !(config_.earth_radius_m > min_earth_radius_m)) {
+      throw std::invalid_argument("earth radius must be finite and above 1e6 m");
+    }
+    if (config_.curvature == Curvature::none) {
+      return;
+    }
+    if (config_.scattering.enabled) {
+      throw std::invalid_argument("curved atmosphere cannot be combined with scattering");
+    }
+    if (config_.curvature == Curvature::spherical && config_.profile) {
+      throw std::invalid_argument(
+          "curvature mode 'spherical' with a profile: curved refraction and "
+          "air delay are not implemented yet");
+    }
+  }
+
+  // The run key curvature_applied (optional: nullopt if the run lacks it) must match the mode.
+  void check_run_curvature(std::optional<std::int64_t> applied) const {
+    switch (config_.curvature) {
+    case Curvature::none:
+      if (applied == 1) {
+        throw std::invalid_argument("input photons were produced with CORSIKA CURVED "
+                                    "(curvature_applied = 1): select curvature mode 'corsika'");
+      }
+      break;
+    case Curvature::corsika:
+      if (applied != 1) {
+        throw std::invalid_argument("curvature mode 'corsika' needs a run with curvature_applied = "
+                                    "1 (CORSIKA CURVED option)");
+      }
+      break;
+    case Curvature::spherical:
+      if (!applied) {
+        throw std::invalid_argument("curvature mode 'spherical' needs the run key "
+                                    "curvature_applied (0: no curvature in the input)");
+      }
+      if (*applied == 1) {
+        throw std::invalid_argument(
+            "curvature is already applied in the input (curvature_applied = 1)");
+      }
+      break;
     }
   }
 
@@ -454,6 +532,14 @@ private:
     if (std::abs(observation_m - config_.site_altitude_m) > altitude_tolerance_m) {
       throw std::invalid_argument("run observation level does not match the site altitude");
     }
+    std::optional<std::int64_t> curvature_applied;
+    if (metadata.count("curvature_applied") != 0) {
+      curvature_applied = checked_integer(metadata, "curvature_applied", 1);
+    }
+    check_run_curvature(curvature_applied);
+    if (config_.curvature == Curvature::spherical) {
+      out["curvature_applied"] = std::int64_t{1}; // curvature is applied from here on
+    }
     bool refraction_applied = false;
     if (metadata.count("refraction_applied") != 0) {
       refraction_applied = checked_integer(metadata, "refraction_applied", 1) == 1;
@@ -544,6 +630,11 @@ private:
                                                            ? std::string("atmospheric profile")
                                                            : config_.profile_source;
     }
+    if (config_.curvature != Curvature::none) {
+      efficiency_status["atmosphere.geometry"] =
+          std::string(config_.curvature == Curvature::corsika ? "corsika-curved" : "spherical");
+      efficiency_status["atmosphere.earth_radius_m"] = config_.earth_radius_m;
+    }
     efficiency_status["wavelength.state"] = std::string("applied");
     efficiency_status["wavelength.source"] = std::string("density 1/lambda^2, continuous");
     efficiency_status["wavelength.range_nm"] = std::vector<double>{range.lo_nm, range.hi_nm};
@@ -591,6 +682,11 @@ private:
         frame != static_cast<std::int64_t>(obdeect::stream::Frame::ground)) {
       throw std::invalid_argument("the atmosphere stage needs photons in frame sky or G");
     }
+    if (config_.curvature == Curvature::corsika &&
+        frame == static_cast<std::int64_t>(obdeect::stream::Frame::sky)) {
+      throw std::invalid_argument("curvature mode 'corsika' needs photons in frame G (CORSIKA "
+                                  "CURVED photons have no sky-frame geometry)");
+    }
     if (id < 1 || static_cast<std::size_t>(id) > run_->x_m.size()) {
       throw std::invalid_argument("telescope_id outside the run's telescope positions (1-based)");
     }
@@ -601,6 +697,24 @@ private:
     telescope_.y_m = run_->y_m[index];
     telescope_.z_m = run_->z_m[index];
     telescope_.altitude_m = run_->observation_m + telescope_.z_m; // the run's observation level
+    telescope_.nx = 0.0;
+    telescope_.ny = 0.0;
+    telescope_.nz = 1.0;
+    if (config_.curvature == Curvature::spherical) {
+      // Position relative to C = (0, 0, -(R + observation level)): v = (x, y, R + a), a = altitude
+      // of the flat plane. The altitude is |v| - R and n = v / |v|.
+      const double radius = config_.earth_radius_m + telescope_.altitude_m;
+      const double rho2 = telescope_.x_m * telescope_.x_m + telescope_.y_m * telescope_.y_m;
+      const double norm = std::sqrt(rho2 + radius * radius);
+      telescope_.altitude_m =
+          spherical_altitude_m(rho2, telescope_.altitude_m, config_.earth_radius_m);
+      telescope_.nx = telescope_.x_m / norm;
+      telescope_.ny = telescope_.y_m / norm;
+      telescope_.nz = radius / norm;
+    }
+    if (config_.curvature != Curvature::none) {
+      validate(curved_path(telescope_));
+    }
     telescope_.pathlen_m = run_->pathlen_m[index];
     if (config_.geometry_only) {
       telescope_.depths = nullptr;
@@ -676,6 +790,12 @@ private:
     return out;
   }
 
+  // Spherical atmosphere of the open telescope (curvature modes other than none).
+  [[nodiscard]] CurvedPath curved_path(const Telescope &telescope) const {
+    return CurvedPath{config_.earth_radius_m, telescope.altitude_m, telescope.nx, telescope.ny,
+                      telescope.nz};
+  }
+
   // Geometry of the open telescope for sky-frame photons (refraction tables built on first use).
   SkyPlane sky_plane() {
     SkyPlane plane;
@@ -683,6 +803,9 @@ private:
     plane.telescope_y_m = telescope_.y_m;
     plane.telescope_z_m = telescope_.z_m;
     plane.observation_m = run_->observation_m;
+    if (config_.curvature == Curvature::spherical) {
+      plane.earth_radius_m = config_.earth_radius_m;
+    }
     if (config_.profile) {
       plane.profile = &*config_.profile;
       if (!run_->refraction_applied) {
@@ -898,6 +1021,9 @@ private:
     settings.event = event_number_;
     settings.telescope = telescope_.id;
     settings.weighted = config_.mode == OutputMode::weighted;
+    if (config_.curvature != Curvature::none) {
+      settings.curved = curved_path(telescope_);
+    }
     std::vector<obdeect::stream::PhotonChunk> outputs =
         apply_extinction_chunk(std::move(chunk_), settings, telescope_.out_index);
     for (auto &out : outputs) {

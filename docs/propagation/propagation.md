@@ -16,7 +16,7 @@ Per telescope and event, without scattering:
 |---|---|---|---|
 | 1 | Straight line from the emission point to the horizontal plane through the telescope sphere centre; bending (refraction) unless the run says it is applied; air delay | sky → G | [](refraction.md) |
 | 2 | Wavelength from 1/lambda² for rows without one | G | [](extinction.md) |
-| 3 | Extinction p_atm (plane-parallel airmass, zem = emission altitude) | G | [](extinction.md) |
+| 3 | Extinction p_atm (plane-parallel airmass by default, zem = emission altitude; curved slant depth with `--curvature`) | G | [](extinction.md), [](curvature.md) |
 | 4 | Efficiency bound E = product of the `--envelope` tables; thinning or weighting | G | [](extinction.md) |
 
 With `--scattering`, one more step runs per event, before the steps above:
@@ -191,9 +191,10 @@ have is an error.
 
 ## Limits
 
-- Plane-parallel airmass and straight-line geometry (no Earth curvature).
-- Scattering needs sky-frame input and `telescope_r_m` in the run keys; not available for photons
-  already in frame G.
+- Plane-parallel airmass and straight-line geometry by default. Earth curvature for the airmass is
+  optional ([](curvature.md)); curved refraction and curved air delay are not implemented.
+- Scattering is plane-parallel and needs sky-frame input and `telescope_r_m` in the run keys; not
+  available for photons already in frame G, and rejected with a curved mode.
 - The in-telescope path is not derived from the optics (default 0).
 - Transmission tables hold one row per integer nm; a wavelength uses the row at its integer part.
 - Efficiency-bound tables must cover the wavelength range (rounded outwards).

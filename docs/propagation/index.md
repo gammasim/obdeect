@@ -30,6 +30,14 @@ The command `obdeect propagation run`: steps, options, output and Python interfa
 Transmission, wavelength assignment and thinning.
 :::
 
+:::{grid-item-card} {fas}`globe;pst-color-primary` Earth curvature
+:link: curvature
+:link-type: doc
+:class-card: sd-shadow-sm
+
+Spherical atmosphere: curvature modes and the slant depth.
+:::
+
 :::{grid-item-card} {fas}`wave-square;pst-color-primary` Refraction and timing
 :link: refraction
 :link-type: doc
@@ -62,6 +70,7 @@ Convert older extinction tables to the current format.
 
 propagation
 extinction
+curvature
 refraction
 scattering
 legacy-tables

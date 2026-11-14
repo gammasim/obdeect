@@ -106,6 +106,7 @@ inline obdeect::stream::Metadata sky_run_metadata(const SkyRun &run) {
   m["observation_level_m"] = run.observation_level_m;
   m["atmosphere_id"] = run.atmosphere_id;
   m["refraction_applied"] = std::int64_t{0};
+  m["curvature_applied"] = std::int64_t{0};
   m["n_telescopes"] = static_cast<std::int64_t>(run.telescopes.size());
   std::vector<double> x, y, z, r;
   for (const auto &t : run.telescopes) {

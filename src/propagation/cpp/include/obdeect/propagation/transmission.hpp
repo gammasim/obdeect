@@ -91,6 +91,20 @@ namespace detail {
   return y[i - 1] + (at - x[i - 1]) / (x[i] - x[i - 1]) * (y[i] - y[i - 1]);
 }
 
+// Curved atmosphere (slant_optical_depth): 8-point Gauss-Legendre nodes and weights on [-1, 1].
+inline constexpr std::size_t gauss_points = 8;
+inline constexpr std::array<double, gauss_points> gauss_nodes{
+    -0.9602898564975363, -0.7966664774136267, -0.5255324099163290, -0.1834346424956498,
+    0.1834346424956498,  0.5255324099163290,  0.7966664774136267,  0.9602898564975363};
+inline constexpr std::array<double, gauss_points> gauss_weights{
+    0.1012285362903763, 0.2223810344533745, 0.3137066458778873, 0.3626837833783620,
+    0.3626837833783620, 0.3137066458778873, 0.2223810344533745, 0.1012285362903763};
+// Cosines below this use h = h_t + u^2 in the first segment (the integrand 1/cos has a
+// 1/sqrt singularity at h_t when cos_t -> 0).
+inline constexpr double curved_substitution_cos = 0.2;
+// Tolerance for cosines of the zenith angle, which may exceed 1 by rounding.
+inline constexpr double curved_cos_tolerance = 1e-9;
+
 } // namespace detail
 
 // Optical depth inside the telescope for every integer wavelength.
@@ -170,6 +184,50 @@ public:
     return transmission2<T>(wavelength_nm, zem_m, airmass, T(0), T(0));
   }
 
+  // Slant optical depth in a spherical atmosphere of Earth radius earth_radius_m:
+  //   integral from h_t to zem of (d tau/dh) / cos theta(h) dh,
+  // with cos theta(h) = sqrt(1 - p^2 / (R + h)^2), p = (R + h_t) sin theta_t and cos theta_t =
+  // cos_zenith. Zero if zem <= h_t. The plane-parallel limit R -> infinity is
+  // |tau(zem) - tau(h_t)| / cos_zenith. Computed in double precision; see docs/extinction.md.
+  template <class T>
+  [[nodiscard]] T slant_optical_depth(T wavelength_nm, T telescope_altitude_m,
+                                      T emission_altitude_m, T cos_zenith,
+                                      double earth_radius_m) const {
+    return static_cast<T>(slant_depth(
+        static_cast<double>(wavelength_nm), static_cast<double>(telescope_altitude_m),
+        static_cast<double>(emission_altitude_m), static_cast<double>(cos_zenith), earth_radius_m));
+  }
+
+  // Transmission exp(-(slant optical depth + od_focus)) in a spherical atmosphere (see
+  // slant_optical_depth). The telescope depth od_tel is tau(h_t). Zero below the observation
+  // level, for od_tel above max_telescope_depth and for a total depth above max_total_depth.
+  template <class T>
+  [[nodiscard]] T transmission_curved(T wavelength_nm, T zem_m, T cos_zenith,
+                                      T telescope_altitude_m, T od_focus,
+                                      double earth_radius_m) const {
+    const double lambda = static_cast<double>(wavelength_nm);
+    const double zem = static_cast<double>(zem_m);
+    const double h_t = static_cast<double>(telescope_altitude_m);
+    const double focus = static_cast<double>(od_focus);
+    const std::size_t row =
+        validate_curved(lambda, h_t, zem, static_cast<double>(cos_zenith), earth_radius_m);
+    if (!std::isfinite(focus) || focus < 0.0) {
+      throw std::invalid_argument("od_focus must be finite and non-negative");
+    }
+    if (zem < observation_level_m()) {
+      return T(0);
+    }
+    if (optical_depth<double>(lambda, h_t) > max_telescope_depth) {
+      return T(0);
+    }
+    const double cos_t = std::min(static_cast<double>(cos_zenith), 1.0);
+    const double depth = slant_depth_row(row, h_t, zem, cos_t, earth_radius_m) + focus;
+    if (depth > max_total_depth) {
+      return T(0);
+    }
+    return static_cast<T>(std::exp(-depth));
+  }
+
   // Depths inside the telescope at altitude telescope_altitude_m with an optical path
   // pathlen_m: od_tel = tau(h_T), od_focus = tau(h_T + l) - tau(h_T). If tau(400 nm, h_T)
   // exceeds 1000 the table does not belong to the site and both are zero.
@@ -193,6 +251,89 @@ public:
   }
 
 private:
+  // Validates the arguments of the curved-atmosphere lookups and returns the table row.
+  [[nodiscard]] std::size_t validate_curved(double wavelength_nm, double telescope_altitude_m,
+                                            double emission_altitude_m, double cos_zenith,
+                                            double earth_radius_m) const {
+    const std::size_t row = row_of(wavelength_nm);
+    if (!std::isfinite(telescope_altitude_m) || !std::isfinite(emission_altitude_m)) {
+      throw std::invalid_argument("altitudes must be finite");
+    }
+    if (!std::isfinite(cos_zenith) || cos_zenith < 0.0 ||
+        cos_zenith > 1.0 + detail::curved_cos_tolerance) {
+      throw std::invalid_argument("cos_zenith must be finite and within [0, 1]");
+    }
+    if (!std::isfinite(earth_radius_m) || !(earth_radius_m > 0.0)) {
+      throw std::invalid_argument("earth radius must be finite and positive");
+    }
+    return row;
+  }
+
+  [[nodiscard]] double slant_depth(double wavelength_nm, double telescope_altitude_m,
+                                   double emission_altitude_m, double cos_zenith,
+                                   double earth_radius_m) const {
+    const std::size_t row = validate_curved(wavelength_nm, telescope_altitude_m,
+                                            emission_altitude_m, cos_zenith, earth_radius_m);
+    return slant_depth_row(row, telescope_altitude_m, emission_altitude_m,
+                           std::min(cos_zenith, 1.0), earth_radius_m);
+  }
+
+  // Slant optical depth of a validated row, cos_zenith in [0, 1]. Segments are the table
+  // intervals between consecutive heights (tau linear in log10 h), clipped to [h_t, zem]; d tau/dh
+  // = a / (h ln 10) with a the slope in log10 h. Each segment is integrated with 8-point
+  // Gauss-Legendre; the first segment at h_t uses h = h_t + u^2 when cos_zenith is small.
+  // cos theta(h)^2 = [d (R + h + R + h_t) + (R + h_t)^2 cos_t^2] / (R + h)^2 with d = h - h_t,
+  // which has no cancellation at small angles.
+  [[nodiscard]] double slant_depth_row(std::size_t row, double telescope_altitude_m,
+                                       double emission_altitude_m, double cos_zenith,
+                                       double earth_radius_m) const {
+    if (!(emission_altitude_m > telescope_altitude_m)) {
+      return 0.0;
+    }
+    const double *tau = &tau_[row * grid_.size()];
+    const double q = earth_radius_m + telescope_altitude_m;
+    const double q2c2 = q * q * cos_zenith * cos_zenith;
+    const bool substitute = cos_zenith < detail::curved_substitution_cos;
+    const double ln10 = std::log(10.0);
+    double sum = 0.0;
+    for (std::size_t i = 0; i + 1 < grid_.size(); ++i) {
+      const double seg_lo = std::max(height_m_[i], telescope_altitude_m);
+      const double seg_hi = std::min(height_m_[i + 1], emission_altitude_m);
+      if (!(seg_hi > seg_lo)) {
+        continue;
+      }
+      const double slope = (tau[i + 1] - tau[i]) / ((grid_[i + 1] - grid_[i]) * ln10);
+      if (slope == 0.0) {
+        continue;
+      }
+      // Integrand of dh at height h = h_t + d (d >= 0): slope / (h cos theta).
+      auto integrand = [&](double d) {
+        const double rho = q + d;
+        const double cos2 = (d * (rho + q) + q2c2) / (rho * rho);
+        return slope / ((telescope_altitude_m + d) * std::sqrt(std::max(cos2, 0.0)));
+      };
+      double part = 0.0;
+      if (substitute && height_m_[i] <= telescope_altitude_m) {
+        // Segment starting at h_t: h = h_t + u^2, dh = 2 u du, u in [0, sqrt(seg_hi - h_t)].
+        const double top = std::sqrt(seg_hi - telescope_altitude_m);
+        for (std::size_t j = 0; j < detail::gauss_points; ++j) {
+          const double u = 0.5 * top * (1.0 + detail::gauss_nodes[j]);
+          part += detail::gauss_weights[j] * 2.0 * u * integrand(u * u);
+        }
+        sum += 0.5 * top * part;
+      } else {
+        const double mid = 0.5 * (seg_lo + seg_hi);
+        const double half = 0.5 * (seg_hi - seg_lo);
+        for (std::size_t j = 0; j < detail::gauss_points; ++j) {
+          const double h = mid + half * detail::gauss_nodes[j];
+          part += detail::gauss_weights[j] * integrand(h - telescope_altitude_m);
+        }
+        sum += half * part;
+      }
+    }
+    return sum;
+  }
+
   [[nodiscard]] std::size_t row_of(double wavelength_nm) const {
     if (!std::isfinite(wavelength_nm)) {
       throw std::invalid_argument("wavelength must be finite");
@@ -293,9 +434,13 @@ private:
       }
       previous = height;
     }
-    grid_.push_back(std::log10(1000.0 * h2_km_));
-    for (double height : heights_km) {
-      grid_.push_back(std::log10(1000.0 * height));
+    height_m_.push_back(1000.0 * h2_km_);
+    height_m_.insert(height_m_.end(), heights_km.size(), 0.0);
+    for (std::size_t k = 0; k < heights_km.size(); ++k) {
+      height_m_[k + 1] = 1000.0 * heights_km[k];
+    }
+    for (double height_m : height_m_) {
+      grid_.push_back(std::log10(height_m));
     }
     const std::size_t columns = heights_km.size();
     tau_.assign(static_cast<std::size_t>(rows_) * grid_.size(), 0.0);
@@ -309,8 +454,9 @@ private:
   double h2_km_{};
   int first_{};
   int rows_{};
-  std::vector<double> grid_; // log10(height / m), starting at the observation level
-  std::vector<double> tau_;  // rows x grid_.size(); first column 0
+  std::vector<double> grid_;     // log10(height / m), starting at the observation level
+  std::vector<double> height_m_; // heights of grid_ [m]
+  std::vector<double> tau_;      // rows x grid_.size(); first column 0
 };
 
 } // namespace obdeect::propagation
