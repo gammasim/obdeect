@@ -710,10 +710,11 @@ private:
         }
         Record zeroed = record;
         zeroed.blob = simtel_detail::block_bytes(make_telpos_block(pos));
-        writer_.write(zeroed);
+        write_telpos(zeroed);
         return;
       }
-      break;
+      write_telpos(record);
+      return;
     case iact::atmprof:
       if (atmprof_) {
         throw std::runtime_error("the stream has its own ATMPROF block; drop --atmprof");
@@ -744,6 +745,15 @@ private:
     writer_.write(record);
   }
 
+  // A TELPOS of the stream waits for the --atmprof ATMPROF, which comes first in CORSIKA order.
+  void write_telpos(const Record &record) {
+    if (atmprof_pending_) {
+      held_telpos_ = record;
+      return;
+    }
+    writer_.write(record);
+  }
+
   void require_event(const char *what) const {
     if (!event_open_) {
       throw std::runtime_error(std::string(what) + " outside an event");
@@ -757,6 +767,7 @@ private:
     atmprof_pending_ = atmprof_.has_value();
     have_runh_ = have_telpos_ = have_rune_ = have_inputcfg_ = false;
     telpos_done_ = false;
+    held_telpos_.reset();
     events_ = 0;
     run_efficiency_statuses_.clear();
     telescope_efficiency_statuses_.clear();
@@ -897,6 +908,7 @@ private:
     }
     end_event();
     ensure_run_headers();
+    emit_atmprof(custom_profile_id); // only a run without events still has it pending
     ensure_telpos(); // a run without events still has its telescope positions
     if (!have_rune_) {
       note_synthesised("RUNE");
@@ -945,6 +957,10 @@ private:
     table.observation_level_cm =
         100.0 * simtel_detail::number_field(run_metadata_, "observation_level_m");
     emit(make_atmprof_block(table));
+    if (held_telpos_) {
+      writer_.write(*held_telpos_);
+      held_telpos_.reset();
+    }
   }
 
   void emit(const EventioBlock &block) {
@@ -1053,6 +1069,7 @@ private:
   std::ostream *warnings_{};
   std::set<std::string> warned_;
   bool atmprof_pending_{};
+  std::optional<Record> held_telpos_;
   Metadata run_metadata_;
   std::int64_t event_number_{};
   std::uint64_t events_{};

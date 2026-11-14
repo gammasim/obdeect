@@ -127,6 +127,7 @@ bool round_trips(float cm) { return corsika_m_to_cm(corsika_cm_to_m(cm)) == cm; 
 // Two telescopes of one event in normal mode (one 1204 container), plus RUNH, TELPOS,
 // EVTH, TELOFF and EVTE, as in CORSIKA output. Positions are integer cm that round-trip.
 std::string corsika_file(int events) {
+  const std::string nshow = "NSHOW " + std::to_string(events);
   std::vector<float> exact;
   for (int k = -60000; exact.size() < 400 && k <= 60000; k += 7) {
     if (round_trips(static_cast<float>(k))) {
@@ -139,8 +140,9 @@ std::string corsika_file(int events) {
     bytes.append(raw.begin(), raw.end());
   };
   add(runh_block());
-  add(make_block(iact::inputcfg, 0, 0,
-                 std::vector<std::uint8_t>{1, 0, 0, 0, 7, 0, 'N', 'S', 'H', 'O', 'W', ' ', '1'}));
+  std::vector<std::uint8_t> cfg = {1, 0, 0, 0, static_cast<std::uint8_t>(nshow.size()), 0};
+  cfg.insert(cfg.end(), nshow.begin(), nshow.end());
+  add(make_block(iact::inputcfg, 0, 0, cfg));
   add(telpos_block({2000.0, 2100.0}));
   for (int e = 1; e <= events; ++e) {
     add(evth_block(static_cast<float>(e)));
@@ -872,6 +874,33 @@ void test_synthesised_run_end_counts_events() {
   CHECK(count == 1);
 }
 
+// A run without events still gets RUNH, INPUTCFG, TELPOS and RUNE, in that order.
+void test_run_without_events() {
+  std::vector<std::uint32_t> types;
+  for (const EventioBlock &block : read_blocks(run_adapter(light_source_events(0), {}))) {
+    types.push_back(block.type);
+  }
+  const std::vector<std::uint32_t> expected = {iact::runh, iact::inputcfg, iact::telpos,
+                                               iact::rune};
+  CHECK(types == expected);
+}
+
+// A TELPOS of the stream is held until the --atmprof ATMPROF is written.
+void test_atmprof_before_stream_telpos() {
+  std::vector<Record> records = light_source_events(1);
+  records.insert(records.begin() + 1, blob_of(telpos_block({2000.0, 2100.0})));
+  SimtelOptions options;
+  options.atmprof = three_level_table();
+  std::vector<std::uint32_t> types;
+  for (const EventioBlock &block : read_blocks(run_adapter_with(records, options))) {
+    types.push_back(block.type);
+  }
+  const std::vector<std::uint32_t> expected = {iact::runh,   iact::inputcfg, iact::atmprof,
+                                               iact::telpos, iact::evth,     iact::teloff,
+                                               iact::telarray, iact::evte,   iact::rune};
+  CHECK(types == expected);
+}
+
 // A stream without the metadata sim_telarray needs is rejected, not padded with defaults.
 void test_missing_metadata_rejected() {
   Metadata run;
@@ -1165,6 +1194,8 @@ int main() {
     test_atmprof_synthesised();
     test_synthesised_warnings();
     test_atmprof_takes_evth_profile();
+    test_atmprof_before_stream_telpos();
+    test_run_without_events();
     test_atmprof_option_conflicts_with_stream();
     test_no_warnings_with_corsika_headers();
   });
