@@ -1031,9 +1031,35 @@ void test_sky_plane_validation() {
   with_tables.curved_tables_upper = &upper;
   with_tables.curved_bending = true;
   CHECK(!throws_invalid([&] { convert(with_tables); }));
+  // The lower table alone is valid with weight 0 (telescope on the lower level, or no upper level
+  // inside the profile) and invalid with a weight above 0.
   auto one_table = with_tables;
   one_table.curved_tables_upper = nullptr;
-  CHECK(throws_invalid([&] { convert(one_table); }));
+  CHECK(!throws_invalid([&] { convert(one_table); }));
+  auto one_table_weighted = one_table;
+  one_table_weighted.telescope_altitude_m = site_m + 3.0;
+  one_table_weighted.curved_weight = 0.3;
+  CHECK(throws_invalid([&] { convert(one_table_weighted); }));
+  auto upper_only = with_tables;
+  upper_only.curved_tables = nullptr;
+  CHECK(throws_invalid([&] { convert(upper_only); }));
+  // A photon emitted above the telescope but below the upper table level is kept: the lower table
+  // alone serves it (the upper lookup starts at its own level), with zero or positive weight.
+  const auto between_levels = [&](const obdeect::propagation::SkyPlane &p, double z_m) {
+    auto chunk = sky_chunk(1, 0, {sky_at(0.0, 0.0, z_m, 30.0)}, 1);
+    const auto lost = obdeect::propagation::sky_to_ground(chunk, p);
+    CHECK(lost == 0);
+    CHECK(chunk[Column::w][0] > 0.0F);
+    return chunk[Column::t][0];
+  };
+  const float t_on_level = between_levels(with_tables, 5.0); // weight 0, emitted 5 m above
+  CHECK(std::isfinite(t_on_level));
+  auto off_level = with_tables;
+  off_level.telescope_z_m = 3.0;
+  off_level.telescope_altitude_m = site_m + 3.0;
+  off_level.curved_weight = 0.3;
+  const float t_off_level = between_levels(off_level, 8.0); // emitted 5 m above, below site + 10
+  CHECK(std::isfinite(t_off_level));
   auto flat_tables = plane(true);
   flat_tables.tables = &flat;
   CHECK(throws_invalid([&] { convert(flat_tables); }));
@@ -1117,6 +1143,24 @@ void check_off_grid(const Batch &batch) {
 
 } // namespace
 
+// The telescope level lies in the last 10 m below the profile top, so no upper table level fits
+// inside the profile: the propagator uses the lower table alone and keeps the photons.
+void test_profile_top_boundary() {
+  const double top = ecmwf_profile().top_m();
+  const double level = top - 5.0;
+  auto run = lateral_run_keys(0, 0, {0.0}, {0.0});
+  run["observation_level_m"] = level;
+  const std::vector<SkyPhoton> photons{sky_at(0.0, 0.0, 3.0, 30.0), sky_at(0.0, 0.0, 4.0, 60.0)};
+  auto config = profile_config(Curvature::spherical, kEarthRadius);
+  config.geometry_only = true;
+  config.transmission.reset();
+  config.store_p = false;
+  config.site_altitude_m = level;
+  const auto result = propagate(sky_blocks({{run, 1, photons, photons.size(), 1}}), config);
+  CHECK(result.summary.dropped == 0);
+  CHECK(result.summary.photons_out == photons.size());
+}
+
 int main() {
   return run_checks([] {
     test_rejections();
@@ -1134,5 +1178,6 @@ int main() {
     check_dropped(batch);
     check_chunk_order(batch);
     test_sky_plane_validation();
+    test_profile_top_boundary();
   });
 }

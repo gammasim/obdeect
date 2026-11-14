@@ -50,7 +50,9 @@ struct SkyPlane {
   // Spherical bending and air delay (earth_radius_m > 0, profile set). The telescope altitude h_t
   // lies between the levels of the two tables: curved_tables at a_lo <= h_t and curved_tables_upper
   // at a_hi > h_t (both built for earth_radius_m). The integrals are interpolated linearly in h_t
-  // with curved_weight = (h_t - a_lo) / (a_hi - a_lo). Both null if profile is null.
+  // with curved_weight = (h_t - a_lo) / (a_hi - a_lo). curved_tables_upper is null (and the weight
+  // 0) if h_t lies on the lower level or no upper level fits inside the profile. Both are null if
+  // profile is null.
   const CurvedRefractionTables *curved_tables{};
   const CurvedRefractionTables *curved_tables_upper{};
   double curved_weight{};
@@ -100,15 +102,27 @@ inline bool curved_arrival(const SkyPlane &plane, double emission_altitude_m, do
                            double &y_out, double &cx_out, double &cy_out, double &t_out) {
   CurvedRayIntegrals lower{};
   CurvedRayIntegrals upper{};
-  if (!curved_table_integrals(*plane.curved_tables, impact_m, emission_altitude_m, lower) ||
-      !curved_table_integrals(*plane.curved_tables_upper, impact_m, emission_altitude_m, upper)) {
+  const double w = plane.curved_weight;
+  const bool use_upper = plane.curved_tables_upper != nullptr && w > 0.0;
+  const bool have_lower =
+      curved_table_integrals(*plane.curved_tables, impact_m, emission_altitude_m, lower);
+  const bool have_upper = use_upper && curved_table_integrals(*plane.curved_tables_upper, impact_m,
+                                                              emission_altitude_m, upper);
+  // A photon emitted between the telescope and the upper level has no data in the upper table (its
+  // lookup starts at its own level), and a grazing line within the level spacing of the telescope
+  // does not reach the lower level. Both cases use the one table that is valid, without blending.
+  CurvedRayIntegrals v{};
+  if (have_lower && have_upper) {
+    v.shift_m = (1.0 - w) * lower.shift_m + w * upper.shift_m;
+    v.excess_bent_ns = (1.0 - w) * lower.excess_bent_ns + w * upper.excess_bent_ns;
+    v.excess_straight_ns = (1.0 - w) * lower.excess_straight_ns + w * upper.excess_straight_ns;
+  } else if (have_lower) {
+    v = lower;
+  } else if (have_upper) {
+    v = upper;
+  } else {
     return false;
   }
-  const double w = plane.curved_weight;
-  CurvedRayIntegrals v{};
-  v.shift_m = (1.0 - w) * lower.shift_m + w * upper.shift_m;
-  v.excess_bent_ns = (1.0 - w) * lower.excess_bent_ns + w * upper.excess_bent_ns;
-  v.excess_straight_ns = (1.0 - w) * lower.excess_straight_ns + w * upper.excess_straight_ns;
   const double vacuum_ns = path_m / speed_of_light_m_per_ns;
   if (!plane.curved_bending) {
     t_out = t_in + vacuum_ns + v.excess_straight_ns;
@@ -167,19 +181,23 @@ inline std::uint64_t sky_to_ground(obdeect::stream::PhotonChunk &chunk, const Sk
       throw std::invalid_argument("telescope altitude must be finite");
     }
     if ((plane.profile != nullptr) != (plane.curved_tables != nullptr) ||
-        (plane.curved_tables == nullptr) != (plane.curved_tables_upper == nullptr)) {
-      throw std::invalid_argument(
-          "curved bending needs a profile and the two curved tables together");
+        (plane.curved_tables == nullptr && plane.curved_tables_upper != nullptr)) {
+      throw std::invalid_argument("curved bending needs a profile and its lower curved table");
     }
     if (plane.curved_tables != nullptr) {
       const double lower = plane.curved_tables->telescope_altitude_m();
-      const double upper = plane.curved_tables_upper->telescope_altitude_m();
-      if (!(upper > lower) || !(lower <= plane.telescope_altitude_m) ||
-          !(plane.telescope_altitude_m < upper) ||
-          plane.curved_tables->earth_radius_m() != plane.earth_radius_m ||
-          plane.curved_tables_upper->earth_radius_m() != plane.earth_radius_m ||
-          std::abs(plane.curved_weight - (plane.telescope_altitude_m - lower) / (upper - lower)) >
-              1e-9) {
+      bool consistent = lower <= plane.telescope_altitude_m &&
+                        plane.curved_tables->earth_radius_m() == plane.earth_radius_m;
+      if (plane.curved_tables_upper != nullptr) {
+        const double upper = plane.curved_tables_upper->telescope_altitude_m();
+        consistent = consistent && upper > lower && plane.telescope_altitude_m < upper &&
+                     plane.curved_tables_upper->earth_radius_m() == plane.earth_radius_m &&
+                     std::abs(plane.curved_weight -
+                              (plane.telescope_altitude_m - lower) / (upper - lower)) <= 1e-9;
+      } else {
+        consistent = consistent && plane.curved_weight == 0.0;
+      }
+      if (!consistent) {
         throw std::invalid_argument(
             "curved tables must bracket the telescope altitude, with its weight and radius");
       }

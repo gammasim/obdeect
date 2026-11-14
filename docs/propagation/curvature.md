@@ -186,9 +186,13 @@ $4 \times 4$ Lagrange stencil, with no allocation.
 - Output precision: the time column of the stream is float32. Its spacing near $3.8\times10^5$ ns is
   0.031 ns (rounding error up to 0.016 ns), so very long grazing-ray delays are limited by the
   resolution of the column.
-- Edge case: a photon whose straight line reaches the telescope level by a margin of less than
-  10 m in impact parameter, at grazing incidence, can be dropped (counted in `dropped`). Its
-  impact parameter is then too close to the level for the stage to decide reliably.
+- Photons emitted between the telescope and the upper table level (less than one 10 m step above
+  the telescope), and grazing lines that reach the telescope level by less than 10 m in impact
+  parameter, are served by the one table that is valid, without the linear blend; the change is
+  first order in the altitude step. A photon is dropped (counted in `dropped`) only if neither
+  table can serve it.
+- Within 10 m below the top of the profile no upper table level fits inside the profile, so the
+  lower table alone is used for the telescope altitude.
 - The telescope plane is the Cartesian plane $z$ = telescope $z$. The local vertical tilt of
   laterally displaced telescopes (at most lateral$/R$) is neglected in the direction of the
   displacement.

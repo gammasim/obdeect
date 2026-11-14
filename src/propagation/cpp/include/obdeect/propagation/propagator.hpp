@@ -832,9 +832,13 @@ private:
         const double lower =
             std::max(std::floor(h / curved_altitude_step_m) * curved_altitude_step_m, bottom);
         const double upper = lower + curved_altitude_step_m;
+        // No upper table if h is on the lower level (zero weight) or the upper level would not lie
+        // below the profile top (the table needs its level inside the profile); then the lower
+        // table alone is used, which is off by the first-order change over less than one step.
+        const bool blend = h > lower && upper < top;
         plane.curved_tables = &curved_tables_at(lower);
-        plane.curved_tables_upper = &curved_tables_at(upper);
-        plane.curved_weight = (h - lower) / (upper - lower);
+        plane.curved_tables_upper = blend ? &curved_tables_at(upper) : nullptr;
+        plane.curved_weight = blend ? (h - lower) / (upper - lower) : 0.0;
         plane.curved_bending = !run_->refraction_applied;
       }
       return plane;
