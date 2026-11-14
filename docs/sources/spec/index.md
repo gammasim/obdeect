@@ -1,10 +1,12 @@
 # Specification
 
-This section specifies, in physics and geometry terms, every light source and tool of obdeect sources. An
-implementer who has only these pages, the tests under `cpp/tests` and `python/tests`, and the
-obdeect stream headers must be able to reimplement obdeect sources. "Agree statistically" means agreement within
-the four-sigma checks of the tests; "exact" means bit-identical counts, record order, metadata
-and deterministic columns.
+This section defines every light source and program of obdeect sources in physics and geometry
+terms. It is written for implementers: with these pages and the obdeect stream headers, you can
+reimplement obdeect sources. If you only want to use a source, read the
+[source model](../sources.md) and the pages under Programs instead.
+
+Two terms are used precisely. "Agree statistically" means agreement within four standard
+deviations. "Exact" means identical counts, record order, metadata and deterministic columns.
 
 ```{toctree}
 :maxdepth: 1
@@ -47,5 +49,4 @@ python-api
 - Header-only, standard-library-only C++20 core in `cpp/include/obdeect/sources/`; obdeect stream supplies
   the stream writer/reader, `PhotonChunk`, `uniform4` (Philox), stage ids and frame codes.
 - Executables `obdeect sources flasher`, `-led`, `-point-source`, `-beam-scan`, `-laser-beam`,
-  `-night-sky`, `-muon-track` from `cpp/tools/<name>.cpp`; tests `cpp/tests/test_<name>.cpp`
-  (one CTest each); Python extension `obdeect.sources._core` (nanobind) and package `python/obdeect sources`.
+  `-night-sky`, `-muon-track` from `cpp/tools/<name>.cpp`; a Python extension `obdeect.sources._core` (nanobind) and the package `obdeect.sources`.

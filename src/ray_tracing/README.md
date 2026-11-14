@@ -17,7 +17,7 @@ Requires Python 3.14 or higher.
 obdeect ray-tracing compile --simulation-models ../simulation-models --model MSTN-01 \
   --version 7.0.0 --seed 1 --zenith-deg 20 --output mst.json
 obdeect ray-tracing trace --model mst.json --seed 2 --photons 10000 --field-deg 0.5 0
-obdeect ray-tracing trace-stream --model mst.json --seed 7 -i ground.ps -o camera.ps
+obdeect ray-tracing trace-stream --model mst.json --seed 7 -i ground.pst -o camera.pst
 obdeect ray-tracing obscurers ...
 obdeect ray-tracing plot ...
 ```

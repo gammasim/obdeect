@@ -57,7 +57,7 @@ def chain(model):
 
 
 def records(data, tmp_path, name):
-    path = tmp_path / f"{name}.ps"
+    path = tmp_path / f"{name}.pst"
     path.write_bytes(data)
     return list(obdeect_stream.Reader(str(path)))
 
@@ -84,7 +84,7 @@ def test_photons_reach_the_camera_frame(chain, tmp_path):
     assert 0 < detected < atmosphere < source
 
 
-def test_ledger_records_the_atmosphere(chain, tmp_path):
+def test_efficiency_status_records_the_atmosphere(chain, tmp_path):
     status = [
         r["metadata"]
         for r in records(chain["camera"], tmp_path, "c")

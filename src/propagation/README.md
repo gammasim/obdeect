@@ -14,7 +14,7 @@ Requires Python 3.14 or higher.
 ## Commands
 
 ```sh
-obdeect propagation run --transmission atm.dat --site-altitude 2156 --seed 1 -i in.ps -o out.ps
+obdeect propagation run --transmission atm.dat --site-altitude 2156 --seed 1 -i in.pst -o out.pst
 obdeect propagation convert-table ...       # convert an atmospheric transmission table
 ```
 

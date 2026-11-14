@@ -19,7 +19,7 @@
 
 namespace obdeect::propagation {
 
-// Geometry of one telescope for sky photons. Heights are m; z is measured above the
+// Geometry of one telescope for sky-frame photons. Heights are m; z is measured above the
 // observation level, as in frame sky.
 struct SkyPlane {
   double telescope_x_m{};
@@ -49,7 +49,7 @@ inline std::uint64_t sky_to_ground(obdeect::stream::PhotonChunk &chunk, const Sk
   }
   chunk.validate();
   if (!chunk.has(Column::z)) {
-    throw std::invalid_argument("sky photons need the z column");
+    throw std::invalid_argument("sky-frame photons need the z column");
   }
   const std::size_t rows = chunk.rows();
   const double plane_z = plane.telescope_z_m;

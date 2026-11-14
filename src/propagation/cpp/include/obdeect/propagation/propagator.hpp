@@ -4,7 +4,8 @@
 // obdeect::stream::Reader, passed to Propagator::process, and written with obdeect::stream::Writer.
 //
 // Per photon chunk, in this order (Propagator::photons):
-//   1. sky photons only: propagation to the telescope plane, bending, air delay, frame G (sky.hpp)
+//   1. sky-frame photons only: propagation to the telescope plane, bending, air delay, frame G
+//   (sky.hpp)
 //   2. wavelength assignment for rows without a wavelength (wavelength.hpp)
 //   3. atmospheric extinction p_atm(lambda, zem, airmass) (extinction.hpp)
 //   4. envelope E(lambda), the product of the envelope factors, then thinning or weighting
@@ -12,8 +13,9 @@
 // Optional single scattering (scattering.hpp) runs on the primaries of an event before step 3.
 // Its scattered photons go through step 1 (sky to G), then step 4 with the envelope and the
 // in-telescope factor exp(-od_focus) only (Propagator::emit_scattered). An event is held until its
-// end, see Propagator::flush_event. Each effect of the ledger is listed in make_ledger(); a new
-// effect adds a step in Propagator::photons and an entry in make_ledger().
+// end, see Propagator::flush_event. Each effect of the efficiency status is listed in
+// make_efficiency_status(); a new effect adds a step in Propagator::photons and an entry in
+// make_efficiency_status().
 
 #include "obdeect/propagation/extinction.hpp"
 #include "obdeect/propagation/pipeline.hpp"
@@ -53,7 +55,7 @@ namespace obdeect::propagation {
 
 enum class OutputMode { thinned, weighted };
 
-// An envelope factor f^env(lambda) of a later efficiency (ledger state `envelope`).
+// An envelope factor f^env(lambda) of a later efficiency (efficiency_status state `envelope`).
 // The stage applies the product of all envelope factors. name: [A-Za-z0-9_-]+.
 struct EnvelopeFactor {
   std::string name;
@@ -66,18 +68,18 @@ struct PropagatorConfig {
   // Required unless geometry_only. Its H2 must match site_altitude_m (within 25 m).
   std::optional<TransmissionTable> transmission;
   // Geometry only: sky to G (refraction, air delay) and wavelength assignment, but no
-  // extinction, envelope or thinning. All rows keep their weight; the ledger records
+  // extinction, envelope or thinning. All rows keep their weight; the efficiency status records
   // `atmosphere` as pending. Needs weighted mode, no transmission table, no envelope, no
   // scattering, no store_p and no in-telescope path.
   bool geometry_only{false};
-  std::string transmission_source; // ledger provenance; default "transmission table"
+  std::string transmission_source; // efficiency_status provenance; default "transmission table"
   double site_altitude_m{};        // observation level [m a.s.l.]
   // Optical path inside a telescope [m] (the od_focus part of the telescope depths).
   // default_pathlen_m applies to every telescope; telescope_pathlen_m (key: telescope_id,
   // 1-based) overrides it for one telescope. 0: no path inside the telescope.
   double default_pathlen_m{0.0};
   std::map<std::uint32_t, double> telescope_pathlen_m;
-  // Optional: air delay for sky photons, and refraction (bending) unless the run says that
+  // Optional: air delay for sky-frame photons, and refraction (bending) unless the run says that
   // refraction is already applied.
   std::optional<AtmosphereProfile> profile;
   std::string profile_source;
@@ -88,17 +90,17 @@ struct PropagatorConfig {
   std::uint64_t seed{};
   OutputMode mode{OutputMode::thinned};
   bool store_p{false}; // keep the acceptance column p in the output
-  // Optional single scattering of the sky photons (docs/scattering.md), off by default. When
+  // Optional single scattering of the sky-frame photons (docs/scattering.md), off by default. When
   // enabled, the table is required and the run needs telescope_r_m (sphere radii).
   ScatteringConfig scattering;
   std::optional<ScatteringTable> scattering_table;
-  std::string scattering_source; // ledger provenance, e.g. the table file name
+  std::string scattering_source; // efficiency_status provenance, e.g. the table file name
 };
 
 struct PropagationSummary {
   std::uint64_t photons_in{};  // rows of the input photon records
   std::uint64_t photons_out{}; // rows written (thinned: surviving photons, weighted: w > 0)
-  std::uint64_t dropped{};     // sky photons that do not reach the telescope plane
+  std::uint64_t dropped{};     // sky-frame photons that do not reach the telescope plane
   double weight_out{};         // sum of w of the output
 };
 
@@ -209,8 +211,9 @@ public:
   }
 
   // Processes one input record. Records of the output go to sink(const obdeect::stream::Record &).
-  // The ledger of a run is written before the first record that is not a ledger after it.
-  // Throws std::invalid_argument if an incoming ledger shows a factor applied already.
+  // The efficiency status of a run is written before the first record that is not an efficiency
+  // status after it. Throws std::invalid_argument if an incoming efficiency_status shows a factor
+  // applied already.
   template <class Sink> void process(const obdeect::stream::Record &record, Sink &&sink) {
     using obdeect::stream::RecordType;
     if (!config_.scattering.enabled) {
@@ -243,12 +246,12 @@ public:
     process_record(record, sink);
   }
 
-  // Writes the held event (if any) and the ledger still pending.
+  // Writes the held event (if any) and the efficiency status still pending.
   template <class Sink> void finish(Sink &&sink) {
     if (in_event_) {
       flush_event(sink);
     }
-    flush_ledger(sink);
+    flush_efficiency_status(sink);
   }
 
   [[nodiscard]] const PropagationSummary &summary() const noexcept { return summary_; }
@@ -260,11 +263,11 @@ private:
   template <class Sink> void process_record(const obdeect::stream::Record &record, Sink &sink) {
     using obdeect::stream::RecordType;
     if (record.type == RecordType::efficiency_status) {
-      check_incoming_ledger(record.metadata);
+      check_incoming_efficiency_status(record.metadata);
       sink(record);
       return;
     }
-    flush_ledger(sink);
+    flush_efficiency_status(sink);
     switch (record.type) {
     case RecordType::stream:
     case RecordType::event_end:
@@ -276,7 +279,7 @@ private:
       obdeect::stream::Record out = record;
       begin_run(record.metadata, out.metadata);
       sink(out);
-      ledger_pending_ = true;
+      efficiency_status_pending_ = true;
       break;
     }
     case RecordType::event:
@@ -321,7 +324,7 @@ private:
     std::vector<double> pathlen_m; // path inside each telescope [m], index = telescope_id - 1
     WavelengthRange wavelengths{};
     Envelope envelope;
-    obdeect::stream::Metadata ledger;
+    obdeect::stream::Metadata efficiency_status;
   };
 
   struct Telescope {
@@ -412,8 +415,9 @@ private:
     return std::get<std::vector<double>>(it->second);
   }
 
-  // Ledger values that other stages wrote for factors this stage applies (never apply twice).
-  void check_incoming_ledger(const obdeect::stream::Metadata &metadata) const {
+  // Efficiency status values that other stages wrote for factors this stage applies (never apply
+  // twice).
+  void check_incoming_efficiency_status(const obdeect::stream::Metadata &metadata) const {
     const auto state_of = [&metadata](const std::string &name) -> std::string {
       const auto it = metadata.find(name + ".state");
       if (it == metadata.end()) {
@@ -422,23 +426,23 @@ private:
       if (const auto *text = std::get_if<std::string>(&it->second)) {
         return *text;
       }
-      throw std::invalid_argument("ledger state of " + name + " is not a string");
+      throw std::invalid_argument("efficiency_status state of " + name + " is not a string");
     };
     if (state_of("atmosphere") != "pending") {
-      throw std::invalid_argument("atmosphere is already applied in the input ledger");
+      throw std::invalid_argument("atmosphere is already applied in the input efficiency status");
     }
     if (state_of("scattering") != "pending") {
-      throw std::invalid_argument("scattering is already applied in the input ledger");
+      throw std::invalid_argument("scattering is already applied in the input efficiency status");
     }
     for (const auto &factor : config_.envelope) {
       if (state_of(factor.name) != "pending") {
         throw std::invalid_argument("envelope factor " + factor.name +
-                                    " is already applied in the input ledger");
+                                    " is already applied in the input efficiency status");
       }
     }
   }
 
-  // Run keys and the ledger of this stage (docs/format.md, "Efficiency ledger").
+  // Run keys and the efficiency status of this stage (docs/format.md, "Efficiency status").
   void begin_run(const obdeect::stream::Metadata &metadata, obdeect::stream::Metadata &out) {
     const auto &x_m = array_field(metadata, "telescope_x_m");
     const auto &y_m = array_field(metadata, "telescope_y_m");
@@ -491,9 +495,9 @@ private:
             pathlen_m,
             wavelengths,
             product_envelope(wavelengths),
-            make_ledger(wavelengths, pathlen_m)};
+            make_efficiency_status(wavelengths, pathlen_m)};
     if (config_.profile) {
-      out["refraction_applied"] = std::int64_t{1}; // sky photons are refracted from here on
+      out["refraction_applied"] = std::int64_t{1}; // sky-frame photons are refracted from here on
     }
     run_ = std::move(run);
     telescope_.open = false;
@@ -522,55 +526,55 @@ private:
     return Envelope(std::move(grid), std::move(product));
   }
 
-  [[nodiscard]] obdeect::stream::Metadata make_ledger(const WavelengthRange &range,
-                                                      const std::vector<double> &pathlen_m) const {
-    obdeect::stream::Metadata ledger;
+  [[nodiscard]] obdeect::stream::Metadata
+  make_efficiency_status(const WavelengthRange &range, const std::vector<double> &pathlen_m) const {
+    obdeect::stream::Metadata efficiency_status;
     std::string factors = "atmosphere,wavelength";
     if (config_.geometry_only) {
-      ledger["atmosphere.state"] = std::string("pending"); // applied by a later stage
+      efficiency_status["atmosphere.state"] = std::string("pending"); // applied by a later stage
     } else {
-      ledger["atmosphere.state"] = std::string("applied");
-      ledger["atmosphere.source"] = config_.transmission_source.empty()
-                                        ? std::string("transmission table")
-                                        : config_.transmission_source;
-      ledger["atmosphere.pathlen_m"] = pathlen_m;
+      efficiency_status["atmosphere.state"] = std::string("applied");
+      efficiency_status["atmosphere.source"] = config_.transmission_source.empty()
+                                                   ? std::string("transmission table")
+                                                   : config_.transmission_source;
+      efficiency_status["atmosphere.pathlen_m"] = pathlen_m;
     }
     if (config_.profile) {
-      ledger["atmosphere.profile_source"] = config_.profile_source.empty()
-                                                ? std::string("atmospheric profile")
-                                                : config_.profile_source;
+      efficiency_status["atmosphere.profile_source"] = config_.profile_source.empty()
+                                                           ? std::string("atmospheric profile")
+                                                           : config_.profile_source;
     }
-    ledger["wavelength.state"] = std::string("applied");
-    ledger["wavelength.source"] = std::string("density 1/lambda^2, continuous");
-    ledger["wavelength.range_nm"] = std::vector<double>{range.lo_nm, range.hi_nm};
+    efficiency_status["wavelength.state"] = std::string("applied");
+    efficiency_status["wavelength.source"] = std::string("density 1/lambda^2, continuous");
+    efficiency_status["wavelength.range_nm"] = std::vector<double>{range.lo_nm, range.hi_nm};
     if (config_.scattering.enabled) {
       factors += ",scattering";
-      ledger["scattering.state"] = std::string("applied");
-      ledger["scattering.source"] = config_.scattering_source.empty()
-                                        ? std::string("scattering table")
-                                        : config_.scattering_source;
-      ledger["scattering.points_per_photon"] =
+      efficiency_status["scattering.state"] = std::string("applied");
+      efficiency_status["scattering.source"] = config_.scattering_source.empty()
+                                                   ? std::string("scattering table")
+                                                   : config_.scattering_source;
+      efficiency_status["scattering.points_per_photon"] =
           static_cast<std::int64_t>(config_.scattering.points_per_photon);
     }
     for (const auto &factor : config_.envelope) {
       factors += "," + factor.name;
-      ledger[factor.name + ".state"] = std::string("envelope");
-      ledger[factor.name + ".source"] = factor.source;
-      ledger[factor.name + ".wavelength_nm"] = factor.wavelength_nm;
-      ledger[factor.name + ".value"] = factor.value;
+      efficiency_status[factor.name + ".state"] = std::string("envelope");
+      efficiency_status[factor.name + ".source"] = factor.source;
+      efficiency_status[factor.name + ".wavelength_nm"] = factor.wavelength_nm;
+      efficiency_status[factor.name + ".value"] = factor.value;
     }
-    ledger["factors"] = factors;
-    return ledger;
+    efficiency_status["factors"] = factors;
+    return efficiency_status;
   }
 
-  template <class Sink> void flush_ledger(Sink &sink) {
-    if (!ledger_pending_) {
+  template <class Sink> void flush_efficiency_status(Sink &sink) {
+    if (!efficiency_status_pending_) {
       return;
     }
-    ledger_pending_ = false;
+    efficiency_status_pending_ = false;
     obdeect::stream::Record out;
     out.type = obdeect::stream::RecordType::efficiency_status;
-    out.metadata = run_->ledger;
+    out.metadata = run_->efficiency_status;
     sink(out);
   }
 
@@ -672,7 +676,7 @@ private:
     return out;
   }
 
-  // Geometry of the open telescope for sky photons (refraction tables built on first use).
+  // Geometry of the open telescope for sky-frame photons (refraction tables built on first use).
   SkyPlane sky_plane() {
     SkyPlane plane;
     plane.telescope_x_m = telescope_.x_m;
@@ -908,9 +912,9 @@ private:
   bool have_event_{};
   std::map<std::uint32_t, std::uint64_t> out_index_; // per telescope, reset at each event
   std::uint32_t event_number_{};
-  bool ledger_pending_{};
+  bool efficiency_status_pending_{};
   // Caches: telescope depths per (altitude, pathlen) (the table is fixed), refraction tables of
-  // the last altitude used for sky photons.
+  // the last altitude used for sky-frame photons.
   std::map<std::pair<double, double>, TelescopeDepths> depths_cache_;
   std::optional<RefractionTables> tables_;
   double tables_altitude_m_{};

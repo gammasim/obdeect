@@ -1,6 +1,6 @@
-# obdeect sources led (implementation)
+# led: specification
 
-User options and examples: [led](../programs/led.md). Frame C. Writer A, producer
+Options and examples: [led](../programs/led.md). Frame C. Writer A, producer
 `obdeect sources led`.
 
 ## Validation (prefix `led: `)

@@ -1,6 +1,6 @@
 """Writes the conformance streams and expected.json, using only the standard library.
 
-An independent implementation of docs/format.md can read valid.ps and must reproduce the
+An independent implementation of docs/format.md can read valid.pst and must reproduce the
 content in expected.json, and must reject every file listed under "invalid".
 Run: python make_conformance.py  (in this directory)
 """
@@ -86,7 +86,7 @@ valid = b"".join([
     record("stream_end"),
 ])
 
-# A record of unknown type (99) between two known ones must be skipped by readers.
+#A record of unknown type(99) between two known ones must be skipped by readers.
 unknown = struct.pack("<IHHQ", MAGIC, 99, 0, 3) + b"abc"
 valid = valid.replace(
     record("event_end", metadata({})), unknown + record("event_end", metadata({}))
@@ -95,24 +95,24 @@ valid = valid.replace(
 rows_too_many = struct.pack("<IIIIQ", 1, 1, 0b1_0101_1011, 65537, 0)
 offset = valid.index(photons(2, 1, 0, CHUNK))
 invalid = {
-    "bad_magic.ps": b"XSTR" + valid[4:],
-    "unknown_major.ps": record("stream", metadata({**STREAM, "format_major": 2}))
+    "bad_magic.pst": b"XSTR" + valid[4:],
+    "unknown_major.pst": record("stream", metadata({**STREAM, "format_major": 2}))
     + record("stream_end"),
-    "truncated_chunk.ps": valid[: offset + 16 + 24 + 20],
-    "too_many_rows.ps": record("stream", metadata(STREAM))
+    "truncated_chunk.pst": valid[: offset + 16 + 24 + 20],
+    "too_many_rows.pst": record("stream", metadata(STREAM))
     + record("photons", rows_too_many)
     + record("stream_end"),
 }
 
 here = Path(__file__).parent
-(here / "valid.ps").write_bytes(valid)
+(here / "valid.pst").write_bytes(valid)
 for name, data in invalid.items():
     (here / name).write_bytes(data)
 
 expected = {
     "format": "records in file order; the unknown-type record is skipped; stream_end is not listed",
     "valid": {
-        "file": "valid.ps",
+        "file": "valid.pst",
         "records": [
             {"type": "stream", "metadata": STREAM},
             {"type": "run", "metadata": RUN},
@@ -128,10 +128,10 @@ expected = {
         ],
     },
     "invalid": {
-        "bad_magic.ps": "bad magic",
-        "unknown_major.ps": "unsupported format major version",
-        "truncated_chunk.ps": "truncated",
-        "too_many_rows.ps": "2^16 rows",
+        "bad_magic.pst": "bad magic",
+        "unknown_major.pst": "unsupported format major version",
+        "truncated_chunk.pst": "truncated",
+        "too_many_rows.pst": "2^16 rows",
     },
 }
 (here / "expected.json").write_text(json.dumps(expected, indent=1) + "\n")

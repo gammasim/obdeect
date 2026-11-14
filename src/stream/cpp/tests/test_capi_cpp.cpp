@@ -114,7 +114,7 @@ std::vector<Record> read_all(const std::string &path) {
 }
 
 void check_conformance(const std::string &directory) {
-  const auto records = read_all(directory + "/valid.ps");
+  const auto records = read_all(directory + "/valid.pst");
   const RecordType types[] = {
       RecordType::stream,    RecordType::run,       RecordType::efficiency_status,
       RecordType::event,     RecordType::telescope, RecordType::photons,
@@ -149,10 +149,10 @@ void check_conformance(const std::string &directory) {
   const struct {
     const char *file;
     const char *message;
-  } invalid[] = {{"bad_magic.ps", "bad magic"},
-                 {"unknown_major.ps", "unsupported format major version"},
-                 {"truncated_chunk.ps", "truncated"},
-                 {"too_many_rows.ps", "2^16 rows"}};
+  } invalid[] = {{"bad_magic.pst", "bad magic"},
+                 {"unknown_major.pst", "unsupported format major version"},
+                 {"truncated_chunk.pst", "truncated"},
+                 {"too_many_rows.pst", "2^16 rows"}};
   for (const auto &entry : invalid) {
     try {
       read_all(directory + "/" + entry.file);

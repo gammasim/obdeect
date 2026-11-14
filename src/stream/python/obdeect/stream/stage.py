@@ -2,7 +2,7 @@
 
 >>> def func(telescope_id, columns, metadata):
 ...     return {**columns, "w": columns["w"] * 0.9}
->>> transform("in.ps", "out.ps", func, stage_id=0x444C0001, frame_out="camera")
+>>> transform("in.pst", "out.pst", func, stage_id=0x444C0001, frame_out="camera")
 """
 
 from __future__ import annotations

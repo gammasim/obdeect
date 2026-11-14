@@ -1,6 +1,6 @@
-# obdeect sources flasher (implementation)
+# flasher: specification
 
-User options and examples: [flasher](../programs/flasher.md). Writer A, producer
+Options and examples: [flasher](../programs/flasher.md). Writer A, producer
 `obdeect sources flasher`, `telescope_id = 1`, telescope at (0, 0, 0).
 
 ## Option parsing

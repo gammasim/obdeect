@@ -1,6 +1,6 @@
-# obdeect sources point-source (implementation)
+# point-source: specification
 
-User options and examples: [point-source](../programs/point-source.md). Writer B, producer
+Options and examples: [point-source](../programs/point-source.md). Writer B, producer
 `obdeect sources point-source`.
 
 ## Validation and defaults

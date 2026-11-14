@@ -2,14 +2,14 @@
 
 User view: [sources](../sources.md). This page lists types, validation and sampling.
 
-Headers `obdeect/sources/source.hpp`, `streams.hpp`, `vec3.hpp`. Namespace `obdeect sources`.
+Headers `obdeect/sources/source.hpp`, `streams.hpp`, `vec3.hpp`. Namespace `obdeect::sources`.
 
 ## Types
 
 - `Vec3{x,y,z}` double; `dot`, `cross`, `norm`, `normalised`, `is_finite`; `orthonormal_basis(n)`
   returns `(e1, e2)`: `e1 = normalise(n x (1,0,0))` if `|n.x| < 0.9` else `normalise(n x
   (0,1,0))`, `e2 = n x e1` (right-handed). The basis choice fixes the azimuth zero point; it is
-  part of the contract only for tests that compare azimuths with this definition.
+  part of the contract only where azimuths are compared with this definition.
 - `Emitter{position, pointing (unit), angular}` (default pointing (0,0,+1), Isotropic).
 - `Star{towards_source (unit, z>0), distance_m (default +inf), disk_radius_m, disk_z_m, start_z_m}`.
 - Targets: `DiscTarget{centre, normal (unit), radius_m}`, `SphereTarget{centre, radius_m}`,
@@ -84,7 +84,7 @@ Target stream: `r = R sqrt(u0)`, `phi = 2 pi u1`, point `P = centre + e1 r cos p
 phi` with `(e1,e2) = orthonormal_basis(normal)`. `direction = (P - position)/|P - position|`,
 `cos = clamp(dot(direction, pointing), -1, 1)`, weight
 `I(1 - cos) / I_max * (h/|P - position|)^3` (zero outside the profile). Sum of weights is the
-expected number of photons reaching the disc. Test: isotropic, `h = 10`, `R = 2`: mean weight
+expected number of photons reaching the disc. Example: isotropic, `h = 10`, `R = 2`: mean weight
 `= (solid angle / 4 pi) * 100`, solid angle `2 pi (1 - 10/sqrt(104))`; a 5 deg FilledCone gives
 `w > 0` inside and `w == 0` outside (margin 1e-3 deg).
 
@@ -101,7 +101,7 @@ centre at t = 0), on top of the pulse time. Weight 1.
 `position = centre + towards_source * distance`. `direction = normalise(target - position)`.
 If `position.z <= start_z` the photon starts at `position`; otherwise at the crossing of the
 start plane: `target + direction * ((start_z - target.z)/direction.z)`. Time added:
-`(|start - position| - distance)/c`. Test: source at 20 m, direction (0.6, 0, 0.8), disc centre
+`(|start - position| - distance)/c`. Example: source at 20 m, direction (0.6, 0, 0.8), disc centre
 height 1.5, start plane 30: start at (12, 0, 17.5), `t = -20/c`.
 
 The frame is stored unchanged in the chunk. A plane-wave star or a point source above the start plane starts at `z = start_z` (in its frame, e.g. T); a point source at or below the start plane starts at its own position.

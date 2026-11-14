@@ -1,6 +1,6 @@
 # Python API
 
-Package `obdeect sources`: `__version__` (distribution version or `"0.0.0"` if not installed);
+Package `obdeect.sources`: `__version__` (distribution version or `"0.0.0"` if not installed);
 extension `obdeect.sources._core` (nanobind) with `core_version()` (three-tuple), `stream_contract()`
 (dict: `format_major`, `format_minor`, `max_chunk_rows`, `sources_format_major`, `frames`
 {sky 0, telescope 2, camera 3}, `emitted_columns` list in obdeect stream order), `make_spectrum`,
@@ -15,7 +15,7 @@ three finite components; frame int must be 0, 2 or 3.
 ## `obdeect.sources.source`
 
 Constants: `CHUNK_ROWS = 65536`, `FRAMES = {"sky":0,"telescope":2,"camera":3}`, `COLUMNS =
-("x","y","z","cx","cy","cz","t","w","wavelength")` (tests compare with obdeect stream).
+("x","y","z","cx","cy","cz","t","w","wavelength")` (as in obdeect stream).
 
 Source dictionary (unknown keys at any level are `ValueError("unknown <label> key(s): ...")`;
 `kind` allowed only in profile and target sections):

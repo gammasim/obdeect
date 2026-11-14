@@ -1,6 +1,6 @@
 # Distributions
 
-Header `obdeect/sources/density.hpp`, namespace `obdeect sources`. `Uniforms = std::array<double,4>`; `sample(u)`
+Header `obdeect/sources/density.hpp`, namespace `obdeect::sources`. `Uniforms = std::array<double,4>`; `sample(u)`
 of 1-D shapes uses `u[0]` (complex pulse `u[0..2]`).
 
 ## LinearDensity
@@ -38,8 +38,8 @@ shapes: `x = mean + sigma * normal_quantile(u)`.
 
 `Spectrum = Fixed | UniformRange | InverseSquare | Tabulated`;
 `Pulse = Fixed | UniformRange | GaussianShape | Exponential | ComplexPulse | Tabulated`. All
-members `sample`, `mean`, `variance` (not Tabulated) are public. Moments are tested to four
-sigma (`test_density`).
+members `sample`, `mean`, `variance` (not Tabulated) are public. Moments agree with the sampled
+values within four sigma.
 
 ## Angular profiles
 
@@ -62,7 +62,7 @@ Argument `u = 1 - cos(theta)`. Each profile has `intensity(u)` (relative per sol
   (nodes computed by repeated addition of `0.05 sigma` starting at 0, while `theta < theta_max`)
   plus a last node at `theta_max`; `u = 1 - cos(theta)`. Error if `sigma < 1e-12` rad or
   non-finite (message mentions 1e-12 rad). `sigma` is the 2-D r.m.s. in angle: the fitted
-  `sqrt(mean(theta^2)/2)` equals sigma (test: sigma 5 deg within 2%). Intensity at `u(sigma)` is
+  `sqrt(mean(theta^2)/2)` equals sigma (sigma 5 deg within 2%). Intensity at `u(sigma)` is
   `exp(-1/2)` to 1e-3 and at `u = 0` is 1.
 - `rayleigh_angular_table()`: intensity `0.5 (1 + cos^2 theta)`, nodes every 1 deg from 0 to
   180 deg (181 nodes), `u = 1 - cos(theta)`.

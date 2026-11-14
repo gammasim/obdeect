@@ -1,6 +1,6 @@
-# obdeect sources night-sky (implementation)
+# night-sky: specification
 
-User options and examples: [night-sky](../programs/night-sky.md). Source:
+Options and examples: [night-sky](../programs/night-sky.md). Source:
 [background](background.md). Writer B, producer `obdeect sources night-sky`.
 
 ## Validation (at plan time, also with `--photons 0`)

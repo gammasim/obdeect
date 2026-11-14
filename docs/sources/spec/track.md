@@ -22,7 +22,7 @@ atan2(dot(perp, e2), dot(perp, e1))` with `(e1,e2) = orthonormal_basis(direction
 `a = cos_alpha - cos_theta cos_b`, `b = sin_theta sin_b`. If `b <= 0`: all azimuths if `a < 0`,
 none otherwise. Else `x = a/b`: none if `x >= 1`; all if `x <= -1`; else `centre = phi0`,
 `half = acos(x)`. Photons with azimuth within `phi0 +- half` hit; fraction `half/pi`.
-Test: against brute-force azimuth scan within 2e-5.
+The result agrees with a brute-force azimuth scan to 2e-5.
 
 ## Emission (`emit_track(track, seed, event, telescope, out)`)
 
