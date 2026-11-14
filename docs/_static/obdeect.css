@@ -53,3 +53,19 @@
 .homepage-actions p {
   margin: 0;
 }
+
+/* Command boxes are shown in full: wrap long lines instead of adding a scroll bar. */
+.bd-article pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow-x: visible;
+}
+
+/* Chain diagram on the front page. */
+.chain-figure {
+  display: block;
+  width: 100%;
+  max-width: 52rem;
+  height: auto;
+  margin: 1.5rem auto;
+}

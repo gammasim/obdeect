@@ -3,8 +3,8 @@
 Flasher photon stream: a light flasher in front of a telescope.
 
 ```console
-$ obdeect sources flasher --type dish > flasher.gst
-$ obdeect sources flasher --type secondary --fire all --delays 0,0,0,0 > secondary.gst
+$ obdeect sources flasher --type dish > flasher.pst
+$ obdeect sources flasher --type secondary --fire all --delays 0,0,0,0 > secondary.pst
 ```
 
 - `--type dish` (default): flasher on the axis of a single-reflector telescope, in front of
@@ -53,7 +53,7 @@ An option of the other type is rejected, e.g. `--delays applies only to --type s
   of the camera, without atmosphere. Time is emission time plus path / c. Count and directions
   equal the sky-frame output for the same seed; positions lie in a disc of radius
   `R / sqrt(1 - (R / d)^2)`. A photon that does not travel towards the plane is an error.
-  Pipeline: see [sim_telarray](../sim_telarray.md).
+  Pipeline: see [sim_telarray](../../user-guide/pipelines.md).
 
 ## Secondary: notes
 
@@ -70,17 +70,3 @@ An option of the other type is rejected, e.g. `--delays applies only to --type s
   delays.
 - Positions are emission points, not impacts on a plane. No refraction (applied by the
   atmosphere stage). Output is a photon stream.
-
-## Checks
-
-- `ctest`: `test_flasher` (dish: count, cone and direction moments, zem, non-default spectrum,
-  pulse, bunch size, event repeats; secondary: flasher positions, direction moments, counts,
-  delays, fire patterns, alternate events; type rules).
-- Dish reference run (default options, 20 events; `validation/sources/compare_flasher-dish.sh`):
-  photons per event 3519.7 (reference) vs 3520.5 (obdeect sources); cz mean -0.998593 +- 3e-6
-  vs -0.998583 +- 3e-6 (2.2 sigma); wavelength 400 nm both; reference time 53.45 ns is the
-  flight time.
-- Secondary reference run (`--photons 1e5 --events 1`; `validation/sources/compare_flasher-secondary.sh`):
-  399939 bunches (reference) vs 400000 (obdeect sources). The reference cz is always negative
-  (sign lost), so the cz comparison is not valid for this isotropic emitter; cx, cy agree within
-  1 sigma.

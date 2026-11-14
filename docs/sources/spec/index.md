@@ -25,7 +25,6 @@ tool-laser-beam
 tool-night-sky
 tool-muon-track
 python-api
-tests
 ```
 
 ## Pages
@@ -42,7 +41,6 @@ tests
 | cli-conventions | option parsing shared by the tools |
 | tool-* | one page per executable |
 | python-api | dictionary API and plot helper |
-| tests | list of tests, the C++ and Python API they require, acceptance criteria |
 
 ## Build contract
 
@@ -51,4 +49,3 @@ tests
 - Executables `obdeect sources flasher`, `-led`, `-point-source`, `-beam-scan`, `-laser-beam`,
   `-night-sky`, `-muon-track` from `cpp/tools/<name>.cpp`; tests `cpp/tests/test_<name>.cpp`
   (one CTest each); Python extension `obdeect.sources._core` (nanobind) and package `python/obdeect sources`.
-- Header and namespace names used by the tests are listed on the [tests](tests.md) page.

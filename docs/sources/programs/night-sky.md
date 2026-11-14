@@ -4,7 +4,7 @@ Night-sky background photons on one telescope sphere, in a cone about the downwa
 (0, 0, -1), sky frame. Source details: [background](../spec/background.md).
 
 ```console
-$ obdeect sources night-sky --photons 1e6 --viewcone 10 -o night-sky.ps
+$ obdeect sources night-sky --photons 1e6 --viewcone 10 -o night-sky.pst
 ```
 
 Replaces the earlier nsbls program; options keep their names.
@@ -24,12 +24,3 @@ Replaces the earlier nsbls program; options keep their names.
 | `-w`, `--pulse-width` [ns] | 0 | `pulse_width_ns` |
 | `-d`, `--pulse-delay` [ns] | 0 | `pulse_delay_ns` |
 | `--seed` | 1 | `seed` |
-
-## Checks
-
-- Directions inside the cone (within 1e-6), |position| = R, mean and variance of cos(theta)
-  (4 sigma), mean time against `-E[zi] R / c` (4 sigma), a table spectrum's mean and variance.
-- Invalid source parameters are rejected when the plan is built, also with `--photons 0`:
-  `--radius -1` and `--viewcone 200` fail with an error.
-- Reference-program run (`--atmosphere 1 --photons 200000`) wrote zero bunches. Cause not
-  found yet, so no comparison.
