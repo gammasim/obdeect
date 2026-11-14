@@ -4,6 +4,10 @@ Air bends light and slows it down. This page describes how obdeect computes the 
 the air delay from an atmospheric profile. The atmosphere stage uses it for light sources and for
 photons emitted in the air. Photons of a run with `refraction_applied` = 1 are not refracted again.
 
+Bending and air delay are plane-parallel (layers of constant height, no Earth curvature). They are
+rejected with the `spherical` curvature mode for now; in the `corsika` mode CORSIKA has already
+applied the curved refraction ([](curvature.md)).
+
 ## Input table
 
 Lines starting with `#` and blank lines are skipped. The first four columns are used:

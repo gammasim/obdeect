@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -29,6 +30,8 @@ struct ExtinctionSettings {
   std::uint32_t event{};
   std::uint32_t telescope{};
   bool weighted{};
+  // Spherical atmosphere (atmospheric_acceptance_curved) if set, plane-parallel otherwise.
+  std::optional<CurvedPath> curved{};
 };
 
 namespace detail {
@@ -132,7 +135,12 @@ apply_extinction_chunk(obdeect::stream::PhotonChunk chunk, const ExtinctionSetti
 
   // Acceptance p = p_atm * E(lambda); rows at or above MAX_LAMBDA are dropped (p = 0).
   std::vector<double> p(rows, 0.0);
-  atmospheric_acceptance<double>(chunk, *settings.table, *settings.depths, p);
+  if (settings.curved) {
+    atmospheric_acceptance_curved<double>(chunk, *settings.table, *settings.depths,
+                                          *settings.curved, p);
+  } else {
+    atmospheric_acceptance<double>(chunk, *settings.table, *settings.depths, p);
+  }
   const Envelope &envelope = *settings.envelope;
   for (std::size_t row = 0; row < rows; ++row) {
     const int iwl = table_wavelength(static_cast<double>(wavelength[row]));

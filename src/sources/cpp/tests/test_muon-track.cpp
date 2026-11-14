@@ -259,6 +259,7 @@ void stream_round_trip() {
       ++runs;
       CHECK(std::get<std::int64_t>(record.metadata.at("run_number")) == 1);
       CHECK(std::get<std::int64_t>(record.metadata.at("refraction_applied")) == 0);
+      CHECK(std::get<std::int64_t>(record.metadata.at("curvature_applied")) == 0);
       break;
     case obdeect::stream::RecordType::event:
       ++events;

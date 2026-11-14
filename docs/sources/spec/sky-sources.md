@@ -28,7 +28,8 @@ Header `obdeect/sources/sky_sources.hpp`. Shared by point-source, beam-scan, las
 ## Stream layout
 
 `run` keys: `run_number` i64, `observation_level_m` f64, `atmosphere_id` i64,
-`refraction_applied` i64 = 0, `n_telescopes` i64, `telescope_x_m`/`y_m`/`z_m`/`r_m`
+`refraction_applied` i64 = 0, `curvature_applied` i64 = 0, `n_telescopes` i64,
+`telescope_x_m`/`y_m`/`z_m`/`r_m`
 `vector<double>`; `wavelength_min_nm` and `wavelength_max_nm` f64 only if
 `wavelength_max_nm > 0`; then all `extra` entries inserted without overwriting existing keys
 (extra may add doubles and strings).

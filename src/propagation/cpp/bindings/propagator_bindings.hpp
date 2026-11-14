@@ -35,9 +35,14 @@ inline void bind_propagator(nb::module_ &module) {
          const std::optional<std::tuple<double, double>> &wavelength_range, std::uint64_t seed,
          bool weighted, bool store_p, const std::optional<std::string> &scattering_path,
          std::uint32_t scattering_points, double pathlen_m,
-         const std::map<std::int64_t, double> &telescope_pathlen_m, bool geometry_only) {
+         const std::map<std::int64_t, double> &telescope_pathlen_m, bool geometry_only,
+         const std::string &curvature, const std::optional<double> &earth_radius_m) {
         obdeect::propagation::PropagatorConfig config;
         config.geometry_only = geometry_only;
+        config.curvature = obdeect::propagation::parse_curvature(curvature);
+        if (earth_radius_m) {
+          config.earth_radius_m = *earth_radius_m;
+        }
         config.default_pathlen_m = pathlen_m;
         for (const auto &[id, metres] : telescope_pathlen_m) {
           if (id < 1 || id > static_cast<std::int64_t>(obdeect::stream::max_telescope)) {
@@ -102,10 +107,13 @@ inline void bind_propagator(nb::module_ &module) {
       nb::arg("store_p") = false, nb::arg("scattering_path") = nb::none(),
       nb::arg("scattering_points") = std::uint32_t{8}, nb::arg("pathlen_m") = 0.0,
       nb::arg("telescope_pathlen_m") = std::map<std::int64_t, double>{},
-      nb::arg("geometry_only") = false,
+      nb::arg("geometry_only") = false, nb::arg("curvature") = "none",
+      nb::arg("earth_radius_m") = nb::none(),
       "Run the atmosphere stage on a photon stream file (geometry_only: no extinction, see "
       "docs/propagation.md). envelope_paths: (name, file) pairs of "
       "two-column text tables (nm, value). scattering_path: optional scattering table (single "
       "scattering of the primaries, off when None). pathlen_m: path inside each telescope [m]; "
-      "telescope_pathlen_m: {telescope_id (1-based): metres} overrides.");
+      "telescope_pathlen_m: {telescope_id (1-based): metres} overrides. curvature: none, corsika "
+      "or spherical (see Curvature); earth_radius_m: Earth radius [m], None for the CORSIKA "
+      "CURVED radius.");
 }

@@ -26,7 +26,8 @@ atmosphere, telescope_id=1, telescope_position=(0,0,0), telescope_radius_m, fram
 
 `run` keys: `run_number` i64, `observation_level_m` f64, `n_telescopes` i64 = 1,
 `telescope_x_m`, `telescope_y_m`, `telescope_z_m`, `telescope_r_m` (each `vector<double>` of
-one value), `atmosphere_id` i64, `refraction_applied` i64 = 0, and, if at least one emission
+one value), `atmosphere_id` i64, `refraction_applied` i64 = 0, `curvature_applied` i64 = 0,
+and, if at least one emission
 exists, `wavelength_min_nm` / `wavelength_max_nm` f64 = min / max over all emissions of the
 spectrum range (Fixed: value both; UniformRange, InverseSquare: low, high; Tabulated: first and
 last node).
@@ -59,7 +60,8 @@ list may have several telescopes; every chunk is frame sky with `zem = float(obs
 `RunInfo{run_number, observation_level_m, wavelength_min_nm, wavelength_max_nm, telescopes}`.
 
 `run` keys: `run_number` i64, `observation_level_m` f64, `wavelength_min_nm`,
-`wavelength_max_nm` f64 (always written), `refraction_applied` i64 = 0, `n_telescopes` i64,
+`wavelength_max_nm` f64 (always written), `refraction_applied` i64 = 0,
+`curvature_applied` i64 = 0, `n_telescopes` i64,
 `telescope_x_m`/`y_m`/`z_m`/`r_m` vectors. No `atmosphere_id`.
 
 `event` keys: `event_number` i64, `primary_id` i64, `energy_gev` f64, `core_x_m` and `core_y_m`

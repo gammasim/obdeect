@@ -233,6 +233,7 @@ inline void write_stream(std::ostream &out, const RunSetup &setup,
   run["telescope_r_m"] = std::vector<double>{setup.telescope_radius_m};
   run["atmosphere_id"] = setup.atmosphere;
   run["refraction_applied"] = std::int64_t{0};
+  run["curvature_applied"] = std::int64_t{0};
   bool any = false;
   double wl_min = 0.0, wl_max = 0.0;
   for (const auto &event : events)

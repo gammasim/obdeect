@@ -52,6 +52,7 @@ void default_stream() {
   CHECK(s.events == 2);
   CHECK(std::get<std::int64_t>(s.run.at("n_telescopes")) == 1);
   CHECK(std::get<std::int64_t>(s.run.at("refraction_applied")) == 0);
+  CHECK(std::get<std::int64_t>(s.run.at("curvature_applied")) == 0);
 
   const auto plan = plan_point_source(o);
   const std::uint64_t expected = plan.cases[0][0].count(1) + plan.cases[0][0].count(2);

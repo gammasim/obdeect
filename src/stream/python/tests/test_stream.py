@@ -39,6 +39,7 @@ def test_round_trip(tmp_path):
                 "name": "site",
                 "energy_min_gev": 0.25,
                 "refraction_applied": True,
+                "curvature_applied": 1,
             },
         )
         writer.write("telescope", {"telescope_id": 1, "frame": 2})
@@ -65,6 +66,7 @@ def test_round_trip(tmp_path):
     assert run["name"] == "site"
     assert run["energy_min_gev"] == 0.25
     assert run["refraction_applied"] == 1
+    assert run["curvature_applied"] == 1
     np.testing.assert_array_equal(run["telescope_x_m"], [1.0, 2.0, -3.5])
     assert run["telescope_x_m"].dtype == np.float64
 

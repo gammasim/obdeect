@@ -65,6 +65,7 @@ public:
     m["wavelength_min_nm"] = run.wavelength_min_nm;
     m["wavelength_max_nm"] = run.wavelength_max_nm;
     m["refraction_applied"] = std::int64_t{0};
+    m["curvature_applied"] = std::int64_t{0};
     m["n_telescopes"] = static_cast<std::int64_t>(run.telescopes.size());
     std::vector<double> x, y, z, r;
     for (const auto &t : run.telescopes) {

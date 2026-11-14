@@ -19,6 +19,16 @@
 
 namespace obdeect::propagation {
 
+// Altitude a.s.l. [m] of a point at horizontal distance sqrt(rho2) [m] from the array reference
+// and at flat altitude altitude_m (observation level + z), seen from the Earth centre
+// C = (0, 0, -(R + observation level)) with Earth radius R: |p - C| - R. Evaluated as
+// (|p - C|^2 - R^2) / (|p - C| + R) so that there is no cancellation for large R.
+inline double spherical_altitude_m(double rho2, double altitude_m, double earth_radius_m) {
+  const double radius = earth_radius_m + altitude_m;
+  const double distance = std::sqrt(rho2 + radius * radius);
+  return (rho2 + altitude_m * (2.0 * earth_radius_m + altitude_m)) / (distance + earth_radius_m);
+}
+
 // Geometry of one telescope for sky-frame photons. Heights are m; z is measured above the
 // observation level, as in frame sky.
 struct SkyPlane {
@@ -31,6 +41,10 @@ struct SkyPlane {
   // Bending to the plane; the tables must be built for the plane altitude (observation_m +
   // telescope_z_m). Null: no bending.
   const RefractionTables *tables{};
+  // Earth radius R [m] for curved emission altitudes (spherical curvature), 0: flat. The emission
+  // altitude is then |p - C| - R with C = (0, 0, -(R + observation_m)) and p = (x, y, z) of the
+  // emission point. Not combined with profile or tables.
+  double earth_radius_m{0.0};
 };
 
 // Converts a chunk in frame sky to frame G in place and returns the number of photons that do
@@ -50,6 +64,13 @@ inline std::uint64_t sky_to_ground(obdeect::stream::PhotonChunk &chunk, const Sk
   chunk.validate();
   if (!chunk.has(Column::z)) {
     throw std::invalid_argument("sky-frame photons need the z column");
+  }
+  if (!std::isfinite(plane.earth_radius_m) || plane.earth_radius_m < 0.0) {
+    throw std::invalid_argument("earth radius must be finite and not negative (0: flat)");
+  }
+  const bool curved = plane.earth_radius_m > 0.0;
+  if (curved && (plane.profile != nullptr || plane.tables != nullptr)) {
+    throw std::invalid_argument("curved air delay and bending are not implemented");
   }
   const std::size_t rows = chunk.rows();
   const double plane_z = plane.telescope_z_m;
@@ -99,7 +120,13 @@ inline std::uint64_t sky_to_ground(obdeect::stream::PhotonChunk &chunk, const Sk
         throw std::invalid_argument("cz column does not match cx, cy (cz = -sqrt(1-cx^2-cy^2))");
       }
     }
-    const double emission_altitude = plane.observation_m + emission_z;
+    double emission_altitude = plane.observation_m + emission_z;
+    if (curved) {
+      const double x_emit = x[row];
+      const double y_emit = y[row];
+      emission_altitude = spherical_altitude_m(x_emit * x_emit + y_emit * y_emit, emission_altitude,
+                                               plane.earth_radius_m);
+    }
     double x_out = 0.0;
     double y_out = 0.0;
     double cx_out = 0.0;

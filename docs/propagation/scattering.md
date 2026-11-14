@@ -6,7 +6,9 @@ scattered at N_s points along its path. Each scattering point gives one photon p
 sphere, aimed at the sphere. The primary photon is unchanged.
 
 Assumptions: single scattering, no polarisation, straight lines, plane-parallel atmosphere (no Earth
-curvature), no refraction. Light travels in vacuum for timing.
+curvature), no refraction. Light travels in vacuum for timing. Scattering is rejected in the curved
+modes of the atmosphere stage ([](curvature.md)); a spherical treatment of the scattering geometry
+is not implemented.
 
 ## Scattering table
 

@@ -17,11 +17,17 @@ assignment and the thinning of photons with an efficiency bound. The order of al
 
 ## Formulas
 
-Airmass of a downward photon with direction cosines (cx, cy), plane-parallel:
+Airmass of a downward photon with direction cosines (cx, cy), plane-parallel (the default):
 
 $$
 X = \frac{1}{|c_z|}, \qquad c_z = -\sqrt{1 - c_x^2 - c_y^2}, \qquad X = 10^{10} \text{ if } c_z = 0.
 $$
+
+The plane-parallel airmass is an approximation: its relative error is about $(H/R)\tan^2\theta$,
+about 2 % at 75 degrees and above 10 % near 85 degrees. With the `curvature` option the airmass
+is replaced by the curved slant optical depth in a spherical atmosphere; see [](curvature.md).
+The formulas below for the depth at height h stay the same, since the slant depth uses the same
+table.
 
 Optical depth at height h (m a.s.l.) and wavelength lambda (nm). The table gives
 $\tau_i(\lambda)$ at heights $h_i$ above the observation level H2, where $\tau = 0$. Between points

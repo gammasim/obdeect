@@ -33,7 +33,8 @@ The output is a photon stream, not an image; `.pst` is only a naming convention.
 
 - Frame `sky`: positions relative to the observation level, z up, metres. No refraction and no
   extinction: obdeect propagation applies them on the way to the telescope.
-- One run, `--events` events, one telescope record (the sphere). `refraction_applied = 0`.
+- One run, `--events` events, one telescope record (the sphere). `refraction_applied = 0` and
+  `curvature_applied = 0`.
 
 ## Options
 
