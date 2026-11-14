@@ -4,7 +4,7 @@ Ground-frame (G) or telescope-frame (T) photons go in; camera-frame (C) photons
 come out. Records pass through unchanged, except that telescopes not selected
 are dropped and the efficiency status is updated. The stream component
 (obdeect-stream) is a required dependency; its frame and chunk constants are used here.
-The frames and the efficiency status rules are described in docs/photon-stream.md.
+The frames and the efficiency status rules are described in docs/ray-tracing/photon-stream.md.
 """
 
 from __future__ import annotations
