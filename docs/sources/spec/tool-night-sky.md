@@ -28,6 +28,7 @@ User options and examples: [night-sky](../programs/night-sky.md). Source:
 
 - Count `3e4` for `6e4` photons with bunch 2; directions inside the cone to 1e-6; `|position| = 15`
   to 1e-3; `w = 2`; cos moments to 4 sigma.
+- Projected disc: `ri^2` uniform in `[0, 1]` (mean 1/2, KS below 1.95/sqrt(n)); `E[zi] = 2/3`.
 - Mean time `= delay - E[zi] r / c` with pulse width 4 and delay 10.
 - Uniform 300..600 table spectrum moments; tilted viewing axes always enter the sphere.
 - Stream layout: 2 events, `2 x 20000` rows, `telescope_r_m = [15]`; `zem - z = altitude`.

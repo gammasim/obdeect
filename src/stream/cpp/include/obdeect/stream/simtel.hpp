@@ -28,12 +28,13 @@
 // with telescope frame, for one telescope is rejected, because the TELPOS height and the
 // Bypass_Optics value are per telescope for the whole run.
 //
-// Streams without CORSIKA blobs (e.g. from light sources) get the headers RUNH,
-// TELPOS, EVTH, TELOFF, EVTE, INPUTCFG (one line, NSHOW <events>, before RUNE) and
-// RUNE synthesised from the run and event metadata. Each synthesised header is
-// reported as a warning. ATMPROF (1216) is written only when a table is given
-// (obdeect stream to-simtel --atmprof): before the first EVTH, with the profile number that EVTH
-// names (99 for synthesised headers).
+// Streams without CORSIKA blobs (e.g. from light sources) get the headers RUNH, INPUTCFG
+// (one line, NSHOW 0), TELPOS, EVTH, TELOFF, EVTE and RUNE synthesised from the run and event
+// metadata. Each synthesised header is reported as a warning. The order follows CORSIKA:
+// RUNH, INPUTCFG, [ATMPROF], TELPOS, then the events. ATMPROF (1216) is written only when a table
+// is given (obdeect stream to-simtel --atmprof): before TELPOS and the first EVTH, with the profile
+// number that EVTH names (99 for synthesised headers). INPUTCFG is written at the start of the run
+// because the number of events is not known then; sim_telarray ignores NSHOW 0.
 //
 // Efficiency status (docs/format.md): run efficiency status records apply to every telescope, a
 // telescope efficiency status to its telescope and overrides the run efficiency status records per
@@ -723,6 +724,7 @@ private:
       if (atmprof_pending_) {
         emit_atmprof(evth_profile(record.blob));
       }
+      ensure_telpos();
       break;
     case iact::teloff:
       have_teloff_ = true;
@@ -754,6 +756,7 @@ private:
     run_headers_done_ = false;
     atmprof_pending_ = atmprof_.has_value();
     have_runh_ = have_telpos_ = have_rune_ = have_inputcfg_ = false;
+    telpos_done_ = false;
     events_ = 0;
     run_efficiency_statuses_.clear();
     telescope_efficiency_statuses_.clear();
@@ -824,6 +827,7 @@ private:
   }
 
   // Run headers come before the first event; CORSIKA blobs have arrived by then.
+  // INPUTCFG is written here, before ATMPROF and TELPOS (CORSIKA order).
   void ensure_run_headers() {
     if (!run_open_ || run_headers_done_) {
       return;
@@ -833,10 +837,22 @@ private:
       note_synthesised("RUNH");
       emit(run_header());
     }
-    if (!have_telpos_) {
-      note_synthesised("TELPOS");
-      emit(telescope_positions());
+    if (!have_inputcfg_) {
+      note_synthesised("INPUTCFG");
+      emit(input_lines_block());
+      have_inputcfg_ = true;
     }
+  }
+
+  // TELPOS, once per run, unless the stream has its own. Called after ATMPROF, before the
+  // first EVTH.
+  void ensure_telpos() {
+    if (!run_open_ || have_telpos_ || telpos_done_) {
+      return;
+    }
+    telpos_done_ = true;
+    note_synthesised("TELPOS");
+    emit(telescope_positions());
   }
 
   // Event headers come before the first telescope; the blobs of CORSIKA output
@@ -853,6 +869,7 @@ private:
         note_missing_atmprof();
       }
       emit_atmprof(custom_profile_id);
+      ensure_telpos();
       emit(event_header());
     }
     if (!have_teloff_) {
@@ -880,13 +897,8 @@ private:
     }
     end_event();
     ensure_run_headers();
+    ensure_telpos(); // a run without events still has its telescope positions
     if (!have_rune_) {
-      if (!have_inputcfg_) {
-        // The receiving run checks the number of showers it reads against the NSHOW
-        // line of the CORSIKA input, which a stream without CORSIKA blobs lacks.
-        note_synthesised("INPUTCFG");
-        emit(input_lines_block());
-      }
       note_synthesised("RUNE");
       emit(run_end_block());
     }
@@ -1006,11 +1018,13 @@ private:
                        {{2, static_cast<double>(event_number_)}});
   }
 
-  // INPUTCFG: the single input line `NSHOW n` with the number of events written.
+  // INPUTCFG: the single input line `NSHOW 0`. The event count is not known when the run starts
+  // (CORSIKA RUNH has no shower count, and the stream is written as it is read), and
+  // sim_telarray only uses a positive NSHOW (multipipe_corsika.c sets CORSIKA_SHOWERS for n > 0).
   EventioBlock input_lines_block() const {
     std::vector<std::uint8_t> body;
     ByteWriter out{body};
-    const std::string line = "NSHOW " + std::to_string(events_);
+    const std::string line = "NSHOW 0";
     out.i32(1);
     out.i16(static_cast<std::int16_t>(line.size()));
     body.insert(body.end(), line.begin(), line.end());
@@ -1048,6 +1062,7 @@ private:
   bool have_telpos_{};
   bool have_rune_{};
   bool have_inputcfg_{};
+  bool telpos_done_{};
   bool event_open_{};
   bool event_headers_done_{};
   bool have_evth_{};

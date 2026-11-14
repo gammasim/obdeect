@@ -50,7 +50,7 @@ inline Photon sample_background(const BackgroundSource &s, std::uint64_t seed, s
   const Vec3 d = direction_about(axis, basis, cos_theta, sin_theta, two_pi * ud[1]);
 
   const Uniforms ut = philox_draw(seed, event, telescope, index, Stream::target);
-  const double ri = 1.0 - std::sqrt(ut[0]);
+  const double ri = std::sqrt(ut[0]);
   const double phi = two_pi * ut[1];
   const double zi = std::sqrt(std::max(0.0, 1.0 - ri * ri));
   const Vec3 local{ri * std::cos(phi), ri * std::sin(phi), zi};

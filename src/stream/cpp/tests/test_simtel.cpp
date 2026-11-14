@@ -139,6 +139,8 @@ std::string corsika_file(int events) {
     bytes.append(raw.begin(), raw.end());
   };
   add(runh_block());
+  add(make_block(iact::inputcfg, 0, 0,
+                 std::vector<std::uint8_t>{1, 0, 0, 0, 7, 0, 'N', 'S', 'H', 'O', 'W', ' ', '1'}));
   add(telpos_block({2000.0, 2100.0}));
   for (int e = 1; e <= events; ++e) {
     add(evth_block(static_cast<float>(e)));
@@ -669,20 +671,20 @@ void test_atmprof_synthesised() {
   for (const EventioBlock &block : blocks) {
     types.push_back(block.type);
   }
-  const std::vector<std::uint32_t> expected = {iact::runh, iact::telpos,   iact::atmprof,
-                                               iact::evth, iact::teloff,   iact::telarray,
-                                               iact::evte, iact::inputcfg, iact::rune};
+  const std::vector<std::uint32_t> expected = {iact::runh,     iact::inputcfg, iact::atmprof,
+                                               iact::telpos,   iact::evth,     iact::teloff,
+                                               iact::telarray, iact::evte,     iact::rune};
   CHECK(types == expected);
   if (types != expected) {
     return;
   }
-  const EventioBlock &atmprof = blocks[2];
+  const EventioBlock &atmprof = blocks[2]; // before TELPOS, as in CORSIKA
   CHECK(atmprof.ident == custom_profile_id);
   const AtmosphereTable table = decode_atmprof(atmprof);
   CHECK(table.observation_level_cm == 220000.0); // run metadata, 2200 m
   CHECK(table.alt_km == std::vector<double>({0.0, 1.0, 5.0}));
   CHECK(table.refidx_m1 == std::vector<double>({2.9e-4, 2.7e-4, 2.2e-4}));
-  const std::vector<float> evth = decode_float_block(blocks[3]);
+  const std::vector<float> evth = decode_float_block(blocks[4]);
   const auto flags = static_cast<std::int64_t>(std::llround(evth[76]));
   CHECK(((flags >> 10) & 0x3FF) == custom_profile_id); // profile of EVTH word 77
   CHECK(warnings.str().find("EVTH") != std::string::npos);
@@ -778,23 +780,23 @@ void test_synthesised_headers() {
   for (const EventioBlock &block : blocks) {
     types.push_back(block.type);
   }
-  const std::vector<std::uint32_t> expected = {iact::runh,     iact::telpos,   iact::evth,
-                                               iact::teloff,   iact::telarray, iact::evte,
-                                               iact::inputcfg, iact::rune};
+  const std::vector<std::uint32_t> expected = {iact::runh, iact::inputcfg, iact::telpos,
+                                               iact::evth, iact::teloff,   iact::telarray,
+                                               iact::evte, iact::rune};
   CHECK(types == expected);
   if (types == expected) {
     const std::vector<float> runh = decode_float_block(blocks[0]);
     CHECK_NEAR(runh[1], 7.0, 0.0);       // run number, word 2
     CHECK_NEAR(runh[5], 220000.0, 1e-3); // observation level, word 6 [cm]
-    const TelPos pos = decode_telpos(blocks[1]);
+    const TelPos pos = decode_telpos(blocks[2]);
     CHECK(pos.x.size() == 2);
     CHECK_NEAR(pos.x[1], 10000.0, 1e-3); // second telescope at 100 m
     CHECK_NEAR(pos.r[0], 1200.0, 1e-3);
-    const std::vector<float> evth = decode_float_block(blocks[2]);
+    const std::vector<float> evth = decode_float_block(blocks[3]);
     CHECK_NEAR(evth[1], 3.0, 0.0);       // event number, word 2
     CHECK_NEAR(evth[43], 7.0, 0.0);      // run number, word 44
     CHECK_NEAR(evth[4], 220000.0, 1e-3); // word 5 [cm]
-    const std::vector<float> evte = decode_float_block(blocks[5]);
+    const std::vector<float> evte = decode_float_block(blocks[6]);
     CHECK_NEAR(evte[1], 3.0, 0.0);
     // RUNE body: count 3, "RUNE", run number, number of showers.
     const std::vector<std::uint8_t> &body = blocks[7].body;
@@ -828,17 +830,17 @@ std::vector<Record> light_source_events(int events) {
   return records;
 }
 
-// The synthesised run end counts the events written, and the input line NSHOW
-// that precedes it gives the same number; a CORSIKA input block is not duplicated.
+// The synthesised run end counts the events written. The synthesised INPUTCFG comes right after
+// RUNH with NSHOW 0 (the event count is not known at the start of the run).
 void test_synthesised_run_end_counts_events() {
   for (const int events : {1, 4}) {
     const std::vector<EventioBlock> blocks =
         read_blocks(run_adapter(light_source_events(events), {}));
     const EventioBlock &rune = blocks.back();
-    const EventioBlock &inputcfg = blocks[blocks.size() - 2];
+    CHECK(blocks[0].type == iact::runh);
+    CHECK(blocks[1].type == iact::inputcfg);
     CHECK(rune.type == iact::rune);
-    CHECK(inputcfg.type == iact::inputcfg);
-    if (rune.type != iact::rune || inputcfg.type != iact::inputcfg) {
+    if (rune.type != iact::rune || blocks[1].type != iact::inputcfg) {
       return;
     }
     // RUNE: count 3, "RUNE", run number, number of showers.
@@ -847,7 +849,7 @@ void test_synthesised_run_end_counts_events() {
     std::memcpy(&showers, rune.body.data() + 12, 4);
     CHECK_NEAR(showers, static_cast<double>(events), 0.0);
     // INPUTCFG: int32 line count, then int16 length and text per line.
-    const std::vector<std::uint8_t> &body = inputcfg.body;
+    const std::vector<std::uint8_t> &body = blocks[1].body;
     CHECK(body.size() >= 6);
     std::int32_t lines = 0;
     std::int16_t length = 0;
@@ -855,7 +857,7 @@ void test_synthesised_run_end_counts_events() {
     std::memcpy(&length, body.data() + 4, 2);
     CHECK(lines == 1);
     const std::string text(body.begin() + 6, body.begin() + 6 + length);
-    CHECK(text == "NSHOW " + std::to_string(events));
+    CHECK(text == "NSHOW 0");
   }
   // A stream with its own INPUTCFG keeps it and gets no second one.
   std::vector<Record> records = light_source_events(2);
