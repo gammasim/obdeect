@@ -73,8 +73,9 @@ def propagate(
             photons from CORSIKA with the CURVED option (``curvature_applied = 1``, frame G);
             the curved slant depth replaces the plane-parallel airmass. ``"spherical"``: photons
             without curvature (``curvature_applied = 0``); the curvature is applied to the
-            emission altitudes and the local vertical of each telescope. Not combined with
-            scattering; ``"spherical"`` is also rejected with a profile.
+            emission altitudes and the local vertical of each telescope; with a profile, the
+            refraction and air delay follow the spherical geometry. Not combined with
+            scattering.
         earth_radius_m: Earth radius [m] for the curved modes; must be above 1e6 m. Default
             None: the CORSIKA CURVED radius (6371315 m).
 
