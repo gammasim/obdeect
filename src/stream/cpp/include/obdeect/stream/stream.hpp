@@ -235,7 +235,10 @@ inline void load_floats(const std::uint8_t *src, float *dst, std::size_t n) {
   }
 }
 
-inline void decode_chunk(PhotonChunk &chunk, const std::uint8_t *data, std::size_t size) {
+// Validates a photons record. With load_columns false the header and payload size are
+// still checked and the fixed fields are set, but no column is allocated or copied.
+inline void decode_chunk(PhotonChunk &chunk, const std::uint8_t *data, std::size_t size,
+                         bool load_columns = true) {
   Cursor cursor(data, size);
   chunk.telescope_id = static_cast<std::uint32_t>(cursor.le(4));
   const std::uint64_t frame = cursor.le(4);
@@ -262,6 +265,10 @@ inline void decode_chunk(PhotonChunk &chunk, const std::uint8_t *data, std::size
   const auto n = static_cast<std::size_t>(rows);
   if (cursor.remaining() != n * present * sizeof(float)) {
     malformed("chunk payload size does not match its header");
+  }
+  if (!load_columns) {
+    chunk.resize(0, 0);
+    return;
   }
   chunk.resize(n, mask);
   for (std::uint32_t i = 0; i < n_columns; ++i) {
@@ -459,6 +466,14 @@ class Reader {
 public:
   explicit Reader(std::istream &in) : in_(in) {}
 
+  // Decode photon chunk columns only for these telescope ids. Other chunks are read and
+  // validated like any other, but their columns are not decoded: they come back with
+  // telescope_id, frame and first_index set and no columns. Default: decode all.
+  void keep_photons_of(std::vector<std::uint32_t> telescope_ids) {
+    kept_telescopes_ = std::move(telescope_ids);
+    filter_photons_ = true;
+  }
+
   // Fills `record` with the next known record. Returns false after stream_end
   // (which is consumed, not returned) or at EOF on a record boundary. Unknown
   // record types are skipped. Throws std::runtime_error on malformed input or
@@ -503,7 +518,9 @@ public:
         record.type = static_cast<RecordType>(type);
         return true;
       case RecordType::photons:
-        decode_chunk(record.chunk, payload, size);
+        // Payloads shorter than the telescope id fail in decode_chunk.
+        decode_chunk(record.chunk, payload, size,
+                     !filter_photons_ || size < 4 || kept(chunk_telescope(payload)));
         record.type = RecordType::photons;
         return true;
       case RecordType::blob:
@@ -545,8 +562,18 @@ public:
   }
 
 private:
+  static std::uint32_t chunk_telescope(const std::uint8_t *payload) {
+    return static_cast<std::uint32_t>(stream_detail::load_le(payload, 4));
+  }
+  [[nodiscard]] bool kept(std::uint32_t telescope_id) const {
+    return std::find(kept_telescopes_.begin(), kept_telescopes_.end(), telescope_id) !=
+           kept_telescopes_.end();
+  }
+
   std::istream &in_;
   std::vector<std::uint8_t> raw_;
+  std::vector<std::uint32_t> kept_telescopes_;
+  bool filter_photons_{false};
   bool header_seen_{false};
   bool ended_{false};
 };

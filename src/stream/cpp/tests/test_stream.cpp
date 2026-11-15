@@ -223,6 +223,70 @@ void invalid_chunk_rejected() {
   CHECK(throws([&] { writer.write_metadata(RecordType::photons, Metadata{}); }));
 }
 
+// Little-endian bytes of the low n bytes of value.
+std::string le_bytes(std::uint64_t value, std::size_t n) {
+  std::string out;
+  for (std::size_t i = 0; i < n; ++i) {
+    out.push_back(static_cast<char>(value >> (8 * i)));
+  }
+  return out;
+}
+
+// Photons payload with its fixed header and no column data.
+std::string photons_header(std::uint32_t telescope, std::uint32_t frame, std::uint32_t mask,
+                           std::uint32_t rows) {
+  return le_bytes(telescope, 4) + le_bytes(frame, 4) + le_bytes(mask, 4) + le_bytes(rows, 4) +
+         le_bytes(0, 8);
+}
+
+void filtered_photons() {
+  std::ostringstream out;
+  {
+    Writer writer(out, "test");
+    writer.write_chunk(make_chunk(1, Frame::sky, 7, 10, 0));
+    writer.write_chunk(make_chunk(2, Frame::telescope, 100, 5, 0));
+    writer.write_chunk(make_chunk(3, Frame::camera, 555, 4, 0));
+    writer.finish();
+  }
+  std::istringstream in(out.str());
+  Reader reader(in);
+  reader.keep_photons_of({2});
+  Record record;
+  CHECK(reader.next(record) && record.type == RecordType::stream);
+  // Skipped chunks report their own header fields, also after a kept chunk reused the record.
+  CHECK(reader.next(record) && record.type == RecordType::photons);
+  CHECK(record.chunk.telescope_id == 1 && record.chunk.frame == Frame::sky);
+  CHECK(record.chunk.first_index == 7 && record.chunk.rows() == 0 && record.chunk.mask() == 0);
+  CHECK(reader.next(record) && record.type == RecordType::photons);
+  CHECK(record.chunk.telescope_id == 2 && record.chunk.frame == Frame::telescope);
+  CHECK(record.chunk.first_index == 100 && record.chunk.rows() == 5);
+  CHECK(reader.next(record) && record.type == RecordType::photons);
+  CHECK(record.chunk.telescope_id == 3 && record.chunk.frame == Frame::camera);
+  CHECK(record.chunk.first_index == 555 && record.chunk.rows() == 0 && record.chunk.mask() == 0);
+  CHECK(!reader.next(record) && reader.ended());
+}
+
+void filtered_photons_validated() {
+  // Unselected chunks are still validated: unknown frame or wrong payload size is rejected.
+  const auto read_keeping_two = [](const std::string &bytes) {
+    std::istringstream in(bytes);
+    Reader reader(in);
+    reader.keep_photons_of({2});
+    Record record;
+    while (reader.next(record)) {
+    }
+  };
+  const std::uint32_t photons = static_cast<std::uint32_t>(RecordType::photons);
+  for (const std::string &payload :
+       {photons_header(9, 99, 0, 0), photons_header(9, 0, required_columns, 3)}) {
+    std::ostringstream bad;
+    Writer writer(bad, "test");
+    bad << raw_record(static_cast<std::uint16_t>(photons), payload);
+    writer.finish();
+    CHECK(throws([&] { read_keeping_two(bad.str()); }));
+  }
+}
+
 void bad_magic() {
   std::ostringstream out;
   {
@@ -298,6 +362,8 @@ int main() {
     stream_round_trip();
     unknown_record_skipped();
     empty_chunk();
+    filtered_photons();
+    filtered_photons_validated();
     invalid_chunk_rejected();
     bad_magic();
     truncated_record();
