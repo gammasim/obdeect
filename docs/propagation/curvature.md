@@ -30,12 +30,13 @@ CORSIKA's CURVED option, constant `obdeect::stream::earth_radius_m`.
 |---|---|---|---|
 | `none` (default) | 0, or absent (1 is rejected) | Plane-parallel airmass and straight-line geometry | sky → G |
 | `corsika` | 1 (required) | CORSIKA has already applied curvature to emission geometry, positions, directions, timing and refraction. The stage only replaces the airmass by the curved slant depth. | G only |
-| `spherical` | 0 (required) | The stage applies curvature: emission altitude from the sphere, per-telescope local vertical and telescope altitude, curved extinction, and curved refraction (bending and air delay, see [](#refraction-in-the-spherical-mode)) when an atmospheric profile is given. With `refraction_applied` = 1 in the input only the air delay is applied. The output run record gets `curvature_applied` = 1. | sky → G |
+| `spherical` | 0 (required) | The stage applies curvature: emission altitude from the sphere, per-telescope local vertical and telescope altitude, curved extinction, and curved refraction (bending and air delay, see [](#refraction-in-the-spherical-mode)) when an atmospheric profile is given. With `refraction_applied` = 1 in the input only the air delay is applied. The output run record gets `curvature_applied` = 1. Photons already in frame G get the curved extinction only. | sky or G |
 
 The run flag `curvature_applied` is read from the EventIO input: the EventIO importer sets it to 1
-when EVTH word 79 equals 1 (CORSIKA CURVED, downgoing primaries) or 2 (CURVED with upgoing
-primaries also allowed). The stage requires the flag in `corsika` mode and
-rejects it in the other two modes, so curvature is neither applied twice nor forgotten.
+when the CURVED flag of the CORSIKA event header (EVTH word 79, 0 = standard, 2 = curved) is 2,
+and to 0 otherwise. Producers that are not CORSIKA, such as the sources package, write 0. The
+stage requires the flag in `corsika` mode, requires 0 in `spherical` mode (the key must be present
+in both) and rejects 1 in mode `none`, so curvature is neither applied twice nor forgotten.
 
 ## Slant depth
 
@@ -100,6 +101,11 @@ $$
 
 where $\mathbf{p}$ is the emission point. The local vertical $\mathbf{n}$ of each telescope is the
 unit radial vector at the telescope, and $h_t$ its altitude a.s.l.
+
+The mode therefore assumes the geometry of the sky frame: $x = y = 0$ is the array reference, $z$
+is the Cartesian height above the observation level (the plane tangent to the sphere at the array
+reference), and the Earth centre lies on the vertical through the array reference at
+$z = -(R + h_{obs})$. A producer of photons in the sky frame must use this frame.
 
 ## Refraction in the spherical mode
 
@@ -166,7 +172,8 @@ $4 \times 4$ Lagrange stencil, with no allocation.
   second-order error of the linear interpolation over the 10 m spacing is about $3\times10^{-6}$
   relative in the grazing-ray delay and about $10^{-3}$ m in position at 80 deg. At 85 deg with
   emission at 20 km it is 0.02 to 0.03 m and 0.06 to 0.12 ns on a delay of $3.6\times10^4$ ns.
-- Build time is about 3 s per table. Tables are cached by level.
+- Build time is about 3 to 5 s per table. Tables are built on first use, when a telescope receives
+  photons in the sky frame, and cached by level; a telescope altitude uses two of them.
 - CORSIKA's CURVED build also tabulates integrated rays, on a 0.25 deg by 0.25 km grid. The grid
   here is finer than that below 20 km above the telescope and near the horizon, and coarser above
   20 km. The integrals are evaluated directly, not by ray tracing.
@@ -237,16 +244,31 @@ default is therefore one constant, the CORSIKA radius. The user can override it 
 - Single scattering is rejected in both curved modes; it is plane-parallel ([](scattering.md)).
 - The in-telescope path is not curved ([](propagation.md)).
 - The Earth is a sphere, not an ellipsoid.
+- The curved extinction integrates the slant depth per photon; its cost compared with the
+  plane-parallel airmass has not been measured.
+- The curved modes are validated against analytic limits and against integrals computed inside the
+  tests. A comparison with CORSIKA CURVED output is not part of these tests; the validation chain
+  of the project covers it.
 - The `corsika` mode does not apply refraction itself; CORSIKA has already applied it
   ([](refraction.md)).
 
 ## Validation
 
-The tests are in `src/propagation/cpp/tests/test_curvature.cpp`:
+The tests are in `src/propagation/cpp/tests/`:
 
-- The limit $R \to \infty$ equals the plane-parallel result (relative difference below $10^{-6}$),
-  for the fixture table and for a synthetic table.
-- The slant depth agrees with a brute-force midpoint integration of the same piecewise integrand.
-- At large zenith angles the curved depth is finite and below the plane-parallel depth.
-- Monotonicity, zero below the observation level, and input validation.
-- The per-row acceptance kernel and the extinction step are independent of row order and chunking.
+- `test_curvature.cpp` (slant depth and extinction):
+  - The limit $R \to \infty$ equals the plane-parallel result (relative difference below
+    $10^{-6}$), for the fixture table and for a synthetic table.
+  - The slant depth agrees with a brute-force midpoint integration of the same piecewise integrand.
+  - At large zenith angles the curved depth is finite and below the plane-parallel depth.
+  - Monotonicity, zero below the observation level, and input validation.
+  - The per-row acceptance kernel and the extinction step are independent of row order and
+    chunking.
+- `test_curved_refraction.cpp` (spherical refraction): the flat limit against `bend()`, an
+  independent fine Simpson integration at the real radius, the physical sign and size of the
+  integrals, the tables against direct quadrature, tables near the profile top, and input
+  validation.
+- `test_curvature_modes.cpp` (the stage): the input checks of the three modes, the efficiency status
+  keys, the CORSIKA mode extinction, the spherical mode against `none` in the limit
+  $R \to \infty$, the emission altitude against $d^2/(2R)$, telescope altitudes between table
+  levels, dropped photons, and independence of chunk size and photon order.

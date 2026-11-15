@@ -101,7 +101,9 @@ mask 0.
 Frames:
 
 - sky: absolute emission position (x north, y west, z up, origin at the array centre on the
-  observation level, as CORSIKA) and direction.
+  observation level, as CORSIKA) and direction. z is the Cartesian height above the plane through
+  the origin. With Earth curvature (run key `curvature_applied`, [](../propagation/curvature.md))
+  the Earth centre lies on the vertical through the origin at z = −(R + observation level).
 - G: horizontal plane through the telescope sphere centre; x and y relative to the centre,
   CORSIKA axes.
 - T: telescope-local 3D frame (z along the optical axis towards the sky).
