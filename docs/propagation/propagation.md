@@ -82,6 +82,9 @@ qe.value                [0.9, 0.5]
 
 - `atmosphere`: applied; source = transmission file; `pathlen_m` = path inside each telescope [m],
   in telescope_id order (entry 0 is telescope 1).
+- `atmosphere.geometry`, `atmosphere.earth_radius_m`: only with `--curvature corsika` or
+  `spherical` (`corsika-curved` or `spherical`, and the radius [m]); absent in mode `none`
+  ([](curvature.md)).
 - `wavelength`: applied; rows without a wavelength get one from the range.
 - `scattering`: only with scattering; applied; source = scattering table; points per photon.
 - Each efficiency bound: state `envelope` (its value is part of the thinning, not applied in full),
@@ -129,6 +132,8 @@ obdeect propagation run: photons in <n>, out <m> (weight <w>), dropped <d>
 | `--store-p` | keep column p |
 | `--scattering FILE` | single scattering with this scattering table (off by default) |
 | `--scattering-points N` | scattering points per photon, 1 to 1024 (default 8; needs `--scattering`) |
+| `--curvature none\|corsika\|spherical` | Earth curvature of the atmosphere (default none), see [](curvature.md) |
+| `--earth-radius-m M` | Earth radius for the curved modes [m] (default 6371315, the CORSIKA CURVED radius) |
 | `--pathlen M` | path inside each telescope [m], finite and ≥ 0 (default 0) |
 | `--telescope-pathlen ID=M` | path inside telescope ID (1-based) [m]; overrides `--pathlen`; repeatable |
 | `-i FILE\|-`, `-o FILE\|-` | input and output stream (default stdin, stdout) |
@@ -154,6 +159,7 @@ summary = obdeect.propagation.propagate(
     wavelength_range=(250.0, 700.0), mode="thinned",
     scattering="scattering_exponential.dat", scattering_points=8,  # optional
     pathlen_m=28.0, telescope_pathlen_m={2: 0.0},                  # optional
+    curvature="spherical", earth_radius_m=6371315.0,               # optional, see curvature.md
 )
 ```
 

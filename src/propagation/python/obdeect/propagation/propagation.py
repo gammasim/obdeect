@@ -68,10 +68,11 @@ def propagate(
             weight and the efficiency status records ``atmosphere`` as pending. Cannot be
             combined with transmission, envelope, mode="thinned", scattering, store_p or the
             path options.
-        curvature: Earth curvature of the atmosphere (extinction only). ``"none"`` (default):
+        curvature: Earth curvature of the atmosphere. ``"none"`` (default):
             plane-parallel, input with ``curvature_applied = 1`` is rejected. ``"corsika"``:
             photons from CORSIKA with the CURVED option (``curvature_applied = 1``, frame G);
-            the curved slant depth replaces the plane-parallel airmass. ``"spherical"``: photons
+            only the curved slant depth replaces the plane-parallel airmass (CORSIKA applied the
+            rest). ``"spherical"``: photons
             without curvature (``curvature_applied = 0``); the curvature is applied to the
             emission altitudes and the local vertical of each telescope; with a profile, the
             refraction and air delay follow the spherical geometry. Not combined with
