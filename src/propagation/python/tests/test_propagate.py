@@ -888,7 +888,7 @@ def test_curvature_rejects_invalid_settings(tmp_path, kwargs, message):
         )
 
 
-def test_spherical_needs_uncurved_input_and_no_profile(tmp_path):
+def test_spherical_needs_uncurved_input(tmp_path):
     source = tmp_path / "in.pst"
     options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 1}
     source.write_bytes(sky_stream(10, seed=1, curvature_applied=1))
@@ -901,11 +901,28 @@ def test_spherical_needs_uncurved_input_and_no_profile(tmp_path):
         obdeect_propagation.propagate(
             source, tmp_path / "out.pst", curvature="spherical", **options
         )
+
+
+def test_spherical_accepts_profile(tmp_path):
+    # Spherical refraction and air delay: the run keeps refraction_applied = 0 (bending).
+    source = tmp_path / "in.pst"
     source.write_bytes(sky_stream(10, seed=1, curvature_applied=0))
-    with pytest.raises(ValueError, match="not implemented"):
-        obdeect_propagation.propagate(
-            source, tmp_path / "out.pst", curvature="spherical", profile=PROFILE_PATH, **options
-        )
+    out = tmp_path / "out.pst"
+    summary = obdeect_propagation.propagate(
+        source,
+        out,
+        transmission=TABLE_PATH,
+        site_altitude_m=SITE_M,
+        seed=1,
+        curvature="spherical",
+        profile=PROFILE_PATH,
+    )
+    assert summary["photons_in"] == 20
+    records = read_records(out.read_bytes())
+    run = next(r["metadata"] for r in records if r["type"] == "run")
+    assert run["curvature_applied"] == 1
+    assert run["refraction_applied"] == 1
+    assert _efficiency_status(records)["atmosphere.geometry"] == "spherical"
 
 
 def test_spherical_status_and_run_record(tmp_path):
