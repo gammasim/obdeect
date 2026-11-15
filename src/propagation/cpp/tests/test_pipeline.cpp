@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <vector>
@@ -175,8 +176,57 @@ void test_atmospheric_acceptance_wavelength() {
 
 } // namespace
 
+// Threads split the rows of a chunk into blocks; the output must be the same for any thread count:
+// same rows, same columns, same bits. Rows span several blocks and mix assigned and given
+// wavelengths, so the blocks differ from each other.
+void test_threads_do_not_change_output() {
+  const auto table = constant_table();
+  const auto depths = table.telescope_depths(2030.0, 28.0);
+  const obdeect::propagation::Envelope envelope({0.0, 5000.0}, {0.9, 0.7});
+  const std::size_t rows = 3 * obdeect::propagation::row_block + 123;
+  for (const bool weighted : {false, true}) {
+    auto make = [&] {
+      auto chunk = photons(rows, 0.0F);
+      chunk.first_index = 1000;
+      for (std::size_t r = 0; r < rows; ++r) {
+        const double phi = 0.001 * static_cast<double>(r);
+        chunk[Column::cx][r] = static_cast<float>(0.2 * std::sin(phi));
+        chunk[Column::cy][r] = static_cast<float>(0.2 * std::cos(phi));
+        chunk[Column::zem][r] = 3000.0F + static_cast<float>(r % 900);
+        chunk[Column::w][r] = 1.0F + static_cast<float>(r % 5);
+        if (r % 3 == 0) {
+          chunk[Column::wavelength][r] = 300.0F + static_cast<float>(r % 400);
+        }
+      }
+      return chunk;
+    };
+    const auto reference = obdeect::propagation::apply_extinction_chunk(
+        make(), settings_for(table, depths, envelope, weighted), 77);
+    for (const unsigned threads : {2U, 3U, 8U}) {
+      auto settings = settings_for(table, depths, envelope, weighted);
+      settings.threads = threads;
+      const auto out = obdeect::propagation::apply_extinction_chunk(make(), settings, 77);
+      CHECK(out.size() == reference.size());
+      if (out.size() != reference.size()) {
+        continue;
+      }
+      for (std::size_t c = 0; c < out.size(); ++c) {
+        CHECK(out[c].first_index == reference[c].first_index);
+        CHECK(out[c].rows() == reference[c].rows());
+        for (std::uint32_t column = 0; column < obdeect::stream::n_columns; ++column) {
+          const auto &a = out[c][static_cast<Column>(column)];
+          const auto &b = reference[c][static_cast<Column>(column)];
+          CHECK(a.size() == b.size());
+          CHECK(a.empty() || std::memcmp(a.data(), b.data(), a.size() * sizeof(float)) == 0);
+        }
+      }
+    }
+  }
+}
+
 int main() {
   return run_checks([] {
+    test_threads_do_not_change_output();
     test_cz_column_must_be_finite();
     test_wavelength_must_be_finite();
     test_wavelength_above_max_is_dropped();

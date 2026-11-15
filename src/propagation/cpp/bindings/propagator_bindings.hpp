@@ -36,9 +36,24 @@ inline void bind_propagator(nb::module_ &module) {
          bool weighted, bool store_p, const std::optional<std::string> &scattering_path,
          std::uint32_t scattering_points, double pathlen_m,
          const std::map<std::int64_t, double> &telescope_pathlen_m, bool geometry_only,
-         const std::string &curvature, const std::optional<double> &earth_radius_m) {
+         const std::string &curvature, const std::optional<double> &earth_radius_m,
+         const std::optional<std::vector<std::int64_t>> &telescopes, std::int64_t threads) {
+        if (threads < 1 || threads > 256) {
+          throw std::invalid_argument("threads must be an integer from 1 to 256");
+        }
         obdeect::propagation::PropagatorConfig config;
+        config.threads = static_cast<unsigned>(threads);
         config.geometry_only = geometry_only;
+        if (telescopes) {
+          std::vector<std::uint32_t> selection;
+          for (const std::int64_t id : *telescopes) {
+            if (id < 1 || id > static_cast<std::int64_t>(obdeect::stream::max_telescope)) {
+              throw std::invalid_argument("telescopes: telescope ids are 1-based");
+            }
+            selection.push_back(static_cast<std::uint32_t>(id));
+          }
+          config.telescopes = std::move(selection);
+        }
         config.curvature = obdeect::propagation::parse_curvature(curvature);
         if (earth_radius_m) {
           config.earth_radius_m = *earth_radius_m;
@@ -108,12 +123,16 @@ inline void bind_propagator(nb::module_ &module) {
       nb::arg("scattering_points") = std::uint32_t{8}, nb::arg("pathlen_m") = 0.0,
       nb::arg("telescope_pathlen_m") = std::map<std::int64_t, double>{},
       nb::arg("geometry_only") = false, nb::arg("curvature") = "none",
-      nb::arg("earth_radius_m") = nb::none(),
+      nb::arg("earth_radius_m") = nb::none(), nb::arg("telescopes") = nb::none(),
+      nb::arg("threads") = std::int64_t{1},
       "Run the atmosphere stage on a photon stream file (geometry_only: no extinction, see "
       "docs/propagation.md). envelope_paths: (name, file) pairs of "
       "two-column text tables (nm, value). scattering_path: optional scattering table (single "
       "scattering of the primaries, off when None). pathlen_m: path inside each telescope [m]; "
       "telescope_pathlen_m: {telescope_id (1-based): metres} overrides. curvature: none, corsika "
       "or spherical (see Curvature); earth_radius_m: Earth radius [m], None for the CORSIKA "
-      "CURVED radius.");
+      "CURVED radius. telescopes: ids (1-based) to keep, None for all; other telescopes' blocks "
+      "are "
+      "dropped and not decoded. threads: 1 to 256 worker threads, the output does not depend on "
+      "it.");
 }

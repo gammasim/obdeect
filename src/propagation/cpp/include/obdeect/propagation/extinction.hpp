@@ -52,10 +52,12 @@ template <class T> [[nodiscard]] T airmass(T cx, T cy) {
 }
 
 // p[row] = atmospheric transmission of every row; 0 for wavelengths at or above max_lambda.
+// Rows [begin, end) only (default: all rows).
 template <class T>
 void atmospheric_acceptance(const obdeect::stream::PhotonChunk &chunk,
                             const TransmissionTable &table, const TelescopeDepths &depths,
-                            std::span<T> p) {
+                            std::span<T> p, std::size_t begin = 0,
+                            std::size_t end = std::numeric_limits<std::size_t>::max()) {
   using obdeect::stream::Column;
   const std::size_t rows = chunk.rows();
   if (p.size() != rows) {
@@ -65,7 +67,8 @@ void atmospheric_acceptance(const obdeect::stream::PhotonChunk &chunk,
   const auto &cy = chunk[Column::cy];
   const auto &zem = chunk[Column::zem];
   const auto &wavelength = chunk[Column::wavelength];
-  for (std::size_t row = 0; row < rows; ++row) {
+  end = std::min(end, rows);
+  for (std::size_t row = begin; row < end; ++row) {
     check_wavelength(static_cast<double>(wavelength[row]));
     const int iwl = table_wavelength(static_cast<double>(wavelength[row]));
     if (iwl < 0) {
@@ -88,7 +91,8 @@ void atmospheric_acceptance(const obdeect::stream::PhotonChunk &chunk,
 template <class T>
 void atmospheric_acceptance_curved(const obdeect::stream::PhotonChunk &chunk,
                                    const TransmissionTable &table, const TelescopeDepths &depths,
-                                   const CurvedPath &path, std::span<T> p) {
+                                   const CurvedPath &path, std::span<T> p, std::size_t begin = 0,
+                                   std::size_t end = std::numeric_limits<std::size_t>::max()) {
   using obdeect::stream::Column;
   validate(path);
   const std::size_t rows = chunk.rows();
@@ -100,7 +104,8 @@ void atmospheric_acceptance_curved(const obdeect::stream::PhotonChunk &chunk,
   const auto &zem = chunk[Column::zem];
   const auto &wavelength = chunk[Column::wavelength];
   const double eps = std::numeric_limits<double>::epsilon();
-  for (std::size_t row = 0; row < rows; ++row) {
+  end = std::min(end, rows);
+  for (std::size_t row = begin; row < end; ++row) {
     check_wavelength(static_cast<double>(wavelength[row]));
     const int iwl = table_wavelength(static_cast<double>(wavelength[row]));
     if (iwl < 0) {

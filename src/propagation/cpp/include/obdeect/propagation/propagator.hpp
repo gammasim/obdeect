@@ -125,10 +125,16 @@ struct PropagatorConfig {
   // efficiency status) and spherical. Must be finite and above 1e6 m.
   Curvature curvature{Curvature::none};
   double earth_radius_m{obdeect::stream::earth_radius_m};
+  // Threads for the extinction of each chunk (1: in place). The output does not depend on it.
+  unsigned threads{1};
+  // Telescopes to keep (1-based ids). Blocks of other telescopes (telescope, photons,
+  // telescope_end and their efficiency status) are dropped; their photons are not decoded when the
+  // stream is read with the same selection (propagate_stream). Default: all telescopes.
+  std::optional<std::vector<std::uint32_t>> telescopes;
 };
 
 struct PropagationSummary {
-  std::uint64_t photons_in{};  // rows of the input photon records
+  std::uint64_t photons_in{};  // rows of the input photon records (selected telescopes only)
   std::uint64_t photons_out{}; // rows written (thinned: surviving photons, weighted: w > 0)
   std::uint64_t dropped{};     // sky-frame photons that do not reach the telescope plane
   double weight_out{};         // sum of w of the output
@@ -227,6 +233,9 @@ public:
       throw std::invalid_argument("scattering needs 1 to 1024 points per photon");
     }
     check_curvature();
+    if (config_.telescopes) {
+      check_telescopes();
+    }
     for (std::size_t i = 0; i < config_.envelope.size(); ++i) {
       const auto &name = config_.envelope[i].name;
       if (!valid_factor_name(name)) {
@@ -296,7 +305,11 @@ private:
     using obdeect::stream::RecordType;
     if (record.type == RecordType::efficiency_status) {
       check_incoming_efficiency_status(record.metadata);
-      sink(record);
+      // A telescope status (after the telescope record) belongs to the dropped block if its
+      // telescope is not selected.
+      if (!telescope_.open || selected(telescope_.id)) {
+        sink(record);
+      }
       return;
     }
     flush_efficiency_status(sink);
@@ -324,7 +337,9 @@ private:
     case RecordType::telescope: {
       obdeect::stream::Record out = record;
       open_telescope(record.metadata, out.metadata);
-      sink(out);
+      if (selected(telescope_.id)) {
+        sink(out);
+      }
       break;
     }
     case RecordType::photons:
@@ -340,7 +355,9 @@ private:
       out.metadata["photons"] = telescope_.weight_out;
       out_index_[telescope_.id] = telescope_.out_index;
       telescope_.open = false;
-      sink(out);
+      if (selected(telescope_.id)) {
+        sink(out);
+      }
       break;
     }
     case RecordType::efficiency_status:
@@ -397,6 +414,32 @@ private:
     if (!std::isfinite(pathlen_m) || pathlen_m < 0.0) {
       throw std::invalid_argument("pathlen must be finite and not negative");
     }
+  }
+
+  // Telescope selection: at least one id, 1-based; sorted and without repeats. Scattered photons of
+  // a telescope come from the primaries of all telescopes of the event, so a selection cannot be
+  // combined with scattering.
+  void check_telescopes() {
+    auto &ids = *config_.telescopes;
+    if (ids.empty()) {
+      throw std::invalid_argument("telescope selection is empty");
+    }
+    for (const auto id : ids) {
+      if (id < 1 || id > obdeect::stream::max_telescope) {
+        throw std::invalid_argument("telescope selection: telescope ids are 1-based");
+      }
+    }
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    if (config_.scattering.enabled) {
+      throw std::invalid_argument("telescope selection cannot be combined with scattering (the "
+                                  "scattered photons need the primaries of all telescopes)");
+    }
+  }
+
+  [[nodiscard]] bool selected(std::uint32_t telescope_id) const {
+    return !config_.telescopes ||
+           std::binary_search(config_.telescopes->begin(), config_.telescopes->end(), telescope_id);
   }
 
   // Config-only checks of the curvature modes (the input is checked in begin_run).
@@ -560,6 +603,11 @@ private:
         sphere_.push_back({static_cast<std::uint32_t>(i + 1), x_m[i], y_m[i], z_m[i], r_m[i]});
       }
       scattered_.assign(x_m.size(), {});
+    }
+    if (config_.telescopes && config_.telescopes->back() > x_m.size()) {
+      throw std::invalid_argument("telescope selection names telescope " +
+                                  std::to_string(config_.telescopes->back()) + ", the run has " +
+                                  std::to_string(x_m.size()));
     }
     std::vector<double> pathlen_m(x_m.size(), config_.default_pathlen_m);
     for (const auto &[id, pathlen] : config_.telescope_pathlen_m) {
@@ -1030,6 +1078,9 @@ private:
     if (input.telescope_id != telescope_.id) {
       throw std::invalid_argument("photons of a telescope that is not open");
     }
+    if (!selected(telescope_.id)) {
+      return; // not in the selection: neither counted nor written
+    }
     summary_.photons_in += input.rows();
     if (input.rows() == 0) {
       return;
@@ -1057,6 +1108,7 @@ private:
     settings.seed = config_.seed;
     settings.event = event_number_;
     settings.telescope = telescope_.id;
+    settings.threads = config_.threads;
     settings.weighted = config_.mode == OutputMode::weighted;
     if (config_.curvature != Curvature::none) {
       settings.curved = curved_path(telescope_);
@@ -1101,6 +1153,7 @@ inline PropagationSummary propagate_stream(std::istream &in, std::ostream &out,
                                            PropagatorConfig config,
                                            const std::string &producer = "obdeect propagation") {
   obdeect::stream::Writer writer(out, producer);
+  const auto telescopes = config.telescopes;
   Propagator propagator(std::move(config));
   const auto sink = [&writer](const obdeect::stream::Record &record) {
     switch (record.type) {
@@ -1118,6 +1171,9 @@ inline PropagationSummary propagate_stream(std::istream &in, std::ostream &out,
     }
   };
   obdeect::stream::Reader reader(in);
+  if (telescopes) {
+    reader.keep_photons_of(*telescopes); // photons of other telescopes are not decoded
+  }
   obdeect::stream::Record record;
   while (reader.next(record)) {
     propagator.process(record, sink);

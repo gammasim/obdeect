@@ -56,6 +56,8 @@ for record in obdeect.stream.Reader("run.pst"):
 Metadata values: `int`, `float`, `str`, or a list or array of floats. Photon columns must be
 float32 arrays. Names: `obdeect.stream.COLUMNS`, `obdeect.stream.FRAMES`. `Reader("-")` reads
 stdin.
+`Reader(path, photon_telescopes)` with a list of telescope ids skips the photons of all other
+telescopes without decoding them: their records come back with `columns` empty.
 
 The module also provides `obdeect.stream.corsika_to_stream`, `stream_to_simtel` and
 `stream_to_grisu`, the Python counterparts of the [commands](command-line.md).

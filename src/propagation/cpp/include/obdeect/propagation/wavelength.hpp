@@ -10,9 +10,11 @@
 #include "obdeect/stream/random.hpp"
 #include "obdeect/stream/wavelength.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 
 namespace obdeect::propagation {
@@ -37,10 +39,14 @@ struct WavelengthRange {
 // Set the wavelength of every row whose wavelength is 0. The draw of row r uses the key
 // (seed, stage_atmosphere, event, telescope, first_index + r, stream_wavelength), so it
 // does not depend on how the photons are split into chunks.
+// Rows [begin, end) only (default: all rows); rows are independent, so blocks may run in parallel.
 inline void assign_wavelengths(obdeect::stream::PhotonChunk &chunk, const WavelengthRange &range,
-                               std::uint64_t seed, std::uint32_t event, std::uint32_t telescope) {
+                               std::uint64_t seed, std::uint32_t event, std::uint32_t telescope,
+                               std::size_t begin = 0,
+                               std::size_t end = std::numeric_limits<std::size_t>::max()) {
   auto &wavelength = chunk[obdeect::stream::Column::wavelength];
-  for (std::size_t row = 0; row < chunk.rows(); ++row) {
+  end = std::min(end, chunk.rows());
+  for (std::size_t row = begin; row < end; ++row) {
     if (wavelength[row] != 0.0F) {
       continue;
     }
