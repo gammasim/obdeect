@@ -61,7 +61,6 @@ jobs:
           && python -m pip install --no-build-isolation ./src/stream ./src/propagation
           ./src/sources "./src/ray_tracing[plot]" pytest
       # One run per component (test modules of different components share file names),
-      # then the end-to-end chain.
       - name: Run Python tests
         run: |
           status=0
