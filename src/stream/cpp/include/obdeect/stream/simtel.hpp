@@ -41,12 +41,14 @@
 // factor. A factor is accepted when its state is `applied` and sim_telarray does not apply it in
 // the telescope's frame, or when its state is `pending` and sim_telarray applies it in that frame.
 // `envelope` is an error for factors sim_telarray applies, because sim_telarray applies the full
-// factor, not f/f_env. With ground-frame photons `atmosphere` is accepted in any state:
+// factor, not f/f_env. With camera- or telescope-frame photons `atmosphere` must be applied
+// upstream: a status without the factor, or with it pending, is an error unless it is listed in
+// `allow_pending`. With ground-frame photons `atmosphere` is accepted in any state:
 // sim_telarray applies its transmission table, which must then be all-zero when
 // the atmosphere was applied upstream. A factor listed in `scaled` must be in
 // state `envelope` and applied by sim_telarray: its sim_telarray table then
 // holds f/f_env (e.g. a QE table divided by the QE envelope). Any other factor is
-// an error, unless it is listed in `allow_pending`. Streams without an efficiency status are
+// an error, unless it is listed in `allow_pending`. Streams without any efficiency status are
 // converted as before.
 
 #include "obdeect/stream/atmprof.hpp"
@@ -495,7 +497,10 @@ inline void check_efficiency_status(const std::vector<Metadata> &run_efficiency_
     if (allow_pending.contains(name) || (name == "atmosphere" && !camera_frame)) {
       continue;
     }
-    const std::string option = "; pass --allow-pending " + name + " to accept it as it is";
+    const std::string option =
+        name == "atmosphere"
+            ? "; pass --allow-pending-atmosphere if sim_telarray applies it in this frame"
+            : "; pass --allow-pending " + name + " to accept it as it is";
     if (!known_factor(name)) {
       throw std::runtime_error("efficiency status of " + where + ": unknown factor '" + name + "'" +
                                option);
@@ -530,6 +535,14 @@ inline void check_efficiency_status(const std::vector<Metadata> &run_efficiency_
       throw std::runtime_error("efficiency status of " + where + ": scaled factor '" + name +
                                "' has no efficiency status (expected state envelope)");
     }
+  }
+  // sim_telarray does not apply the atmosphere in the camera or telescope frame, so a status
+  // without the factor leaves it unapplied. A pending atmosphere is rejected above.
+  if (camera_frame && !states.contains("atmosphere") && !allow_pending.contains("atmosphere")) {
+    throw std::runtime_error("efficiency status of " + where +
+                             ": factor 'atmosphere' is missing, but sim_telarray does not apply "
+                             "it in this frame; apply it upstream (state applied), or pass "
+                             "--allow-pending-atmosphere if sim_telarray is meant to apply it");
   }
 }
 
