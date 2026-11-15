@@ -194,6 +194,27 @@ void telpos_rejects_malformed() {
   CHECK(telpos_rejects("TELESCOPE 0 0 0 1500 9\n", true));
 }
 
+// All telescopes get the same photons. Generating the event once (cached) and generating it
+// again for each telescope (no cache) write the same bytes.
+void telescopes_share_photons() {
+  XyzlsOptions o;
+  o.events = 2;
+  o.z_cm = 500.0; // inside the fiducial sphere: 4 pi emission, every photon is written
+  o.telescopes = {{0.0, 0.0, 0.0, 1200.0}, {1400.0, 0.0, 0.0, 1200.0}, {0.0, 1400.0, 0.0, 1200.0}};
+  o.photons = {3000.0};
+  const auto plan = plan_point_source(o);
+  const std::string cached =
+      write_to_string([&](std::ostream &out) { write_plan(out, "test", plan); });
+  const std::string regenerated =
+      write_to_string([&](std::ostream &out) { write_plan(out, "test", plan, 0); });
+  CHECK(cached == regenerated);
+  const StreamSummary s = read_stream(cached);
+  CHECK(s.photons.size() == 3);
+  CHECK(s.photons.at(1) == 2 * 3000U);
+  CHECK(s.photons.at(2) == s.photons.at(1));
+  CHECK(s.photons.at(3) == s.photons.at(1));
+}
+
 } // namespace
 
 int main() {
@@ -207,5 +228,6 @@ int main() {
     telpos_valid();
     telpos_rejects_empty();
     telpos_rejects_malformed();
+    telescopes_share_photons();
   });
 }

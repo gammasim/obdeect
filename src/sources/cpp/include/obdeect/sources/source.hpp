@@ -266,10 +266,15 @@ inline Vec3 cone_direction(const Vec3 &axis, double cos_theta, double azimuth) {
 inline Photon sample_photon(const Source &s, std::uint64_t seed, std::uint32_t event,
                             std::uint32_t telescope, std::uint64_t index) {
   Photon p;
-  const double pulse_time =
-      sample(s.pulse, philox_draw(seed, event, telescope, index, Stream::pulse));
+  // Draws that their profile ignores are not computed (same result, fewer Philox calls).
+  const Uniforms none{};
+  const double pulse_time = sample(
+      s.pulse,
+      ignores_draw(s.pulse) ? none : philox_draw(seed, event, telescope, index, Stream::pulse));
   p.wavelength_nm =
-      sample(s.spectrum, philox_draw(seed, event, telescope, index, Stream::wavelength));
+      sample(s.spectrum, ignores_draw(s.spectrum)
+                             ? none
+                             : philox_draw(seed, event, telescope, index, Stream::wavelength));
   p.time_ns = pulse_time;
   p.weight = 1.0;
 
