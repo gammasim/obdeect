@@ -56,7 +56,8 @@ the chunk with w = 0, so the random draws of the other photons do not change.
 
 Time: without a profile, t + s/c. With a profile and no refraction in the stream, the air delay
 `straight_path_air_delay_ns` is added. With refraction (`refraction_applied` = 0 and a profile),
-time and direction come from `bend` at the telescope plane ([](refraction.md)).
+time and direction come from `bend` at the telescope plane ([](refraction.md)). In `spherical` mode
+the bending and air delay are the spherical integrals of [](curvature.md) instead.
 
 ## Efficiency status
 
@@ -191,12 +192,13 @@ have is an error.
 
 ## Limits
 
-- Plane-parallel airmass and straight-line geometry by default. Earth curvature for the airmass is
-  optional ([](curvature.md)); curved refraction and curved air delay are not implemented.
+- Plane-parallel airmass, straight-line geometry and refraction by default (mode `none`). With
+  `--curvature spherical` the airmass, bending and air delay are spherical ([](curvature.md)); with
+  `corsika` CORSIKA has applied them.
 - Scattering is plane-parallel and needs sky-frame input and `telescope_r_m` in the run keys; not
   available for photons already in frame G, and rejected with a curved mode.
 - The in-telescope path is not derived from the optics (default 0).
 - Transmission tables hold one row per integer nm; a wavelength uses the row at its integer part.
 - Efficiency-bound tables must cover the wavelength range (rounded outwards).
-- Photons within about 3 degrees of the horizon are not bent and are dropped (series limit of the
-  ray bending, see [](refraction.md)).
+- In mode `none`, photons within about 3 degrees of the horizon are not bent and are dropped (series
+  limit of the ray bending, see [](refraction.md)).
