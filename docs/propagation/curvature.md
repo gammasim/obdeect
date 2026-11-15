@@ -33,10 +33,12 @@ CORSIKA's CURVED option, constant `obdeect::stream::earth_radius_m`.
 | `spherical` | 0 (required) | The stage applies curvature: emission altitude from the sphere, per-telescope local vertical and telescope altitude, curved extinction, and curved refraction (bending and air delay, see [](#refraction-in-the-spherical-mode)) when an atmospheric profile is given. With `refraction_applied` = 1 in the input only the air delay is applied. The output run record gets `curvature_applied` = 1. Photons already in frame G get the curved extinction only. | sky or G |
 
 The run flag `curvature_applied` is read from the EventIO input: the EventIO importer sets it to 1
-when the CURVED flag of the CORSIKA event header (EVTH word 79, 1 = downgoing primaries, 2 = curved with upgoing
-primaries also allowed) is 1 or 2, and to 0 otherwise. Producers that are not CORSIKA, such as the sources package, write 0.
-stage requires the flag in `corsika` mode, requires 0 in `spherical` mode (the key must be present
-in both) and rejects 1 in mode `none`, so curvature is neither applied twice nor forgotten.
+when the CURVED flag of the CORSIKA event header (EVTH word 79) is 1 or 2 (CORSIKA documents 0 = standard, 1 = curved with downgoing primaries, and 2 = curved with upgoing primaries also allowed), and to 0 otherwise. The same information is present in bit `0x40` of the
+interface option word (EVTH word 77), which sim_telarray reads; the importer uses word 79, and the
+two indicators agree in a CORSIKA run. Producers that are not CORSIKA, such as the sources package,
+write 0. The stage requires the flag in `corsika` mode, requires 0 in `spherical` mode (the key
+must be present in both) and rejects 1 in mode `none`, so curvature is neither applied twice nor
+forgotten.
 
 ## Slant depth
 
@@ -203,6 +205,16 @@ $4 \times 4$ Lagrange stencil, with no allocation.
   does not reach the telescope level or the emission is below it.
 - A table level within a fraction of a metre of the profile top has fewer natural height nodes
   than the interpolation stencil needs; its height grid is then filled up uniformly to eight nodes.
+- The shifted arrival point is placed on the telescope-level sphere, with the time referenced to
+  that sphere, not on the tangent plane of the frame G. For a shift $s$ the sphere lies
+  $s^2/(2R)$ below the plane, so a ray arriving at zenith angle $\theta$ crosses the plane about
+  $(s^2/2R)\tan\theta$ away, a time difference of about that distance divided by $c$. The effect
+  is not applied; it is below 0.05 m and 0.15 ns at 80 deg and about 2 m and 7 ns at 85 deg with
+  emission at 20 km (more at higher emission altitudes), and negligible below 75 deg.
+- The zenith cosine of a photon is taken from the stored $c_x$, $c_y$ in double precision (a
+  stored $c_z$ is only checked for consistency). With float32 columns the relative error of
+  $\cos\theta$ is about $1.4\times10^{-4}$ at 89.5 deg, which is about $7\times10^{-4}$ in the
+  transmission there. CORSIKA input has the same float32 limit.
 - The telescope plane is the Cartesian plane $z$ = telescope $z$. The local vertical tilt of
   laterally displaced telescopes (at most lateral$/R$) is neglected in the direction of the
   displacement.
@@ -230,6 +242,20 @@ option):
 - The CORSIKA documentation (Bernloehr, `bernlohr/README`) states that with CURVED the emission
   altitude is the altitude above sea level, and that the transmission no longer scales exactly
   with the secant of the zenith angle.
+
+## Relation to sim_telarray
+
+sim_telarray does not model curvature in the atmosphere, also not for CORSIKA CURVED input. In
+`sim_telarray/common/sim_telarray.c` the airmass of every photon bunch is $1/|c_z|$ ("assume a
+plane atmosphere", for the bunches with stored emission altitude and for the 3D bunches), and the
+transmission is $\exp[-(|\tau(z_{em}) - \tau_{tel}|\,\text{airmass} + \tau_{focus})]$
+(`sim_absorb.c`, `atmospheric_transmission2`), the plane-parallel formula of mode `none`. A CORSIKA
+CURVED run only makes sim_telarray print that CORSIKA was compiled with the CURVED option.
+
+The curved modes of this stage therefore differ from the atmosphere of sim_telarray at large
+zenith angles by the curved-minus-plane-parallel correction of the table in [](#why), by design. To
+use the curved extinction in a chain, apply it in this stage and give sim_telarray an all-zero
+optical-depth table (`atmosphere` is `applied` upstream, see [](../stream/efficiency-status.md)).
 
 ## Choice of radius
 
@@ -272,3 +298,6 @@ The tests are in `src/propagation/cpp/tests/`:
   keys, the CORSIKA mode extinction, the spherical mode against `none` in the limit
   $R \to \infty$, the emission altitude against $d^2/(2R)$, telescope altitudes between table
   levels, dropped photons, and independence of chunk size and photon order.
+
+The validation against independent references and CORSIKA CURVED showers (suite `curvature`) is
+described in the `obdeect-validation` repository (`docs/curvature-validation.md`).
