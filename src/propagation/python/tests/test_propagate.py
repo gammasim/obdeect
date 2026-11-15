@@ -1015,3 +1015,137 @@ def test_executable_rejects_unknown_curvature(tmp_path):
     result = subprocess.run(command, capture_output=True, text=True, input="", check=False)
     assert result.returncode == 2, result.stderr
     assert "--curvature" in result.stderr
+
+
+def _without_telescopes(records, dropped):
+    """The records of a run without the blocks of the telescopes in `dropped`.
+
+    A block is its telescope record, photons, telescope status and telescope_end; run-level
+    records are kept.
+    """
+    kept, block = [], None
+    for record in records:
+        kind = record["type"]
+        if kind == "telescope":
+            block = record["metadata"]["telescope_id"]
+        if kind == "photons":
+            drop = record["telescope_id"] in dropped
+        elif block is not None and kind in ("telescope", "efficiency_status", "telescope_end"):
+            drop = block in dropped
+        else:
+            drop = False
+        if not drop:
+            kept.append(record)
+        if kind == "telescope_end":
+            block = None
+    return kept
+
+
+def test_telescopes_keeps_selected_blocks_and_run_records(tmp_path):
+    n = 3000
+    source = tmp_path / "in.pst"
+    source.write_bytes(ground_stream(n, seed=4, chunk_rows=1024))
+    full_out = tmp_path / "full.pst"
+    selected_out = tmp_path / "selected.pst"
+    options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 9}
+    obdeect_propagation.propagate(source, full_out, **options)
+    summary = obdeect_propagation.propagate(source, selected_out, telescopes=[2], **options)
+
+    full = read_records(full_out.read_bytes())
+    selected = read_records(selected_out.read_bytes())
+    assert summary["photons_in"] == n  # the rows of telescope 2 only
+    expected = _without_telescopes(full, dropped={1})
+    assert [r["type"] for r in selected] == [r["type"] for r in expected]
+    assert {r["metadata"]["telescope_id"] for r in selected if r["type"] == "telescope"} == {2}
+    for got, want in zip(selected, expected, strict=True):
+        if got["type"] == "photons":
+            assert got["telescope_id"] == want["telescope_id"]
+            assert got["first_index"] == want["first_index"]
+            for name in want["columns"]:
+                np.testing.assert_array_equal(got["columns"][name], want["columns"][name])
+        else:
+            assert repr(got.get("metadata")) == repr(want.get("metadata"))
+
+
+def test_telescopes_executable_matches_api(tmp_path):
+    exe = _executable()
+    source = tmp_path / "in.pst"
+    source.write_bytes(ground_stream(2000, seed=6, chunk_rows=512))
+    api_out = tmp_path / "api.pst"
+    obdeect_propagation.propagate(
+        source,
+        api_out,
+        transmission=TABLE_PATH,
+        site_altitude_m=SITE_M,
+        seed=3,
+        telescopes=[2, 1],
+    )
+    cli_out = tmp_path / "cli.pst"
+    command = [
+        exe,
+        "--transmission",
+        str(TABLE_PATH),
+        "--site-altitude",
+        str(SITE_M),
+        "--seed",
+        "3",
+        "--telescopes",
+        "2,1,2",
+        "-i",
+        str(source),
+        "-o",
+        str(cli_out),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert "photons in 4000" in result.stderr
+    assert cli_out.read_bytes() == api_out.read_bytes()
+
+
+@pytest.mark.parametrize("telescopes", [[], [0], [3], [1.5]])
+def test_telescopes_rejects_invalid_selection(tmp_path, telescopes):
+    source = tmp_path / "in.pst"
+    source.write_bytes(ground_stream(100, seed=8))
+    with pytest.raises((ValueError, TypeError)):
+        obdeect_propagation.propagate(
+            source,
+            tmp_path / "out.pst",
+            transmission=TABLE_PATH,
+            site_altitude_m=SITE_M,
+            seed=1,
+            telescopes=telescopes,
+        )
+
+
+def test_telescopes_cannot_combine_with_scattering(tmp_path):
+    source = tmp_path / "in.pst"
+    source.write_bytes(ground_stream(100, seed=8))
+    with pytest.raises(ValueError, match="scattering"):
+        obdeect_propagation.propagate(
+            source,
+            tmp_path / "out.pst",
+            transmission=TABLE_PATH,
+            site_altitude_m=SITE_M,
+            seed=1,
+            scattering=SCATTERING_TABLE,
+            telescopes=[1],
+        )
+
+
+@pytest.mark.parametrize("selection", ["0", "1,,2", "x", "2,"])
+def test_executable_rejects_invalid_telescopes(selection):
+    exe = _executable()
+    command = [
+        exe,
+        "--transmission",
+        str(TABLE_PATH),
+        "--site-altitude",
+        str(SITE_M),
+        "--seed",
+        "1",
+        "--telescopes",
+        selection,
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, input="", check=False)
+    assert result.returncode == 2, result.stderr
+    assert "--telescopes" in result.stderr

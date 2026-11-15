@@ -263,3 +263,22 @@ def _bytes_path(directory, data):
     path = directory / "stdout.pst"
     path.write_bytes(data)
     return str(path)
+
+
+def test_reader_skips_photons_of_other_telescopes(tmp_path):
+    path = tmp_path / "two.pst"
+    with obdeect_stream.Writer(str(path), "pytest") as writer:
+        writer.write("run", {"run_number": 1})
+        for telescope_id in (1, 2):
+            writer.write("telescope", {"telescope_id": telescope_id, "frame": "telescope"})
+            writer.write_photons(telescope_id, "telescope", 0, _columns(50, REQUIRED))
+            writer.write("telescope_end", {"photons": 50.0})
+        writer.write("run_end", {})
+
+    chunks = [r for r in obdeect_stream.Reader(str(path), [2]) if r["type"] == "photons"]
+    assert [c["telescope_id"] for c in chunks] == [1, 2]
+    assert chunks[0]["columns"] == {}
+    assert set(chunks[1]["columns"]) == set(REQUIRED)
+    assert len(chunks[1]["columns"]["w"]) == 50
+    everything = [c for c in obdeect_stream.Reader(str(path)) if c["type"] == "photons"]
+    np.testing.assert_array_equal(everything[1]["columns"]["x"], chunks[1]["columns"]["x"])

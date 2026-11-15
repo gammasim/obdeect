@@ -4,6 +4,7 @@
 // p = p_atm(lambda) * E(lambda), where E is the envelope (the upper bound over the
 // later wavelength-dependent factors, e.g. QE x max_qe_rel, see docs/extinction.md).
 
+#include "obdeect/propagation/parallel.hpp"
 #include "obdeect/propagation/streams.hpp"
 
 #include "obdeect/stream/format.hpp"
@@ -99,11 +100,12 @@ private:
 // copied from its bunch. p (acceptance, per input row) is written as column p if write_p.
 // Output photons are numbered from out_first_index; the result is split into chunks of at
 // most 2^16 rows. The output does not depend on how the input is split into chunks, as
-// long as first_index of each input chunk is its offset in the telescope's photons.
+// long as first_index of each input chunk is its offset in the telescope's photons. The
+// survivor counts and the copy of the output rows run on up to `threads` threads.
 [[nodiscard]] inline std::vector<obdeect::stream::PhotonChunk>
 thin_chunk(const obdeect::stream::PhotonChunk &in, std::span<const double> p, std::uint64_t seed,
            std::uint32_t event, std::uint32_t telescope, std::uint64_t out_first_index,
-           bool write_p, std::uint32_t stream = stream_thinning) {
+           bool write_p, std::uint32_t stream = stream_thinning, unsigned threads = 1) {
   using obdeect::stream::Column;
   if (in.has(Column::p)) {
     throw std::invalid_argument("input already has an acceptance column p");
@@ -111,20 +113,34 @@ thin_chunk(const obdeect::stream::PhotonChunk &in, std::span<const double> p, st
   if (p.size() != in.rows()) {
     throw std::invalid_argument("acceptance needs one value per row");
   }
-  // Source row of every output photon.
+  // Survivors of every row (rows are independent), then the source row of every output photon.
+  const std::size_t rows = in.rows();
+  std::vector<std::uint64_t> counts(rows, 0);
+  const auto &weight = in[Column::w];
+  for_row_blocks(rows, threads, [&](std::size_t begin, std::size_t end) {
+    for (std::size_t row = begin; row < end; ++row) {
+      if (!(p[row] >= 0.0 && p[row] <= 1.0)) {
+        throw std::invalid_argument("acceptance must be within [0, 1]");
+      }
+      const double w = weight[row];
+      if (!(w >= 0.0 && w <= static_cast<double>(max_bunch_photons))) {
+        throw std::invalid_argument("bunch weight must be within [0, max_bunch_photons]");
+      }
+      const obdeect::stream::DrawKey key{seed,      stage_atmosphere,     event,
+                                         telescope, in.first_index + row, stream};
+      counts[row] = surviving_photons(w, p[row], key);
+    }
+  });
+  std::size_t total = 0;
+  for (const std::uint64_t count : counts) {
+    total += count;
+  }
   std::vector<std::size_t> source;
-  for (std::size_t row = 0; row < in.rows(); ++row) {
-    if (!(p[row] >= 0.0 && p[row] <= 1.0)) {
-      throw std::invalid_argument("acceptance must be within [0, 1]");
+  source.reserve(total);
+  for (std::size_t row = 0; row < rows; ++row) {
+    for (std::uint64_t k = 0; k < counts[row]; ++k) {
+      source.push_back(row);
     }
-    const double w = in[Column::w][row];
-    if (!(w >= 0.0 && w <= static_cast<double>(max_bunch_photons))) {
-      throw std::invalid_argument("bunch weight must be within [0, max_bunch_photons]");
-    }
-    const obdeect::stream::DrawKey key{seed,      stage_atmosphere,     event,
-                                       telescope, in.first_index + row, stream};
-    const std::uint64_t count = surviving_photons(w, p[row], key);
-    source.insert(source.end(), count, row);
   }
 
   std::uint32_t mask = in.mask() | obdeect::stream::column_bit(Column::w);
@@ -140,20 +156,22 @@ thin_chunk(const obdeect::stream::PhotonChunk &in, std::span<const double> p, st
     chunk.frame = in.frame;
     chunk.first_index = out_first_index + first;
     chunk.resize(rows, mask);
-    for (std::size_t j = 0; j < rows; ++j) {
-      const std::size_t row = source[first + j];
-      for (std::uint32_t c = 0; c < obdeect::stream::n_columns; ++c) {
-        const auto column = static_cast<Column>(c);
-        if (column == Column::w || column == Column::p || !in.has(column)) {
-          continue;
+    for_row_blocks(rows, threads, [&](std::size_t begin, std::size_t end) {
+      for (std::size_t j = begin; j < end; ++j) {
+        const std::size_t row = source[first + j];
+        for (std::uint32_t c = 0; c < obdeect::stream::n_columns; ++c) {
+          const auto column = static_cast<Column>(c);
+          if (column == Column::w || column == Column::p || !in.has(column)) {
+            continue;
+          }
+          chunk[column][j] = in[column][row];
         }
-        chunk[column][j] = in[column][row];
+        chunk[Column::w][j] = 1.0F;
+        if (write_p) {
+          chunk[Column::p][j] = static_cast<float>(p[row]);
+        }
       }
-      chunk[Column::w][j] = 1.0F;
-      if (write_p) {
-        chunk[Column::p][j] = static_cast<float>(p[row]);
-      }
-    }
+    });
     out.push_back(std::move(chunk));
   }
   return out;

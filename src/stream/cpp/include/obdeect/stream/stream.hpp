@@ -459,6 +459,14 @@ class Reader {
 public:
   explicit Reader(std::istream &in) : in_(in) {}
 
+  // Decode photon chunks only for these telescope ids. Other chunks are read (their
+  // record is consumed) but not decoded: they come back with telescope_id set and
+  // no columns. The chunk header is not validated for them. Default: decode all.
+  void keep_photons_of(std::vector<std::uint32_t> telescope_ids) {
+    kept_telescopes_ = std::move(telescope_ids);
+    filter_photons_ = true;
+  }
+
   // Fills `record` with the next known record. Returns false after stream_end
   // (which is consumed, not returned) or at EOF on a record boundary. Unknown
   // record types are skipped. Throws std::runtime_error on malformed input or
@@ -503,7 +511,12 @@ public:
         record.type = static_cast<RecordType>(type);
         return true;
       case RecordType::photons:
-        decode_chunk(record.chunk, payload, size);
+        if (filter_photons_ && size >= 4 && !kept(chunk_telescope(payload))) {
+          record.chunk.telescope_id = chunk_telescope(payload);
+          record.chunk.resize(0, 0);
+        } else {
+          decode_chunk(record.chunk, payload, size);
+        }
         record.type = RecordType::photons;
         return true;
       case RecordType::blob:
@@ -545,8 +558,18 @@ public:
   }
 
 private:
+  static std::uint32_t chunk_telescope(const std::uint8_t *payload) {
+    return static_cast<std::uint32_t>(stream_detail::load_le(payload, 4));
+  }
+  [[nodiscard]] bool kept(std::uint32_t telescope_id) const {
+    return std::find(kept_telescopes_.begin(), kept_telescopes_.end(), telescope_id) !=
+           kept_telescopes_.end();
+  }
+
   std::istream &in_;
   std::vector<std::uint8_t> raw_;
+  std::vector<std::uint32_t> kept_telescopes_;
+  bool filter_photons_{false};
   bool header_seen_{false};
   bool ended_{false};
 };
