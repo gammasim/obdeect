@@ -66,10 +66,16 @@ def run_command(group: Group, name: str, command: Command, argv: list[str]) -> i
     return command.function(argv)
 
 
-def groups() -> dict[str, Group]:
+def groups(component: str | None = None) -> dict[str, Group]:
+    """Command groups of the installed components, or only ``component`` (imported alone).
+
+    Importing a group imports its component (ray-tracing imports NumPy), so a command that names
+    one component loads only that one.
+    """
     found = {}
     for entry in metadata.entry_points(group=ENTRY_POINTS):
-        found[entry.name] = entry.load()
+        if component is None or entry.name == component:
+            found[entry.name] = entry.load()
     return dict(sorted(found.items()))
 
 
@@ -88,6 +94,15 @@ def versions() -> str:
 
 def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if len(argv) >= 2 and argv[0] not in ("-h", "--help"):
+        # Fast path: `obdeect <component> <command>` imports only that component's group.
+        group = groups(argv[0]).get(argv[0])
+        if group is not None and argv[1] in group.commands:
+            return run_command(group, f"{argv[0]} {argv[1]}", group.commands[argv[1]], argv[2:])
+    return _main(argv)
+
+
+def _main(argv: list[str]) -> int:
     available = groups()
     parser = argparse.ArgumentParser(
         prog="obdeect",
