@@ -33,8 +33,8 @@ CORSIKA's CURVED option, constant `obdeect::stream::earth_radius_m`.
 | `spherical` | 0 (required) | The stage applies curvature: emission altitude from the sphere, per-telescope local vertical and telescope altitude, curved extinction, and curved refraction (bending and air delay, see [](#refraction-in-the-spherical-mode)) when an atmospheric profile is given. With `refraction_applied` = 1 in the input only the air delay is applied. The output run record gets `curvature_applied` = 1. Photons already in frame G get the curved extinction only. | sky or G |
 
 The run flag `curvature_applied` is read from the EventIO input: the EventIO importer sets it to 1
-when the CURVED flag of the CORSIKA event header (EVTH word 79, 0 = standard, 2 = curved) is 2,
-and to 0 otherwise. Producers that are not CORSIKA, such as the sources package, write 0. The
+when the CURVED flag of the CORSIKA event header (EVTH word 79, 1 = downgoing primaries, 2 = curved with upgoing
+primaries also allowed) is 1 or 2, and to 0 otherwise. Producers that are not CORSIKA, such as the sources package, write 0.
 stage requires the flag in `corsika` mode, requires 0 in `spherical` mode (the key must be present
 in both) and rejects 1 in mode `none`, so curvature is neither applied twice nor forgotten.
 
