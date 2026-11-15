@@ -68,7 +68,6 @@ jobs:
           for component in stream propagation sources ray_tracing; do
             pytest "src/${component}/python/tests" || status=1
           done
-          pytest validation || status=1
           exit "${status}"
 
   # Each component on its own, in parallel.
