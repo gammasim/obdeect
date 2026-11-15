@@ -133,5 +133,6 @@ inline void bind_propagator(nb::module_ &module) {
       "or spherical (see Curvature); earth_radius_m: Earth radius [m], None for the CORSIKA "
       "CURVED radius. telescopes: ids (1-based) to keep, None for all; other telescopes' blocks "
       "are "
-      "dropped and not decoded. threads: 1 to 256 worker threads, the output does not depend on it.");
+      "dropped and not decoded. threads: 1 to 256 worker threads, the output does not depend on "
+      "it.");
 }
