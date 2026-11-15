@@ -39,9 +39,27 @@ def test_version_lists_components_and_format(capsys):
 
 
 def test_missing_component_names_its_distribution(monkeypatch, capsys):
-    monkeypatch.setattr(cli, "groups", lambda: {})
+    monkeypatch.setattr(cli, "groups", lambda component=None: {})
     assert cli.main(["sources", "led"]) == 2
     assert "pip install obdeect-sources" in capsys.readouterr().err
+
+
+def test_groups_can_load_one_component():
+    assert set(cli.groups("stream")) == {"stream"}
+    assert cli.groups("no-such-component") == {}
+
+
+def test_command_loads_only_its_component(monkeypatch):
+    # A command imports its own component only: the other components (ray-tracing imports NumPy)
+    # are not loaded, which keeps every `obdeect <component> <command>` start-up short.
+    calls = []
+    monkeypatch.setattr(
+        cli, "run_command", lambda group, name, command, argv: calls.append(name) or 0
+    )
+    monkeypatch.delitem(sys.modules, "obdeect.ray_tracing.cli", raising=False)
+    assert cli.main(["stream", "cat", "file.pst"]) == 0
+    assert calls == ["stream cat"]
+    assert "obdeect.ray_tracing.cli" not in sys.modules
 
 
 def test_unknown_command_is_an_error():
