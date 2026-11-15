@@ -2,6 +2,7 @@
 // _POSIX_C_SOURCE), so the nanobind headers come first.
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
@@ -103,7 +104,8 @@ obdeect::stream::RecordType metadata_type_from_name(const std::string &name) {
 
 class PyReader {
 public:
-  explicit PyReader(const std::string &path) {
+  PyReader(const std::string &path,
+           const std::optional<std::vector<std::uint32_t>> &photon_telescopes) {
     if (path == "-") {
       input_ = &std::cin;
     } else {
@@ -114,6 +116,9 @@ public:
       input_ = file_.get();
     }
     reader_ = std::make_unique<obdeect::stream::Reader>(*input_);
+    if (photon_telescopes) {
+      reader_->keep_photons_of(*photon_telescopes);
+    }
   }
 
   nb::dict next() {
@@ -421,7 +426,8 @@ NB_MODULE(_core, module) {
       nb::arg("text"));
 
   nb::class_<PyReader>(module, "Reader")
-      .def(nb::init<const std::string &>(), nb::arg("path"))
+      .def(nb::init<const std::string &, const std::optional<std::vector<std::uint32_t>> &>(),
+           nb::arg("path"), nb::arg("photon_telescopes") = nb::none())
       .def("__iter__", [](nb::object self) { return self; })
       .def("__next__", &PyReader::next);
 
