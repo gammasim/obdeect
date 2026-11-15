@@ -1166,3 +1166,29 @@ def test_executable_rejects_invalid_telescopes(selection):
     result = subprocess.run(command, capture_output=True, text=True, input="", check=False)
     assert result.returncode == 2, result.stderr
     assert "--telescopes" in result.stderr
+
+
+def test_threads_output_is_identical_to_single_thread(tmp_path):
+    source = tmp_path / "in.pst"
+    source.write_bytes(ground_stream(3000, seed=4, chunk_rows=1024))
+    options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 9}
+    single = tmp_path / "single.pst"
+    multi = tmp_path / "multi.pst"
+    obdeect_propagation.propagate(source, single, **options)
+    obdeect_propagation.propagate(source, multi, threads=4, **options)
+    assert multi.read_bytes() == single.read_bytes()
+
+
+@pytest.mark.parametrize("threads", [0, -1, 257, 1.5])
+def test_threads_rejects_invalid_count(tmp_path, threads):
+    source = tmp_path / "in.pst"
+    source.write_bytes(ground_stream(100, seed=8))
+    with pytest.raises((ValueError, TypeError)):
+        obdeect_propagation.propagate(
+            source,
+            tmp_path / "out.pst",
+            transmission=TABLE_PATH,
+            site_altitude_m=SITE_M,
+            seed=1,
+            threads=threads,
+        )

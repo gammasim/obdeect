@@ -35,6 +35,7 @@ def propagate(
     curvature: str = "none",
     earth_radius_m: float | None = None,
     telescopes: Iterable[int] | None = None,
+    threads: int = 1,
 ) -> dict[str, float]:
     """Run the atmosphere stage on a photon stream file.
 
@@ -85,6 +86,7 @@ def propagate(
             output, and their photons are not decoded. The run-level records are unchanged.
             Counts in the result are for the kept telescopes. Default None: all telescopes.
             Not combined with scattering.
+        threads: worker threads, 1 to 256. The output is identical for any count. Default 1.
 
     Returns:
         Dict with photons_in, photons_out, dropped (sky-frame photons not reaching the
@@ -127,6 +129,9 @@ def propagate(
             raise ValueError("telescopes: give at least one telescope id")
         if scattering is not None:
             raise ValueError("telescopes cannot be combined with scattering")
+    threads = operator.index(threads)
+    if not 1 <= threads <= 256:
+        raise ValueError("threads must be an integer from 1 to 256")
     return dict(
         _core.propagate(
             os.fspath(input_path),
@@ -149,6 +154,7 @@ def propagate(
             curvature,
             None if earth_radius_m is None else float(earth_radius_m),
             selection,
+            threads,
         )
     )
 
