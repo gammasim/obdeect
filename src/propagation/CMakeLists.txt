@@ -42,7 +42,8 @@ endif()
 add_library(obdeect_propagation_core INTERFACE)
 target_include_directories(obdeect_propagation_core INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/cpp/include)
 target_compile_features(obdeect_propagation_core INTERFACE cxx_std_20)
-target_link_libraries(obdeect_propagation_core INTERFACE obdeect::stream)
+find_package(Threads REQUIRED)
+target_link_libraries(obdeect_propagation_core INTERFACE obdeect::stream Threads::Threads)
 # Identical floating-point results for any thread count and chunk size on one
 # platform: no implicit fused multiply-add contraction.
 target_compile_options(obdeect_propagation_core INTERFACE -ffp-contract=off)

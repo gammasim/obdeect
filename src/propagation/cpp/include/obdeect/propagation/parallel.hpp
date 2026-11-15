@@ -51,7 +51,7 @@ template <class Body> void for_row_blocks(std::size_t rows, unsigned threads, co
     for (std::size_t w = 1; w < workers; ++w) {
       pool.emplace_back(work);
     }
-  } catch (...) {
+  } catch (...) { // NOLINT(bugprone-empty-catch)
     // Fewer threads than asked for (e.g. the system limit): the started threads and this one
     // still cover every block.
   }
