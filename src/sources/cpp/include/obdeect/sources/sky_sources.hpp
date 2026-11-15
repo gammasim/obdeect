@@ -148,8 +148,8 @@ void generate_plan_chunk(const Emission &emission, std::uint32_t event, double o
 }
 
 // Writes the stream of a plan: each case is written events_per_case times, events numbered 1, 2...
-// The photons of an event are the same for every telescope: they are generated once per event
-// (cached below max_cached_event_bytes) and written for each telescope.
+// The photons of an event are the same for every telescope: with more than one telescope they are
+// generated once per event (cached below max_cached_event_bytes) and written for each telescope.
 template <class Emission>
 void write_plan(std::ostream &out, const std::string &producer, const SkyPlan<Emission> &plan,
                 std::uint64_t max_cached_bytes = max_cached_event_bytes) {
@@ -172,7 +172,8 @@ void write_plan(std::ostream &out, const std::string &producer, const SkyPlan<Em
         counts.push_back(emission.count(event));
         total += counts.back();
       }
-      const bool use_cache = total <= max_cached_bytes / cached_bytes_per_photon;
+      const bool use_cache =
+          plan.run.telescopes.size() > 1 && total <= max_cached_bytes / cached_bytes_per_photon;
       cached.clear();
       if (use_cache) {
         for (std::size_t k = 0; k < emissions.size(); ++k) {

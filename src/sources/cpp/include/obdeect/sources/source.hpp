@@ -266,7 +266,7 @@ inline Vec3 cone_direction(const Vec3 &axis, double cos_theta, double azimuth) {
 inline Photon sample_photon(const Source &s, std::uint64_t seed, std::uint32_t event,
                             std::uint32_t telescope, std::uint64_t index) {
   Photon p;
-  // Draws that their profile ignores are not computed (same result, fewer Philox calls).
+  // Draws that a profile ignores are not computed (same result, fewer Philox calls).
   const Uniforms none{};
   const double pulse_time = sample(
       s.pulse,
