@@ -329,6 +329,16 @@ private:
       heights_.push_back(h);
     }
     heights_.push_back(h_max);
+    // The 4-node stencil of lookup() needs at least four heights; a telescope within a fraction of
+    // a metre of the profile top gets a short uniform grid instead.
+    constexpr std::size_t min_heights = 8;
+    if (heights_.size() < min_heights) {
+      heights_.clear();
+      for (std::size_t k = 0; k < min_heights; ++k) {
+        heights_.push_back(h_t + (h_max - h_t) * static_cast<double>(k) /
+                                     static_cast<double>(min_heights - 1));
+      }
+    }
   }
 
   AtmosphereProfile profile_;

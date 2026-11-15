@@ -186,13 +186,15 @@ $4 \times 4$ Lagrange stencil, with no allocation.
 - Output precision: the time column of the stream is float32. Its spacing near $3.8\times10^5$ ns is
   0.031 ns (rounding error up to 0.016 ns), so very long grazing-ray delays are limited by the
   resolution of the column.
-- Photons emitted between the telescope and the upper table level (less than one 10 m step above
-  the telescope), and grazing lines that reach the telescope level by less than 10 m in impact
-  parameter, are served by the one table that is valid, without the linear blend; the change is
-  first order in the altitude step. A photon is dropped (counted in `dropped`) only if neither
-  table can serve it.
-- Within 10 m below the top of the profile no upper table level fits inside the profile, so the
-  lower table alone is used for the telescope altitude.
+- A table is referenced to its own level, so it cannot serve a photon on its own when the
+  telescope altitude lies between two levels. Where the linear blend is not possible (a photon
+  emitted less than one 10 m step above the telescope, a grazing line that does not reach the lower
+  level, or a telescope within 10 m of the profile top where no upper level fits inside the
+  profile) the integrals are computed directly at the telescope altitude by the reference
+  quadrature. This is exact and rare. A photon is dropped (counted in `dropped`) only if the line
+  does not reach the telescope level or the emission is below it.
+- A table level within a fraction of a metre of the profile top has fewer natural height nodes
+  than the interpolation stencil needs; its height grid is then filled up uniformly to eight nodes.
 - The telescope plane is the Cartesian plane $z$ = telescope $z$. The local vertical tilt of
   laterally displaced telescopes (at most lateral$/R$) is neglected in the direction of the
   displacement.

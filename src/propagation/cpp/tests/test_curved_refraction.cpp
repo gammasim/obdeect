@@ -322,6 +322,24 @@ void test_rejections(const AtmosphereProfile &profile) {
 
 } // namespace
 
+// A table level within a fraction of a metre of the profile top has fewer than four natural height
+// nodes; the grid is then filled up so that the 4-node stencil stays inside it (no out-of-bounds
+// read; run under AddressSanitizer in CI).
+void test_table_near_profile_top(const AtmosphereProfile &profile) {
+  const double top = profile.top_m();
+  for (const double gap : {0.05, 0.15, 0.3, 5.0}) {
+    const CurvedRefractionTables tables(profile, kEarthRadius, top - gap);
+    CurvedRayIntegrals out{};
+    for (const double theta : {0.0, 0.7, 1.2, kPi / 2.}) {
+      CHECK(tables.lookup(theta, top - 0.5 * gap, out));
+      CHECK(std::isfinite(out.shift_m) && std::isfinite(out.excess_bent_ns) &&
+            std::isfinite(out.excess_straight_ns));
+      CHECK(tables.lookup(theta, top + 1000.0, out)); // above the top: clamped
+    }
+    CHECK(!tables.lookup(0.5, top - gap - 1.0, out)); // below the telescope
+  }
+}
+
 int main() {
   return run_checks([] {
     const AtmosphereProfile profile = AtmosphereProfile::from_file(kFixture);
@@ -331,5 +349,6 @@ int main() {
     test_physics(profile);
     test_tables_against_direct(profile);
     test_rejections(profile);
+    test_table_near_profile_top(profile);
   });
 }

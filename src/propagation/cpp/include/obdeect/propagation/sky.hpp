@@ -91,36 +91,60 @@ inline bool curved_table_integrals(const CurvedRefractionTables &table, double i
   return table.lookup(theta, emission_altitude_m, out);
 }
 
+// Integrals of the photon at the exact telescope altitude by direct quadrature
+// (curved_ray_integrals): the reference the tables approximate, used where no table is referenced
+// to the telescope level (see curved_arrival). False if the line does not reach the telescope level
+// or the emission is below it.
+inline bool curved_direct_integrals(const SkyPlane &plane, double emission_altitude_m,
+                                    double impact_m, CurvedRayIntegrals &out) {
+  const double radius = plane.earth_radius_m + plane.telescope_altitude_m;
+  if (!(impact_m < radius) || !(emission_altitude_m >= plane.telescope_altitude_m)) {
+    return false;
+  }
+  const double theta = std::atan2(impact_m, std::sqrt((radius - impact_m) * (radius + impact_m)));
+  try {
+    out = curved_ray_integrals(*plane.profile, plane.earth_radius_m, plane.telescope_altitude_m,
+                               theta, emission_altitude_m);
+  } catch (const std::invalid_argument &) {
+    return false;
+  }
+  return true;
+}
+
 // Spherical bending and air delay of one sky-frame photon with impact parameter impact_m that
 // reaches the telescope level (plane.curved_tables required). Input: the straight-line position
 // x_out, y_out (already relative to the telescope), direction cx, cy of the emission, the vacuum
 // path [m] to the plane and the time t_in [ns]. Output: the bent position, direction and time.
-// Returns false if the photon is dropped (a lookup fails, or the bent direction leaves the unit
-// disc). No allocation, no exceptions.
+// The integrals come from the table at the telescope level if there is one, else from the blend of
+// the two tables around it. A table is referenced to its own level, so where the blend is not
+// possible (emission between the telescope and the upper level, a grazing line that does not reach
+// the lower level, no upper level inside the profile) the integrals are computed directly at the
+// telescope altitude, which is exact and rare. Returns false if the photon is dropped (no
+// integrals, or the bent direction leaves the unit disc). No allocation.
 inline bool curved_arrival(const SkyPlane &plane, double emission_altitude_m, double impact_m,
                            double cx, double cy, double path_m, double t_in, double &x_out,
                            double &y_out, double &cx_out, double &cy_out, double &t_out) {
-  CurvedRayIntegrals lower{};
-  CurvedRayIntegrals upper{};
-  const double w = plane.curved_weight;
-  const bool use_upper = plane.curved_tables_upper != nullptr && w > 0.0;
-  const bool have_lower =
-      curved_table_integrals(*plane.curved_tables, impact_m, emission_altitude_m, lower);
-  const bool have_upper = use_upper && curved_table_integrals(*plane.curved_tables_upper, impact_m,
-                                                              emission_altitude_m, upper);
-  // A photon emitted between the telescope and the upper level has no data in the upper table (its
-  // lookup starts at its own level), and a grazing line within the level spacing of the telescope
-  // does not reach the lower level. Both cases use the one table that is valid, without blending.
   CurvedRayIntegrals v{};
-  if (have_lower && have_upper) {
-    v.shift_m = (1.0 - w) * lower.shift_m + w * upper.shift_m;
-    v.excess_bent_ns = (1.0 - w) * lower.excess_bent_ns + w * upper.excess_bent_ns;
-    v.excess_straight_ns = (1.0 - w) * lower.excess_straight_ns + w * upper.excess_straight_ns;
-  } else if (have_lower) {
-    v = lower;
-  } else if (have_upper) {
-    v = upper;
+  const double w = plane.curved_weight;
+  const bool on_level = plane.curved_tables->telescope_altitude_m() == plane.telescope_altitude_m;
+  bool have = false;
+  if (on_level) {
+    have = curved_table_integrals(*plane.curved_tables, impact_m, emission_altitude_m, v);
   } else {
+    CurvedRayIntegrals lower{};
+    CurvedRayIntegrals upper{};
+    if (plane.curved_tables_upper != nullptr && w > 0.0 &&
+        curved_table_integrals(*plane.curved_tables, impact_m, emission_altitude_m, lower) &&
+        curved_table_integrals(*plane.curved_tables_upper, impact_m, emission_altitude_m, upper)) {
+      v.shift_m = (1.0 - w) * lower.shift_m + w * upper.shift_m;
+      v.excess_bent_ns = (1.0 - w) * lower.excess_bent_ns + w * upper.excess_bent_ns;
+      v.excess_straight_ns = (1.0 - w) * lower.excess_straight_ns + w * upper.excess_straight_ns;
+      have = true;
+    } else {
+      have = curved_direct_integrals(plane, emission_altitude_m, impact_m, v);
+    }
+  }
+  if (!have) {
     return false;
   }
   const double vacuum_ns = path_m / speed_of_light_m_per_ns;

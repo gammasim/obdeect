@@ -1050,16 +1050,32 @@ void test_sky_plane_validation() {
     const auto lost = obdeect::propagation::sky_to_ground(chunk, p);
     CHECK(lost == 0);
     CHECK(chunk[Column::w][0] > 0.0F);
-    return chunk[Column::t][0];
+    return chunk;
   };
-  const float t_on_level = between_levels(with_tables, 5.0); // weight 0, emitted 5 m above
-  CHECK(std::isfinite(t_on_level));
+  // Where no table is referenced to the telescope level the integrals are computed directly at the
+  // telescope altitude: the output equals the straight line plus curved_ray_integrals there.
+  const auto expect_direct = [&](const obdeect::propagation::SkyPlane &p, double z_m) {
+    auto input = sky_chunk(1, 0, {sky_at(0.0, 0.0, z_m, 30.0)}, 1);
+    const double cx = input[Column::cx][0];
+    const double cy = input[Column::cy][0];
+    const double cz = std::sqrt(1.0 - cx * cx - cy * cy);
+    const double path = (z_m - p.telescope_z_m) / cz;
+    const double b = obdeect::propagation::impact_parameter_m(0.0, 0.0, z_m, site_m, R, cx, cy, cz);
+    const auto out = between_levels(p, z_m);
+    const double theta = std::asin(b / (R + p.telescope_altitude_m));
+    const auto direct = obdeect::propagation::curved_ray_integrals(
+        profile, R, p.telescope_altitude_m, theta, static_cast<double>(out[Column::zem][0]));
+    const double s = std::sqrt(cx * cx + cy * cy);
+    CHECK(std::abs(out[Column::x][0] - (path * cx + direct.shift_m * cx / s)) < 1e-4);
+    CHECK(std::abs(out[Column::t][0] - (path / obdeect::propagation::speed_of_light_m_per_ns +
+                                        direct.excess_bent_ns)) < 2e-4);
+  };
+  CHECK(std::isfinite(between_levels(with_tables, 5.0)[Column::t][0])); // on the level, 5 m above
   auto off_level = with_tables;
   off_level.telescope_z_m = 3.0;
   off_level.telescope_altitude_m = site_m + 3.0;
   off_level.curved_weight = 0.3;
-  const float t_off_level = between_levels(off_level, 8.0); // emitted 5 m above, below site + 10
-  CHECK(std::isfinite(t_off_level));
+  expect_direct(off_level, 8.0); // emitted 5 m above the telescope, below site + 10
   auto flat_tables = plane(true);
   flat_tables.tables = &flat;
   CHECK(throws_invalid([&] { convert(flat_tables); }));
