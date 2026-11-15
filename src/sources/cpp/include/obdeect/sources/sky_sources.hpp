@@ -128,13 +128,36 @@ inline obdeect::stream::Metadata sky_run_metadata(const SkyRun &run) {
   return m;
 }
 
-// Writes the stream of a plan: each case is written events_per_case times, events numbered 1, 2...
+// Bytes per generated photon in a cached chunk (ten float32 columns including zem).
+inline constexpr std::uint64_t cached_bytes_per_photon = 10 * sizeof(float);
+// Generated photons of one event are cached (and reused for every telescope) up to this size;
+// larger events are generated again for each telescope. The output is the same either way.
+inline constexpr std::uint64_t max_cached_event_bytes = std::uint64_t{1} << 30;
+
+// Rows first..first+rows-1 of one emission, with zem added (observation level + z).
 template <class Emission>
-void write_plan(std::ostream &out, const std::string &producer, const SkyPlan<Emission> &plan) {
+void generate_plan_chunk(const Emission &emission, std::uint32_t event, double observation_level_m,
+                         std::uint64_t first, std::size_t rows,
+                         obdeect::stream::PhotonChunk &chunk) {
+  using obdeect::stream::Column;
+  emission.fill(event, first, rows, chunk);
+  auto &zem = chunk[Column::zem];
+  zem.resize(rows);
+  for (std::size_t i = 0; i < rows; ++i)
+    zem[i] = static_cast<float>(observation_level_m + static_cast<double>(chunk[Column::z][i]));
+}
+
+// Writes the stream of a plan: each case is written events_per_case times, events numbered 1, 2...
+// The photons of an event are the same for every telescope: with more than one telescope they are
+// generated once per event (cached below max_cached_event_bytes) and written for each telescope.
+template <class Emission>
+void write_plan(std::ostream &out, const std::string &producer, const SkyPlan<Emission> &plan,
+                std::uint64_t max_cached_bytes = max_cached_event_bytes) {
   using obdeect::stream::Column;
   obdeect::stream::Writer writer(out, producer);
   writer.write_metadata(obdeect::stream::RecordType::run, sky_run_metadata(plan.run));
   obdeect::stream::PhotonChunk chunk;
+  std::vector<obdeect::stream::PhotonChunk> cached;
   std::uint64_t event_number = 0;
   std::vector<std::uint64_t> counts;
   for (const auto &emissions : plan.cases) {
@@ -144,8 +167,26 @@ void write_plan(std::ostream &out, const std::string &producer, const SkyPlan<Em
       writer.write_metadata(obdeect::stream::RecordType::event,
                             {{"event_number", static_cast<std::int64_t>(event_number)}});
       counts.clear();
-      for (const auto &emission : emissions)
+      std::uint64_t total = 0;
+      for (const auto &emission : emissions) {
         counts.push_back(emission.count(event));
+        total += counts.back();
+      }
+      const bool use_cache =
+          plan.run.telescopes.size() > 1 && total <= max_cached_bytes / cached_bytes_per_photon;
+      cached.clear();
+      if (use_cache) {
+        for (std::size_t k = 0; k < emissions.size(); ++k) {
+          for (std::uint64_t done = 0; done < counts[k];) {
+            const auto rows = static_cast<std::size_t>(
+                std::min<std::uint64_t>(obdeect::stream::max_chunk_rows, counts[k] - done));
+            cached.emplace_back();
+            generate_plan_chunk(emissions[k], event, plan.run.observation_level_m, done, rows,
+                                cached.back());
+            done += rows;
+          }
+        }
+      }
       for (const auto &tel : plan.run.telescopes) {
         obdeect::stream::Metadata tm;
         tm["telescope_id"] = static_cast<std::int64_t>(tel.id);
@@ -157,23 +198,27 @@ void write_plan(std::ostream &out, const std::string &producer, const SkyPlan<Em
         writer.write_metadata(obdeect::stream::RecordType::telescope, tm);
         std::uint64_t written = 0;
         double weight = 0.0;
-        for (std::size_t k = 0; k < emissions.size(); ++k) {
-          for (std::uint64_t done = 0; done < counts[k];) {
-            const auto rows = static_cast<std::size_t>(
-                std::min<std::uint64_t>(obdeect::stream::max_chunk_rows, counts[k] - done));
-            emissions[k].fill(event, done, rows, chunk);
-            chunk.telescope_id = tel.id;
-            chunk.first_index = written;
-            auto &zem = chunk[Column::zem];
-            zem.resize(rows);
-            for (std::size_t i = 0; i < rows; ++i) {
-              zem[i] = static_cast<float>(plan.run.observation_level_m +
-                                          static_cast<double>(chunk[Column::z][i]));
-              weight += static_cast<double>(chunk[Column::w][i]);
+        const auto write_block = [&](obdeect::stream::PhotonChunk &block) {
+          block.telescope_id = tel.id;
+          block.first_index = written;
+          for (const float w : block[Column::w])
+            weight += static_cast<double>(w);
+          writer.write_chunk(block);
+          written += block.rows();
+        };
+        if (use_cache) {
+          for (auto &block : cached)
+            write_block(block);
+        } else {
+          for (std::size_t k = 0; k < emissions.size(); ++k) {
+            for (std::uint64_t done = 0; done < counts[k];) {
+              const auto rows = static_cast<std::size_t>(
+                  std::min<std::uint64_t>(obdeect::stream::max_chunk_rows, counts[k] - done));
+              generate_plan_chunk(emissions[k], event, plan.run.observation_level_m, done, rows,
+                                  chunk);
+              write_block(chunk);
+              done += rows;
             }
-            writer.write_chunk(chunk);
-            written += rows;
-            done += rows;
           }
         }
         writer.write_metadata(

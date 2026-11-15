@@ -109,6 +109,10 @@ record format is described in [](../stream/efficiency-status.md).
 - `telescope_end`: `photons` is the sum of w of the output.
 - Other records (event, blob, end records) are passed through. The output stream record comes
   from the writer; the input one is not copied.
+- With a telescope selection (`--telescopes`), the blocks of other telescopes are removed: their
+  `telescope` and `telescope_end` records, photons and telescope status. The format allows any
+  subset of telescope blocks in an event (`telescope photons* telescope_end`, repeated). Their
+  photons are not decoded. Run and event records are unchanged.
 
 ## Command line
 
@@ -136,6 +140,8 @@ obdeect propagation run: photons in <n>, out <m> (weight <w>), dropped <d>
 | `--earth-radius-m M` | Earth radius for the curved modes [m] (default 6371315, the CORSIKA CURVED radius) |
 | `--pathlen M` | path inside each telescope [m], finite and ≥ 0 (default 0) |
 | `--telescope-pathlen ID=M` | path inside telescope ID (1-based) [m]; overrides `--pathlen`; repeatable |
+| `--threads N` | threads for the rows of each chunk, 1 to 256 (default 1); the output does not depend on N |
+| `--telescopes ID[,ID...]` | keep only these telescopes (1-based ids); other telescope blocks are dropped and not decoded; not with `--scattering` (default all) |
 | `-i FILE\|-`, `-o FILE\|-` | input and output stream (default stdin, stdout) |
 
 Path 28 m for all telescopes, 0 m for telescope 2:
@@ -144,6 +150,13 @@ Path 28 m for all telescopes, 0 m for telescope 2:
 $ obdeect propagation run ... --pathlen 28 --telescope-pathlen 2=0
 ```
 
+Keep telescopes 1 and 3 only. The summary counts their photons:
+
+```console
+$ obdeect propagation run ... --telescopes 1,3 -i in.pst -o out.pst
+```
+
+The output for the kept telescopes is the same as the full run with the other blocks removed.
 The summary goes to stderr.
 
 ## Python
@@ -159,6 +172,7 @@ summary = obdeect.propagation.propagate(
     wavelength_range=(250.0, 700.0), mode="thinned",
     scattering="scattering_exponential.dat", scattering_points=8,  # optional
     pathlen_m=28.0, telescope_pathlen_m={2: 0.0},                  # optional
+    telescopes=[1, 3],                                             # optional
     curvature="spherical", earth_radius_m=6371315.0,               # optional, see curvature.md
 )
 ```

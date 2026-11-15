@@ -8,6 +8,7 @@
 
 using namespace obdeect::propagation;
 
+#include <algorithm>
 #include <cerrno>
 #include <cmath>
 #include <cstdio>
@@ -33,6 +34,7 @@ void usage() {
       "                       [--scattering FILE] [--scattering-points N]\n"
       "                       [--pathlen M] [--telescope-pathlen ID=M]...\n"
       "                       [--curvature none|corsika|spherical] [--earth-radius-m M]\n"
+      "                       [--threads N] [--telescopes ID[,ID...]]\n"
       "                       [-i FILE|-] [-o FILE|-]\n");
 }
 
@@ -85,6 +87,39 @@ std::uint32_t parse_points(const std::string &text) {
   return static_cast<std::uint32_t>(value);
 }
 
+// --threads N: from 1 to 256.
+unsigned parse_threads(const std::string &text) {
+  long value = 0;
+  if (!obdeect::stream::parse::integer(text, value) || value < 1 || value > 256) {
+    throw UsageError("--threads needs an integer from 1 to 256: " + text);
+  }
+  return static_cast<unsigned>(value);
+}
+
+// --telescopes IDS: comma-separated telescope ids from 1; sorted, repeats removed.
+std::vector<std::uint32_t> parse_telescope_list(const std::string &text) {
+  std::vector<std::uint32_t> ids;
+  std::size_t start = 0;
+  while (true) {
+    const std::size_t comma = text.find(',', start);
+    const std::string item =
+        text.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+    long id = 0;
+    if (!obdeect::stream::parse::integer(item, id) || id < 1 ||
+        id > static_cast<long>(obdeect::stream::max_telescope)) {
+      throw UsageError("--telescopes needs telescope ids from 1, separated by commas: " + text);
+    }
+    ids.push_back(static_cast<std::uint32_t>(id));
+    if (comma == std::string::npos) {
+      break;
+    }
+    start = comma + 1;
+  }
+  std::sort(ids.begin(), ids.end());
+  ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+  return ids;
+}
+
 std::uint64_t parse_seed(const std::string &text) {
   std::uint64_t value = 0;
   if (!obdeect::stream::parse::integer(text, value)) {
@@ -115,6 +150,8 @@ int main(int argc, char **argv) {
         std::map<std::uint32_t, double> telescope_pathlen;
         Curvature curvature = Curvature::none;
         std::optional<double> earth_radius;
+        unsigned threads = 1;
+        std::optional<std::vector<std::uint32_t>> telescopes;
         std::string input = "-";
         std::string output = "-";
 
@@ -173,6 +210,13 @@ int main(int argc, char **argv) {
               curvature = parse_curvature_flag(value("--curvature"));
             } else if (arg == "--earth-radius-m") {
               earth_radius = parse_double(value("--earth-radius-m"), "--earth-radius-m");
+            } else if (arg == "--threads") {
+              threads = parse_threads(value("--threads"));
+            } else if (arg == "--telescopes") {
+              if (telescopes) {
+                throw UsageError("--telescopes given twice");
+              }
+              telescopes = parse_telescope_list(value("--telescopes"));
             } else if (arg == "-i") {
               input = value("-i");
             } else if (arg == "-o") {
@@ -212,6 +256,9 @@ int main(int argc, char **argv) {
           if (scattering_points && !scattering) {
             throw UsageError("--scattering-points needs --scattering");
           }
+          if (telescopes && scattering) {
+            throw UsageError("--telescopes cannot be combined with --scattering");
+          }
 
           PropagatorConfig config;
           config.geometry_only = no_extinction;
@@ -237,6 +284,8 @@ int main(int argc, char **argv) {
           config.wavelength_range = wavelengths;
           config.seed = *seed;
           config.mode = mode.value_or(no_extinction ? OutputMode::weighted : OutputMode::thinned);
+          config.threads = threads;
+          config.telescopes = telescopes;
           config.store_p = store_p;
           if (scattering) {
             config.scattering.enabled = true;

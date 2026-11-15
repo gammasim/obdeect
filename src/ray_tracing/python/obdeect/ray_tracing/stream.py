@@ -639,7 +639,9 @@ def trace_stream(
         reject_same_file(input, output)
     except ValueError as error:
         raise ModelError(str(error)) from error
-    records = iter(obdeect_stream.Reader(str(input)))
+    # Photon chunks of other telescopes are skipped by the reader, not decoded.
+    kept = None if telescopes is None else sorted(telescopes)
+    records = iter(obdeect_stream.Reader(str(input), kept))
     head = next(records, None)
     if head is None or head["type"] != "stream":
         raise ModelError(f"{input}: not a photon stream")

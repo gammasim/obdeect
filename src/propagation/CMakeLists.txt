@@ -42,7 +42,8 @@ endif()
 add_library(obdeect_propagation_core INTERFACE)
 target_include_directories(obdeect_propagation_core INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/cpp/include)
 target_compile_features(obdeect_propagation_core INTERFACE cxx_std_20)
-target_link_libraries(obdeect_propagation_core INTERFACE obdeect::stream)
+find_package(Threads REQUIRED)
+target_link_libraries(obdeect_propagation_core INTERFACE obdeect::stream Threads::Threads)
 # Identical floating-point results for any thread count and chunk size on one
 # platform: no implicit fused multiply-add contraction.
 target_compile_options(obdeect_propagation_core INTERFACE -ffp-contract=off)
@@ -81,7 +82,7 @@ endif()
 if(OBDEECT_PROPAGATION_BUILD_TESTING)
   enable_testing()
   foreach(test_name version transmission thinning pipeline profile refraction timing
-                    propagator scattering stream_contract physics curvature curvature_modes
+                    propagator scattering stream_contract physics curvature curvature_modes telescopes
                     curved_refraction)
     add_executable(obdeect_propagation_test_${test_name} cpp/tests/test_${test_name}.cpp)
     target_link_libraries(obdeect_propagation_test_${test_name} PRIVATE obdeect_propagation_core)

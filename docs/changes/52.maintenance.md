@@ -1,0 +1,1 @@
+Faster `point-source` with several telescopes: the photons of an event are generated once and written for every telescope instead of once per telescope (14 to 74 times faster for 4 to 64 telescopes in the measured cases). Random draws that a fixed spectrum or a zero-width pulse does not use are skipped. The output is byte-identical for the same seed.

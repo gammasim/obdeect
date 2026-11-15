@@ -4,6 +4,7 @@
 // wavelength assignment, atmospheric acceptance, envelope, then weighted or thinned output.
 
 #include "obdeect/propagation/extinction.hpp"
+#include "obdeect/propagation/parallel.hpp"
 #include "obdeect/propagation/streams.hpp"
 #include "obdeect/propagation/thinning.hpp"
 #include "obdeect/propagation/transmission.hpp"
@@ -32,6 +33,8 @@ struct ExtinctionSettings {
   bool weighted{};
   // Spherical atmosphere (atmospheric_acceptance_curved) if set, plane-parallel otherwise.
   std::optional<CurvedPath> curved{};
+  // Threads for the rows of the chunk (1: in place). The result does not depend on it.
+  unsigned threads{1};
 };
 
 namespace detail {
@@ -129,30 +132,39 @@ apply_extinction_chunk(obdeect::stream::PhotonChunk chunk, const ExtinctionSetti
   if (rows == 0) {
     return {};
   }
-  auto &wavelength = chunk[Column::wavelength];
-  assign_wavelengths(chunk, settings.wavelengths, settings.seed, settings.event,
-                     settings.telescope);
+  // Each stage runs over all rows before the next one, so the first error is the same for any
+  // thread count. Rows are independent within a stage.
+  const unsigned threads = settings.threads;
+  const auto &wavelength = chunk[Column::wavelength];
+  for_row_blocks(rows, threads, [&](std::size_t begin, std::size_t end) {
+    assign_wavelengths(chunk, settings.wavelengths, settings.seed, settings.event,
+                       settings.telescope, begin, end);
+  });
 
   // Acceptance p = p_atm * E(lambda); rows at or above MAX_LAMBDA are dropped (p = 0).
   std::vector<double> p(rows, 0.0);
-  if (settings.curved) {
-    atmospheric_acceptance_curved<double>(chunk, *settings.table, *settings.depths,
-                                          *settings.curved, p);
-  } else {
-    atmospheric_acceptance<double>(chunk, *settings.table, *settings.depths, p);
-  }
+  for_row_blocks(rows, threads, [&](std::size_t begin, std::size_t end) {
+    if (settings.curved) {
+      atmospheric_acceptance_curved<double>(chunk, *settings.table, *settings.depths,
+                                            *settings.curved, p, begin, end);
+    } else {
+      atmospheric_acceptance<double>(chunk, *settings.table, *settings.depths, p, begin, end);
+    }
+  });
   const Envelope &envelope = *settings.envelope;
-  for (std::size_t row = 0; row < rows; ++row) {
-    const int iwl = table_wavelength(static_cast<double>(wavelength[row]));
-    if (iwl < 0) {
-      p[row] = 0.0;
-      continue;
+  for_row_blocks(rows, threads, [&](std::size_t begin, std::size_t end) {
+    for (std::size_t row = begin; row < end; ++row) {
+      const int iwl = table_wavelength(static_cast<double>(wavelength[row]));
+      if (iwl < 0) {
+        p[row] = 0.0;
+        continue;
+      }
+      if (iwl < envelope.min_wavelength_nm() || iwl > envelope.max_wavelength_nm()) {
+        throw std::invalid_argument("wavelength outside the envelope table");
+      }
+      p[row] *= envelope(static_cast<double>(iwl));
     }
-    if (iwl < envelope.min_wavelength_nm() || iwl > envelope.max_wavelength_nm()) {
-      throw std::invalid_argument("wavelength outside the envelope table");
-    }
-    p[row] *= envelope(static_cast<double>(iwl));
-  }
+  });
 
   if (settings.weighted) {
     weight_chunk(chunk, p, true);
@@ -161,7 +173,7 @@ apply_extinction_chunk(obdeect::stream::PhotonChunk chunk, const ExtinctionSetti
     return out;
   }
   return thin_chunk(chunk, p, settings.seed, settings.event, settings.telescope, out_first_index,
-                    true);
+                    true, stream_thinning, threads);
 }
 
 // Envelope step for scattered photons (docs/scattering.md, frame G). Their transmission from the
