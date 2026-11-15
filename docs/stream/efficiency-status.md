@@ -26,18 +26,23 @@ run updates before the telescope status overrides the run status.
 its photons. It accepts a factor that is `applied` upstream unless sim_telarray applies it again
 in that frame. It accepts `pending` only for factors that sim_telarray applies in that frame.
 `envelope` is always an error for those factors: sim_telarray applies the full factor, not f/f_env.
+For camera- and telescope-frame photons the atmosphere must be `applied`: a status without
+`atmosphere`, or with it `pending`, is an error. A stream without any efficiency status is not
+checked.
 
 | Factor | Camera frame (C) | Ground frame (G) |
 |---|---|---|
 | `qe`, `camera_transmission`, `camera_filter` | sim_telarray applies: pending ok | sim_telarray applies: pending ok |
 | `mirror_reflectivity`, `telescope_transmission` | not applied by sim_telarray: error | sim_telarray applies: pending ok |
-| `atmosphere` | must be applied upstream | any state; with `applied` sim_telarray needs an all-zero optical-depth table |
+| `atmosphere` | must be applied upstream (absent or pending: error) | any state; with `applied` sim_telarray needs an all-zero optical-depth table |
 | `wavelength`, `scattering` | must be applied upstream | must be applied upstream |
 | `telescope_transmission_constant` | not applied by sim_telarray: error | not applied by sim_telarray: error |
 | any other name | error | error |
 
 Any other factor (or unknown name) raises an error that names it, unless it is given to
-`obdeect stream to-simtel --allow-pending FACTOR` or `allow_pending=` in Python.
+`obdeect stream to-simtel --allow-pending FACTOR` or `allow_pending=` in Python. Where sim_telarray
+is meant to apply the atmosphere in the camera or telescope frame, use
+`obdeect stream to-simtel --allow-pending-atmosphere` or `allow_pending_atmosphere=True` in Python.
 
 `envelope` for a factor that sim_telarray applies is valid only with
 `obdeect stream to-simtel --scaled-factor FACTOR` (`scaled_factors=` in Python): the sim_telarray

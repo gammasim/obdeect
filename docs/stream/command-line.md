@@ -89,7 +89,7 @@ such a telescope is checked as for camera frame.
 
 `obdeect stream to-simtel` refuses a stream whose [efficiency status](efficiency-status.md) says
 that a factor is still to be applied when sim_telarray does not apply it in that frame. The
-error names the factor:
+error names the factor and exits with status 1:
 
 ```text
 obdeect stream to-simtel: efficiency status of telescope 2 (camera frame): factor
@@ -97,14 +97,27 @@ obdeect stream to-simtel: efficiency status of telescope 2 (camera frame): facto
 apply it upstream (state applied); pass --allow-pending telescope_transmission_constant to accept it as it is
 ```
 
-Use `--allow-pending FACTOR` (repeatable) only when the factor is applied elsewhere in the chain,
+Camera- and telescope-frame photons need the atmosphere applied upstream, for example by
+`obdeect propagation run`. A stream whose status lacks `atmosphere` is refused:
+
+```text
+obdeect stream to-simtel: efficiency status of telescope 1 (camera frame): factor 'atmosphere' is
+missing, but sim_telarray does not apply it in this frame; apply it upstream (state applied), or
+pass --allow-pending-atmosphere if sim_telarray is meant to apply it
+```
+
+Use `--allow-pending-atmosphere` only when sim_telarray is meant to apply the atmosphere in that
+frame; it accepts an atmosphere that is missing or pending. Use `--allow-pending FACTOR` (repeatable)
+only when the factor is applied elsewhere in the chain,
 for example by the camera module. If the QE envelope was applied upstream (state `envelope`) and
 the sim_telarray QE table is divided by that envelope, declare it with `--scaled-factor`:
 
 ```console
 $ obdeect stream to-simtel --camera-map cam.txt --allow-pending telescope_transmission_constant run.pst > sim.simtel
+$ obdeect stream to-simtel --camera-map cam.txt --allow-pending-atmosphere run.pst > sim.simtel
 $ obdeect stream to-simtel --camera-map cam.txt --scaled-factor qe run.pst > sim.simtel
 ```
 
-In Python: `allow_pending=[...]` and `scaled_factors=[...]` of `obdeect.stream.stream_to_simtel`.
+In Python: `allow_pending=[...]`, `allow_pending_atmosphere=True` and `scaled_factors=[...]` of
+`obdeect.stream.stream_to_simtel`.
 The factors that sim_telarray applies in each frame are listed in [](efficiency-status.md).

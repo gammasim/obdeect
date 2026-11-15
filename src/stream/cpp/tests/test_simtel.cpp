@@ -954,16 +954,18 @@ efficiency_status_run(Frame frame, const std::vector<Metadata> &run_efficiency_s
   return records;
 }
 
-// Efficiency status rules (docs/usage.md): which factors sim_telarray may leave to
-// itself in each frame, and which ones must be applied upstream.
+// Efficiency status rules (docs/stream/efficiency-status.md): which factors sim_telarray may leave
+// to itself in each frame, and which ones must be applied upstream. Camera-frame fixtures carry
+// `atmosphere` applied, because sim_telarray does not apply the atmosphere in that frame.
 void test_efficiency_status_rules() {
   const CameraMap camera{{2, CameraTelescope{1, 0.0}}};
   const std::set<std::string> constant_allowed{"telescope_transmission_constant"};
   const std::string constant = "telescope_transmission_constant";
+  const Metadata atmosphere = efficiency_status_of("atmosphere", "applied");
 
   // Pending constant part of the telescope transmission (angular mode) in camera frame.
-  const auto constant_run =
-      efficiency_status_run(Frame::camera, {efficiency_status_of(constant, "pending")}, {});
+  const auto constant_run = efficiency_status_run(
+      Frame::camera, {efficiency_status_of(constant, "pending"), atmosphere}, {});
   CHECK(throws_error([&] { run_adapter(constant_run, camera); }));
   CHECK(!throws_error([&] { run_adapter(constant_run, camera, constant_allowed); }));
   // Ground frame: the same factor is not in the sim_telarray list either.
@@ -974,12 +976,14 @@ void test_efficiency_status_rules() {
 
   // sim_telarray applies the camera efficiencies in camera frame: pending is accepted.
   CHECK(!throws_error([&] {
-    run_adapter(efficiency_status_run(Frame::camera, {efficiency_status_of("qe", "pending")}, {}),
+    run_adapter(efficiency_status_run(Frame::camera,
+                                      {efficiency_status_of("qe", "pending"), atmosphere}, {}),
                 camera);
   }));
   // An envelope on a factor sim_telarray applies in full would make the result too dim.
   CHECK(throws_error([&] {
-    run_adapter(efficiency_status_run(Frame::camera, {efficiency_status_of("qe", "envelope")}, {}),
+    run_adapter(efficiency_status_run(Frame::camera,
+                                      {efficiency_status_of("qe", "envelope"), atmosphere}, {}),
                 camera);
   }));
   // Ground frame: atmosphere is accepted in any state (sim_telarray's table must then be zero).
@@ -1000,8 +1004,9 @@ void test_efficiency_status_rules() {
                 {});
   }));
   CHECK(throws_error([&] {
-    run_adapter(efficiency_status_run(Frame::camera,
-                                      {efficiency_status_of("mirror_reflectivity", "pending")}, {}),
+    run_adapter(efficiency_status_run(
+                    Frame::camera,
+                    {efficiency_status_of("mirror_reflectivity", "pending"), atmosphere}, {}),
                 camera);
   }));
 
@@ -1028,32 +1033,33 @@ void test_efficiency_status_rules() {
   CHECK(!throws_error([&] {
     run_adapter(efficiency_status_run(Frame::camera,
                                       {efficiency_status_of("wavelength", "pending"),
-                                       efficiency_status_of("wavelength", "applied")},
+                                       efficiency_status_of("wavelength", "applied"), atmosphere},
                                       {}),
                 camera);
   }));
   CHECK(throws_error([&] {
     run_adapter(efficiency_status_run(Frame::camera,
                                       {efficiency_status_of("wavelength", "applied"),
-                                       efficiency_status_of("wavelength", "pending")},
+                                       efficiency_status_of("wavelength", "pending"), atmosphere},
                                       {}),
                 camera);
   }));
   CHECK(!throws_error([&] {
-    run_adapter(efficiency_status_run(Frame::camera, {},
+    run_adapter(efficiency_status_run(Frame::camera, {atmosphere},
                                       {efficiency_status_of("qe", "pending"),
                                        efficiency_status_of("qe", "envelope")}),
                 camera, {}, {"qe"});
   }));
   CHECK(throws_error([&] {
-    run_adapter(efficiency_status_run(Frame::camera, {},
+    run_adapter(efficiency_status_run(Frame::camera, {atmosphere},
                                       {efficiency_status_of("qe", "envelope"),
                                        efficiency_status_of("qe", "pending")}),
                 camera, {}, {"qe"});
   }));
   // Applied upstream and applied again by sim_telarray: rejected.
   CHECK(throws_error([&] {
-    run_adapter(efficiency_status_run(Frame::camera, {efficiency_status_of("qe", "applied")}, {}),
+    run_adapter(efficiency_status_run(Frame::camera,
+                                      {efficiency_status_of("qe", "applied"), atmosphere}, {}),
                 camera);
   }));
   // Atmosphere pending is not applied by sim_telarray: rejected.
@@ -1065,14 +1071,14 @@ void test_efficiency_status_rules() {
 
   // Unknown factor names are rejected, also when applied; --allow-pending accepts them.
   CHECK(throws_error([&] {
-    run_adapter(
-        efficiency_status_run(Frame::camera, {efficiency_status_of("made_up", "applied")}, {}),
-        camera);
+    run_adapter(efficiency_status_run(Frame::camera,
+                                      {efficiency_status_of("made_up", "applied"), atmosphere}, {}),
+                camera);
   }));
   CHECK(!throws_error([&] {
-    run_adapter(
-        efficiency_status_run(Frame::camera, {efficiency_status_of("made_up", "applied")}, {}),
-        camera, {"made_up"});
+    run_adapter(efficiency_status_run(Frame::camera,
+                                      {efficiency_status_of("made_up", "applied"), atmosphere}, {}),
+                camera, {"made_up"});
   }));
   CHECK(throws_error(
       [&] { run_adapter(efficiency_status_run(Frame::camera, {}, {}), camera, {}, {"qe"}); }));
@@ -1080,20 +1086,24 @@ void test_efficiency_status_rules() {
   // Scaled factors (sim_telarray table holds f/f_env): only the envelope state of a factor
   // that sim_telarray applies in the frame is accepted.
   CHECK(throws_error([&] {
-    run_adapter(efficiency_status_run(Frame::camera, {efficiency_status_of("qe", "envelope")}, {}),
+    run_adapter(efficiency_status_run(Frame::camera,
+                                      {efficiency_status_of("qe", "envelope"), atmosphere}, {}),
                 camera);
   }));
   CHECK(!throws_error([&] {
-    run_adapter(efficiency_status_run(Frame::camera, {efficiency_status_of("qe", "envelope")}, {}),
+    run_adapter(efficiency_status_run(Frame::camera,
+                                      {efficiency_status_of("qe", "envelope"), atmosphere}, {}),
                 camera, {}, {"qe"});
   }));
   CHECK(throws_error([&] {
-    run_adapter(efficiency_status_run(Frame::camera, {efficiency_status_of("qe", "pending")}, {}),
+    run_adapter(efficiency_status_run(Frame::camera,
+                                      {efficiency_status_of("qe", "pending"), atmosphere}, {}),
                 camera, {}, {"qe"});
   }));
   CHECK(throws_error([&] {
     run_adapter(efficiency_status_run(
-                    Frame::camera, {efficiency_status_of("mirror_reflectivity", "envelope")}, {}),
+                    Frame::camera,
+                    {efficiency_status_of("mirror_reflectivity", "envelope"), atmosphere}, {}),
                 camera, {}, {"mirror_reflectivity"});
   }));
   // Ground frame: the atmosphere cannot be a scaled factor, in any state, although the
@@ -1124,16 +1134,78 @@ void test_efficiency_status_rules() {
 
   // A telescope efficiency status overrides the run efficiency status for its factor.
   CHECK(!throws_error([&] {
-    run_adapter(efficiency_status_run(Frame::camera, {efficiency_status_of(constant, "pending")},
+    run_adapter(efficiency_status_run(Frame::camera,
+                                      {efficiency_status_of(constant, "pending"), atmosphere},
                                       {efficiency_status_of(constant, "applied")}),
                 camera);
   }));
 
   // A telescope efficiency status after the photons of its telescope is rejected.
-  std::vector<Record> late = efficiency_status_run(Frame::camera, {}, {});
+  std::vector<Record> late = efficiency_status_run(Frame::camera, {atmosphere}, {});
   late.insert(late.end() - 3,
               record_of(RecordType::efficiency_status, efficiency_status_of("qe", "pending")));
   CHECK(throws_error([&] { run_adapter(late, camera); }));
+}
+
+// The atmosphere must be applied upstream for camera- and telescope-frame photons, because
+// sim_telarray does not apply it there. A status without the factor does not say so: rejected.
+// Ground-frame photons, streams without any efficiency status and an allowed atmosphere
+// (sim_telarray applies it) are accepted.
+void test_efficiency_status_atmosphere_missing() {
+  const CameraMap camera{{2, CameraTelescope{1, 0.0}}};
+  const CameraMap telescope_frame{{2, CameraTelescope{2, 0.0}}};
+  const std::set<std::string> allow_atmosphere{"atmosphere"};
+  // One event with telescope 2 (class 2) in telescope frame, with the given efficiency status.
+  auto telescope_run = [](const std::vector<Metadata> &run_status) {
+    std::vector<Record> records = efficiency_status_run(Frame::camera, run_status, {});
+    for (Record &record : records) {
+      if (record.type == RecordType::photons) {
+        record = photons_of(telescope_chunk(2, {0.5}, {0.2}, {0.1}, {0.6}, {0.0}, {-0.8}, {0.0}));
+      }
+    }
+    return records;
+  };
+
+  // Camera frame, status lacks the atmosphere: the error names the factor.
+  const auto missing = efficiency_status_run(
+      Frame::camera, {efficiency_status_of("mirror_reflectivity", "applied")}, {});
+  bool named = false;
+  try {
+    run_adapter(missing, camera);
+  } catch (const std::runtime_error &error) {
+    named = std::string(error.what()).find("'atmosphere' is missing") != std::string::npos;
+  }
+  CHECK(named);
+  // Pending quantum efficiency alone is not enough either.
+  CHECK(throws_error([&] {
+    run_adapter(efficiency_status_run(Frame::camera, {efficiency_status_of("qe", "pending")}, {}),
+                camera);
+  }));
+  // Telescope frame (class 2 telescope, Bypass_Optics=1): the same rule.
+  CHECK(throws_error([&] {
+    run_adapter(telescope_run({efficiency_status_of("qe", "pending")}), telescope_frame);
+  }));
+  CHECK(!throws_error([&] {
+    run_adapter(telescope_run({efficiency_status_of("qe", "pending"),
+                               efficiency_status_of("atmosphere", "applied")}),
+                telescope_frame);
+  }));
+  // Override: sim_telarray is meant to apply the atmosphere in this frame.
+  CHECK(!throws_error([&] { run_adapter(missing, camera, allow_atmosphere); }));
+  // A telescope status that makes the atmosphere pending overrides an applied run status: rejected.
+  CHECK(throws_error([&] {
+    run_adapter(efficiency_status_run(Frame::camera,
+                                      {efficiency_status_of("atmosphere", "applied")},
+                                      {efficiency_status_of("atmosphere", "pending")}),
+                camera);
+  }));
+  // Ground frame: the atmosphere is not required.
+  CHECK(!throws_error([&] {
+    run_adapter(efficiency_status_run(Frame::ground, {efficiency_status_of("qe", "pending")}, {}),
+                {});
+  }));
+  // No efficiency status at all: converted as before.
+  CHECK(!throws_error([&] { run_adapter(efficiency_status_run(Frame::camera, {}, {}), camera); }));
 }
 
 // CORSIKA-style file -> corsika_to_records -> Writer -> Reader -> SimtelWriter gives the
@@ -1189,6 +1261,7 @@ int main() {
     test_missing_metadata_rejected();
     test_frames_rejected();
     test_efficiency_status_rules();
+    test_efficiency_status_atmosphere_missing();
     test_round_trip_byte_identical();
     test_atmprof_text();
     test_atmprof_synthesised();

@@ -214,11 +214,21 @@ def _efficiency_status(factor, state):
     return {"factors": factor, f"{factor}.state": state}
 
 
-# Efficiency status of a camera-frame telescope (docs/usage.md): accepted and rejected factors.
+def _with_atmosphere(status):
+    """Add the atmosphere as applied: a camera-frame status needs it upstream."""
+    return {
+        **status,
+        "factors": f"{status['factors']},atmosphere",
+        "atmosphere.state": "applied",
+    }
+
+
+# Efficiency status of a camera-frame telescope (docs/stream/efficiency-status.md): accepted and
+# rejected factors. Accepted statuses carry the atmosphere as applied.
 ACCEPTED_EFFICIENCY_STATUSES = [
-    _efficiency_status("qe", "pending"),
+    _with_atmosphere(_efficiency_status("qe", "pending")),
+    _with_atmosphere(_efficiency_status("telescope_transmission_constant", "applied")),
     _efficiency_status("atmosphere", "applied"),
-    _efficiency_status("telescope_transmission_constant", "applied"),
 ]
 REJECTED_EFFICIENCY_STATUSES = [
     _efficiency_status("telescope_transmission_constant", "pending"),
@@ -249,7 +259,7 @@ def test_efficiency_status_rejected_in_camera_frame(tmp_path, efficiency_status)
 def test_efficiency_status_pending_accepted_with_allow_pending(tmp_path):
     stream = tmp_path / "light.pst"
     simtel = tmp_path / "light.simtel"
-    constant = _efficiency_status("telescope_transmission_constant", "pending")
+    constant = _with_atmosphere(_efficiency_status("telescope_transmission_constant", "pending"))
     _write_light_source_stream(stream, telescope_efficiency_status=constant)
     obdeect_stream.stream_to_simtel(
         stream, simtel, {2: (1, 0.0)}, allow_pending=["telescope_transmission_constant"]
@@ -259,6 +269,67 @@ def test_efficiency_status_pending_accepted_with_allow_pending(tmp_path):
         obdeect_stream.stream_to_simtel(stream, simtel, {2: (1, 0.0)}, allow_pending="qe")
 
 
+def test_efficiency_status_missing_atmosphere_rejected_in_camera_frame(tmp_path):
+    # The status says nothing about the atmosphere: sim_telarray does not apply it in this frame.
+    stream = tmp_path / "light.pst"
+    _write_light_source_stream(
+        stream, telescope_efficiency_status=_efficiency_status("qe", "pending")
+    )
+    with pytest.raises(RuntimeError, match="'atmosphere' is missing"):
+        obdeect_stream.stream_to_simtel(stream, tmp_path / "bad.simtel", {2: (1, 0.0)})
+
+
+def test_allow_pending_atmosphere_accepts_missing_atmosphere(tmp_path):
+    stream = tmp_path / "light.pst"
+    simtel = tmp_path / "light.simtel"
+    _write_light_source_stream(
+        stream, telescope_efficiency_status=_efficiency_status("qe", "pending")
+    )
+    obdeect_stream.stream_to_simtel(stream, simtel, {2: (1, 0.0)}, allow_pending_atmosphere=True)
+    assert simtel.stat().st_size > 0
+
+
+def test_ground_frame_without_atmosphere_is_accepted(tmp_path):
+    # The run status applies to telescope 1 (ground frame), which has no atmosphere entry: accepted.
+    # Telescope 2 (camera frame) states the atmosphere as applied.
+    stream = tmp_path / "light.pst"
+    simtel = tmp_path / "light.simtel"
+    _write_light_source_stream(
+        stream,
+        run_efficiency_status=_efficiency_status("qe", "pending"),
+        telescope_efficiency_status=_efficiency_status("atmosphere", "applied"),
+    )
+    obdeect_stream.stream_to_simtel(stream, simtel, {2: (1, 0.0)})
+    assert simtel.stat().st_size > 0
+
+
+@pytest.mark.skipif(
+    find_program("obdeect.stream", "obdeect-stream-to-simtel") is None,
+    reason="obdeect stream to-simtel is not installed",
+)
+def test_cli_allow_pending_atmosphere_option(tmp_path):
+    stream = tmp_path / "light.pst"
+    camera = tmp_path / "camera.txt"
+    camera.write_text("2 1 0.0\n")
+    _write_light_source_stream(
+        stream, telescope_efficiency_status=_efficiency_status("qe", "pending")
+    )
+    base = [
+        find_program("obdeect.stream", "obdeect-stream-to-simtel"),
+        "--camera-map",
+        str(camera),
+        "-o",
+        str(tmp_path / "ok.simtel"),
+    ]
+    failed = subprocess.run([*base, str(stream)], capture_output=True)
+    assert failed.returncode != 0
+    assert b"--allow-pending-atmosphere" in failed.stderr
+    subprocess.run(
+        [*base, "--allow-pending-atmosphere", str(stream)], check=True, capture_output=True
+    )
+    assert (tmp_path / "ok.simtel").stat().st_size > 0
+
+
 def test_efficiency_status_scaled_factor_accepts_envelope(tmp_path):
     # A QE table divided by the QE envelope: sim_telarray applies f/f_env.
     stream = tmp_path / "light.pst"
@@ -266,7 +337,7 @@ def test_efficiency_status_scaled_factor_accepts_envelope(tmp_path):
     _write_light_source_stream(
         stream,
         run_efficiency_status=_efficiency_status("qe", "envelope"),
-        telescope_efficiency_status=_efficiency_status("qe", "envelope"),
+        telescope_efficiency_status=_with_atmosphere(_efficiency_status("qe", "envelope")),
     )
     with pytest.raises(RuntimeError, match="--scaled-factor qe"):
         obdeect_stream.stream_to_simtel(stream, tmp_path / "bad.simtel", {2: (1, 0.0)})
@@ -371,7 +442,7 @@ def test_cli_allow_pending_option(tmp_path):
     stream = tmp_path / "light.pst"
     camera = tmp_path / "camera.txt"
     camera.write_text("2 1 0.0\n")
-    constant = _efficiency_status("telescope_transmission_constant", "pending")
+    constant = _with_atmosphere(_efficiency_status("telescope_transmission_constant", "pending"))
     _write_light_source_stream(stream, telescope_efficiency_status=constant)
     base = [
         find_program("obdeect.stream", "obdeect-stream-to-simtel"),
@@ -465,7 +536,7 @@ def test_cli_scaled_factor_option(tmp_path):
     _write_light_source_stream(
         stream,
         run_efficiency_status=_efficiency_status("qe", "envelope"),
-        telescope_efficiency_status=_efficiency_status("qe", "envelope"),
+        telescope_efficiency_status=_with_atmosphere(_efficiency_status("qe", "envelope")),
     )
     out = tmp_path / "ok.simtel"
     base = [
