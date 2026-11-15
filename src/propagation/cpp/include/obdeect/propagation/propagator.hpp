@@ -17,6 +17,7 @@
 // make_efficiency_status(); a new effect adds a step in Propagator::photons and an entry in
 // make_efficiency_status().
 
+#include "obdeect/propagation/curved_refraction.hpp"
 #include "obdeect/propagation/extinction.hpp"
 #include "obdeect/propagation/pipeline.hpp"
 #include "obdeect/propagation/profile.hpp"
@@ -452,11 +453,6 @@ private:
     if (config_.scattering.enabled) {
       throw std::invalid_argument("curved atmosphere cannot be combined with scattering");
     }
-    if (config_.curvature == Curvature::spherical && config_.profile) {
-      throw std::invalid_argument(
-          "curvature mode 'spherical' with a profile: curved refraction and "
-          "air delay are not implemented yet");
-    }
   }
 
   // The run key curvature_applied (optional: nullopt if the run lacks it) must match the mode.
@@ -844,6 +840,20 @@ private:
                       telescope.nz};
   }
 
+  // Curved refraction table of the spherical mode at the level a [m a.s.l.], built on first use.
+  // The levels lie on the grid curved_altitude_step_m (or at the profile bottom, if the grid lies
+  // below it). A telescope altitude h_t between two adjacent levels is served by linear
+  // interpolation in h_t between the two tables (sky_plane): the error of that interpolation is
+  // second order in the 10 m spacing. Each table is looked up at its own level.
+  const CurvedRefractionTables &curved_tables_at(double level_m) {
+    const auto found = curved_tables_.find(level_m);
+    if (found != curved_tables_.end()) {
+      return found->second;
+    }
+    return curved_tables_.try_emplace(level_m, *config_.profile, config_.earth_radius_m, level_m)
+        .first->second;
+  }
+
   // Geometry of the open telescope for sky-frame photons (refraction tables built on first use).
   SkyPlane sky_plane() {
     SkyPlane plane;
@@ -853,6 +863,33 @@ private:
     plane.observation_m = run_->observation_m;
     if (config_.curvature == Curvature::spherical) {
       plane.earth_radius_m = config_.earth_radius_m;
+      plane.telescope_altitude_m = telescope_.altitude_m; // true altitude (r_t, nu_t)
+      if (config_.profile) {
+        plane.profile = &*config_.profile;
+        const double h = telescope_.altitude_m;
+        const double bottom = config_.profile->bottom_m();
+        const double top = config_.profile->top_m();
+        if (!(h >= bottom && h < top)) {
+          throw std::invalid_argument("telescope altitude must lie inside the atmospheric profile");
+        }
+        if (run_->observation_m < bottom || run_->observation_m >= top) {
+          throw std::invalid_argument("observation level must lie inside the atmospheric profile");
+        }
+        // Levels of the two tables around h: the grid level below h (not below the profile
+        // bottom) and the next level above it.
+        const double lower =
+            std::max(std::floor(h / curved_altitude_step_m) * curved_altitude_step_m, bottom);
+        const double upper = lower + curved_altitude_step_m;
+        // No upper table if h is on the lower level (zero weight) or the upper level would not lie
+        // below the profile top (the table needs its level inside the profile); then the lower
+        // table alone is used, which is off by the first-order change over less than one step.
+        const bool blend = h > lower && upper < top;
+        plane.curved_tables = &curved_tables_at(lower);
+        plane.curved_tables_upper = blend ? &curved_tables_at(upper) : nullptr;
+        plane.curved_weight = blend ? (h - lower) / (upper - lower) : 0.0;
+        plane.curved_bending = !run_->refraction_applied;
+      }
+      return plane;
     }
     if (config_.profile) {
       plane.profile = &*config_.profile;
@@ -1092,11 +1129,14 @@ private:
   std::uint32_t event_number_{};
   bool efficiency_status_pending_{};
   // Caches: telescope depths per (altitude, pathlen) (the table is fixed), refraction tables of
-  // the last altitude used for sky-frame photons.
+  // the last altitude used for sky-frame photons (flat geometry), curved tables per level of the
+  // 10 m grid (spherical geometry).
   std::map<std::pair<double, double>, TelescopeDepths> depths_cache_;
   std::optional<RefractionTables> tables_;
   double tables_altitude_m_{};
-  obdeect::stream::PhotonChunk chunk_; // reused by photons()
+  static constexpr double curved_altitude_step_m = 10.0;   // grid of the curved table levels [m]
+  std::map<double, CurvedRefractionTables> curved_tables_; // by level [m a.s.l.]
+  obdeect::stream::PhotonChunk chunk_;                     // reused by photons()
   // Single scattering: sphere of telescope i+1, scattered photons per telescope (sky frame),
   // the records of the held event, and the running index of its primary photons.
   std::vector<ScatterTelescope> sphere_;

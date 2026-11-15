@@ -153,9 +153,8 @@ implementation of [](format.md) should decode `valid.pst` to `expected.json` and
 
 ## End-to-end check
 
-`validation/stream/validate_container.sh OUTDIR` is a manual end-to-end check of the EventIO codec. In the
-`ghcr.io/gammasim/simtools-dev` container it runs CORSIKA, then
-`obdeect stream from-corsika | obdeect stream to-simtel`, and compares the CORSIKA EventIO file
-with the round-trip file. It then runs sim_telarray on both files with the same configuration and
-seed and compares the outputs. The container, CORSIKA and sim_telarray are not part of the
-automated tests.
+The end-to-end check of the EventIO codec lives in the `obdeect-validation` repository: case
+`cases/stream/corsika-roundtrip.json` (suite `stream`). In the `ghcr.io/gammasim/simtools-dev`
+container it runs `obdeect stream from-corsika | obdeect stream to-simtel` on a CORSIKA IACT file,
+compares bunches and sim_telarray camera images with the direct run, and checks the stdin/tee
+variants. It needs CORSIKA and sim_telarray and is not part of the automated tests.

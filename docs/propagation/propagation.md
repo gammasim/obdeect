@@ -56,7 +56,8 @@ the chunk with w = 0, so the random draws of the other photons do not change.
 
 Time: without a profile, t + s/c. With a profile and no refraction in the stream, the air delay
 `straight_path_air_delay_ns` is added. With refraction (`refraction_applied` = 0 and a profile),
-time and direction come from `bend` at the telescope plane ([](refraction.md)).
+time and direction come from `bend` at the telescope plane ([](refraction.md)). In `spherical` mode
+the bending and air delay are the spherical integrals of [](curvature.md) instead.
 
 ## Efficiency status
 
@@ -81,6 +82,9 @@ qe.value                [0.9, 0.5]
 
 - `atmosphere`: applied; source = transmission file; `pathlen_m` = path inside each telescope [m],
   in telescope_id order (entry 0 is telescope 1).
+- `atmosphere.geometry`, `atmosphere.earth_radius_m`: only with `--curvature corsika` or
+  `spherical` (`corsika-curved` or `spherical`, and the radius [m]); absent in mode `none`
+  ([](curvature.md)).
 - `wavelength`: applied; rows without a wavelength get one from the range.
 - `scattering`: only with scattering; applied; source = scattering table; points per photon.
 - Each efficiency bound: state `envelope` (its value is part of the thinning, not applied in full),
@@ -132,6 +136,8 @@ obdeect propagation run: photons in <n>, out <m> (weight <w>), dropped <d>
 | `--store-p` | keep column p |
 | `--scattering FILE` | single scattering with this scattering table (off by default) |
 | `--scattering-points N` | scattering points per photon, 1 to 1024 (default 8; needs `--scattering`) |
+| `--curvature none\|corsika\|spherical` | Earth curvature of the atmosphere (default none), see [](curvature.md) |
+| `--earth-radius-m M` | Earth radius for the curved modes [m] (default 6371315, the CORSIKA CURVED radius) |
 | `--pathlen M` | path inside each telescope [m], finite and ≥ 0 (default 0) |
 | `--telescope-pathlen ID=M` | path inside telescope ID (1-based) [m]; overrides `--pathlen`; repeatable |
 | `--threads N` | threads for the rows of each chunk, 1 to 256 (default 1); the output does not depend on N |
@@ -167,6 +173,7 @@ summary = obdeect.propagation.propagate(
     scattering="scattering_exponential.dat", scattering_points=8,  # optional
     pathlen_m=28.0, telescope_pathlen_m={2: 0.0},                  # optional
     telescopes=[1, 3],                                             # optional
+    curvature="spherical", earth_radius_m=6371315.0,               # optional, see curvature.md
 )
 ```
 
@@ -205,12 +212,13 @@ have is an error.
 
 ## Limits
 
-- Plane-parallel airmass and straight-line geometry by default. Earth curvature for the airmass is
-  optional ([](curvature.md)); curved refraction and curved air delay are not implemented.
+- Plane-parallel airmass, straight-line geometry and refraction by default (mode `none`). With
+  `--curvature spherical` the airmass, bending and air delay are spherical ([](curvature.md)); with
+  `corsika` CORSIKA has applied them.
 - Scattering is plane-parallel and needs sky-frame input and `telescope_r_m` in the run keys; not
   available for photons already in frame G, and rejected with a curved mode.
 - The in-telescope path is not derived from the optics (default 0).
 - Transmission tables hold one row per integer nm; a wavelength uses the row at its integer part.
 - Efficiency-bound tables must cover the wavelength range (rounded outwards).
-- Photons within about 3 degrees of the horizon are not bent and are dropped (series limit of the
-  ray bending, see [](refraction.md)).
+- In mode `none`, photons within about 3 degrees of the horizon are not bent and are dropped (series
+  limit of the ray bending, see [](refraction.md)).

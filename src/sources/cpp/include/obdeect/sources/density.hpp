@@ -166,6 +166,8 @@ struct UniformRange {
 struct GaussianShape {
   double mean_value{}, sigma{};
   [[nodiscard]] double sample(const Uniforms &u) const {
+    if (sigma == 0.0)
+      return mean_value; // no quantile needed (u is in (0, 1), so the product is never NaN)
     return mean_value + sigma * normal_quantile(u[0]);
   }
   [[nodiscard]] double mean() const { return mean_value; }
@@ -220,6 +222,17 @@ using Pulse =
 
 template <class Shape> double sample(const Shape &shape, const Uniforms &u) {
   return std::visit([&u](const auto &s) { return s.sample(u); }, shape);
+}
+
+// True when sample(u) does not depend on u, so its draw may be skipped (draws are stateless).
+inline bool ignores_draw(const Spectrum &spectrum) {
+  return std::holds_alternative<Fixed>(spectrum);
+}
+inline bool ignores_draw(const Pulse &pulse) {
+  if (std::holds_alternative<Fixed>(pulse))
+    return true;
+  const auto *g = std::get_if<GaussianShape>(&pulse);
+  return g != nullptr && g->sigma == 0.0;
 }
 
 // Angular profiles in u = 1 - cos(theta), u in [0, 2].
