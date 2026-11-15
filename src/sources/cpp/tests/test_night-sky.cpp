@@ -4,6 +4,7 @@
 #include "obdeect/sources/background.hpp"
 #include "obdeect/sources/programs/night-sky.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <stdexcept>
@@ -18,16 +19,30 @@ namespace {
 
 constexpr double deg = pi / 180.0;
 
-// E[z] of the sphere point: projected radius r = 1 - sqrt(U), z = sqrt(1 - r^2).
+// E[z] of the sphere point: projected radius r = sqrt(U) (area-uniform disc), z = sqrt(1 - r^2).
+// Analytic value: integral of sqrt(1 - u) over [0, 1] = 2/3.
 double mean_zi() {
   const int n = 2000000;
   double s = 0.0;
   for (int i = 0; i < n; ++i) {
     const double u = (i + 0.5) / n;
-    const double r = 1.0 - std::sqrt(u);
+    const double r = std::sqrt(u);
     s += std::sqrt(1.0 - r * r);
   }
   return s / n;
+}
+
+// Kolmogorov-Smirnov statistic of sorted values against the uniform law on [0, 1].
+double ks_uniform(std::vector<double> v) {
+  std::sort(v.begin(), v.end());
+  const double n = static_cast<double>(v.size());
+  double d = 0.0;
+  for (std::size_t i = 0; i < v.size(); ++i) {
+    const double x = std::clamp(v[i], 0.0, 1.0);
+    d = std::max(d,
+                 std::max((static_cast<double>(i) + 1.0) / n - x, x - static_cast<double>(i) / n));
+  }
+  return d;
 }
 
 struct Moments {
@@ -81,6 +96,35 @@ void cone_and_sphere() {
   const double width = 1.0 - cos_vc;
   CHECK_NEAR(m.mean, 0.5 * (1.0 + cos_vc), 4.0 * std::sqrt(width * width / 12.0 / n));
   CHECK_NEAR(m.var, width * width / 12.0, 4.0 * (width * width / 12.0) * std::sqrt(0.8 / n));
+}
+
+// Entry points are uniform over the projected disc of the sphere: for each direction d the
+// perpendicular radius ri = |u - (u.d) d| has ri^2 uniform in [0, 1] (isotropic flux through
+// the telescope sphere), and E[zi] = 2/3.
+void projected_area_uniform() {
+  BackgroundSource s;
+  s.centre = {0.0, 0.0, 0.0};
+  s.radius_m = 15.0;
+  s.pointing = {0.0, 0.0, -1.0};
+  s.viewcone_rad = pi / 2.0;
+  const std::uint64_t n = 40000;
+  std::vector<double> r2;
+  std::vector<double> zl;
+  for (std::uint64_t i = 0; i < n; ++i) {
+    const Photon ph = sample_background(s, 11, 2, 1, i);
+    const Vec3 u = ph.position * (1.0 / s.radius_m);
+    const double ud = dot(u, ph.direction);
+    r2.push_back(1.0 - ud * ud);
+    zl.push_back(-ud);
+  }
+  const auto m = moments_of(r2);
+  const double nd = static_cast<double>(n);
+  CHECK_NEAR(m.mean, 0.5, 4.0 * std::sqrt(1.0 / 12.0 / nd));
+  CHECK_NEAR(m.var, 1.0 / 12.0, 4.0 * (1.0 / 12.0) * std::sqrt(0.8 / nd));
+  // KS critical value at alpha = 0.001: 1.95 / sqrt(n).
+  CHECK(ks_uniform(r2) < 1.95 / std::sqrt(nd));
+  CHECK_NEAR(moments_of(zl).mean, 2.0 / 3.0, 4.0 * std::sqrt(1.0 / 18.0 / nd));
+  CHECK_NEAR(mean_zi(), 2.0 / 3.0, 1e-6);
 }
 
 // Emission time: -zi R / c (zi of the sphere point, pulse 0, delay 0). With a pulse width
@@ -226,6 +270,7 @@ void rejects_bad_source_parameters() {
 int main() {
   return run_checks([] {
     cone_and_sphere();
+    projected_area_uniform();
     timing_and_delay();
     table_spectrum();
     stream_layout();

@@ -51,7 +51,7 @@ EventioBlock evth_block(float event, float curved_flag = 0.0F) {
   w[10] = 0.3F;        // zenith [rad]
   w[11] = 1.2F;        // azimuth [rad]
   w[76] = 5136.0F;     // atmosphere 5 (bits 11-20), refraction (bit 5)
-  w[78] = curved_flag; // word 79: CURVED flag (0 = standard, 2 = curved)
+  w[78] = curved_flag; // word 79: CURVED flag (0 = standard, 1 = curved, 2 = curved with upgoing)
   w[95] = 250.0F;      // Cherenkov wavelength range [nm]
   w[96] = 800.0F;
   return make_float_block(iact::evth, static_cast<std::uint32_t>(event), w);
@@ -277,12 +277,14 @@ void curvature_flag_is_read_from_evth() {
   }
   CHECK(meta<std::int64_t>(standard.front().metadata, "curvature_applied") == 0);
 
-  const std::vector<Record> curved = convert(build_stream_a(2.0F));
-  CHECK(!curved.empty() && curved.front().type == RecordType::run);
-  if (curved.empty() || curved.front().type != RecordType::run) {
-    return;
+  for (const float flag : {1.0F, 2.0F}) {
+    const std::vector<Record> curved = convert(build_stream_a(flag));
+    CHECK(!curved.empty() && curved.front().type == RecordType::run);
+    if (curved.empty() || curved.front().type != RecordType::run) {
+      return;
+    }
+    CHECK(meta<std::int64_t>(curved.front().metadata, "curvature_applied") == 1);
   }
-  CHECK(meta<std::int64_t>(curved.front().metadata, "curvature_applied") == 1);
 }
 
 void stream_a_round_trips_byte_identically() {

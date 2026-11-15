@@ -1,17 +1,24 @@
 # obdeect
 
-obdeect is a simulation chain for imaging atmospheric Cherenkov telescopes. The chain is
-made of modules that exchange photons as photon streams: light sources or CORSIKA air
-showers, the atmosphere, telescope optics, and the camera simulation in sim_telarray, which
-is reached through `obdeect stream to-simtel`. The repository [simtools](https://github.com/gammasim/simtools)
-configures and runs the chain.
+<p align="center">
+  <img src="docs/_static/images/obdeect_21ratio_small.jpg" alt="Obdeect optical ray tracing for imaging atmospheric Cherenkov telescopes" width="800">
+</p>
+
+[![DOI](https://zenodo.org/badge/1376945125.svg)](https://doi.org/10.5281/zenodo.23942573)
+
+obdeect is a simulation chain for imaging atmospheric Cherenkov telescopes.
+
+The chain is made of modules that exchange photons as photon streams:
 
 | Component | Package | Command |
 |---|---|---|
-| photon stream | `obdeect-stream` | `obdeect stream ...` |
 | atmospheric propagation | `obdeect-propagation` | `obdeect propagation ...` |
 | light sources | `obdeect-sources` | `obdeect sources ...` |
 | ray tracing | `obdeect-ray-tracing` | `obdeect ray-tracing ...` |
+| camera simulation | (not implemented yet) | uses sim_telarray |
+| photon stream | `obdeect-stream` | `obdeect stream ...` |
+
+[simtools](https://github.com/gammasim/simtools) configures and runs the chain.
 
 ## Install
 
@@ -48,10 +55,6 @@ pytest validation   # end-to-end chain
 ```
 
 Requires Python 3.14 or higher, a C++20 compiler, and CMake 3.20 or higher.
-
-## Status
-
-Alpha. The ray tracing component is pre-alpha.
 
 ## License
 

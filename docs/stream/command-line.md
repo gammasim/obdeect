@@ -47,9 +47,9 @@ n-1 per line, `#` comments). It is written as ATMPROF (1216) before the first ev
 profile number that EVTH names (99 for synthesised headers). A stream with its own ATMPROF block
 rejects the option.
 
-A stream without CORSIKA blocks gets synthesised headers. The run end (RUNE) and the input block
-(INPUTCFG, one line `NSHOW <n>`) carry the number of events written, so sim_telarray reports the
-run as complete:
+A stream without CORSIKA blocks gets synthesised headers. The run end (RUNE) carries the number of
+events written, so sim_telarray reports the run as complete. The input block (INPUTCFG, one line
+`NSHOW 0`) is written at the start of the run, when the event count is not yet known:
 
 ```text
 Run(s) completed as expected after 3 events (3 showers).

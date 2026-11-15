@@ -11,11 +11,12 @@ spectrum (Fixed 400), pulse_width_ns=0, pulse_delay_ns=0}`.
 - `sample_background(s, seed, event, telescope, index)`:
   - direction stream: `cos_theta = 1 - u0 (1 - cos(viewcone))`, `phi = 2 pi u1`; direction `d =
     pointing_unit cos_theta + (e1 cos phi + e2 sin phi) sin_theta` (basis of `pointing`).
-  - target stream: `ri = 1 - sqrt(u0)`, `phi' = 2 pi u1`, `zi = sqrt(max(0, 1 - ri^2))`; the
+  - target stream: `ri = sqrt(u0)` (area-uniform over the disc perpendicular to `d`, so `ri^2`
+    is uniform in `[0, 1]`), `phi' = 2 pi u1`, `zi = sqrt(max(0, 1 - ri^2))`; the
     local point `(ri cos phi', ri sin phi', zi)` is rotated so that its z axis is `-d`:
     `za = acos(clamp(-d.z,-1,1))`, `az = atan2(-d.y, -d.x)`, `unit = rotate_z(rotate_y(local, za),
     az)`. Position `centre + unit * radius`. Then `dot(unit, d) <= 0` for every photon
-    (tested), and `E[zi] = mean over u of sqrt(1 - (1-sqrt(u))^2)`.
+    (tested), and `E[zi] = mean over u of sqrt(1 - u) = 2/3`.
   - time `= pulse_delay_ns - zi radius/c + w`, with `w = pulse_width_ns/2.35482004503095 *
     (pulse_u0 - 0.5)` if `pulse_width_ns > 0`, else 0 (pulse stream).
   - wavelength from the spectrum (wavelength stream).
