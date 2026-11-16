@@ -69,6 +69,19 @@ jobs:
           done
           exit "${status}"
 
+  # Repository-level release files (CITATION.cff, CHANGELOG.md); no build needed.
+  release-metadata:
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7
+        with:
+          python-version: '3.14'
+      - name: Check CITATION.cff against CHANGELOG.md
+        run: |
+          python -m pip install --upgrade pip pytest
+          pytest docs/test_release_metadata.py -q
+
   # Each component on its own, in parallel.
   sanitizers:
     strategy:
