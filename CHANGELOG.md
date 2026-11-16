@@ -8,7 +8,11 @@ All components are released together with one version (tags `vX.Y.Z`); the secti
 
 ### Fixed
 
-- fix ubuntu version in deploy runners.
+- Fix ubuntu version in deploy runners.
+
+### Maintenance
+
+- Add a test for version and data in CITATION.cff. (#64)
 
 ## [v0.9.1] - 2026-11-16
 
