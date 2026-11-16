@@ -4,6 +4,36 @@ All components are released together with one version (tags `vX.Y.Z`); the secti
 
 <!-- towncrier release notes start -->
 
+## [v0.9.0] - 2026-11-16
+
+### Added
+
+- Atmosphere stage: optional Earth curvature for the extinction airmass (`curvature` = `none`, `corsika` or `spherical`, with `earth_radius_m`); the slant optical depth replaces the plane-parallel airmass, and CORSIKA CURVED input is detected from the EVTH flag so that curvature is never applied twice. See the propagation curvature page. (#48)
+- Atmosphere stage: in the `spherical` curvature mode, refraction is now applied in spherical shells. With an atmospheric profile the rays are bent and the air delay follows the bent ray (with `refraction_applied` = 1 only the air delay along the straight line is added). See the propagation curvature page. (#50)
+- Atmosphere stage: `obdeect propagation run --telescopes ID[,ID...]` (Python: `telescopes=`) keeps only the listed telescopes. Their photons are not decoded; the blocks of other telescopes are dropped from the output. The kept telescopes' output is byte-identical to the full run with the other blocks removed. Not combined with scattering. `obdeect.stream.Reader(path, photon_telescopes)` skips the photons of other telescopes the same way. (#52)
+- Atmosphere stage: `obdeect propagation run --threads N` runs the extinction of each chunk on N threads (default 1). The output is byte-identical for any N. (#55)
+- `obdeect ray-tracing trace-stream` traces several telescopes with their own optical models in one process: `--model ID=PATH`, repeated (Python: `trace_stream({id: model, ...}, ...)`). The output is one camera-frame stream in event order, so an array no longer needs one process per telescope and a merge of their streams. Each telescope block carries the efficiency status of its model. `--model PATH` (one model for every telescope) is unchanged. (#60)
+
+### Fixed
+
+- Photon indices (`first_index`) now continue across CORSIKA array reuses of the same telescope and event, so the random draws of propagation and ray tracing differ between reuses. The sim_telarray writer expects the continued numbering within an event; propagation and `stage.transform` keep it in their output. (#43)
+- The night-sky background sampler now places entry points uniformly over the projected telescope disc (`ri = sqrt(u)`, previously `1 - sqrt(u)`), so the flux is isotropic. The mean emission distance `E[zi]` is now 2/3. (#47)
+- `obdeect stream to-simtel` now refuses a camera- or telescope-frame stream whose efficiency status does not show the atmosphere as applied: a status without `atmosphere`, or with it `pending`. Before, a stream from `obdeect ray-tracing trace-stream` built on an unpropagated CORSIKA stream was converted without the atmosphere. The error names the factor and exits with status 1. Use `--allow-pending-atmosphere` (Python: `allow_pending_atmosphere=True`) where sim_telarray applies the atmosphere in that frame. Ground-frame streams and streams without any efficiency status are unchanged. (#58)
+- Ground-frame photons at grazing pointing (zenith above about 70°) were placed on an input plane above the incoming obscurers only. Where the dish reaches above that plane, photons started behind the mirror and were lost (about 20 % at zenith 86.8° for a dish reaching far above its camera). The plane now lies above the primary mirror (and the secondary if it blocks incoming light) too, and `trace_bunches` rejects a plane below such a mirror. (#59)
+- Segmented telescopes without a `mirror_offset` record compile with an offset of zero, as the other telescope types already do, instead of failing with `missing parameter mirror_offset`. (#61)
+
+### Maintenance
+
+- Use the top-level `[[tool.dynamic-metadata]]` entries of scikit-build-core for the version and the component dependencies; the deprecation warning in the wheel builds is gone and the built metadata is unchanged. (#39)
+- Faster CI: native and Python tests run in parallel jobs (native tests once per platform, Python 3.15 on one platform), sanitizers per component, FMA and ThreadSanitizer for ray tracing only, the documentation installs only the documented packages, and pull requests build wheels for one platform; jobs without compilation run on ubuntu-slim. The release publishes each PyPI project even if another upload fails; the TestPyPI channel is removed. (#40)
+- Remove duplicated code between the components: one number parser, command-line helper, `Vec3`, telescope-position conversion, 1/λ² wavelength draw and CORSIKA atmosphere-profile reader now live in `obdeect-stream`. Every native tool exits with status 2 on a usage error and accepts `--version`. Propagation and ray tracing draw continuous wavelengths instead of integer nm, so their per-photon results change slightly (mean wavelength about +0.5 nm). (#41)
+- Rewrote the documentation: a user guide, common landing pages for all components, separate pages for random numbers, efficiency status, GrISU export and legacy extinction tables, and no test sections. Renamed "ledger" to "efficiency status" in the code (including some error messages), and photon-stream files now use the extension `.pst` instead of `.ps`. (#46)
+- Validation scripts moved to obdeect-validation (CORSIKA and stream container check, chain test, flasher, LED and IACT helpers). (#51)
+- Faster `point-source` with several telescopes: the photons of an event are generated once and written for every telescope instead of once per telescope (14 to 74 times faster for 4 to 64 telescopes in the measured cases). Random draws that a fixed spectrum or a zero-width pulse does not use are skipped. The output is byte-identical for the same seed. (#52)
+- Faster `trace-stream` for several telescopes: the photon reader does not decode the columns of photon chunks from telescopes that are not traced. Their headers and payload sizes are still validated, and their `frame` and `first_index` are set. Output for the traced telescopes is unchanged (byte-identical). (#53)
+- Faster `obdeect <component> <command>` start-up: the command loads only its own component. Before, every call also imported NumPy through the ray-tracing component (about 0.1 s per call, most of the light-source chain overhead). Output is unchanged (byte-identical). (#57)
+
+
 ## [0.8.0] - 2026-11-13
 
 ### Added
