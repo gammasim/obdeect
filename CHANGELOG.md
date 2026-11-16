@@ -4,6 +4,12 @@ All components are released together with one version (tags `vX.Y.Z`); the secti
 
 <!-- towncrier release notes start -->
 
+## [v0.9.1] - 2026-11-16
+
+### Fixed
+
+- citation string in CITATION.cff
+
 ## [v0.9.0] - 2026-11-16
 
 ### Added
