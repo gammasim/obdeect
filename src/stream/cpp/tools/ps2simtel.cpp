@@ -19,8 +19,8 @@ constexpr std::size_t buffer_size = std::size_t{1} << 20;
 
 void usage() {
   std::fprintf(stderr, "usage: obdeect stream to-simtel [--camera-map FILE] [--atmprof FILE] "
-                       "[--allow-pending FACTOR]... [--scaled-factor FACTOR]... [-o FILE|-] "
-                       "[input|-]\n");
+                       "[--allow-pending FACTOR]... [--allow-pending-atmosphere] "
+                       "[--scaled-factor FACTOR]... [-o FILE|-] [input|-]\n");
 }
 
 } // namespace
@@ -46,6 +46,8 @@ int main(int argc, char **argv) {
         output = args.value(arg);
       } else if (arg == "--allow-pending") {
         allow_pending.insert(args.value(arg));
+      } else if (arg == "--allow-pending-atmosphere") {
+        allow_pending.insert("atmosphere");
       } else if (arg == "--scaled-factor") {
         scaled.insert(args.value(arg));
       } else if (arg == "--atmprof") {
