@@ -6,8 +6,14 @@ writes the camera-frame photons. Frames and records are defined in the [photon-s
 ```bash
 obdeect ray-tracing trace-stream --model telescope.json --seed 7 -i ground.pst -o camera.pst
 obdeect ray-tracing trace-stream --model telescope.json --seed 7 --telescopes 1,2 < in.pst > out.pst
+obdeect ray-tracing trace-stream --model 1=lst.json --model 2=lst.json --model 5=mst.json \
+  --seed 7 < array.pst > camera.pst
 ```
 
+`--model PATH` traces every telescope with one model. `--model ID=PATH`, repeated, gives each
+telescope id its own model, so that one process traces a whole array and writes one stream in
+event order; telescopes without a model are dropped, and a model file named several times is
+loaded once. The photons of a telescope do not depend on the other telescopes traced with it.
 Records pass through; telescopes not listed in `--telescopes` are dropped. A summary (events,
 photons in and out) goes to standard error. `-` (the default) is standard input or output.
 
@@ -66,7 +72,8 @@ run level.
 
 Other factors (for example `qe`) pass on unchanged. After the run record, the stage writes a
 efficiency-status record after the incoming run statuses, marking the factors it applies `applied`, with
-`source` set to obdeect and the model hash. Input records naming these factors are rewritten the
+`source` set to obdeect and the model hash. With a model per telescope id, this record is written
+at the start of each telescope block instead, with the hash of that telescope's model. Input records naming these factors are rewritten the
 same way. For example, a run record with `mirror_reflectivity.state = envelope` (table over 300
 to 600 nm) becomes:
 

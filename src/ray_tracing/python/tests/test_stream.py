@@ -925,3 +925,129 @@ def test_input_plane_clears_the_mirror_at_grazing_pointing():
     # highest point along the ground normal, measured from the axes offset.
     support = dict(model.mirrors_support(normal))["primary"]
     assert height - float(np.dot(normal, model.axes_offset_m)) > support
+
+
+@pytest.fixture(scope="module")
+def dual_model():
+    records, files = dual()
+    return OpticalModel.from_records(records, files.__getitem__, configuration_seed=1)
+
+
+def two_telescope_stream(path):
+    return write_stream(
+        path,
+        {1: beam(800, (0.0, 0.0), seed=1), 2: beam(600, (0.0, 0.0), radius_m=1.5, seed=2)},
+        run_efficiency_statuses=[{"factors": "qe", "qe.state": "pending"}],
+    )
+
+
+def test_models_by_telescope_trace_as_separate_runs(model, dual_model, tmp_path, obdeect_stream):
+    source = two_telescope_stream(tmp_path / "array.pst")
+    output = tmp_path / "array.out.pst"
+
+    counts = trace_stream(
+        {1: model, 2: dual_model}, source, output, seed=SEED, pointing=(0.0, 0.0), threads=3
+    )
+
+    assert counts["photons_in"] == 1400
+    for telescope, single in ((1, model), (2, dual_model)):
+        alone = tmp_path / f"alone{telescope}.pst"
+        trace_stream(single, source, alone, seed=SEED, pointing=(0.0, 0.0), telescopes=[telescope])
+        expected = camera_photons(alone, obdeect_stream)
+        traced = camera_photons(output, obdeect_stream, telescope)
+        assert expected.keys() == traced.keys()
+        for name, values in expected.items():
+            assert np.array_equal(values, traced[name]), name
+
+
+def test_models_by_telescope_mark_the_status_in_each_block(
+    model, dual_model, tmp_path, obdeect_stream
+):
+    source = two_telescope_stream(tmp_path / "status.pst")
+    output = tmp_path / "status.out.pst"
+
+    trace_stream({1: model, 2: dual_model}, source, output, seed=SEED, pointing=(0.0, 0.0))
+
+    records = read_records(output, obdeect_stream)
+    first_event = [r["type"] for r in records].index("event")
+    run_statuses = [
+        r["metadata"] for r in records[:first_event] if r["type"] == "efficiency_status"
+    ]
+    assert run_statuses == [{"factors": "qe", "qe.state": "pending"}]
+    block_statuses = {}
+    for previous, record in zip(records, records[1:]):
+        if previous["type"] == "telescope" and record["type"] == "efficiency_status":
+            block_statuses[previous["metadata"]["telescope_id"]] = record["metadata"]
+    assert block_statuses.keys() == {1, 2}
+    for telescope, single in ((1, model), (2, dual_model)):
+        status = block_statuses[telescope]
+        assert status["mirror_reflectivity.state"] == "applied"
+        assert status["mirror_reflectivity.source"].endswith(f"model {single.sha256}")
+
+
+def test_models_by_telescope_drop_telescopes_without_a_model(model, tmp_path, obdeect_stream):
+    source = two_telescope_stream(tmp_path / "drop.pst")
+    output = tmp_path / "drop.out.pst"
+
+    counts = trace_stream({2: model}, source, output, seed=SEED, pointing=(0.0, 0.0))
+
+    records = read_records(output, obdeect_stream)
+    assert [r["metadata"]["telescope_id"] for r in records if r["type"] == "telescope"] == [2]
+    assert counts["photons_in"] == 600
+
+
+def test_models_by_telescope_need_a_model_for_each_selected_telescope(model, tmp_path):
+    source = two_telescope_stream(tmp_path / "missing.pst")
+    with pytest.raises(ModelError, match=r"telescopes without an optical model: \[1\]"):
+        trace_stream({2: model}, source, tmp_path / "missing.out.pst", seed=SEED, telescopes=[1, 2])
+    with pytest.raises(ModelError, match="at least one optical model"):
+        trace_stream({}, source, tmp_path / "missing.out.pst", seed=SEED)
+
+
+def test_cli_trace_stream_with_a_model_per_telescope(
+    model, dual_model, tmp_path, obdeect_stream, capsys
+):
+    model.save(tmp_path / "segmented.json")
+    dual_model.save(tmp_path / "dual.json")
+    source = two_telescope_stream(tmp_path / "cli.array.pst")
+    output = tmp_path / "cli.array.out.pst"
+    arguments = ["trace-stream", "--seed", "3", "--pointing-zenith-deg", "0"]
+    arguments += ["--pointing-azimuth-deg", "0", "-i", str(source), "-o", str(output)]
+
+    code = main([
+        *arguments,
+        "--model",
+        f"1={tmp_path / 'segmented.json'}",
+        "--model",
+        f"2={tmp_path / 'dual.json'}",
+    ])
+
+    assert code == 0
+    assert "1400 photons in" in capsys.readouterr().err
+    records = read_records(output, obdeect_stream)
+    assert [r["metadata"]["telescope_id"] for r in records if r["type"] == "telescope"] == [1, 2]
+
+
+@pytest.mark.parametrize(
+    ("models", "message"),
+    [
+        (["{path}", "2={path}"], "give one --model PATH"),
+        (["1={path}", "1={path}"], "more than one --model"),
+    ],
+)
+def test_cli_rejects_inconsistent_models(model, tmp_path, capsys, models, message):
+    path = tmp_path / "model.json"
+    model.save(path)
+    source = write_stream(tmp_path / "cli.bad.pst", {1: beam(10, (0.0, 0.0))})
+    arguments = ["trace-stream", "--seed", "3", "-i", str(source), "-o", str(tmp_path / "o.pst")]
+    for item in models:
+        arguments += ["--model", item.format(path=path)]
+
+    assert main(arguments) == 1
+    assert message in capsys.readouterr().err
+
+
+def test_cli_rejects_a_non_integer_telescope_id(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        main(["trace-stream", "--model", "LST=x.json", "--seed", "3"])
+    assert "TELESCOPE_ID=PATH" in capsys.readouterr().err

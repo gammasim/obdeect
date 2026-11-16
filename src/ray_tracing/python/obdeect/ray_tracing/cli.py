@@ -101,10 +101,9 @@ def _trace_stream(args: argparse.Namespace) -> None:
     pointing = None
     if args.pointing_zenith_deg is not None:
         pointing = (args.pointing_zenith_deg, args.pointing_azimuth_deg)
-    model = OpticalModel.load(args.model)
     try:
         counts = trace_stream(
-            model,
+            _trace_stream_models(args.model),
             args.input,
             args.output,
             seed=args.seed,
@@ -121,6 +120,40 @@ def _trace_stream(args: argparse.Namespace) -> None:
         f"{counts['photons_out']} out",
         file=sys.stderr,
     )
+
+
+def _model_argument(text: str) -> tuple[int | None, Path]:
+    """--model of trace-stream: PATH (every telescope) or ID=PATH (one telescope)."""
+    telescope, separator, path = text.partition("=")
+    if not separator:
+        return None, Path(text)
+    try:
+        return int(telescope), Path(path)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"--model takes PATH or TELESCOPE_ID=PATH: {text!r}"
+        ) from error
+
+
+def _trace_stream_models(
+    items: list[tuple[int | None, Path]],
+) -> OpticalModel | dict[int, OpticalModel]:
+    """One model for every telescope, or the model of each telescope id (files loaded once)."""
+    if len(items) == 1 and items[0][0] is None:
+        return OpticalModel.load(items[0][1])
+    if any(telescope is None for telescope, _ in items):
+        raise ModelError("give one --model PATH, or --model TELESCOPE_ID=PATH for each telescope")
+    telescopes = [telescope for telescope, _ in items]
+    if len(set(telescopes)) != len(telescopes):
+        raise ModelError("a telescope id is given in more than one --model")
+    loaded: dict[Path, OpticalModel] = {}
+    models = {}
+    for telescope, path in items:
+        key = path.resolve()
+        if key not in loaded:
+            loaded[key] = OpticalModel.load(path)
+        models[telescope] = loaded[key]
+    return models
 
 
 def _telescope_ids(text: str) -> tuple[int, ...]:
@@ -205,7 +238,15 @@ def main(argv: list[str] | None = None, prog: str = "obdeect ray-tracing") -> in
         "trace-stream",
         help="trace a photon stream (G or T photons) to camera-frame (C) photons",
     )
-    s.add_argument("--model", type=Path, required=True)
+    s.add_argument(
+        "--model",
+        type=_model_argument,
+        action="append",
+        required=True,
+        metavar="[ID=]PATH",
+        help="optical model of every telescope (PATH), or of one telescope id (ID=PATH, "
+        "repeated: one process traces several telescopes; telescopes without a model are dropped)",
+    )
     s.add_argument("--seed", type=int, required=True, help="run seed of the random draws")
     s.add_argument("--threads", type=int, default=0, help="0 uses every core")
     s.add_argument(
