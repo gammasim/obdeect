@@ -72,8 +72,10 @@ def minimum_input_plane_height_m(
 ) -> float:
     """Height [m] of the ground-frame input plane above the telescope sphere centre.
 
-    The plane lies above every incoming obscurer in the pointing direction,
-    with the axes offset and a margin included (see ``trace_bunches``).
+    The plane lies above every incoming obscurer and every mirror in the pointing direction,
+    with the axes offset and a margin included (see ``trace_bunches``). A photon starts on
+    the plane and moves down to the ground, so a mirror point above the plane would never be
+    reached: at grazing pointing the dish reaches far above the obscurers.
     """
     if not 0.0 <= theta_deg < 90.0:
         raise ModelError(f"telescope zenith angle {theta_deg} deg must lie in [0, 90)")
@@ -83,6 +85,7 @@ def minimum_input_plane_height_m(
         for obscurer in model.document["optics"]["obscurers"]
         if "incoming" in obscurer.get("legs", [])
     ]
+    supports += [support for _, support in model.mirrors_support(normal)]
     support = max(supports, default=0.0)
     return max(0.0, support + float(np.dot(normal, model.axes_offset_m))) + INPUT_PLANE_MARGIN_M
 
@@ -319,9 +322,12 @@ class _Tracer:
         self.next_index: dict[int, int] = {}
         self.counts = {"events": 0, "photons_in": 0, "photons_out": 0}
         self.run_status_pending = False
-        top = model.max_incoming_obscurer_z_m()
-        # Input plane of telescope-frame photons (telescope frame, no tilt).
-        self.telescope_plane_m = (0.0 if top is None else float(top)) + INPUT_PLANE_MARGIN_M
+        # Input plane of telescope-frame photons (telescope frame, no tilt): above the incoming
+        # obscurers and the mirrors, so that every photon starts upstream of them.
+        tops = [
+            z for z in (model.max_incoming_obscurer_z_m(), model.max_mirror_z_m()) if z is not None
+        ]
+        self.telescope_plane_m = max(tops, default=0.0) + INPUT_PLANE_MARGIN_M
 
     def handle(self, record: dict[str, Any]) -> None:
         kind = record["type"]

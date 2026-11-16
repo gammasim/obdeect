@@ -24,9 +24,10 @@ keys `wavelength_min_nm` and `wavelength_max_nm`, as in CORSIKA. A `cz` column m
 `cx` and `cy`. Column `p` (acceptance already applied) is rejected, because the stage does not
 reweight by it.
 
-Each photon moves along its direction to an input plane above the incoming obscurers, using
-their directional support for the pointing. Its time advances by the path length over the speed
-of light. The G rotation is the ground-to-telescope rotation of simtools, so a shower from the
+Each photon moves along its direction to an input plane above the incoming obscurers and the
+mirrors it meets first (the primary, and the secondary if it blocks incoming light). The plane
+follows the pointing: at grazing pointing the dish top lies well above the obscurers. Its time
+advances by the path length over the speed of light. The G rotation is the ground-to-telescope rotation of simtools, so a shower from the
 optical axis maps to direction (0, 0, -1). For a telescope at zenith 20° and array azimuth 0°:
 
 ```bash
