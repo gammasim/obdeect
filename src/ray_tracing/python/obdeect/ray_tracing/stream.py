@@ -2,9 +2,11 @@
 
 Ground-frame (G) or telescope-frame (T) photons go in; camera-frame (C) photons
 come out. Records pass through unchanged, except that telescopes not selected
-are dropped and the efficiency status is updated. The stream component
-(obdeect-stream) is a required dependency; its frame and chunk constants are used here.
-The frames and the efficiency status rules are described in docs/ray-tracing/photon-stream.md.
+are dropped and the efficiency status is updated. One optical model can serve every
+telescope, or each telescope id gets its own model; then one process traces a whole array.
+The stream component (obdeect-stream) is a required dependency; its frame and chunk
+constants are used here. The frames and the efficiency status rules are described in
+docs/ray-tracing/photon-stream.md.
 """
 
 from __future__ import annotations
@@ -40,6 +42,8 @@ TRANSMISSION_PARTS = ("full", "angular")
 CONSTANT_FACTOR = "telescope_transmission_constant"
 # Run-record keys with the telescope pointing [rad]: zenith and azimuth in the array frame.
 RUN_POINTING_KEYS = ("telescope_pointing_zenith_rad", "telescope_pointing_azimuth_rad")
+# Telescope ids (sim_telarray numbering from 1); the random-number key holds 16 bits.
+TELESCOPE_IDS = range(1, 2**16)
 
 
 def _rotation(alpha: float, beta: float) -> np.ndarray:
@@ -138,10 +142,19 @@ def _transmission(model: OpticalModel, part: str) -> _Transmission:
     return _Transmission(part, on_axis)
 
 
-def _own_efficiency_status(model: OpticalModel, transmission: _Transmission) -> dict[str, Any]:
-    """The efficiency status record that marks the factors obdeect applies as applied."""
+def _own_efficiency_status(
+    model: OpticalModel, transmission: _Transmission, metadata: Mapping[str, Any] | None = None
+) -> Mapping[str, Any]:
+    """The efficiency status record that marks the factors obdeect applies as applied.
+
+    ``metadata`` is an incoming efficiency status: its other factors are kept, and the factors
+    obdeect applies are added to it, so that each factor appears once in the record.
+    """
+    metadata = dict(metadata or {})
+    names = _names(metadata.get("factors", ""))
+    factors = names + [name for name in _own_factors(model) if name not in names]
     return _efficiency_status_with_applied(
-        {"factors": ",".join(_own_factors(model))}, model, transmission
+        {**metadata, "factors": ",".join(factors)}, model, transmission
     )
 
 
@@ -241,6 +254,24 @@ class _Envelopes:
 
 
 @dataclass(frozen=True)
+class _Optics:
+    """Optical model of a telescope, with the part of its transmission that the trace applies."""
+
+    model: OpticalModel
+    transmission: _Transmission
+    # Input plane of telescope-frame photons (telescope frame, no tilt): above the incoming
+    # obscurers and the mirrors, so that every photon starts upstream of them.
+    telescope_plane_m: float
+
+    @classmethod
+    def of(cls, model: OpticalModel, part: str) -> _Optics:
+        tops = [
+            z for z in (model.max_incoming_obscurer_z_m(), model.max_mirror_z_m()) if z is not None
+        ]
+        return cls(model, _transmission(model, part), max(tops, default=0.0) + INPUT_PLANE_MARGIN_M)
+
+
+@dataclass(frozen=True)
 class _Config:
     """How the traced photons of one telescope are weighted."""
 
@@ -257,8 +288,17 @@ class _Telescope:
     factors: dict[str, _Factor] = field(default_factory=dict)
     config: _Config | None = None
     photons_seen: bool = False
+    status_written: bool = False
     out_index: int = 0
     weight: float = 0.0
+
+
+def _telescope_id(value: int) -> int:
+    if value not in TELESCOPE_IDS:
+        raise ModelError(
+            f"telescope id {value} outside {TELESCOPE_IDS.start}..{TELESCOPE_IDS.stop - 1}"
+        )
+    return value
 
 
 def _wavelength_law(metadata: Mapping[str, Any]) -> tuple[float, float] | None:
@@ -302,11 +342,16 @@ def _camera_columns(
 
 
 class _Tracer:
-    """Reads the records of one stream and writes the traced records."""
+    """Reads the records of one stream and writes the traced records.
 
-    def __init__(self, model, writer, *, seed, pool, telescopes, pointing, transmission):
-        self.model = model
-        self.transmission = transmission
+    ``optics`` is one ``_Optics`` for every telescope, or a dict of them by telescope id. With a
+    dict, the factors that a model applies are marked in an efficiency status at the start of
+    each telescope block (the provenance differs between models), not at run level.
+    """
+
+    def __init__(self, optics, writer, *, seed, pool, telescopes, pointing):
+        self.optics = optics
+        self.per_telescope = isinstance(optics, dict)
         self.writer = writer
         self.seed = seed
         self.pool = pool
@@ -316,24 +361,28 @@ class _Tracer:
         self.run_factors: dict[str, _Factor] = {}
         self.law: tuple[float, float] | None = None
         self.event: dict[str, Any] | None = None
-        self.geometry: tuple[np.ndarray, float] | None = None
+        # Ground-frame rotation and input plane of the event, by telescope id.
+        self.geometry: dict[int, tuple[np.ndarray, float]] = {}
         self.telescope: _Telescope | None = None
         # Row indices continue across repeated blocks of one telescope in an event.
         self.next_index: dict[int, int] = {}
         self.counts = {"events": 0, "photons_in": 0, "photons_out": 0}
         self.run_status_pending = False
-        # Input plane of telescope-frame photons (telescope frame, no tilt): above the incoming
-        # obscurers and the mirrors, so that every photon starts upstream of them.
-        tops = [
-            z for z in (model.max_incoming_obscurer_z_m(), model.max_mirror_z_m()) if z is not None
-        ]
-        self.telescope_plane_m = max(tops, default=0.0) + INPUT_PLANE_MARGIN_M
+
+    def _optics(self, telescope_id: int) -> _Optics:
+        if not self.per_telescope:
+            return self.optics
+        return self.optics[telescope_id]
+
+    def _all_optics(self) -> list[_Optics]:
+        return list(self.optics.values()) if self.per_telescope else [self.optics]
 
     def handle(self, record: dict[str, Any]) -> None:
         kind = record["type"]
         if self.run_status_pending and kind in ("event", "run_end"):
             self.writer.write(
-                "efficiency_status", _own_efficiency_status(self.model, self.transmission)
+                "efficiency_status",
+                _own_efficiency_status(self.optics.model, self.optics.transmission),
             )
             self.run_status_pending = False
         if kind == "run":
@@ -364,13 +413,13 @@ class _Tracer:
         self.run_pointing = _run_pointing(metadata)
         self.event = None
         self.writer.write("run", metadata)
-        self.run_status_pending = True
+        self.run_status_pending = not self.per_telescope
 
     def _efficiency_status(self, metadata: Mapping[str, Any]) -> None:
         if self.telescope is None:
             self.run_factors = {**self.run_factors, **_efficiency_status_factors(metadata)}
-            if self.transmission.normalise and CONSTANT_FACTOR in _names(
-                metadata.get("factors", "")
+            if any(optics.transmission.normalise for optics in self._all_optics()) and (
+                CONSTANT_FACTOR in _names(metadata.get("factors", ""))
             ):
                 raise ModelError(f"the efficiency status already names {CONSTANT_FACTOR}")
             self.writer.write("efficiency_status", metadata)
@@ -384,15 +433,24 @@ class _Tracer:
             if not telescope.kept:
                 return
             telescope.factors = {**telescope.factors, **_efficiency_status_factors(metadata)}
+            if self.per_telescope:
+                if telescope.status_written:
+                    raise ModelError(
+                        f"telescope {telescope.telescope_id}: more than one efficiency_status "
+                        "before its photons"
+                    )
+                self._write_status(telescope, metadata)
+                return
+        optics = self._optics(telescope.telescope_id)
         self.writer.write(
             "efficiency_status",
-            _efficiency_status_with_applied(metadata, self.model, self.transmission),
+            _efficiency_status_with_applied(metadata, optics.model, optics.transmission),
         )
 
     def _event(self, metadata: Mapping[str, Any]) -> None:
         _int_key(metadata, "event_number", "event")
         self.event = dict(metadata)
-        self.geometry = None
+        self.geometry = {}
         self.telescope = None
         self.next_index = {}
         self.counts["events"] += 1
@@ -406,6 +464,24 @@ class _Tracer:
         if kept:
             self.writer.write("telescope", {**metadata, "frame": FRAME_CAMERA})
 
+    def _write_status(self, telescope: _Telescope, metadata: Mapping[str, Any] | None) -> None:
+        """Writes the telescope's efficiency status, with the factors obdeect applies applied.
+
+        With a mapping of models, this is the one record of the block that marks them applied:
+        an incoming status is rewritten, or a record of the own factors is written before the
+        first photons, so no factor is applied twice in one telescope scope.
+        """
+        optics = self._optics(telescope.telescope_id)
+        self.writer.write(
+            "efficiency_status",
+            _own_efficiency_status(optics.model, optics.transmission, metadata),
+        )
+        telescope.status_written = True
+
+    def _ensure_status(self, telescope: _Telescope) -> None:
+        if self.per_telescope and not telescope.status_written:
+            self._write_status(telescope, None)
+
     def _telescope_end(self, metadata: Mapping[str, Any]) -> None:
         telescope = self.telescope
         if telescope is None or _int_key(metadata, "telescope_id", "telescope_end") != (
@@ -414,6 +490,7 @@ class _Tracer:
             raise ModelError("telescope_end record without its telescope record")
         if telescope.kept:
             # Applies the efficiency status checks even for a telescope without photons.
+            self._ensure_status(telescope)
             self._config(telescope)
             self.writer.write("telescope_end", {**metadata, "photons": telescope.weight})
             self.next_index[telescope.telescope_id] = telescope.out_index
@@ -423,7 +500,7 @@ class _Tracer:
         if telescope.config is None:
             factors = {**self.run_factors, **telescope.factors}
             tables = []
-            for name in _own_factors(self.model):
+            for name in _own_factors(self._optics(telescope.telescope_id).model):
                 factor = factors.get(name)
                 if factor is None or factor.state == "pending":
                     continue
@@ -436,14 +513,15 @@ class _Tracer:
             telescope.config = _Config(roulette=not tables, envelopes=_Envelopes(tuple(tables)))
         return telescope.config
 
-    def _ground_geometry(self) -> tuple[np.ndarray, float]:
-        if self.geometry is None:
+    def _ground_geometry(self, telescope_id: int) -> tuple[np.ndarray, float]:
+        if telescope_id not in self.geometry:
             zenith_deg, azimuth_deg = self._pointing()
-            self.geometry = (
+            model = self._optics(telescope_id).model
+            self.geometry[telescope_id] = (
                 ground_to_telescope_rotation(zenith_deg, azimuth_deg),
-                minimum_input_plane_height_m(self.model, zenith_deg, azimuth_deg),
+                minimum_input_plane_height_m(model, zenith_deg, azimuth_deg),
             )
-        return self.geometry
+        return self.geometry[telescope_id]
 
     def _pointing(self) -> tuple[float, float]:
         if self.pointing is not None:
@@ -490,10 +568,12 @@ class _Tracer:
                 f"photon frame {record['frame']} is not supported: trace-stream takes ground "
                 "(1) or telescope (2) photons"
             )
+        self._ensure_status(telescope)
         config = self._config(telescope)
+        optics = self._optics(telescope.telescope_id)
         event_number = _int_key(self.event, "event_number", "event")
-        bunches, placement = self._input_bunches(record, event_number)
-        traced = self.model.trace_bunches(
+        bunches, placement = self._input_bunches(record, event_number, optics)
+        traced = optics.model.trace_bunches(
             bunches,
             seed=self.seed,
             event=event_number,
@@ -501,7 +581,7 @@ class _Tracer:
             length_unit_m=1.0,
             wavelength_law=self.law,
             roulette=config.roulette,
-            normalise_transmission=self.transmission.normalise,
+            normalise_transmission=optics.transmission.normalise,
             pool=self.pool,
             **placement,
         )
@@ -510,7 +590,7 @@ class _Tracer:
         self._write(telescope, columns)
 
     def _input_bunches(
-        self, record: dict[str, Any], event_number: int
+        self, record: dict[str, Any], event_number: int, optics: _Optics
     ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
         """Bunches on the input plane and the frame that places it (see trace_bunches)."""
         columns = record["columns"]
@@ -532,17 +612,17 @@ class _Tracer:
             if "z" in columns and np.any(columns["z"] != 0):
                 raise ModelError("ground-frame photons must lie in the plane z = 0")
             z = np.zeros(rows)
-            rotation, plane = self._ground_geometry()
+            rotation, plane = self._ground_geometry(record["telescope_id"])
             offset = np.zeros(3)
         else:
             if "z" not in columns:
                 raise ModelError("telescope-frame photons need the column z")
             z = columns["z"].astype(np.float64)
             rotation = np.eye(3)
-            plane = self.telescope_plane_m
+            plane = optics.telescope_plane_m
             # The telescope frame is the frame of trace(): cancel the axes offset that
             # trace_bunches subtracts, so that a photon at p is traced at p.
-            offset = np.asarray(self.model.axes_offset_m, dtype=np.float64)
+            offset = np.asarray(optics.model.axes_offset_m, dtype=np.float64)
         # Move each photon along its direction to the input plane; the time follows the path.
         s = (plane - z) / cz
         first_index = int(record["first_index"])
@@ -581,8 +661,35 @@ def _writer_path(output: Any) -> str:
     return "/dev/stdout" if str(output) == "-" else str(output)
 
 
+def _optics_of(
+    model: OpticalModel | Mapping[int, OpticalModel],
+    telescopes: frozenset[int] | None,
+    part: str,
+) -> tuple[_Optics | dict[int, _Optics], frozenset[int] | None]:
+    """The optics of the tracer and the telescopes to trace (see trace_stream)."""
+    if isinstance(model, OpticalModel):
+        return _Optics.of(model, part), telescopes
+    models = {_telescope_id(int(telescope)): value for telescope, value in model.items()}
+    if not models:
+        raise ModelError("give at least one optical model")
+    if telescopes is None:
+        telescopes = frozenset(models)
+    without_model = sorted(telescopes - set(models))
+    if without_model:
+        raise ModelError(f"telescopes without an optical model: {without_model}")
+    # One _Optics per distinct model: telescopes of one type share it.
+    shared: dict[int, _Optics] = {}
+    optics = {}
+    for telescope in sorted(telescopes):
+        value = models[telescope]
+        if id(value) not in shared:
+            shared[id(value)] = _Optics.of(value, part)
+        optics[telescope] = shared[id(value)]
+    return optics, telescopes
+
+
 def trace_stream(
-    model: OpticalModel,
+    model: OpticalModel | Mapping[int, OpticalModel],
     input: Any,
     output: Any,
     *,
@@ -596,8 +703,10 @@ def trace_stream(
 
     Parameters
     ----------
-    model: OpticalModel
-        Optical model of the telescope type.
+    model: OpticalModel or mapping of int to OpticalModel
+        Optical model of every traced telescope, or the optical model of each telescope id.
+        With a mapping, telescopes without a model are dropped, and the efficiency status of
+        each telescope block names the model that traced it.
     input, output: str or path-like
         Photon-stream files; "-" is standard input or output.
     seed: int
@@ -606,7 +715,8 @@ def trace_stream(
     threads: int
         Worker threads (0 uses every core); results do not depend on it.
     telescopes: iterable of int or None
-        Telescope ids to trace; other telescopes are dropped. None traces all.
+        Telescope ids to trace; other telescopes are dropped. None traces all (with a mapping
+        of models: all telescopes with a model). Each id needs a model.
     pointing: (float, float) or None
         Telescope (zenith, azimuth) [deg]; azimuth in the array frame (x north,
         y west), as simtools' telescope phi. None takes it from the run keys
@@ -630,15 +740,16 @@ def trace_stream(
         For an invalid stream, a missing pointing (ground-frame photons only), an
         unsupported frame or column,
         or an efficiency status that says a factor is already applied, and for an unknown
-        telescope_transmission or "angular" with a model that has none.
+        telescope_transmission or "angular" with a model that has none, and for a telescope
+        id without a model or outside 1..65535.
     """
-    transmission = _transmission(model, telescope_transmission)
     if seed < 0:
         raise ModelError("seed must not be negative")
     if telescopes is not None:
-        telescopes = frozenset(int(telescope) for telescope in telescopes)
+        telescopes = frozenset(_telescope_id(int(telescope)) for telescope in telescopes)
         if not telescopes:
             raise ModelError("telescopes: give at least one telescope id")
+    optics, telescopes = _optics_of(model, telescopes, telescope_transmission)
     if pointing is not None:
         pointing = (float(pointing[0]), float(pointing[1]))
     try:
@@ -657,13 +768,12 @@ def trace_stream(
         f"{producer}; obdeect {__version__}" if producer else f"obdeect {__version__}",
     )
     tracer = _Tracer(
-        model,
+        optics,
         writer,
         seed=seed,
         pool=ThreadPool(threads),
         telescopes=telescopes,
         pointing=pointing,
-        transmission=transmission,
     )
     for record in records:
         tracer.handle(record)
