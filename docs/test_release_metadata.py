@@ -24,14 +24,15 @@ def test_citation_version_matches_latest_changelog_release():
 
 def test_citation_date_matches_latest_changelog_release():
     latest = re.search(
-        r"^## \[v?\d+\.\d+\.\d+\] - (\d{4}-\d{2}-\d{2})",
+        r"^## \[v?(\d+\.\d+\.\d+)\](?: - (\d{4}-\d{2}-\d{2}))?",
         CHANGELOG.read_text(encoding="utf-8"),
         re.M,
     )
-    assert latest is not None, "CHANGELOG.md has no dated release heading"
+    assert latest is not None, "CHANGELOG.md has no release heading"
+    assert latest.group(2) is not None, "CHANGELOG.md latest release has no date"
     released = re.search(r"^date-released:\s*(\S+)", CITATION.read_text(encoding="utf-8"), re.M)
     assert released is not None, "CITATION.cff has no date-released"
-    assert released.group(1) == latest.group(1), (
+    assert released.group(1) == latest.group(2), (
         f"CITATION.cff date-released {released.group(1)} must equal the latest CHANGELOG.md "
-        f"release date {latest.group(1)}"
+        f"release date {latest.group(2)}"
     )
