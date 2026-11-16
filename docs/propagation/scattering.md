@@ -114,12 +114,18 @@ t_in = 0 ns, emission -> point 15000 m  =>  t = 15000 / c = 50034.6 ns
 import obdeect.propagation
 
 table = obdeect.propagation.ScatteringTable("scattering_exponential.dat")
-site = obdeect.propagation.TransmissionTable("atm_trans_2000_1_10_0_0_2000.dat", site_altitude_m=2000.0)
+site = obdeect.propagation.TransmissionTable(
+    "atm_trans_2000_1_10_0_0_2000.dat", site_altitude_m=2000.0
+)
 out = obdeect.propagation.scatter(
     columns,  # x, y, z, cx, cy, t, w, wavelength (float32), z above the observation level
-    table, site,
+    table,
+    site,
     telescopes=[(1, 3000.0, 0.0, 0.0, 12.5)],  # id, x, y, z, radius [m]
-    seed=1, event=1, first_index=0, n_points=32,
+    seed=1,
+    event=1,
+    first_index=0,
+    n_points=32,
 )
 photons = out[1]  # dict of float32 arrays
 ```

@@ -165,15 +165,22 @@ The summary goes to stderr.
 import obdeect.propagation
 
 summary = obdeect.propagation.propagate(
-    "in.pst", "out.pst",
-    transmission="atm_trans_2000_1_10_0_0_2000.dat", site_altitude_m=2000.0,
-    seed=1, profile="atmprof.dat",
+    "in.pst",
+    "out.pst",
+    transmission="atm_trans_2000_1_10_0_0_2000.dat",
+    site_altitude_m=2000.0,
+    seed=1,
+    profile="atmprof.dat",
     envelope={"qe": "qe.dat", "mirror": "mirror.dat"},
-    wavelength_range=(250.0, 700.0), mode="thinned",
-    scattering="scattering_exponential.dat", scattering_points=8,  # optional
-    pathlen_m=28.0, telescope_pathlen_m={2: 0.0},                  # optional
-    telescopes=[1, 3],                                             # optional
-    curvature="spherical", earth_radius_m=6371315.0,               # optional, see curvature.md
+    wavelength_range=(250.0, 700.0),
+    mode="thinned",
+    scattering="scattering_exponential.dat",
+    scattering_points=8,  # optional
+    pathlen_m=28.0,
+    telescope_pathlen_m={2: 0.0},  # optional
+    telescopes=[1, 3],  # optional
+    curvature="spherical",
+    earth_radius_m=6371315.0,  # optional, see curvature.md
 )
 ```
 

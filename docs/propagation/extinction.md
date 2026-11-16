@@ -82,12 +82,22 @@ only with `--store-p`.
 ```python
 import obdeect.propagation
 
-table = obdeect.propagation.TransmissionTable("atm_trans_2000_1_10_0_0_2000.dat", site_altitude_m=2000.0)
+table = obdeect.propagation.TransmissionTable(
+    "atm_trans_2000_1_10_0_0_2000.dat", site_altitude_m=2000.0
+)
 out = obdeect.propagation.apply_extinction(
-    columns, table, telescope_altitude_m=2030.0,
-    envelope_wavelength=[200.0, 800.0], envelope_value=[0.9, 0.3],
-    seed=1, event=1, telescope=1, first_index=0,
-    weighted=False, wavelength_range=(250.0, 700.0), pathlen_m=28.0,
+    columns,
+    table,
+    telescope_altitude_m=2030.0,
+    envelope_wavelength=[200.0, 800.0],
+    envelope_value=[0.9, 0.3],
+    seed=1,
+    event=1,
+    telescope=1,
+    first_index=0,
+    weighted=False,
+    wavelength_range=(250.0, 700.0),
+    pathlen_m=28.0,
 )
 ```
 

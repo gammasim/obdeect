@@ -31,10 +31,14 @@ flasher = {
     },
     "spectrum": {"kind": "fixed", "wavelength_nm": 385.0},
     "pulse": {"kind": "tophat", "width_ns": 2.5},
-    "target": {"kind": "disc", "centre_m": [0.0, 0.0, 0.0],
-               "normal": [0.0, 0.0, 1.0], "radius_m": 1.2},
+    "target": {
+        "kind": "disc",
+        "centre_m": [0.0, 0.0, 0.0],
+        "normal": [0.0, 0.0, 1.0],
+        "radius_m": 1.2,
+    },
 }
-photons = emit(flasher, seed=3)   # float32 arrays: x y z cx cy cz t w wavelength
+photons = emit(flasher, seed=3)  # float32 arrays: x y z cx cy cz t w wavelength
 ```
 
 `iter_chunks` emits large counts (at most 2^16 rows per chunk); `emit_chunk(..., first_index=,
