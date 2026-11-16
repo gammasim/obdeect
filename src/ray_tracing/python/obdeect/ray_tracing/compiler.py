@@ -253,7 +253,9 @@ def _surface_ids(optics: dict[str, Any]) -> list[int]:
 
 def _segmented_telescope(p: _Parameters, seed: int, zenith_deg: float | None) -> dict[str, Any]:
     focal_length = length_m(p.record("focal_length"), "focal_length")
-    overall_offset = signed_length_m(p.record("mirror_offset"), "mirror_offset")
+    overall_offset = (
+        signed_length_m(p.record("mirror_offset"), "mirror_offset") if "mirror_offset" in p else 0.0
+    )
     facets = read_mirror_list(p.file("mirror_list")[0])
     fallback = (
         length_m(p.record("mirror_focal_length"), "mirror_focal_length", allow_zero=True)

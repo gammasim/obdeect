@@ -29,6 +29,11 @@ def test_davies_cotton_chief_rays_meet_at_the_focus():
         assert abs(np.dot(facet["tangent"], normal)) < 1e-12
 
 
+def test_segmented_telescope_without_mirror_offset_has_no_offset():
+    optics = build(segmented(mirror_offset=None))["optics"]
+    assert optics["focal_surface"]["plane_z_m"] == pytest.approx(8.0)
+
+
 def test_random_errors_follow_the_seed():
     errors = {
         "mirror_align_random_horizontal": record(
