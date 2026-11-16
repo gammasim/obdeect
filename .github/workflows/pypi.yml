@@ -106,7 +106,7 @@ jobs:
       fail-fast: false
       matrix:
         project: [obdeect-stream, obdeect-propagation, obdeect-sources, obdeect-ray-tracing]
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-24.04
     environment: pypi-${{ matrix.project }}
     permissions:
       id-token: write
@@ -128,7 +128,7 @@ jobs:
   # The obdeect package requires all components: publish it after them.
   publish-obdeect:
     needs: publish
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-24.04
     environment: pypi-obdeect
     permissions:
       id-token: write

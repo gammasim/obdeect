@@ -4,6 +4,12 @@ All components are released together with one version (tags `vX.Y.Z`); the secti
 
 <!-- towncrier release notes start -->
 
+## [v0.9.2] - 2026-11-16
+
+### Fixed
+
+- fix ubuntu version in deploy runners.
+
 ## [v0.9.1] - 2026-11-16
 
 ### Fixed

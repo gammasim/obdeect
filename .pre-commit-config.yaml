@@ -7,14 +7,14 @@ exclude: ^src/[^/]+/cpp/tests/data/
 
 repos:
 - repo: https://github.com/pre-commit/pre-commit-hooks
-  rev: v5.0.0
+  rev: v6.0.0
   hooks:
   - id: check-yaml
   - id: check-json
   - id: end-of-file-fixer
   - id: trailing-whitespace
 - repo: https://github.com/astral-sh/ruff-pre-commit
-  rev: v0.12.7
+  rev: v0.17.5
   hooks:
   - id: ruff-check
     args: [--fix]
@@ -26,7 +26,7 @@ repos:
   - id: actionlint
 # https://pyproject-fmt.readthedocs.io/en/latest/
 - repo: https://github.com/tox-dev/pyproject-fmt
-  rev: "v2.29.2"
+  rev: "v2.30.6"
   hooks:
   - id: pyproject-fmt
     args: ["--max-supported-python", "3.15"]
@@ -40,7 +40,7 @@ repos:
     ]
 # markdownlint
 - repo: https://github.com/igorshubovych/markdownlint-cli
-  rev: v0.49.1
+  rev: v0.50.0
   hooks:
   - id: markdownlint
     args: ["--disable", "MD041"]
