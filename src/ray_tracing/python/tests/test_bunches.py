@@ -7,6 +7,7 @@ import pytest
 from obdeect.ray_tracing import OpticalModel, ThreadPool
 from obdeect.ray_tracing.compiler import model_hash
 from obdeect.ray_tracing.model import _obscurer_top_z_m
+from telescopes import dual as telescopes_dual
 from telescopes import record, segmented
 
 IDENTITY = np.eye(3)
@@ -617,7 +618,7 @@ def test_tilted_plane_above_a_slanted_cylinder_is_accepted():
     # Rotation about x by 20 deg: the plane normal is n = (0, -sin, cos). The cylinder runs from
     # (0, -1, 0) to (0, 1, 1), so its lateral extreme (y = -1, z = 0) is not its highest point
     # (y = 1, z = 1). Its support max n.q is about 0.65, but the old bound (max lateral support
-    # + max z) gives about 1.28: the plane at n.p = 0.9 lies above the cylinder everywhere.
+    # + max z) gives about 1.28: the plane at n.p = 1.6 lies above the cylinder everywhere.
     angle = math.radians(20.0)
     tilted = np.array([
         [1.0, 0.0, 0.0],
@@ -640,7 +641,8 @@ def test_tilted_plane_above_a_slanted_cylinder_is_accepted():
 
     model = edited(compiled(telescope_transmission=None), only_cylinder)
     bunches, _ = star_bunches(model, 10)
-    assert "weight" in trace_bunches(model, bunches, 0.9, frame_rotation=tilted)
+    # The segmented mirror reaches 1.44 along this normal, so the plane lies above it too.
+    assert "weight" in trace_bunches(model, bunches, 1.6, frame_rotation=tilted)
     # A plane at n.p = 0.3 passes through the cylinder's low end (height 0 at y = -1): rejected.
     with pytest.raises(ValueError, match="input plane below incoming obscurer 'slanted-cylinder'"):
         trace_bunches(model, bunches, 0.3, frame_rotation=tilted)
@@ -679,3 +681,52 @@ def test_without_incoming_obscurers_no_height_is_rejected():
     assert model.max_incoming_obscurer_z_m() is None
     bunches, plane_z = star_bunches(model, 1000)
     assert "weight" in trace_bunches(model, bunches, plane_z)
+
+
+def without_obscurers(model):
+    """A copy of `model` without obscurers, so that the mirrors alone limit the input plane."""
+
+    def remove(document):
+        document["optics"]["obscurers"] = []
+
+    return edited(model, remove)
+
+
+def dual_without_obscurers():
+    records, files = telescopes_dual()
+    return without_obscurers(
+        OpticalModel.from_records(records, files.__getitem__, configuration_seed=1)
+    )
+
+
+def test_input_plane_below_a_mirror_is_rejected():
+    model = dual_without_obscurers()
+    top = model.max_mirror_z_m()
+    assert top is not None and top > 0.0
+    bunches, _ = star_bunches(model, 1000)
+    # The highest mirror point lies at `top` on the axis: a plane below it would drop its photons.
+    with pytest.raises(ValueError, match="input plane below the primary mirror"):
+        trace_bunches(model, bunches, 0.5 * top)
+    assert "weight" in trace_bunches(model, bunches, 1.02 * top)
+
+
+def test_mirror_support_is_the_highest_point_along_the_direction():
+    model = dual_without_obscurers()
+    asphere = model.document["optics"]["primary"]["asphere"]
+    radii = np.linspace(asphere["inner_radius_m"], asphere["outer_radius_m"], 401)
+    phi = np.linspace(0.0, 2.0 * np.pi, 720)
+    z = np.full(radii.shape, asphere["vertex_z_m"])
+    for i, coefficient in enumerate(asphere["coefficients_m"]):
+        z += coefficient * (radii / asphere["radial_scale_m"]) ** (2 * i)
+    rr, pp = np.meshgrid(radii, phi)
+    points = np.stack([rr * np.cos(pp), rr * np.sin(pp), np.broadcast_to(z, rr.shape)], axis=-1)
+    for direction in [(0.0, 0.0, 1.0), (0.3, -0.2, 0.93), (-0.5, 0.1, 0.86)]:
+        direction = np.asarray(direction) / np.linalg.norm(direction)
+        brute = float(np.max(points.reshape(-1, 3) @ direction))
+        support = dict(model.mirrors_support(direction))["primary"]
+        assert support == pytest.approx(brute, abs=1e-5)
+        assert support >= brute - 1e-9
+    segmented_model = compiled(telescope_transmission=None)
+    centres = [f["centre_m"] for f in segmented_model.document["optics"]["primary"]["facets"]]
+    support = dict(segmented_model.mirrors_support(np.array([0.0, 0.0, 1.0])))["primary"]
+    assert support >= max(c[2] for c in centres)

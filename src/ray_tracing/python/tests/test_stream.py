@@ -10,6 +10,7 @@ import pytest
 from obdeect.ray_tracing import OpticalModel
 from obdeect.ray_tracing import stream as stream_module
 from obdeect.ray_tracing.cli import main
+from obdeect.ray_tracing.compiler import model_hash
 from obdeect.ray_tracing.formats import ModelError
 from obdeect.ray_tracing.stream import (
     CONSTANT_FACTOR,
@@ -17,7 +18,7 @@ from obdeect.ray_tracing.stream import (
     minimum_input_plane_height_m,
     trace_stream,
 )
-from telescopes import segmented
+from telescopes import dual, segmented
 
 FOCAL_LENGTH_M = 8.0  # focal length of segmented()
 RUN = {"run_number": 7, "wavelength_min_nm": 300.0, "wavelength_max_nm": 600.0}
@@ -846,3 +847,81 @@ def test_single_wavelength_run_keys_give_that_wavelength():
         550.0,
     )
     assert stream_module._wavelength_law({}) is None
+
+
+def dual_without_obscurers():
+    """SST-like dual mirror with no obscurers: its dish reaches above the camera at grazing."""
+    records, files = dual()
+    model = OpticalModel.from_records(records, files.__getitem__, configuration_seed=1)
+    document = model.document
+    document["optics"]["obscurers"] = []
+    document["sha256"] = model_hash(document)
+    return OpticalModel(document)
+
+
+def parallel_beam_in_both_frames(model, zenith_deg, azimuth_deg, count, radius_m, seed=5):
+    """The same rays as telescope-frame and as ground-frame photons, for trace-stream.
+
+    Rays move along the optical axis, in the telescope frame as (u, v, 0) moving along -z. The
+    ground-frame photon of each ray is where it crosses the ground plane z = 0 (the telescope
+    sphere centre plane), with the ground-frame direction. Both describe the same rays.
+    """
+    rng = np.random.default_rng(seed)
+    radius = radius_m * np.sqrt(rng.random(count))
+    angle = 2.0 * np.pi * rng.random(count)
+    u, v = radius * np.cos(angle), radius * np.sin(angle)
+    rotation = ground_to_telescope_rotation(zenith_deg, azimuth_deg)  # p_t = R p_g - O
+    down = np.array([0.0, 0.0, -1.0])
+    origin = np.stack([u, v, np.zeros(count)], axis=1) + np.asarray(model.axes_offset_m)
+    # p_g = R^T (p_t + O); the ray crosses z_g = 0 where R[:, 2] . (origin + s down) = 0.
+    s = -(origin @ rotation[:, 2]) / (down @ rotation[:, 2])
+    ground_xy = ((origin + s[:, None] * down) @ rotation)[:, :2]
+    ground_direction = down @ rotation
+    zeros = np.zeros(count, np.float32)
+    ones = np.ones(count, np.float32)
+    wavelength = np.full(count, 400.0, np.float32)
+    telescope = {
+        "x": u.astype(np.float32),
+        "y": v.astype(np.float32),
+        "z": zeros,
+        "cx": zeros,
+        "cy": zeros,
+        "t": zeros,
+        "w": ones,
+        "wavelength": wavelength,
+    }
+    ground = {
+        "x": ground_xy[:, 0].astype(np.float32),
+        "y": ground_xy[:, 1].astype(np.float32),
+        "cx": np.full(count, ground_direction[0], np.float32),
+        "cy": np.full(count, ground_direction[1], np.float32),
+        "t": zeros,
+        "w": ones,
+        "wavelength": wavelength,
+    }
+    return telescope, ground
+
+
+@pytest.mark.parametrize("zenith", [20.0, 60.0, 80.0, 86.775939])
+def test_grazing_pointing_keeps_the_photons_of_the_same_rays(zenith, tmp_path, obdeect_stream):
+    # At grazing pointing the dish reaches above the obscurer-based input plane. Photons must
+    # start above the dish, not only above the obscurers, or the ones behind it never reach it.
+    model = dual_without_obscurers()
+    telescope, ground = parallel_beam_in_both_frames(model, zenith, 132.4, 20000, 2.0)
+    reference, _, _ = focus(model, tmp_path, obdeect_stream, telescope, frame=2, name="t.pst")
+    counts, _, _ = focus(
+        model, tmp_path, obdeect_stream, ground, pointing=(zenith, 132.4), name="g.pst"
+    )
+    assert reference["photons_out"] > 0.5 * 20000
+    assert counts["photons_in"] == 20000
+    assert counts["photons_out"] == pytest.approx(reference["photons_out"], rel=1e-3)
+
+
+def test_input_plane_clears_the_mirror_at_grazing_pointing():
+    model = dual_without_obscurers()
+    normal = ground_to_telescope_rotation(86.775939, 132.4)[:, 2]
+    height = minimum_input_plane_height_m(model, 86.775939, 132.4)
+    # The plane (ground height `height` above the sphere centre) lies above the mirror's
+    # highest point along the ground normal, measured from the axes offset.
+    support = dict(model.mirrors_support(normal))["primary"]
+    assert height - float(np.dot(normal, model.axes_offset_m)) > support

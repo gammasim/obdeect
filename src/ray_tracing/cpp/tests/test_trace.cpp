@@ -675,6 +675,45 @@ void bunch_survivor_allocation() {
   }
 }
 
+// A ray inclined at a grazing angle to the axis meets the dish the same way from any start on
+// its line above the optics: the candidate search of the facet grid must not depend on where the
+// ray starts (the input plane of grazing ground-frame photons is one such start).
+void grazing_start_invariance() {
+  const auto model = single_facet(10.0, 8.0);
+  constexpr double kPi = 3.14159265358979323846;
+  std::size_t detected = 0, total = 0;
+  for (const double angle_deg : {60.0, 80.0, 85.0}) {
+    const double angle = angle_deg * kPi / 180.0;
+    const Vec3 direction = normalized({std::sin(angle), 0.0, -std::cos(angle)});
+    for (int i = -6; i <= 6; ++i)
+      for (int j = -6; j <= 6; ++j) {
+        const Vec3 impact{0.5 * i, 0.5 * j, 0.0};
+        TraceResult reference;
+        for (const double distance : {40.0, 80.0, 160.0}) {
+          const Vec3 origin = impact - direction * distance;
+          const auto t = trace_photon(model, {origin, direction}, 400.0, 0.0, 1.0, 0, 1, false);
+          if (distance == 40.0) {
+            reference = t;
+            ++total;
+            detected += t.status == Status::detected;
+            continue;
+          }
+          CHECK(t.status == reference.status);
+          CHECK(t.terminal_surface == reference.terminal_surface);
+          // The mirror point is well conditioned; the focal point of a nearly horizontal
+          // reflection lies kilometres away and only shows rounding.
+          if (t.status == Status::detected) {
+            CHECK_NEAR(t.primary_point.x, reference.primary_point.x, 1e-9);
+            CHECK_NEAR(t.primary_point.y, reference.primary_point.y, 1e-9);
+            CHECK_NEAR(t.primary_point.z, reference.primary_point.z, 1e-9);
+          }
+        }
+      }
+  }
+  // Some of the rays meet the dish and are detected (the focal plane is infinite).
+  CHECK(detected > 0 && detected <= total);
+}
+
 // trace_bunches rejects a wavelength density or law reaching 0 nm and bad acceptance axes.
 void bunch_option_validation() {
   const auto model = single_facet(10.0, 0.5);
@@ -747,6 +786,7 @@ void all_tests() {
   thread_pool_exceptions();
   bunch_option_validation();
   bunch_survivor_allocation();
+  grazing_start_invariance();
 }
 
 int main() { return run_checks(all_tests); }

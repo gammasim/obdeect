@@ -79,11 +79,13 @@ efficiency). The total equals the native chain. See
 
 ## Input plane
 
-The input plane must lie above every incoming obscurer, such as the camera housing.
-Photons starting below an obscurer never meet it. The plane is `n . p = value` with
-normal `n = R e_z`. Before tracing, `trace_bunches` compares it with each incoming
-obscurer's highest point along `n`. If the plane passes below that point, it raises
-`ValueError` naming the obscurer and the height along the telescope axis, `value / n_z`.
+The input plane must lie above every incoming obscurer, such as the camera housing, and
+above the mirrors that photons meet first (the primary, and the secondary if it blocks
+incoming light). Photons starting below an optic never meet it. The plane is `n . p = value`
+with normal `n = R e_z`. Before tracing, `trace_bunches` compares it with each incoming
+obscurer's highest point along `n`, and with each such mirror's highest point. If the plane
+passes below one of them, it raises `ValueError` naming the obscurer or the mirror and the
+height along the telescope axis, `value / n_z` (for a mirror, the plane's value along `n`).
 Raise `plane_z` to fix it.
 
 `frame_offset_m` is the input origin in the telescope frame. For a model with an axes

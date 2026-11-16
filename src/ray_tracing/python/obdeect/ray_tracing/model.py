@@ -144,6 +144,31 @@ class OpticalModel:
         top = self._incoming_top()
         return None if top is None else top[0]
 
+    def max_mirror_z_m(self) -> float | None:
+        """Highest z [m, telescope frame] of the mirrors that photons meet first, or None.
+
+        The primary, and the secondary if it blocks incoming light (see `mirrors_support`).
+        """
+        tops = [support for _, support in self.mirrors_support(_UP)]
+        return max(tops) if tops else None
+
+    def mirrors_support(self, direction: np.ndarray) -> list[tuple[str, float]]:
+        """Maximum dot product with a direction over the mirrors that photons meet first [m].
+
+        Photons start on the input plane and meet the primary first, then the secondary
+        after it: only the primary and, if it blocks incoming light, the secondary must lie
+        below the plane.
+        """
+        optics = self._document["optics"]
+        roles = ["primary"]
+        if optics.get("secondary_blocks_incoming"):
+            roles.append("secondary")
+        return [
+            (role, _mirror_support(optics[role], direction))
+            for role in roles
+            if optics.get(role) is not None
+        ]
+
     def _incoming_top(self) -> tuple[float, str] | None:
         """Highest incoming obscurer top [m] and its name, or None without incoming obscurers."""
         tops = [
@@ -478,33 +503,42 @@ class OpticalModel:
         offset = np.ascontiguousarray(frame_offset_m, dtype=np.float64)
         # The traced input origin is offset - axes_offset_m (applied natively).
         traced_offset = offset - np.asarray(self.axes_offset_m, dtype=np.float64)
-        # The input plane is {p : n.p = value} with n = R[:, 2]. Its height on the telescope
-        # axis is value / n_z, and an obscurer with support s = max over its points q of n.q
-        # lies entirely below the plane iff s <= value (for n_z > 0).
         top = self._incoming_top()
-        if top is not None and float(length_unit_m) > 0.0:
+        if float(length_unit_m) > 0.0:
+            # The input plane is {p : n.p = value} with n = R[:, 2]. Its height on the
+            # telescope axis is value / n_z, and an optic with support s = max over its points
+            # q of n.q lies entirely below the plane iff s <= value (for n_z > 0).
             normal = rotation[:, 2]
             point = traced_offset + normal * float(plane_z) * float(length_unit_m)
             value = float(np.dot(normal, point))
-            if normal[2] > 0.0:
-                checks = [
-                    (
-                        value / float(normal[2]),
-                        _obscurer_support(o, normal) / float(normal[2]),
-                        o["name"],
-                    )
-                    for o in self._document["optics"]["obscurers"]
-                    if "incoming" in o.get("legs", [])
-                ]
-            else:
-                checks = [(-math.inf, top[0], top[1])]
-            for plane_height_m, obscurer_top, name in checks:
-                if plane_height_m < obscurer_top:
+            if top is not None:
+                if normal[2] > 0.0:
+                    checks = [
+                        (
+                            value / float(normal[2]),
+                            _obscurer_support(o, normal) / float(normal[2]),
+                            o["name"],
+                        )
+                        for o in self._document["optics"]["obscurers"]
+                        if "incoming" in o.get("legs", [])
+                    ]
+                else:
+                    checks = [(-math.inf, top[0], top[1])]
+                for plane_height_m, obscurer_top, name in checks:
+                    if plane_height_m < obscurer_top:
+                        raise ValueError(
+                            f"input plane below incoming obscurer {name!r}: the plane is at "
+                            f"{plane_height_m:.3f} m along the telescope axis, "
+                            "but the obscurer reaches "
+                            f"{obscurer_top:.3f} m; raise the input plane above it"
+                        )
+            # Photons start on the plane and move on: a mirror point above it is never reached.
+            for role, mirror_top in self.mirrors_support(normal):
+                if value < mirror_top:
                     raise ValueError(
-                        f"input plane below incoming obscurer {name!r}: the plane is at "
-                        f"{plane_height_m:.3f} m along the telescope axis, "
-                        "but the obscurer reaches "
-                        f"{obscurer_top:.3f} m; raise the input plane above it"
+                        f"input plane below the {role} mirror: the plane is at n.p = {value:.3f} "
+                        f"m but the mirror reaches {mirror_top:.3f} m along the input normal; "
+                        "raise the input plane above it"
                     )
         if acceptance is not None:
             wavelengths, heights, values = (np.asarray(a, dtype=np.float64) for a in acceptance)
@@ -588,6 +622,38 @@ def _obscurer_top_z_m(obscurer: Mapping[str, Any]) -> float:
         float(point[2]) + radius * sine
         for point, radius in zip((start, end), _end_radii(obscurer), strict=True)
     )
+
+
+_UP = np.array([0.0, 0.0, 1.0])
+# Radial samples of an asphere mirror's aperture for its support.
+_ASPHERE_SAMPLES = 2049
+
+
+def _mirror_support(mirror: Mapping[str, Any], direction: np.ndarray) -> float:
+    """Maximum dot product with a direction over a mirror's surface (facets or asphere).
+
+    A facet's footprint lies within its circumradius plus its sag about the centre, so
+    that bound is used. An asphere point at radius r has the direction's dot product
+    hypot(d_x, d_y) r + d_z z(r); the maximum over r is taken on a radial grid.
+    """
+    if "facets" in mirror:
+        best = -math.inf
+        for facet in mirror["facets"]:
+            radius = float(facet.get("radius_of_curvature_m", 0.0))
+            reach = _circumradius(facet["shape"], facet["diameter_m"])
+            sag = radius - math.sqrt(max(0.0, radius * radius - reach * reach)) if radius else 0.0
+            best = max(best, float(np.dot(facet["centre_m"], direction)) + reach + sag)
+        return best
+    asphere = mirror["asphere"]
+    radii = np.linspace(
+        float(asphere["inner_radius_m"]), float(asphere["outer_radius_m"]), _ASPHERE_SAMPLES
+    )
+    scale = float(asphere["radial_scale_m"])
+    z = np.full(radii.shape, float(asphere["vertex_z_m"]))
+    for i, coefficient in enumerate(asphere["coefficients_m"]):
+        z += float(coefficient) * (radii / scale) ** (2 * i)
+    radial = math.hypot(float(direction[0]), float(direction[1]))
+    return float(np.max(radial * radii + float(direction[2]) * z))
 
 
 def _obscurer_support(obscurer: Mapping[str, Any], direction: np.ndarray) -> float:
