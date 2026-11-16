@@ -630,11 +630,12 @@ _ASPHERE_SAMPLES = 2049
 
 
 def _mirror_support(mirror: Mapping[str, Any], direction: np.ndarray) -> float:
-    """Maximum dot product with a direction over a mirror's surface (facets or asphere).
+    """Conservative bound on the dot product over a mirror's surface.
 
     A facet's footprint lies within its circumradius plus its sag about the centre, so
     that bound is used. An asphere point at radius r has the direction's dot product
-    hypot(d_x, d_y) r + d_z z(r); the maximum over r is taken on a radial grid.
+    hypot(d_x, d_y) r + d_z z(r). Bound the interpolation error between radial
+    samples using the maximum absolute second derivative of that polynomial.
     """
     if "facets" in mirror:
         best = -math.inf
@@ -650,10 +651,30 @@ def _mirror_support(mirror: Mapping[str, Any], direction: np.ndarray) -> float:
     )
     scale = float(asphere["radial_scale_m"])
     z = np.full(radii.shape, float(asphere["vertex_z_m"]))
+    curvature_bound = 0.0
+    magnitude = abs(float(asphere["vertex_z_m"]))
+    outer_scaled = float(asphere["outer_radius_m"]) / scale
     for i, coefficient in enumerate(asphere["coefficients_m"]):
-        z += float(coefficient) * (radii / scale) ** (2 * i)
+        coefficient = float(coefficient)
+        z += coefficient * (radii / scale) ** (2 * i)
+        magnitude += abs(coefficient) * outer_scaled ** (2 * i)
+        if i:
+            curvature_bound += (
+                abs(coefficient) * (2 * i) * (2 * i - 1) * outer_scaled ** (2 * i - 2) / scale**2
+            )
     radial = math.hypot(float(direction[0]), float(direction[1]))
-    return float(np.max(radial * radii + float(direction[2]) * z))
+    dz = abs(float(direction[2]))
+    step = (float(asphere["outer_radius_m"]) - float(asphere["inner_radius_m"])) / (
+        _ASPHERE_SAMPLES - 1
+    )
+    rounding = (
+        np.finfo(float).eps
+        * (16 + 4 * len(asphere["coefficients_m"]))
+        * (radial * float(asphere["outer_radius_m"]) + dz * magnitude)
+    )
+    return float(np.max(radial * radii + float(direction[2]) * z)) + (
+        dz * curvature_bound * step**2 / 8 + rounding
+    )
 
 
 def _obscurer_support(obscurer: Mapping[str, Any], direction: np.ndarray) -> float:

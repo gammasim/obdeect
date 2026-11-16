@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from obdeect.ray_tracing import OpticalModel, ThreadPool
 from obdeect.ray_tracing.compiler import model_hash
-from obdeect.ray_tracing.model import _obscurer_top_z_m
+from obdeect.ray_tracing.model import _mirror_support, _obscurer_top_z_m
 from telescopes import dual as telescopes_dual
 from telescopes import record, segmented
 
@@ -708,6 +708,21 @@ def test_input_plane_below_a_mirror_is_rejected():
     with pytest.raises(ValueError, match="input plane below the primary mirror"):
         trace_bunches(model, bunches, 0.5 * top)
     assert "weight" in trace_bunches(model, bunches, 1.02 * top)
+
+
+def test_asphere_support_bounds_peak_between_samples():
+    # z = -(r² - peak²)² has its maximum halfway between grid points.
+    peak = 1000.5 / 2048
+    mirror = {
+        "asphere": {
+            "inner_radius_m": 0.0,
+            "outer_radius_m": 1.0,
+            "radial_scale_m": 1.0,
+            "vertex_z_m": 0.0,
+            "coefficients_m": [-(peak**4), 2 * peak**2, -1.0],
+        }
+    }
+    assert _mirror_support(mirror, np.array([0.0, 0.0, 1.0])) >= 0.0
 
 
 def test_mirror_support_is_the_highest_point_along_the_direction():
