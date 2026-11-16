@@ -29,7 +29,7 @@ jobs:
       - name: Configure and build all components
         run: >-
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-          && cmake --build build --parallel
+          && cmake --build build --parallel 4
       - name: Run native tests
         run: ctest --test-dir build --output-on-failure --parallel 4
 
