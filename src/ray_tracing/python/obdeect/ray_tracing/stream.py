@@ -42,6 +42,8 @@ TRANSMISSION_PARTS = ("full", "angular")
 CONSTANT_FACTOR = "telescope_transmission_constant"
 # Run-record keys with the telescope pointing [rad]: zenith and azimuth in the array frame.
 RUN_POINTING_KEYS = ("telescope_pointing_zenith_rad", "telescope_pointing_azimuth_rad")
+# Telescope ids (sim_telarray numbering from 1); the random-number key holds 16 bits.
+TELESCOPE_IDS = range(1, 2**16)
 
 
 def _rotation(alpha: float, beta: float) -> np.ndarray:
@@ -140,10 +142,19 @@ def _transmission(model: OpticalModel, part: str) -> _Transmission:
     return _Transmission(part, on_axis)
 
 
-def _own_efficiency_status(model: OpticalModel, transmission: _Transmission) -> dict[str, Any]:
-    """The efficiency status record that marks the factors obdeect applies as applied."""
+def _own_efficiency_status(
+    model: OpticalModel, transmission: _Transmission, metadata: Mapping[str, Any] | None = None
+) -> Mapping[str, Any]:
+    """The efficiency status record that marks the factors obdeect applies as applied.
+
+    ``metadata`` is an incoming efficiency status: its other factors are kept, and the factors
+    obdeect applies are added to it, so that each factor appears once in the record.
+    """
+    metadata = dict(metadata or {})
+    names = _names(metadata.get("factors", ""))
+    factors = names + [name for name in _own_factors(model) if name not in names]
     return _efficiency_status_with_applied(
-        {"factors": ",".join(_own_factors(model))}, model, transmission
+        {**metadata, "factors": ",".join(factors)}, model, transmission
     )
 
 
@@ -277,8 +288,17 @@ class _Telescope:
     factors: dict[str, _Factor] = field(default_factory=dict)
     config: _Config | None = None
     photons_seen: bool = False
+    status_written: bool = False
     out_index: int = 0
     weight: float = 0.0
+
+
+def _telescope_id(value: int) -> int:
+    if value not in TELESCOPE_IDS:
+        raise ModelError(
+            f"telescope id {value} outside {TELESCOPE_IDS.start}..{TELESCOPE_IDS.stop - 1}"
+        )
+    return value
 
 
 def _wavelength_law(metadata: Mapping[str, Any]) -> tuple[float, float] | None:
@@ -413,6 +433,14 @@ class _Tracer:
             if not telescope.kept:
                 return
             telescope.factors = {**telescope.factors, **_efficiency_status_factors(metadata)}
+            if self.per_telescope:
+                if telescope.status_written:
+                    raise ModelError(
+                        f"telescope {telescope.telescope_id}: more than one efficiency_status "
+                        "before its photons"
+                    )
+                self._write_status(telescope, metadata)
+                return
         optics = self._optics(telescope.telescope_id)
         self.writer.write(
             "efficiency_status",
@@ -435,11 +463,24 @@ class _Tracer:
         self.telescope = _Telescope(telescope_id, kept, out_index=start)
         if kept:
             self.writer.write("telescope", {**metadata, "frame": FRAME_CAMERA})
-            if self.per_telescope:
-                optics = self._optics(telescope_id)
-                self.writer.write(
-                    "efficiency_status", _own_efficiency_status(optics.model, optics.transmission)
-                )
+
+    def _write_status(self, telescope: _Telescope, metadata: Mapping[str, Any] | None) -> None:
+        """Writes the telescope's efficiency status, with the factors obdeect applies applied.
+
+        With a mapping of models, this is the one record of the block that marks them applied:
+        an incoming status is rewritten, or a record of the own factors is written before the
+        first photons, so no factor is applied twice in one telescope scope.
+        """
+        optics = self._optics(telescope.telescope_id)
+        self.writer.write(
+            "efficiency_status",
+            _own_efficiency_status(optics.model, optics.transmission, metadata),
+        )
+        telescope.status_written = True
+
+    def _ensure_status(self, telescope: _Telescope) -> None:
+        if self.per_telescope and not telescope.status_written:
+            self._write_status(telescope, None)
 
     def _telescope_end(self, metadata: Mapping[str, Any]) -> None:
         telescope = self.telescope
@@ -449,6 +490,7 @@ class _Tracer:
             raise ModelError("telescope_end record without its telescope record")
         if telescope.kept:
             # Applies the efficiency status checks even for a telescope without photons.
+            self._ensure_status(telescope)
             self._config(telescope)
             self.writer.write("telescope_end", {**metadata, "photons": telescope.weight})
             self.next_index[telescope.telescope_id] = telescope.out_index
@@ -526,6 +568,7 @@ class _Tracer:
                 f"photon frame {record['frame']} is not supported: trace-stream takes ground "
                 "(1) or telescope (2) photons"
             )
+        self._ensure_status(telescope)
         config = self._config(telescope)
         optics = self._optics(telescope.telescope_id)
         event_number = _int_key(self.event, "event_number", "event")
@@ -626,7 +669,7 @@ def _optics_of(
     """The optics of the tracer and the telescopes to trace (see trace_stream)."""
     if isinstance(model, OpticalModel):
         return _Optics.of(model, part), telescopes
-    models = {int(telescope): value for telescope, value in model.items()}
+    models = {_telescope_id(int(telescope)): value for telescope, value in model.items()}
     if not models:
         raise ModelError("give at least one optical model")
     if telescopes is None:
@@ -698,12 +741,12 @@ def trace_stream(
         unsupported frame or column,
         or an efficiency status that says a factor is already applied, and for an unknown
         telescope_transmission or "angular" with a model that has none, and for a telescope
-        id without a model.
+        id without a model or outside 1..65535.
     """
     if seed < 0:
         raise ModelError("seed must not be negative")
     if telescopes is not None:
-        telescopes = frozenset(int(telescope) for telescope in telescopes)
+        telescopes = frozenset(_telescope_id(int(telescope)) for telescope in telescopes)
         if not telescopes:
             raise ModelError("telescopes: give at least one telescope id")
     optics, telescopes = _optics_of(model, telescopes, telescope_transmission)

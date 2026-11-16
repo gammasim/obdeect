@@ -1004,6 +1004,42 @@ def test_models_by_telescope_need_a_model_for_each_selected_telescope(model, tmp
         trace_stream({}, source, tmp_path / "missing.out.pst", seed=SEED)
 
 
+def test_telescope_ids_outside_the_range_are_rejected(model, tmp_path):
+    source = two_telescope_stream(tmp_path / "range.pst")
+    output = tmp_path / "range.out.pst"
+    for models in ({0: model}, {65536: model}):
+        with pytest.raises(ModelError, match="outside 1..65535"):
+            trace_stream(models, source, output, seed=SEED)
+    with pytest.raises(ModelError, match="outside 1..65535"):
+        trace_stream(model, source, output, seed=SEED, telescopes=[0])
+
+
+def test_telescope_status_marks_own_factors_once_per_block(model, tmp_path, obdeect_stream):
+    pending = {
+        "factors": "qe,mirror_reflectivity",
+        "qe.state": "pending",
+        "mirror_reflectivity.state": "pending",
+    }
+    source = write_stream(
+        tmp_path / "once.pst",
+        {1: beam(200, (0.0, 0.0))},
+        telescope_efficiency_statuses={1: pending},
+    )
+    output = tmp_path / "once.out.pst"
+    trace_stream({1: model}, source, output, seed=SEED, pointing=(0, 0))
+
+    records = read_records(output, obdeect_stream)
+    types = [r["type"] for r in records]
+    start = types.index("telescope")
+    end = types.index("photons", start)
+    statuses = [r["metadata"] for r in records[start:end] if r["type"] == "efficiency_status"]
+    assert len(statuses) == 1
+    names = statuses[0]["factors"].split(",")
+    assert len(names) == len(set(names))
+    assert statuses[0]["mirror_reflectivity.state"] == "applied"
+    assert statuses[0]["qe.state"] == "pending"
+
+
 def test_cli_trace_stream_with_a_model_per_telescope(
     model, dual_model, tmp_path, obdeect_stream, capsys
 ):
@@ -1033,6 +1069,7 @@ def test_cli_trace_stream_with_a_model_per_telescope(
     [
         (["{path}", "2={path}"], "give one --model PATH"),
         (["1={path}", "1={path}"], "more than one --model"),
+        (["0={path}"], "outside 1..65535"),
     ],
 )
 def test_cli_rejects_inconsistent_models(model, tmp_path, capsys, models, message):

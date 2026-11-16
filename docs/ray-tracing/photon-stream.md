@@ -73,8 +73,10 @@ run level.
 Other factors (for example `qe`) pass on unchanged. After the run record, the stage writes a
 efficiency-status record after the incoming run statuses, marking the factors it applies `applied`, with
 `source` set to obdeect and the model hash. With a model per telescope id, this record is written
-at the start of each telescope block instead, with the hash of that telescope's model. Input records naming these factors are rewritten the
-same way. For example, a run record with `mirror_reflectivity.state = envelope` (table over 300
+in each telescope block instead, with the hash of that telescope's model: the first
+telescope-level record of the block, or one written before its first photons. An incoming
+telescope-level record naming these factors is rewritten into that record, so each factor is
+marked `applied` once per block. For example, a run record with `mirror_reflectivity.state = envelope` (table over 300
 to 600 nm) becomes:
 
 ```text
