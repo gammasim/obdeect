@@ -39,18 +39,23 @@ with obdeect.stream.Writer("run.pst", "my-module") as writer:
     writer.write("run", {"run_number": 1, "telescope_x_m": [0.0, 10.0]})
     writer.write_photons(
         1,
-        "telescope",                                  # or 2
+        "telescope",  # or 2
         0,
-        {"x": np.zeros(3, np.float32), "y": np.zeros(3, np.float32),
-         "cx": np.zeros(3, np.float32), "cy": np.zeros(3, np.float32),
-         "t": np.zeros(3, np.float32), "w": np.ones(3, np.float32)},
+        {
+            "x": np.zeros(3, np.float32),
+            "y": np.zeros(3, np.float32),
+            "cx": np.zeros(3, np.float32),
+            "cy": np.zeros(3, np.float32),
+            "t": np.zeros(3, np.float32),
+            "w": np.ones(3, np.float32),
+        },
     )
-    writer.write_blob(1204, 0, b"...")                # raw EventIO block
+    writer.write_blob(1204, 0, b"...")  # raw EventIO block
 
 for record in obdeect.stream.Reader("run.pst"):
-    print(record["type"])                             # stream, run, photons, blob, ...
+    print(record["type"])  # stream, run, photons, blob, ...
     if record["type"] == "photons":
-        w = record["columns"]["w"]                    # numpy float32 array
+        w = record["columns"]["w"]  # numpy float32 array
 ```
 
 Metadata values: `int`, `float`, `str`, or a list or array of floats. Photon columns must be
@@ -102,16 +107,24 @@ uses the same stage interface:
 import numpy as np
 from obdeect.stream.stage import transform
 
+
 def trace(telescope_id, columns, metadata):
     # columns: x, y, cx, cy, t, w, ... as float32 arrays (ground frame, metres)
     x, y = columns["x"], columns["y"]
-    hit = x**2 + y**2 < 12.0**2                  # your optics here
+    hit = x**2 + y**2 < 12.0**2  # your optics here
     out = {name: values[hit] for name, values in columns.items()}
-    out["x"], out["y"] = out["x"] * 0.01, out["y"] * 0.01   # focal plane
-    return out                                   # float32 arrays of equal length
+    out["x"], out["y"] = out["x"] * 0.01, out["y"] * 0.01  # focal plane
+    return out  # float32 arrays of equal length
 
-transform("ground.pst", "camera.pst", trace, stage_id=0x444C0010, frame_out="camera",
-          efficiency_status={"mirror": {"state": "applied", "source": "my-model-v1"}})
+
+transform(
+    "ground.pst",
+    "camera.pst",
+    trace,
+    stage_id=0x444C0010,
+    frame_out="camera",
+    efficiency_status={"mirror": {"state": "applied", "source": "my-model-v1"}},
+)
 ```
 
 `transform` copies all other records unchanged (records of unknown type are dropped), sets the

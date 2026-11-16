@@ -41,8 +41,8 @@ Heights in m a.s.l. (cm internally).
 
 ```python
 profile = obdeect.propagation.AtmosphereProfile("atmprof_ecmwf_north_winter_fixed.dat")
-profile.density([0.0, 2180.0])        # [1.21171e-03, 9.75149e-04] g/cm^3
-profile.group_index(2180.0)           # 1.000225191893913
+profile.density([0.0, 2180.0])  # [1.21171e-03, 9.75149e-04] g/cm^3
+profile.group_index(2180.0)  # 1.000225191893913
 ```
 
 ## Ray bending

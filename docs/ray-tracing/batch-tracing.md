@@ -34,22 +34,27 @@ are in [Air-shower photons](air-shower-photons.md).
 ```python
 out = model.trace_bunches(
     {
-        "x": x, "y": y, "cx": cx, "cy": cy,        # input plane, input length units
-        "time_ns": t, "zem": zem, "size": size,    # size: photons per bunch
-        "wavelength_nm": wavelength,               # 0: drawn from a density or law
-        "bunch_id": bunch_id,                      # unique per seed
+        "x": x,
+        "y": y,
+        "cx": cx,
+        "cy": cy,  # input plane, input length units
+        "time_ns": t,
+        "zem": zem,
+        "size": size,  # size: photons per bunch
+        "wavelength_nm": wavelength,  # 0: drawn from a density or law
+        "bunch_id": bunch_id,  # unique per seed
     },
-    seed=run_seed,                # draws keyed on (seed, event, telescope, bunch)
+    seed=run_seed,  # draws keyed on (seed, event, telescope, bunch)
     event=event_number,
     telescope=telescope_id,
-    frame_rotation=rotation,      # 3 x 3, input frame to telescope frame
-    frame_offset_m=offset_m,      # telescope frame, metres
-    length_unit_m=0.01,           # metres per input length unit (cm here)
-    plane_z=0.0,                  # height of the input plane, input units
+    frame_rotation=rotation,  # 3 x 3, input frame to telescope frame
+    frame_offset_m=offset_m,  # telescope frame, metres
+    length_unit_m=0.01,  # metres per input length unit (cm here)
+    plane_z=0.0,  # height of the input plane, input units
     acceptance=(wavelength_nm_axis, zem_m_axis, values),  # optional, in [0, 1]
     wavelength_density=(nm, density),  # or wavelength_law=(lo_nm, hi_nm)
     normalise_transmission=False,
-    pool=pool,                    # or threads=...
+    pool=pool,  # or threads=...
 )
 ```
 
