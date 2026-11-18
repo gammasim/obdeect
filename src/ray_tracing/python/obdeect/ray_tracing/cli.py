@@ -307,7 +307,8 @@ group = Group(
         "trace": Command("trace a star or point source", function=_command("trace")),
         "obscurers": Command("which obscurers shade a star", function=_command("obscurers")),
         "trace-stream": Command(
-            "trace a photon stream to camera-frame photons", function=_command("trace-stream")
+            "trace a photon stream to camera-frame photons",
+            program="obdeect-ray-tracing-trace-stream",
         ),
         "plot": Command(
             "plot the dish layout and the focal-plane image", function=_command("plot")

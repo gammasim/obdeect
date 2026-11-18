@@ -1,0 +1,1235 @@
+#pragma once
+
+// Trace a photon stream through optical models: the native `obdeect ray-tracing trace-stream`.
+// Same rules and output as obdeect.ray_tracing.stream.trace_stream (Python), which this file
+// follows step by step: ground-frame (G) or telescope-frame (T) photons in, camera-frame (C)
+// photons out; records pass through, telescopes not selected are dropped and the efficiency
+// status is updated (docs/ray-tracing/photon-stream.md). Floating-point steps that the Python
+// version does in NumPy (input plane, sums, envelope interpolation) are done in the same order,
+// so the two write the same stream; only the version in the provenance strings may differ.
+
+#include "obdeect/ray_tracing/bunches.hpp"
+#include "obdeect/ray_tracing/json.hpp"
+#include "obdeect/ray_tracing/model_hash.hpp"
+#include "obdeect/ray_tracing/model_json.hpp"
+#include "obdeect/stream/stream.hpp"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <istream>
+#include <limits>
+#include <map>
+#include <memory>
+#include <optional>
+#include <ostream>
+#include <set>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <variant>
+#include <vector>
+
+namespace obdeect::ray_tracing {
+
+namespace stream_trace_detail {
+
+namespace st = obdeect::stream;
+using json::Value;
+
+inline constexpr double kPi = 3.141592653589793;
+// Margin above the highest incoming obscurer for the input plane [m] (as simtools).
+inline constexpr double kInputPlaneMarginM = 1.0;
+// Largest allowed difference between a cz column and -sqrt(1 - cx^2 - cy^2).
+inline constexpr double kCzTolerance = 1e-5;
+// Radial samples of an asphere mirror's aperture for its support.
+inline constexpr std::size_t kAsphereSamples = 2049;
+// NumPy's reduction buffer: float32 sums in float64 are pairwise within blocks of this size.
+inline constexpr std::size_t kNumpyBuffer = 8192;
+inline constexpr const char *kConstantFactor = "telescope_transmission_constant";
+inline constexpr std::uint32_t kMaxTelescopeId = 65535;
+
+using Vec = std::array<double, 3>;
+
+[[nodiscard]] inline double dot(const Vec &a, const Vec &b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+// CPython's math.hypot of two values (vector_norm: exact squares and sums, one correction).
+[[nodiscard]] inline double python_hypot(double a, double b) {
+  const double x0 = std::abs(a), x1 = std::abs(b);
+  const double max = std::max(x0, x1);
+  if (std::isinf(max))
+    return max;
+  if (std::isnan(x0) || std::isnan(x1))
+    return std::numeric_limits<double>::quiet_NaN();
+  if (max == 0.0)
+    return max;
+  int max_e = 0;
+  (void)std::frexp(max, &max_e);
+  if (max_e < -1023)
+    return std::numeric_limits<double>::min() *
+           python_hypot(x0 / std::numeric_limits<double>::min(),
+                        x1 / std::numeric_limits<double>::min());
+  const double scale = std::ldexp(1.0, -max_e);
+  double csum = 1.0, frac1 = 0.0, frac2 = 0.0;
+  const auto add = [&](double hi, double lo) {
+    const double sum = csum + hi;
+    const double z = sum - csum;
+    frac2 += hi - z;
+    csum = sum;
+    frac1 += lo;
+  };
+  for (const double v : {x0, x1}) {
+    const double x = v * scale;
+    const double square = x * x;
+    add(square, std::fma(x, x, -square));
+  }
+  double h = std::sqrt(csum - 1.0 + (frac1 + frac2));
+  const double product = -h * h;
+  add(product, std::fma(-h, h, -product));
+  const double x = csum - 1.0 + (frac1 + frac2);
+  h += x / (2.0 * h);
+  return h / scale;
+}
+
+// numpy.sum(values, dtype=float64) of float32 values: pairwise within buffer blocks.
+[[nodiscard]] inline double pairwise(const float *a, std::size_t n) {
+  if (n < 8) {
+    double result = 0.0;
+    for (std::size_t i = 0; i < n; ++i)
+      result += static_cast<double>(a[i]);
+    return result;
+  }
+  if (n <= 128) {
+    std::array<double, 8> r{};
+    for (std::size_t j = 0; j < 8; ++j)
+      r[j] = static_cast<double>(a[j]);
+    std::size_t i = 8;
+    for (; i < n - (n % 8); i += 8)
+      for (std::size_t j = 0; j < 8; ++j)
+        r[j] += static_cast<double>(a[i + j]);
+    double result = ((r[0] + r[1]) + (r[2] + r[3])) + ((r[4] + r[5]) + (r[6] + r[7]));
+    for (; i < n; ++i)
+      result += static_cast<double>(a[i]);
+    return result;
+  }
+  std::size_t half = n / 2;
+  half -= half % 8;
+  return pairwise(a, half) + pairwise(a + half, n - half);
+}
+
+[[nodiscard]] inline double numpy_sum(const std::vector<float> &values) {
+  double total = 0.0;
+  for (std::size_t start = 0; start < values.size(); start += kNumpyBuffer)
+    total = total + pairwise(values.data() + start, std::min(kNumpyBuffer, values.size() - start));
+  return total;
+}
+
+// numpy.interp(x, nodes, values) for x within [nodes[0], nodes[-1]] (checked by the caller).
+[[nodiscard]] inline double numpy_interp(double x, const std::vector<double> &nodes,
+                                         const std::vector<double> &values) {
+  if (std::isnan(x))
+    return x;
+  const std::size_t n = nodes.size();
+  if (n == 1)
+    return values[0];
+  const auto above = std::upper_bound(nodes.begin(), nodes.end(), x);
+  const std::size_t j = static_cast<std::size_t>(above - nodes.begin()) - 1;
+  if (j == n - 1 || nodes[j] == x)
+    return values[j];
+  const double slope = (values[j + 1] - values[j]) / (nodes[j + 1] - nodes[j]);
+  double result = slope * (x - nodes[j]) + values[j];
+  if (std::isnan(result)) {
+    result = slope * (x - nodes[j + 1]) + values[j + 1];
+    if (std::isnan(result) && values[j] == values[j + 1])
+      result = values[j];
+  }
+  return result;
+}
+
+[[nodiscard]] inline std::string format_g(double value) {
+  char buffer[64];
+  std::snprintf(buffer, sizeof buffer, "%g", value);
+  return buffer;
+}
+
+[[nodiscard]] inline std::string format_3f(double value) {
+  char buffer[64];
+  std::snprintf(buffer, sizeof buffer, "%.3f", value);
+  return buffer;
+}
+
+// ---- The model document: facts that trace-stream needs beyond the compiled model ----
+
+[[nodiscard]] inline const Value &at(const Value &object, std::string_view key) {
+  const Value *found = object.find(key);
+  if (found == nullptr)
+    throw ModelError("optical model: missing '" + std::string(key) + "'");
+  return *found;
+}
+
+[[nodiscard]] inline double number(const Value &value) {
+  if (value.kind() == Value::Kind::boolean)
+    return std::get<bool>(value.data) ? 1.0 : 0.0;
+  if (value.kind() != Value::Kind::number)
+    throw ModelError("optical model: expected a number");
+  return std::get<double>(value.data);
+}
+
+[[nodiscard]] inline const Value::Array &items(const Value &value) {
+  if (value.kind() != Value::Kind::array)
+    throw ModelError("optical model: expected an array");
+  return std::get<Value::Array>(value.data);
+}
+
+[[nodiscard]] inline Vec vec3(const Value &value) {
+  const auto &list = items(value);
+  if (list.size() != 3)
+    throw ModelError("optical model: expected three components");
+  return {number(list[0]), number(list[1]), number(list[2])};
+}
+
+[[nodiscard]] inline std::string text(const Value &value) {
+  if (value.kind() != Value::Kind::string)
+    throw ModelError("optical model: expected a string");
+  return std::get<std::string>(value.data);
+}
+
+[[nodiscard]] inline bool truthy(const Value *value) {
+  if (value == nullptr)
+    return false;
+  switch (value->kind()) {
+  case Value::Kind::null:
+    return false;
+  case Value::Kind::boolean:
+    return std::get<bool>(value->data);
+  case Value::Kind::number:
+    return std::get<double>(value->data) != 0.0;
+  case Value::Kind::string:
+    return !std::get<std::string>(value->data).empty();
+  case Value::Kind::array:
+    return !std::get<Value::Array>(value->data).empty();
+  case Value::Kind::object:
+    return !std::get<Value::Object>(value->data).names.empty();
+  }
+  return false;
+}
+
+[[nodiscard]] inline bool has_leg(const Value &obscurer, std::string_view leg) {
+  const Value *legs = obscurer.find("legs");
+  if (legs == nullptr)
+    return false;
+  for (const auto &item : items(*legs))
+    if (item.kind() == Value::Kind::string && std::get<std::string>(item.data) == leg)
+      return true;
+  return false;
+}
+
+// Radius [m] of the circle that encloses a plate aperture, as in the native tracer.
+[[nodiscard]] inline double circumradius(const std::string &aperture, double diameter_m) {
+  const double half_width = 0.5 * diameter_m;
+  if (aperture == "square")
+    return half_width * std::sqrt(2.0);
+  if (aperture.rfind("hexagon", 0) == 0)
+    return half_width * 2.0 / std::sqrt(3.0);
+  return half_width;
+}
+
+[[nodiscard]] inline std::array<double, 2> end_radii(const Value &obscurer) {
+  if (obscurer.find("start_radius_m") != nullptr) {
+    const double thickness = number(at(obscurer, "thickness_m"));
+    return {number(at(obscurer, "start_radius_m")) + thickness,
+            number(at(obscurer, "end_radius_m")) + thickness};
+  }
+  const double radius = 0.5 * number(at(obscurer, "diameter_m"));
+  return {radius, radius};
+}
+
+[[nodiscard]] inline Vec unit(const Vec &v) {
+  const double norm = std::sqrt(dot(v, v));
+  return {v[0] / norm, v[1] / norm, v[2] / norm};
+}
+
+[[nodiscard]] inline Vec minus(const Vec &a, const Vec &b) {
+  return {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
+}
+
+// Highest z [m] of one obscurer record.
+[[nodiscard]] inline double obscurer_top_z(const Value &obscurer) {
+  if (const Value *vertices = obscurer.find("vertices_m")) {
+    double top = -std::numeric_limits<double>::infinity();
+    for (const auto &vertex : items(*vertices))
+      top = std::max(top, vec3(vertex)[2]);
+    return top;
+  }
+  if (obscurer.find("centre_m") != nullptr) {
+    const Vec normal = unit(vec3(at(obscurer, "normal")));
+    const double radius =
+        circumradius(text(at(obscurer, "aperture")), number(at(obscurer, "diameter_m")));
+    return vec3(at(obscurer, "centre_m"))[2] +
+           radius * std::sqrt(std::max(0.0, 1.0 - std::pow(normal[2], 2.0)));
+  }
+  const Vec start = vec3(at(obscurer, "start_m")), end = vec3(at(obscurer, "end_m"));
+  const Vec axis = unit(minus(end, start));
+  const double sine = std::sqrt(std::max(0.0, 1.0 - std::pow(axis[2], 2.0)));
+  const auto radii = end_radii(obscurer);
+  return std::max(start[2] + radii[0] * sine, end[2] + radii[1] * sine);
+}
+
+// Maximum dot product with a direction over an obscurer's geometry.
+[[nodiscard]] inline double obscurer_support(const Value &obscurer, const Vec &direction) {
+  if (const Value *vertices = obscurer.find("vertices_m")) {
+    double best = -std::numeric_limits<double>::infinity();
+    for (const auto &vertex : items(*vertices))
+      best = std::max(best, dot(vec3(vertex), direction));
+    return best;
+  }
+  const auto radial_of = [&](const Vec &axis) {
+    return std::sqrt(
+        std::max(0.0, dot(direction, direction) - std::pow(dot(direction, axis), 2.0)));
+  };
+  if (obscurer.find("centre_m") != nullptr) {
+    const Vec normal = unit(vec3(at(obscurer, "normal")));
+    const double radius =
+        circumradius(text(at(obscurer, "aperture")), number(at(obscurer, "diameter_m")));
+    return dot(vec3(at(obscurer, "centre_m")), direction) + radius * radial_of(normal);
+  }
+  const Vec start = vec3(at(obscurer, "start_m")), end = vec3(at(obscurer, "end_m"));
+  const double radial = radial_of(unit(minus(end, start)));
+  const auto radii = end_radii(obscurer);
+  return std::max(dot(start, direction) + radii[0] * radial,
+                  dot(end, direction) + radii[1] * radial);
+}
+
+// Conservative bound on the dot product with a direction over a mirror's surface.
+[[nodiscard]] inline double mirror_support(const Value &mirror, const Vec &direction) {
+  if (const Value *facets = mirror.find("facets")) {
+    double best = -std::numeric_limits<double>::infinity();
+    for (const auto &facet : items(*facets)) {
+      const Value *curvature = facet.find("radius_of_curvature_m");
+      const double radius = curvature == nullptr ? 0.0 : number(*curvature);
+      const double reach = circumradius(text(at(facet, "shape")), number(at(facet, "diameter_m")));
+      const double sag =
+          radius != 0.0 ? radius - std::sqrt(std::max(0.0, radius * radius - reach * reach)) : 0.0;
+      best = std::max(best, dot(vec3(at(facet, "centre_m")), direction) + reach + sag);
+    }
+    return best;
+  }
+  const Value &asphere = at(mirror, "asphere");
+  const double inner = number(at(asphere, "inner_radius_m"));
+  const double outer = number(at(asphere, "outer_radius_m"));
+  const double scale = number(at(asphere, "radial_scale_m"));
+  const double vertex = number(at(asphere, "vertex_z_m"));
+  const auto &coefficients = items(at(asphere, "coefficients_m"));
+  // numpy.linspace(inner, outer, kAsphereSamples).
+  const double step = (outer - inner) / static_cast<double>(kAsphereSamples - 1);
+  std::vector<double> radii(kAsphereSamples), z(kAsphereSamples, vertex);
+  for (std::size_t k = 0; k < kAsphereSamples; ++k)
+    radii[k] = static_cast<double>(k) * step + inner;
+  radii.back() = outer;
+  double curvature_bound = 0.0;
+  double magnitude = std::abs(vertex);
+  const double outer_scaled = outer / scale;
+  for (std::size_t i = 0; i < coefficients.size(); ++i) {
+    const double coefficient = number(coefficients[i]);
+    const double power = static_cast<double>(2 * i);
+    for (std::size_t k = 0; k < kAsphereSamples; ++k)
+      z[k] += coefficient * std::pow(radii[k] / scale, power);
+    magnitude += std::abs(coefficient) * std::pow(outer_scaled, power);
+    if (i != 0)
+      curvature_bound += std::abs(coefficient) * power * (power - 1.0) *
+                         std::pow(outer_scaled, power - 2.0) / std::pow(scale, 2.0);
+  }
+  const double radial = python_hypot(direction[0], direction[1]);
+  const double dz = std::abs(direction[2]);
+  const double rounding = std::numeric_limits<double>::epsilon() *
+                          static_cast<double>(16 + 4 * coefficients.size()) *
+                          (radial * outer + dz * magnitude);
+  double best = -std::numeric_limits<double>::infinity();
+  for (std::size_t k = 0; k < kAsphereSamples; ++k)
+    best = std::max(best, radial * radii[k] + direction[2] * z[k]);
+  return best + (dz * curvature_bound * std::pow(step, 2.0) / 8.0 + rounding);
+}
+
+// An optical model with the document facts that trace-stream reads (OpticalModel in Python).
+struct StreamModel {
+  OpticalModel model;
+  Value document;
+  std::string sha256;
+  bool has_structure{};
+  std::optional<double> transmission_on_axis; // optics.telescope_transmission.on_axis
+
+  [[nodiscard]] const Value &optics() const { return at(document, "optics"); }
+
+  [[nodiscard]] Vec axes_offset() const {
+    const Value *offset = optics().find("axes_offset_m");
+    return offset == nullptr ? Vec{0.0, 0.0, 0.0} : vec3(*offset);
+  }
+
+  [[nodiscard]] std::vector<const Value *> incoming_obscurers() const {
+    std::vector<const Value *> out;
+    for (const auto &obscurer : items(at(optics(), "obscurers")))
+      if (has_leg(obscurer, "incoming"))
+        out.push_back(&obscurer);
+    return out;
+  }
+
+  // The primary, and the secondary if it blocks incoming light: (role, support).
+  [[nodiscard]] std::vector<std::pair<std::string, double>>
+  mirrors_support(const Vec &direction) const {
+    std::vector<std::string> roles = {"primary"};
+    if (truthy(optics().find("secondary_blocks_incoming")))
+      roles.emplace_back("secondary");
+    std::vector<std::pair<std::string, double>> out;
+    for (const auto &role : roles) {
+      const Value *mirror = optics().find(role);
+      if (mirror != nullptr && mirror->kind() != Value::Kind::null)
+        out.emplace_back(role, mirror_support(*mirror, direction));
+    }
+    return out;
+  }
+
+  // Highest incoming obscurer top [m] and its name.
+  [[nodiscard]] std::optional<std::pair<double, std::string>> incoming_top() const {
+    std::optional<std::pair<double, std::string>> top;
+    for (const Value *obscurer : incoming_obscurers()) {
+      std::pair<double, std::string> item{obscurer_top_z(*obscurer), text(at(*obscurer, "name"))};
+      if (!top || item > *top)
+        top = std::move(item);
+    }
+    return top;
+  }
+
+  [[nodiscard]] std::optional<double> max_mirror_z() const {
+    std::optional<double> top;
+    for (const auto &[role, support] : mirrors_support({0.0, 0.0, 1.0}))
+      top = top ? std::max(*top, support) : support;
+    return top;
+  }
+};
+
+// Loads an optical-model file's text; the sha256 entry must match the content.
+[[nodiscard]] inline std::shared_ptr<const StreamModel> load_stream_model(std::string_view text) {
+  auto out = std::make_shared<StreamModel>();
+  try {
+    out->document = json::Parser::parse(text);
+  } catch (const std::runtime_error &error) {
+    throw ModelError(error.what());
+  }
+  if (out->document.kind() != Value::Kind::object)
+    throw ModelError("optical model: expected a JSON object");
+  const Value *sha = out->document.find("sha256");
+  if (sha == nullptr || sha->kind() != Value::Kind::string ||
+      std::get<std::string>(sha->data) != model_hash(text))
+    throw ModelError("optical model content does not match its sha256");
+  out->sha256 = std::get<std::string>(sha->data);
+  out->model = load_model(text);
+  out->has_structure = truthy(&at(at(out->document, "provenance"), "structure"));
+  if (const Value *transmission = out->optics().find("telescope_transmission");
+      transmission != nullptr && transmission->kind() != Value::Kind::null)
+    out->transmission_on_axis = number(at(*transmission, "on_axis"));
+  return out;
+}
+
+// Rotation R with p_telescope = R p_ground for a telescope at zenith theta, azimuth phi
+// (row-major; see ground_to_telescope_rotation in Python).
+[[nodiscard]] inline std::array<double, 9> ground_to_telescope_rotation(double theta_deg,
+                                                                        double phi_deg) {
+  const double theta = theta_deg * (kPi / 180.0), phi = phi_deg * (kPi / 180.0);
+  // M = step(alpha = phi; 0, 1) @ step(beta = -theta; 2, 0) for the row-vector rule; R = M^T.
+  const auto step = [](double angle, int i, int j) {
+    std::array<double, 9> m = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    m[3 * i + i] = m[3 * j + j] = std::cos(angle);
+    m[3 * i + j] = std::sin(angle);
+    m[3 * j + i] = -std::sin(angle);
+    return m;
+  };
+  const auto a = step(phi, 0, 1), b = step(-theta, 2, 0);
+  std::array<double, 9> m{};
+  for (int i = 0; i < 3; ++i)
+    for (int j = 0; j < 3; ++j)
+      m[3 * i + j] = a[3 * i] * b[j] + a[3 * i + 1] * b[3 + j] + a[3 * i + 2] * b[6 + j];
+  std::array<double, 9> r{};
+  for (int i = 0; i < 3; ++i)
+    for (int j = 0; j < 3; ++j)
+      r[3 * i + j] = m[3 * j + i];
+  return r;
+}
+
+[[nodiscard]] inline Vec column(const std::array<double, 9> &r, int j) {
+  return {r[j], r[3 + j], r[6 + j]};
+}
+
+// Height [m] of the ground-frame input plane above the telescope sphere centre.
+[[nodiscard]] inline double minimum_input_plane_height_m(const StreamModel &model, double theta_deg,
+                                                         double phi_deg) {
+  if (!(theta_deg >= 0.0 && theta_deg < 90.0))
+    throw ModelError("telescope zenith angle " + std::string(format_g(theta_deg)) +
+                     " deg must lie in [0, 90)");
+  const Vec normal = column(ground_to_telescope_rotation(theta_deg, phi_deg), 2);
+  std::optional<double> support;
+  for (const Value *obscurer : model.incoming_obscurers()) {
+    const double s = obscurer_support(*obscurer, normal);
+    support = support ? std::max(*support, s) : s;
+  }
+  for (const auto &[role, s] : model.mirrors_support(normal))
+    support = support ? std::max(*support, s) : s;
+  return std::max(0.0, support.value_or(0.0) + dot(normal, model.axes_offset())) +
+         kInputPlaneMarginM;
+}
+
+// The input-plane checks of OpticalModel.trace_bunches (Python): the plane must lie above the
+// incoming obscurers and above the mirrors that photons meet first.
+inline void check_input_plane(const StreamModel &model, const std::array<double, 9> &rotation,
+                              const Vec &offset, double plane_z) {
+  const Vec axes = model.axes_offset();
+  const Vec traced_offset = minus(offset, axes);
+  const Vec normal = column(rotation, 2);
+  const Vec point = {traced_offset[0] + normal[0] * plane_z * 1.0,
+                     traced_offset[1] + normal[1] * plane_z * 1.0,
+                     traced_offset[2] + normal[2] * plane_z * 1.0};
+  const double value = dot(normal, point);
+  if (const auto top = model.incoming_top()) {
+    std::vector<std::tuple<double, double, std::string>> checks;
+    if (normal[2] > 0.0) {
+      for (const Value *obscurer : model.incoming_obscurers())
+        checks.emplace_back(value / normal[2], obscurer_support(*obscurer, normal) / normal[2],
+                            text(at(*obscurer, "name")));
+    } else {
+      checks.emplace_back(-std::numeric_limits<double>::infinity(), top->first, top->second);
+    }
+    for (const auto &[height, obscurer_top, name] : checks)
+      if (height < obscurer_top)
+        throw ModelError("input plane below incoming obscurer '" + name + "': the plane is at " +
+                         format_3f(height) + " m along the telescope axis, but the obscurer " +
+                         "reaches " + format_3f(obscurer_top) +
+                         " m; raise the input plane above it");
+  }
+  for (const auto &[role, mirror_top] : model.mirrors_support(normal))
+    if (value < mirror_top)
+      throw ModelError("input plane below the " + role + " mirror: the plane is at n.p = " +
+                       format_3f(value) + " m but the mirror reaches " + format_3f(mirror_top) +
+                       " m along the input normal; raise the input plane above it");
+}
+
+// ---- Efficiency status ----
+
+[[nodiscard]] inline std::vector<std::string> names_of(const st::Metadata &metadata) {
+  std::vector<std::string> names;
+  const auto found = metadata.find("factors");
+  if (found == metadata.end())
+    return names;
+  std::string text;
+  if (const auto *s = std::get_if<std::string>(&found->second))
+    text = *s;
+  else if (const auto *i = std::get_if<std::int64_t>(&found->second))
+    text = std::to_string(*i);
+  std::size_t start = 0;
+  while (start <= text.size()) {
+    const std::size_t comma = std::min(text.find(',', start), text.size());
+    std::string item = text.substr(start, comma - start);
+    const auto first = item.find_first_not_of(" \t\n\r\f\v");
+    if (first != std::string::npos) {
+      const auto last = item.find_last_not_of(" \t\n\r\f\v");
+      names.push_back(item.substr(first, last - first + 1));
+    }
+    start = comma + 1;
+  }
+  return names;
+}
+
+[[nodiscard]] inline std::string join(const std::vector<std::string> &names) {
+  std::string out;
+  for (std::size_t i = 0; i < names.size(); ++i)
+    out += (i ? "," : "") + names[i];
+  return out;
+}
+
+[[nodiscard]] inline bool contains(const std::vector<std::string> &names, std::string_view name) {
+  return std::find(names.begin(), names.end(), name) != names.end();
+}
+
+// One efficiency status entry; for `envelope`, its envelope table.
+struct Factor {
+  std::string state;
+  std::optional<st::Value> wavelength_nm;
+  std::optional<st::Value> value;
+};
+
+[[nodiscard]] inline std::string value_text(const st::Value &value) {
+  if (const auto *s = std::get_if<std::string>(&value))
+    return *s;
+  if (const auto *i = std::get_if<std::int64_t>(&value))
+    return std::to_string(*i);
+  if (const auto *d = std::get_if<double>(&value))
+    return hash_detail::python_float_repr(*d);
+  return "[...]";
+}
+
+[[nodiscard]] inline std::map<std::string, Factor> factors_of(const st::Metadata &metadata) {
+  std::map<std::string, Factor> factors;
+  for (const auto &name : names_of(metadata)) {
+    Factor factor;
+    const auto state = metadata.find(name + ".state");
+    factor.state = state == metadata.end() ? "pending" : value_text(state->second);
+    if (factor.state != "applied" && factor.state != "envelope" && factor.state != "pending")
+      throw ModelError("efficiency_status factor '" + name + "': unknown state '" + factor.state +
+                       "'");
+    if (const auto w = metadata.find(name + ".wavelength_nm"); w != metadata.end())
+      factor.wavelength_nm = w->second;
+    if (const auto v = metadata.find(name + ".value"); v != metadata.end())
+      factor.value = v->second;
+    factors.insert_or_assign(name, std::move(factor));
+  }
+  return factors;
+}
+
+[[nodiscard]] inline std::vector<double> as_array(const st::Value &value) {
+  if (const auto *v = std::get_if<std::vector<double>>(&value))
+    return *v;
+  if (const auto *d = std::get_if<double>(&value))
+    return {*d};
+  if (const auto *i = std::get_if<std::int64_t>(&value))
+    return {static_cast<double>(*i)};
+  double parsed = 0.0;
+  if (obdeect::stream::parse::finite_number(std::get<std::string>(value), parsed))
+    return {parsed};
+  throw ModelError("could not convert string to float: '" + std::get<std::string>(value) + "'");
+}
+
+struct Envelope {
+  std::vector<double> nodes, values;
+};
+
+[[nodiscard]] inline Envelope envelope_table(const std::string &name, const Factor &factor) {
+  if (!factor.wavelength_nm || !factor.value)
+    throw ModelError("efficiency status factor '" + name + "' is 'envelope' but has no " + name +
+                     ".wavelength_nm and " + name + ".value");
+  Envelope table{as_array(*factor.wavelength_nm), as_array(*factor.value)};
+  bool valid = !table.nodes.empty() && table.nodes.size() == table.values.size();
+  for (std::size_t i = 1; valid && i < table.nodes.size(); ++i)
+    valid = table.nodes[i] - table.nodes[i - 1] > 0.0;
+  for (std::size_t i = 0; valid && i < table.values.size(); ++i)
+    valid = table.values[i] > 0.0;
+  if (!valid)
+    throw ModelError("efficiency_status factor '" + name +
+                     "': the envelope needs increasing wavelengths and positive values of the "
+                     "same length");
+  return table;
+}
+
+// ---- The tracer ----
+
+enum class TransmissionPart { full, angular };
+
+// Optical model of a telescope, with the part of its transmission that the trace applies.
+struct Optics {
+  std::shared_ptr<const StreamModel> model;
+  TransmissionPart part{TransmissionPart::full};
+  double on_axis{};
+  double telescope_plane_m{}; // Input plane of telescope-frame photons.
+  std::string provenance;
+
+  [[nodiscard]] bool normalise() const { return part == TransmissionPart::angular; }
+
+  [[nodiscard]] std::vector<std::string> own_factors() const {
+    if (model->has_structure || model->transmission_on_axis)
+      return {"mirror_reflectivity", "telescope_transmission"};
+    return {"mirror_reflectivity"};
+  }
+};
+
+[[nodiscard]] inline std::shared_ptr<const Optics>
+make_optics(std::shared_ptr<const StreamModel> model, TransmissionPart part,
+            const std::string &version) {
+  auto optics = std::make_shared<Optics>();
+  optics->part = part;
+  if (part == TransmissionPart::angular) {
+    if (!model->transmission_on_axis)
+      throw ModelError("the angular telescope transmission needs a model with "
+                       "telescope_transmission; this model has none");
+    optics->on_axis = *model->transmission_on_axis;
+    if (!(optics->on_axis > 0.0))
+      throw ModelError("the angular telescope transmission needs a positive on-axis value");
+  }
+  std::optional<double> top;
+  if (const auto obscurer = model->incoming_top())
+    top = obscurer->first;
+  if (const auto mirror = model->max_mirror_z())
+    top = top ? std::max(*top, *mirror) : *mirror;
+  optics->telescope_plane_m = top.value_or(0.0) + kInputPlaneMarginM;
+  optics->provenance = "obdeect " + version + " model " + model->sha256;
+  optics->model = std::move(model);
+  return optics;
+}
+
+// The efficiency status record with the factors obdeect applies marked applied.
+[[nodiscard]] inline st::Metadata with_applied(const st::Metadata &metadata, const Optics &optics) {
+  const auto all_names = names_of(metadata);
+  if (optics.normalise() && contains(all_names, kConstantFactor))
+    throw ModelError(std::string("the efficiency status already names ") + kConstantFactor);
+  std::vector<std::string> names;
+  const auto own = optics.own_factors();
+  for (const auto &name : all_names)
+    if (contains(own, name))
+      names.push_back(name);
+  if (names.empty())
+    return metadata;
+  st::Metadata updated = metadata;
+  for (const auto &name : names) {
+    updated[name + ".state"] = std::string("applied");
+    updated[name + ".source"] = optics.provenance;
+  }
+  if (contains(names, "telescope_transmission")) {
+    updated["telescope_transmission.part"] = std::string(optics.normalise() ? "angular" : "full");
+    if (optics.normalise()) {
+      updated[std::string(kConstantFactor) + ".state"] = std::string("pending");
+      updated[std::string(kConstantFactor) + ".value"] = optics.on_axis;
+      auto factors = names_of(updated);
+      factors.emplace_back(kConstantFactor);
+      updated["factors"] = join(factors);
+    }
+  }
+  return updated;
+}
+
+// The efficiency status that marks the factors obdeect applies as applied, merged into an
+// incoming one (each factor named once).
+[[nodiscard]] inline st::Metadata own_status(const Optics &optics,
+                                             const st::Metadata &metadata = {}) {
+  st::Metadata merged = metadata;
+  auto names = names_of(metadata);
+  for (const auto &name : optics.own_factors())
+    if (!contains(names, name))
+      names.push_back(name);
+  merged["factors"] = join(names);
+  return with_applied(merged, optics);
+}
+
+[[nodiscard]] inline std::int64_t int_key(const st::Metadata &metadata, const std::string &key,
+                                          const std::string &record) {
+  const auto found = metadata.find(key);
+  if (found == metadata.end())
+    throw ModelError(record + " record without " + key);
+  if (const auto *i = std::get_if<std::int64_t>(&found->second))
+    return *i;
+  if (const auto *d = std::get_if<double>(&found->second))
+    return static_cast<std::int64_t>(*d);
+  if (const auto *s = std::get_if<std::string>(&found->second)) {
+    std::int64_t value = 0;
+    if (obdeect::stream::parse::integer(*s, value))
+      return value;
+  }
+  throw ModelError(record + " record: " + key + " is not an integer");
+}
+
+[[nodiscard]] inline double float_key(const st::Value &value, const std::string &key) {
+  if (const auto *d = std::get_if<double>(&value))
+    return *d;
+  if (const auto *i = std::get_if<std::int64_t>(&value))
+    return static_cast<double>(*i);
+  if (const auto *s = std::get_if<std::string>(&value)) {
+    double parsed = 0.0;
+    if (obdeect::stream::parse::finite_number(*s, parsed))
+      return parsed;
+  }
+  throw ModelError("run record: " + key + " is not a number");
+}
+
+struct Config {
+  bool roulette{true};
+  std::vector<Envelope> envelopes;
+};
+
+struct Telescope {
+  std::uint32_t id{};
+  bool kept{};
+  std::map<std::string, Factor> factors;
+  std::optional<Config> config;
+  bool photons_seen{};
+  bool status_written{};
+  std::uint64_t out_index{};
+  double weight{};
+};
+
+} // namespace stream_trace_detail
+
+// Settings of one trace-stream run (see `obdeect ray-tracing trace-stream`).
+struct StreamTraceSettings {
+  std::uint64_t seed{};
+  unsigned threads{1};
+  std::optional<std::set<std::uint32_t>> telescopes; // None: all (or all with a model)
+  std::optional<std::pair<double, double>> pointing; // (zenith, azimuth) [deg]
+  stream_trace_detail::TransmissionPart part{stream_trace_detail::TransmissionPart::full};
+  std::string version; // In the producer and provenance strings.
+};
+
+struct StreamTraceCounts {
+  std::uint64_t events{}, photons_in{}, photons_out{};
+};
+
+// Reads the records of one stream and writes the traced records.
+class StreamTracer {
+public:
+  using Optics = stream_trace_detail::Optics;
+
+  // `shared`: one model for every telescope; `per_telescope`: the model of each telescope id.
+  StreamTracer(std::shared_ptr<const Optics> shared,
+               std::map<std::uint32_t, std::shared_ptr<const Optics>> per_telescope,
+               obdeect::stream::Writer &writer, const StreamTraceSettings &settings)
+      : shared_(std::move(shared)), per_telescope_(std::move(per_telescope)), writer_(writer),
+        settings_(settings), pool_(settings.threads) {}
+
+  void handle(const obdeect::stream::Record &record) {
+    using obdeect::stream::RecordType;
+    const RecordType kind = record.type;
+    if (run_status_pending_ && (kind == RecordType::event || kind == RecordType::run_end)) {
+      writer_.write_metadata(RecordType::efficiency_status,
+                             stream_trace_detail::own_status(*shared_));
+      run_status_pending_ = false;
+    }
+    switch (kind) {
+    case RecordType::run:
+      run(record.metadata);
+      break;
+    case RecordType::efficiency_status:
+      efficiency_status(record.metadata);
+      break;
+    case RecordType::event:
+      event(record.metadata);
+      break;
+    case RecordType::telescope:
+      telescope(record.metadata);
+      break;
+    case RecordType::photons:
+      photons(record.chunk);
+      break;
+    case RecordType::telescope_end:
+      telescope_end(record.metadata);
+      break;
+    case RecordType::blob:
+      writer_.write_blob(record.blob_eventio_type, record.blob_eventio_id, record.blob);
+      break;
+    case RecordType::event_end:
+    case RecordType::run_end:
+      writer_.write_metadata(kind, record.metadata);
+      break;
+    case RecordType::stream:
+    case RecordType::stream_end:
+      break;
+    default:
+      throw ModelError(std::string("unexpected photon-stream record '") +
+                       obdeect::stream::record_name(kind) + "'");
+    }
+  }
+
+  [[nodiscard]] const StreamTraceCounts &counts() const { return counts_; }
+
+private:
+  using Metadata = obdeect::stream::Metadata;
+
+  [[nodiscard]] bool per_telescope() const { return !shared_; }
+
+  [[nodiscard]] const Optics &optics(std::uint32_t telescope_id) const {
+    if (shared_)
+      return *shared_;
+    return *per_telescope_.at(telescope_id);
+  }
+
+  void run(const Metadata &metadata) {
+    using namespace stream_trace_detail;
+    run_factors_.clear();
+    law_.reset();
+    if (metadata.count("wavelength_min_nm") && metadata.count("wavelength_max_nm")) {
+      const double lo = float_key(metadata.at("wavelength_min_nm"), "wavelength_min_nm");
+      const double hi = float_key(metadata.at("wavelength_max_nm"), "wavelength_max_nm");
+      // One wavelength: the 1/lambda^2 law over [lo, lo + 1) truncates every draw to floor(lo).
+      law_ = InverseSquareLaw{lo, hi == lo ? lo + 1.0 : hi};
+    }
+    const bool zenith = metadata.count("telescope_pointing_zenith_rad") != 0;
+    const bool azimuth = metadata.count("telescope_pointing_azimuth_rad") != 0;
+    run_pointing_.reset();
+    if (zenith != azimuth)
+      throw ModelError("run record: give both telescope_pointing_zenith_rad and "
+                       "telescope_pointing_azimuth_rad or neither");
+    if (zenith) {
+      const double radians_to_degrees = 180.0 / kPi;
+      run_pointing_ = std::pair{
+          float_key(metadata.at("telescope_pointing_zenith_rad"), "telescope_pointing_zenith_rad") *
+              radians_to_degrees,
+          float_key(metadata.at("telescope_pointing_azimuth_rad"),
+                    "telescope_pointing_azimuth_rad") *
+              radians_to_degrees};
+    }
+    event_.reset();
+    writer_.write_metadata(obdeect::stream::RecordType::run, metadata);
+    run_status_pending_ = !per_telescope();
+  }
+
+  void efficiency_status(const Metadata &metadata) {
+    using namespace stream_trace_detail;
+    if (!telescope_) {
+      for (auto &[name, factor] : factors_of(metadata))
+        run_factors_.insert_or_assign(name, std::move(factor));
+      bool normalise = shared_ && shared_->normalise();
+      for (const auto &[id, optics] : per_telescope_)
+        normalise = normalise || optics->normalise();
+      if (normalise && contains(names_of(metadata), kConstantFactor))
+        throw ModelError(std::string("the efficiency status already names ") + kConstantFactor);
+      writer_.write_metadata(obdeect::stream::RecordType::efficiency_status, metadata);
+      return;
+    }
+    Telescope &telescope = *telescope_;
+    if (telescope.photons_seen)
+      throw ModelError("telescope " + std::to_string(telescope.id) +
+                       ": efficiency_status after its photons");
+    if (!telescope.kept)
+      return;
+    for (auto &[name, factor] : factors_of(metadata))
+      telescope.factors.insert_or_assign(name, std::move(factor));
+    if (per_telescope()) {
+      if (telescope.status_written)
+        throw ModelError("telescope " + std::to_string(telescope.id) +
+                         ": more than one efficiency_status before its photons");
+      write_status(telescope, metadata);
+      return;
+    }
+    writer_.write_metadata(obdeect::stream::RecordType::efficiency_status,
+                           with_applied(metadata, optics(telescope.id)));
+  }
+
+  void event(const Metadata &metadata) {
+    using namespace stream_trace_detail;
+    (void)int_key(metadata, "event_number", "event");
+    event_ = metadata;
+    geometry_.clear();
+    telescope_.reset();
+    next_index_.clear();
+    ++counts_.events;
+    writer_.write_metadata(obdeect::stream::RecordType::event, metadata);
+  }
+
+  void telescope(const Metadata &metadata) {
+    using namespace stream_trace_detail;
+    const auto id = static_cast<std::uint32_t>(int_key(metadata, "telescope_id", "telescope"));
+    Telescope telescope;
+    telescope.id = id;
+    telescope.kept = !settings_.telescopes || settings_.telescopes->count(id) != 0;
+    const auto next = next_index_.find(id);
+    telescope.out_index = next == next_index_.end() ? 0 : next->second;
+    telescope_ = std::move(telescope);
+    if (telescope_->kept) {
+      Metadata out = metadata;
+      out["frame"] = static_cast<std::int64_t>(obdeect::stream::Frame::camera);
+      writer_.write_metadata(obdeect::stream::RecordType::telescope, out);
+    }
+  }
+
+  void write_status(stream_trace_detail::Telescope &telescope, const Metadata &metadata) {
+    writer_.write_metadata(obdeect::stream::RecordType::efficiency_status,
+                           stream_trace_detail::own_status(optics(telescope.id), metadata));
+    telescope.status_written = true;
+  }
+
+  void ensure_status(stream_trace_detail::Telescope &telescope) {
+    if (per_telescope() && !telescope.status_written)
+      write_status(telescope, {});
+  }
+
+  void telescope_end(const Metadata &metadata) {
+    using namespace stream_trace_detail;
+    if (!telescope_ ||
+        int_key(metadata, "telescope_id", "telescope_end") != std::int64_t{telescope_->id})
+      throw ModelError("telescope_end record without its telescope record");
+    Telescope &telescope = *telescope_;
+    if (telescope.kept) {
+      // Applies the efficiency status checks even for a telescope without photons.
+      ensure_status(telescope);
+      (void)config(telescope);
+      Metadata out = metadata;
+      out["photons"] = telescope.weight;
+      writer_.write_metadata(obdeect::stream::RecordType::telescope_end, out);
+      next_index_[telescope.id] = telescope.out_index;
+    }
+    telescope_.reset();
+  }
+
+  const stream_trace_detail::Config &config(stream_trace_detail::Telescope &telescope) {
+    using namespace stream_trace_detail;
+    if (!telescope.config) {
+      std::map<std::string, Factor> factors = run_factors_;
+      for (const auto &[name, factor] : telescope.factors)
+        factors.insert_or_assign(name, factor);
+      Config config;
+      for (const auto &name : optics(telescope.id).own_factors()) {
+        const auto found = factors.find(name);
+        if (found == factors.end() || found->second.state == "pending")
+          continue;
+        if (found->second.state == "applied")
+          throw ModelError("telescope " + std::to_string(telescope.id) +
+                           ": the efficiency status says " + name +
+                           " is already applied; trace-stream applies it in its trace and "
+                           "cannot skip it");
+        config.envelopes.push_back(envelope_table(name, found->second));
+      }
+      config.roulette = config.envelopes.empty();
+      telescope.config = std::move(config);
+    }
+    return *telescope.config;
+  }
+
+  // Rotation and input plane of ground-frame photons for a telescope (cached per event).
+  const std::pair<std::array<double, 9>, double> &ground_geometry(std::uint32_t telescope_id) {
+    using namespace stream_trace_detail;
+    auto found = geometry_.find(telescope_id);
+    if (found == geometry_.end()) {
+      std::pair<double, double> pointing;
+      if (settings_.pointing)
+        pointing = *settings_.pointing;
+      else if (run_pointing_)
+        pointing = *run_pointing_;
+      else
+        throw ModelError("no telescope pointing for ground-frame photons: give "
+                         "--pointing-zenith-deg and --pointing-azimuth-deg, or the run keys "
+                         "telescope_pointing_zenith_rad and telescope_pointing_azimuth_rad");
+      const StreamModel &model = *optics(telescope_id).model;
+      found = geometry_
+                  .emplace(telescope_id,
+                           std::pair{ground_to_telescope_rotation(pointing.first, pointing.second),
+                                     minimum_input_plane_height_m(model, pointing.first,
+                                                                  pointing.second)})
+                  .first;
+    }
+    return found->second;
+  }
+
+  void photons(const obdeect::stream::PhotonChunk &chunk) {
+    using namespace stream_trace_detail;
+    using obdeect::stream::Column;
+    if (!telescope_ || telescope_->id != chunk.telescope_id)
+      throw ModelError("photons of telescope " + std::to_string(chunk.telescope_id) +
+                       " outside their block");
+    Telescope &telescope = *telescope_;
+    if (!telescope.kept)
+      return;
+    if (!event_)
+      throw ModelError("photons outside an event record");
+    telescope.photons_seen = true;
+    if (chunk.has(Column::p))
+      throw ModelError("photon column p (acceptance already applied) is not supported");
+    const std::size_t rows = chunk.rows();
+    if (rows == 0)
+      return;
+    if (chunk.frame != obdeect::stream::Frame::ground &&
+        chunk.frame != obdeect::stream::Frame::telescope)
+      throw ModelError("photon frame " + std::to_string(static_cast<std::uint32_t>(chunk.frame)) +
+                       " is not supported: trace-stream takes ground (1) or telescope (2) photons");
+    ensure_status(telescope);
+    const Config &config = this->config(telescope);
+    const Optics &optics = this->optics(telescope.id);
+    const std::int64_t event_number = int_key(*event_, "event_number", "event");
+
+    // Input bunches on the input plane.
+    const auto &cx_in = chunk[Column::cx];
+    const auto &cy_in = chunk[Column::cy];
+    std::vector<double> cz(rows);
+    bool cz_nan = false, cz_mismatch = false, upward = false;
+    for (std::size_t i = 0; i < rows; ++i) {
+      const double cx = cx_in[i], cy = cy_in[i];
+      const double v = 1.0 - cx * cx - cy * cy;
+      cz[i] = -std::sqrt(std::isnan(v) ? v : std::max(0.0, v));
+      if (chunk.has(Column::cz)) {
+        const double difference = std::abs(static_cast<double>(chunk[Column::cz][i]) - cz[i]);
+        cz_nan = cz_nan || std::isnan(difference);
+        cz_mismatch = cz_mismatch || difference > kCzTolerance;
+      }
+      upward = upward || !(cz[i] < 0.0);
+    }
+    if (cz_mismatch && !cz_nan)
+      throw ModelError("photon column cz does not match cx and cy");
+    if (upward)
+      throw ModelError("photons must move towards -z (downwards)");
+    std::array<double, 9> rotation = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    Vec offset = {0.0, 0.0, 0.0};
+    double plane = 0.0;
+    const bool ground = chunk.frame == obdeect::stream::Frame::ground;
+    if (ground) {
+      if (chunk.has(Column::z))
+        for (const float z : chunk[Column::z])
+          if (z != 0.0F)
+            throw ModelError("ground-frame photons must lie in the plane z = 0");
+      const auto &geometry = ground_geometry(telescope.id);
+      rotation = geometry.first;
+      plane = geometry.second;
+    } else {
+      if (!chunk.has(Column::z))
+        throw ModelError("telescope-frame photons need the column z");
+      plane = optics.telescope_plane_m;
+      // The telescope frame is the frame of trace(): cancel the axes offset that the tracer
+      // subtracts, so that a photon at p is traced at p.
+      offset = optics.model->axes_offset();
+    }
+    if (event_number < 0 || event_number >= (std::int64_t{1} << 32) ||
+        chunk.first_index + rows >= (std::uint64_t{1} << 32))
+      throw ModelError("bunch ids need event numbers and photon indices below 2^32");
+    check_input_plane(*optics.model, rotation, offset, plane);
+    const auto &x_in = chunk[Column::x];
+    const auto &y_in = chunk[Column::y];
+    const auto &t_in = chunk[Column::t];
+    std::vector<float> x(rows), y(rows), time(rows);
+    std::vector<std::uint64_t> bunch_id(rows);
+    for (std::size_t i = 0; i < rows; ++i) {
+      const double z = ground ? 0.0 : static_cast<double>(chunk[Column::z][i]);
+      const double s = (plane - z) / cz[i];
+      x[i] = static_cast<float>(static_cast<double>(x_in[i]) + s * static_cast<double>(cx_in[i]));
+      y[i] = static_cast<float>(static_cast<double>(y_in[i]) + s * static_cast<double>(cy_in[i]));
+      time[i] = static_cast<float>(static_cast<double>(t_in[i]) + s / kSpeedOfLightMPerNs);
+      bunch_id[i] = (static_cast<std::uint64_t>(event_number) << 32) | (chunk.first_index + i);
+    }
+    const std::vector<float> zeros(rows, 0.0F);
+    const auto &zem = chunk.has(Column::zem) ? chunk[Column::zem] : zeros;
+    const auto &wavelength = chunk.has(Column::wavelength) ? chunk[Column::wavelength] : zeros;
+    const BunchBlock block{x.data(),
+                           y.data(),
+                           cx_in.data(),
+                           cy_in.data(),
+                           time.data(),
+                           zem.data(),
+                           chunk[Column::w].data(),
+                           wavelength.data(),
+                           bunch_id.data(),
+                           rows};
+    BunchFrame frame;
+    std::copy(rotation.begin(), rotation.end(), frame.rotation);
+    std::copy(offset.begin(), offset.end(), frame.offset_m);
+    frame.length_unit_m = 1.0;
+    frame.plane_z = plane;
+    BunchOptions options;
+    options.roulette = config.roulette;
+    options.normalise_transmission = optics.normalise();
+    if (law_)
+      options.wavelength_law = &*law_;
+    std::vector<double> position, direction, t_out, weight, wavelength_out;
+    std::vector<std::uint64_t> bunch_index;
+    std::vector<std::uint32_t> sub_photon;
+    const std::size_t traced = trace_bunches(
+        optics.model->model, block, frame, options,
+        RandomKey{settings_.seed, static_cast<std::uint32_t>(event_number), telescope.id}, pool_,
+        [&](std::size_t n) {
+          position.resize(3 * n);
+          direction.resize(3 * n);
+          t_out.resize(n);
+          weight.resize(n);
+          wavelength_out.resize(n);
+          bunch_index.resize(n);
+          sub_photon.resize(n);
+          return BunchResult{position.data(),  direction.data(),      t_out.data(),
+                             weight.data(),    wavelength_out.data(), bunch_index.data(),
+                             sub_photon.data()};
+        });
+    counts_.photons_in += rows;
+
+    // Camera-frame columns.
+    if (!config.envelopes.empty()) {
+      std::vector<double> inverse(traced, 1.0);
+      for (const auto &table : config.envelopes) {
+        if (traced > 0) {
+          const auto [lo, hi] =
+              std::minmax_element(wavelength_out.begin(), wavelength_out.begin() + traced);
+          if (*lo < table.nodes.front() || *hi > table.nodes.back())
+            throw ModelError("photon wavelengths lie outside the efficiency status envelope [" +
+                             format_g(table.nodes.front()) + ", " + format_g(table.nodes.back()) +
+                             "] nm");
+        }
+        for (std::size_t i = 0; i < traced; ++i)
+          inverse[i] /= numpy_interp(wavelength_out[i], table.nodes, table.values);
+      }
+      for (std::size_t i = 0; i < traced; ++i)
+        weight[i] = weight[i] * inverse[i];
+    }
+    const bool with_zem = chunk.has(Column::zem);
+    for (std::size_t start = 0; start < traced; start += obdeect::stream::max_chunk_rows) {
+      const std::size_t n = std::min<std::size_t>(obdeect::stream::max_chunk_rows, traced - start);
+      std::uint32_t mask = 0;
+      for (const Column c : {Column::x, Column::y, Column::cx, Column::cy, Column::cz, Column::t,
+                             Column::w, Column::wavelength})
+        mask |= obdeect::stream::column_bit(c);
+      if (with_zem)
+        mask |= obdeect::stream::column_bit(Column::zem);
+      out_.resize(n, mask);
+      out_.telescope_id = telescope.id;
+      out_.frame = obdeect::stream::Frame::camera;
+      out_.first_index = telescope.out_index;
+      for (std::size_t k = 0; k < n; ++k) {
+        const std::size_t i = start + k;
+        out_[Column::x][k] = static_cast<float>(position[3 * i]);
+        out_[Column::y][k] = static_cast<float>(position[3 * i + 1]);
+        out_[Column::cx][k] = static_cast<float>(direction[3 * i]);
+        out_[Column::cy][k] = static_cast<float>(direction[3 * i + 1]);
+        out_[Column::cz][k] = static_cast<float>(direction[3 * i + 2]);
+        out_[Column::t][k] = static_cast<float>(t_out[i]);
+        out_[Column::w][k] = static_cast<float>(weight[i]);
+        out_[Column::wavelength][k] = static_cast<float>(wavelength_out[i]);
+        if (with_zem)
+          out_[Column::zem][k] = zem[bunch_index[i]];
+      }
+      writer_.write_chunk(out_);
+      telescope.out_index += n;
+      w_.insert(w_.end(), out_[Column::w].begin(), out_[Column::w].end());
+    }
+    telescope.weight += numpy_sum(w_);
+    w_.clear();
+    counts_.photons_out += traced;
+  }
+
+  std::shared_ptr<const Optics> shared_;
+  std::map<std::uint32_t, std::shared_ptr<const Optics>> per_telescope_;
+  obdeect::stream::Writer &writer_;
+  StreamTraceSettings settings_;
+  ThreadPool pool_;
+  std::optional<std::pair<double, double>> run_pointing_;
+  std::map<std::string, stream_trace_detail::Factor> run_factors_;
+  std::optional<InverseSquareLaw> law_;
+  std::optional<Metadata> event_;
+  std::map<std::uint32_t, std::pair<std::array<double, 9>, double>> geometry_;
+  std::optional<stream_trace_detail::Telescope> telescope_;
+  std::map<std::uint32_t, std::uint64_t> next_index_;
+  StreamTraceCounts counts_;
+  bool run_status_pending_{false};
+  obdeect::stream::PhotonChunk out_;
+  std::vector<float> w_;
+};
+
+// Traces a whole stream from `in` to `out`. `shared` is the model of every telescope, or null
+// with `per_telescope` the model of each telescope id. Writes stream_end only after the whole
+// input, so a failed run leaves a stream without it.
+inline StreamTraceCounts trace_stream(
+    std::istream &in, std::ostream &out, std::shared_ptr<const stream_trace_detail::Optics> shared,
+    std::map<std::uint32_t, std::shared_ptr<const stream_trace_detail::Optics>> per_telescope,
+    const StreamTraceSettings &settings) {
+  namespace st = obdeect::stream;
+  st::Reader reader(in);
+  if (settings.telescopes) // Photon chunks of other telescopes are skipped, not decoded.
+    reader.keep_photons_of({settings.telescopes->begin(), settings.telescopes->end()});
+  st::Record record;
+  if (!reader.next(record) || record.type != st::RecordType::stream)
+    throw ModelError("input is not a photon stream");
+  std::string producer;
+  if (const auto found = record.metadata.find("producer"); found != record.metadata.end())
+    producer = stream_trace_detail::value_text(found->second);
+  st::Writer writer(out, producer.empty() ? "obdeect " + settings.version
+                                          : producer + "; obdeect " + settings.version);
+  StreamTracer tracer(std::move(shared), std::move(per_telescope), writer, settings);
+  while (reader.next(record))
+    tracer.handle(record);
+  if (!reader.ended())
+    throw std::runtime_error("truncated photon stream (no stream_end record)");
+  writer.finish();
+  return tracer.counts();
+}
+
+} // namespace obdeect::ray_tracing
