@@ -41,11 +41,12 @@ if(NOT TARGET obdeect::stream)
 endif()
 
 # Header-only, standard-library-only core.
+find_package(Threads REQUIRED)
 add_library(obdeect_ray_tracing_core INTERFACE)
 target_include_directories(obdeect_ray_tracing_core INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/cpp/include)
 target_compile_features(obdeect_ray_tracing_core INTERFACE cxx_std_20)
 # Philox core shared with the other components.
-target_link_libraries(obdeect_ray_tracing_core INTERFACE obdeect::stream)
+target_link_libraries(obdeect_ray_tracing_core INTERFACE obdeect::stream Threads::Threads)
 # Identical floating-point results for any thread count and block size on one
 # platform: no implicit fused multiply-add contraction. Transcendental functions
 # come from the platform's math library, so results may differ between

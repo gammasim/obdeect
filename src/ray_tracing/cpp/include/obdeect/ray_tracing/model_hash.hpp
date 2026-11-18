@@ -7,6 +7,7 @@
 // Python's repr, strings with Python's escapes. Standard library only.
 
 #include "obdeect/ray_tracing/model.hpp"
+#include "obdeect/stream/parse.hpp"
 
 #include <algorithm>
 #include <array>
@@ -353,8 +354,8 @@ private:
     if (integer)
       return token == "-0" ? "0" : std::string(token);
     double value = 0.0;
-    const auto result = std::from_chars(token.data(), token.data() + token.size(), value);
-    if (result.ec != std::errc{} || !std::isfinite(value))
+    // Floating-point from_chars is missing in some standard libraries (Apple libc++).
+    if (!stream::parse::finite_number(token, value))
       fail("number out of range");
     return python_float_repr(value);
   }
