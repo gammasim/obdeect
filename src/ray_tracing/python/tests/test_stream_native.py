@@ -291,3 +291,25 @@ def test_model_hash_is_checked(native, models, tmp_path):
     )
     assert result.returncode == 1
     assert "does not match its sha256" in result.stderr
+
+
+def test_data_after_stream_end_is_rejected(native, models, tmp_path):
+    source = write_stream(tmp_path / "in.pst", {1: beam(20, (0.0, 0.0))})
+    with open(source, "ab") as stream:
+        stream.write(b"\x00trailing")
+    with pytest.raises(Exception):
+        trace_stream(models["segmented"][0], source, tmp_path / "python.pst", seed=SEED)
+    out = tmp_path / "native.pst"
+    argv = _native_argv(
+        native,
+        [str(models["segmented"][1])],
+        source,
+        out,
+        telescopes=None,
+        pointing=(0.0, 0.0),
+        transmission="full",
+        threads=1,
+    )
+    result = subprocess.run(argv, capture_output=True, text=True, check=False)
+    assert result.returncode == 1
+    assert "data after stream_end" in result.stderr

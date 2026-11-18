@@ -1073,8 +1073,10 @@ private:
       // subtracts, so that a photon at p is traced at p.
       offset = optics.model->axes_offset();
     }
+    // first_index + rows >= 2^32, tested without overflowing the sum.
+    constexpr std::uint64_t index_limit = std::uint64_t{1} << 32;
     if (event_number < 0 || event_number >= (std::int64_t{1} << 32) ||
-        chunk.first_index + rows >= (std::uint64_t{1} << 32))
+        chunk.first_index >= index_limit || rows >= index_limit - chunk.first_index)
       throw ModelError("bunch ids need event numbers and photon indices below 2^32");
     check_input_plane(*optics.model, rotation, offset, plane);
     const auto &x_in = chunk[Column::x];
@@ -1228,6 +1230,8 @@ inline StreamTraceCounts trace_stream(
     tracer.handle(record);
   if (!reader.ended())
     throw std::runtime_error("truncated photon stream (no stream_end record)");
+  if (!reader.at_clean_end())
+    throw std::runtime_error("data after stream_end");
   writer.finish();
   return tracer.counts();
 }
