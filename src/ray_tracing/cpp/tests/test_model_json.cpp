@@ -172,10 +172,19 @@ void decimal_comma_locale() {
   CHECK(std::get<double>(numbers[3].data) == 0.1);
 }
 
+// A repeated key keeps its last value, as in Python's json.loads (the model hash relies on it).
+void duplicate_keys_keep_the_last_value() {
+  const auto value = json::Parser::parse(R"({"a": 1, "b": 2, "a": 3})");
+  const auto *a = value.find("a");
+  CHECK(a != nullptr && std::get<double>(a->data) == 3.0);
+  CHECK(std::get<json::Value::Object>(value.data).names.size() == 2);
+}
+
 } // namespace
 
 void all_tests() {
   decimal_comma_locale();
+  duplicate_keys_keep_the_last_value();
   const auto model = load_model(kValid);
   CHECK(model.primary.facets.size() == 1);
   CHECK_NEAR(model.primary.facets[0].half_width, 0.6, 0.0);

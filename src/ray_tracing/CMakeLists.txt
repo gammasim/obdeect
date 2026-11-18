@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.20)
 project(obdeect_ray_tracing LANGUAGES CXX)
 
 option(OBDEECT_RAY_TRACING_BUILD_TESTING "Build the C++ tests" ON)
+option(OBDEECT_RAY_TRACING_BUILD_TOOLS "Build the native trace-stream program" ON)
 if(DEFINED SKBUILD_PLATLIB_DIR)
   set(OBDEECT_RAY_TRACING_BUILD_PYTHON_API_DEFAULT ON)
 else()
@@ -40,11 +41,12 @@ if(NOT TARGET obdeect::stream)
 endif()
 
 # Header-only, standard-library-only core.
+find_package(Threads REQUIRED)
 add_library(obdeect_ray_tracing_core INTERFACE)
 target_include_directories(obdeect_ray_tracing_core INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/cpp/include)
 target_compile_features(obdeect_ray_tracing_core INTERFACE cxx_std_20)
 # Philox core shared with the other components.
-target_link_libraries(obdeect_ray_tracing_core INTERFACE obdeect::stream)
+target_link_libraries(obdeect_ray_tracing_core INTERFACE obdeect::stream Threads::Threads)
 # Identical floating-point results for any thread count and block size on one
 # platform: no implicit fused multiply-add contraction. Transcendental functions
 # come from the platform's math library, so results may differ between
@@ -87,9 +89,24 @@ if(OBDEECT_RAY_TRACING_BUILD_PYTHON_API)
   install(TARGETS _core LIBRARY DESTINATION obdeect/ray_tracing)
 endif()
 
+if(OBDEECT_RAY_TRACING_BUILD_TOOLS)
+  add_executable(obdeect-ray-tracing-trace-stream cpp/tools/trace_stream.cpp)
+  target_link_libraries(obdeect-ray-tracing-trace-stream PRIVATE obdeect_ray_tracing_core)
+  obdeect_ray_tracing_enable_warnings(obdeect-ray-tracing-trace-stream)
+  if(OBDEECT_RAY_TRACING_BUILD_TESTING)
+    add_test(NAME trace_stream_version COMMAND obdeect-ray-tracing-trace-stream --version)
+    set_tests_properties(trace_stream_version PROPERTIES PASS_REGULAR_EXPRESSION
+      "^obdeect ray-tracing trace-stream [0-9]+\\.[0-9]+\\.[0-9]+ \\(photon-stream format [0-9]+\\.[0-9]+\\)")
+  endif()
+  # Wheels: inside the package, run through `obdeect ray-tracing trace-stream`.
+  if(DEFINED SKBUILD_PLATLIB_DIR)
+    install(TARGETS obdeect-ray-tracing-trace-stream RUNTIME DESTINATION obdeect/ray_tracing/bin)
+  endif()
+endif()
+
 if(OBDEECT_RAY_TRACING_BUILD_TESTING)
   enable_testing()
-  foreach(name kernels trace model_json bounds)
+  foreach(name kernels trace model_json bounds model_hash)
     add_executable(test_${name} cpp/tests/test_${name}.cpp)
     target_link_libraries(test_${name} PRIVATE obdeect_ray_tracing_core)
     # check.hpp lives with the stream tests; tests are built from the repository only, never from an sdist.

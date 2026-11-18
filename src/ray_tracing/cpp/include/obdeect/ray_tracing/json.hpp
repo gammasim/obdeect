@@ -1,6 +1,7 @@
 #pragma once
 
 #include "obdeect/stream/parse.hpp"
+#include <algorithm>
 #include <cctype>
 #include <charconv>
 #include <cmath>
@@ -190,8 +191,15 @@ private:
         space();
         expect(':');
         space();
-        members.names.push_back(std::move(key));
-        members.values.push_back(value(depth + 1));
+        Value item = value(depth + 1);
+        // Later duplicates replace earlier ones, as in Python's json.loads.
+        const auto found = std::find(members.names.begin(), members.names.end(), key);
+        if (found != members.names.end()) {
+          members.values[static_cast<std::size_t>(found - members.names.begin())] = std::move(item);
+        } else {
+          members.names.push_back(std::move(key));
+          members.values.push_back(std::move(item));
+        }
         space();
       } while (take(','));
       expect('}');

@@ -17,6 +17,12 @@ loaded once. The photons of a telescope do not depend on the other telescopes tr
 Records pass through; telescopes not listed in `--telescopes` are dropped. A summary (events,
 photons in and out) goes to standard error. `-` (the default) is standard input or output.
 
+The command runs a native program (`obdeect-ray-tracing-trace-stream`, C++), like the other
+stream stages. It writes the same stream as the Python function
+`obdeect.ray_tracing.stream.trace_stream`, bit for bit; only the version in the producer and
+provenance strings can differ between a development build and the Python package. Like the
+Python loader, it rejects a model file whose content does not match its `sha256`.
+
 ## Input frames
 
 | Frame | Photons | Requirements |
