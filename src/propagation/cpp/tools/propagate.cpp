@@ -5,6 +5,7 @@
 #include "obdeect/propagation/propagator.hpp"
 #include "obdeect/stream/cli.hpp"
 #include "obdeect/stream/parse.hpp"
+#include "obdeect/stream/stdin_buffer.hpp"
 
 using namespace obdeect::propagation;
 
@@ -311,8 +312,10 @@ int main(int argc, char **argv) {
               throw std::runtime_error("cannot open output stream: " + output);
             }
           }
-          std::istream &in = input == "-" ? static_cast<std::istream &>(std::cin)
-                                          : static_cast<std::istream &>(in_file);
+          // std::cin is read one character at a time by libc++ once sync_with_stdio is off.
+          obdeect::stream::StdinBuffer stdin_buffer;
+          std::istream stdin_stream(&stdin_buffer);
+          std::istream &in = input == "-" ? stdin_stream : static_cast<std::istream &>(in_file);
           std::ostream &out = output == "-" ? static_cast<std::ostream &>(std::cout)
                                             : static_cast<std::ostream &>(out_file);
           const PropagationSummary summary = propagate_stream(in, out, std::move(config));
