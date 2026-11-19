@@ -1,6 +1,7 @@
 # Scope and limitations
 
-The trace stops at the camera entrance. The effects below are outside it. Their impact
+The trace ends at the focal surface. A camera window can optionally be included in the
+optical model; effects not represented there remain outside the trace. Their impact
 depends on the instrument and its model parameters.
 
 ## Misalignment of aspheric (dual-mirror) mirrors
@@ -19,12 +20,9 @@ comparisons, see [Validation](VALIDATION.md).
 
 ## Curvature and refraction of the camera window (LST and others)
 
-A camera window is a transparent plate, flat or curved, in front of the pixels. Refraction
-in it shifts each photon sideways, moves the focus backwards and delays the photon. A curved
-window also acts as a weak lens.
-
-The window and its transmission belong to the downstream camera simulation; window geometry
-and refraction are not traced.
+A camera window is a transparent plate, flat or curved, in front of the pixels. The optical
+model can trace refraction at both surfaces, Fresnel loss, bulk transmittance and added flight
+time. The rim and flange absorb photons. See [Optical elements](optical-elements.md).
 
 **Size of the effects** for a flat plate of thickness t and refractive index n (PMMA n = 1.49
 as an example; take each camera window's thickness from the camera documentation):
@@ -42,11 +40,10 @@ n_g ≈ 1.5. The mean incidence angle on the LST focal plane is 16 deg
 of uniform thickness t and radius of curvature R has optical power of order (n - 1) t / R²: a
 focal length of kilometres for millimetres and metres, negligible against 28 m.
 
-The focus shift is the only one that is not negligible. It belongs with the camera position:
-`focus_offset` (6.55 cm for the LST) was tuned to a measured PSF, so the window is already
-included. Adding the window to the ray tracing would count it twice unless `focus_offset` were
-re-derived at the same time. The origin of each telescope's `focus_offset` must be audited
-before any window refraction is added.
+The focus shift is the only effect in the table that is not negligible. The interplay with
+`focus_offset` is being studied: it was tuned to the measured PSF without a traced window, and
+a curved shell changes focus differently across the field. The 5 mm row gives representative
+LST-scale values; the actual result depends on the window shape and ray incidence.
 
 ## Other effects not traced
 

@@ -43,6 +43,7 @@ MODEL_FORMAT = "obdeect.optical-model.v2"
 # Structure table (masts, quadrupods, dish frame); see docs/optical-elements.md#telescope-structure.
 STRUCTURE_PARAMETER = "telescope_structure"
 ALL_LEGS = ["incoming", "after_primary", "after_secondary"]
+REFRACTIVE_INDEX_RANGE = (1.0, 3.0)  # Plausible bounds for a window material.
 
 
 class _Parameters:
@@ -216,6 +217,18 @@ def _sampling(p: _Parameters, optics: dict[str, Any]) -> dict[str, float]:
             heights.append(mirror["asphere"]["vertex_z_m"])
     if "asphere" in optics["focal_surface"]:
         heights.append(optics["focal_surface"]["asphere"]["vertex_z_m"])
+    if "camera_window" in optics:
+        window = optics["camera_window"]
+        heights.append(window["outer_apex_z_m"])
+        if window["shape"] == "flat":
+            heights.append(window["outer_apex_z_m"] + window["thickness_m"])
+        else:
+            radius = window["radius_of_curvature_m"]
+            aperture = window["aperture_radius_m"]
+            centre_z = window["outer_apex_z_m"] + radius
+            heights.append(centre_z - math.sqrt(radius**2 - aperture**2))
+            inner_radius = radius - window["thickness_m"]
+            heights.append(centre_z - math.sqrt(inner_radius**2 - aperture**2))
     for obscurer in optics["obscurers"]:
         for key in ("start_m", "end_m", "centre_m"):
             if key in obscurer:
@@ -237,6 +250,8 @@ def model_hash(model: dict[str, Any]) -> str:
 
 def _surface_ids(optics: dict[str, Any]) -> list[int]:
     ids = [optics["focal_surface"]["id"]]
+    if "camera_window" in optics:
+        ids.append(optics["camera_window"]["id"])
     for role in ("primary", "secondary"):
         mirror = optics.get(role)
         if not mirror:
@@ -289,14 +304,112 @@ def _segmented_telescope(p: _Parameters, seed: int, zenith_deg: float | None) ->
             contents, filename, options = _file_args(p, name)
             primary["degradation"] = read_spatial_map(contents, filename, filename_options=options)
     focus = _focus_offset(p, zenith_deg)
+    focal_plane_z = focal_length + focus - overall_offset
+    camera_window = _camera_window(
+        p,
+        surface_id=len(facets) + 1,
+        focal_plane_z_m=focal_plane_z,
+        highest_primary_z_m=max(f["centre_m"][2] for f in facets),
+    )
     obscurers = _camera_body(p, focal_length - overall_offset, after_primary=False)
-    return {
+    optics = {
         "primary": primary,
         "secondary": None,
         "secondary_blocks_incoming": False,
-        "focal_surface": {"id": len(facets), "plane_z_m": focal_length + focus - overall_offset},
+        "focal_surface": {"id": len(facets), "plane_z_m": focal_plane_z},
         "obscurers": obscurers,
     }
+    if camera_window is not None:
+        optics["camera_window"] = camera_window
+    return optics
+
+
+def _camera_window(
+    p: _Parameters, *, surface_id: int, focal_plane_z_m: float, highest_primary_z_m: float
+) -> dict[str, Any] | None:
+    """Compile optional camera-window parameters and optical response tables."""
+    name = "camera_window_parameters"
+    if name not in p:
+        return None
+    parameters = p.value(name)
+    if not isinstance(parameters, dict):
+        raise ModelError(f"{name} must be a mapping")
+    p.used.add(name)
+
+    shape = parameters.get("shape")
+    if shape not in ("flat", "sphere"):
+        raise ModelError(f"{name}: unsupported shape {shape!r}")
+
+    def positive(key: str) -> float:
+        value = number(parameters.get(key), f"{name}.{key}")
+        if value <= 0.0:
+            raise ModelError(f"{name}.{key} must be positive")
+        return value * 0.01  # Input lengths are cm.
+
+    thickness_m = positive("thickness_cm")
+    aperture_diameter_m = positive("aperture_diameter_cm")
+    outer_diameter_m = positive("outer_diameter_cm")
+    flange_offset_m = number(parameters.get("flange_offset_cm"), f"{name}.flange_offset_cm") * 0.01
+    if flange_offset_m < 0.0:
+        raise ModelError(f"{name}.flange_offset_cm must be non-negative")
+    aperture_radius_m = aperture_diameter_m / 2.0
+    outer_radius_m = outer_diameter_m / 2.0
+    if aperture_diameter_m > outer_diameter_m:
+        raise ModelError(f"{name}: aperture diameter exceeds outer diameter")
+
+    window: dict[str, Any] = {
+        "id": surface_id,
+        "shape": shape,
+        "thickness_m": thickness_m,
+        "aperture_radius_m": aperture_radius_m,
+        "outer_radius_m": outer_radius_m,
+    }
+    sag_m = 0.0
+    if shape == "sphere":
+        radius_cm = parameters.get("radius_of_curvature_cm")
+        if radius_cm is None:
+            raise ModelError(f"{name}: sphere requires radius_of_curvature_cm")
+        radius_m = number(radius_cm, f"{name}.radius_of_curvature_cm") * 0.01
+        if radius_m <= 0.0 or aperture_radius_m > radius_m:
+            raise ModelError(f"{name}: invalid radius of curvature")
+        if aperture_radius_m > radius_m - thickness_m:
+            raise ModelError(f"{name}: aperture exceeds the inner surface radius")
+        sag_m = radius_m - math.sqrt(radius_m * radius_m - aperture_radius_m * aperture_radius_m)
+        window["radius_of_curvature_m"] = radius_m
+    distance_budget_m = focal_plane_z_m - highest_primary_z_m - flange_offset_m
+    if sag_m >= distance_budget_m:
+        raise ModelError(f"{name}: sag must be less than the available distance budget")
+    window["outer_apex_z_m"] = focal_plane_z_m - flange_offset_m - sag_m
+
+    refractive_name = "camera_window_refractive_index"
+    transmittance_name = "camera_window_internal_transmittance"
+    if not p.has_file(refractive_name):
+        raise ModelError(f"{name} requires {refractive_name} table")
+    if not p.has_file(transmittance_name):
+        raise ModelError(f"{name} requires {transmittance_name} table")
+    refractive_contents, refractive_options = p.file(refractive_name)
+    refractive = response_grid(
+        read_response(
+            refractive_contents,
+            refractive_name,
+            "refractive_index",
+            filename_options=refractive_options,
+            value_range=REFRACTIVE_INDEX_RANGE,
+        ),
+        value_range=REFRACTIVE_INDEX_RANGE,
+    )
+    transmittance_contents, transmittance_options = p.file(transmittance_name)
+    transmittance = response_grid(
+        read_response(
+            transmittance_contents,
+            transmittance_name,
+            "transmittance",
+            filename_options=transmittance_options,
+        )
+    )
+    window["refractive_index"] = refractive
+    window["internal_transmittance"] = transmittance
+    return window
 
 
 def _file_args(p: _Parameters, name: str) -> tuple[str, str, str]:
@@ -563,8 +676,13 @@ def _response_json(contents: str, name: str, options: str, factor: float) -> str
     )
 
 
-def response_grid(table: dict[str, Any], factor: float = 1.0) -> dict[str, Any]:
-    """Resample a response table onto a 1 nm wavelength grid.
+def response_grid(
+    table: dict[str, Any],
+    factor: float = 1.0,
+    *,
+    value_range: tuple[float, float] = (0.0, 1.0),
+) -> dict[str, Any]:
+    """Resample a response table onto a 1 nm wavelength grid, clipped to ``value_range``.
 
     1-D tables use their declared RPOL interpolation; 2-D tables are bilinear.
     """
@@ -582,7 +700,7 @@ def response_grid(table: dict[str, Any], factor: float = 1.0) -> dict[str, Any]:
         "wavelength_min_nm": grid[0],
         "wavelength_step_nm": 1.0,
         "incidence_deg": list(y) or [0.0],
-        "values": [[min(1.0, max(0.0, v)) for v in row] for row in rows],
+        "values": [[min(value_range[1], max(value_range[0], v)) for v in row] for row in rows],
     }
 
 
