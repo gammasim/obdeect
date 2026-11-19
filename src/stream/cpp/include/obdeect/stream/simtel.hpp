@@ -21,7 +21,9 @@
 // receiving run needs Bypass_Optics=1. The camera rotation is not used.
 //
 // Telescopes with C photons get z = 0 in TELPOS (1201), because their photons
-// are already at the camera. Ground-frame telescopes keep their height.
+// are already at the camera. Ground-frame telescopes keep their height. With
+// keep_telpos_height (obdeect stream to-simtel --keep-telpos-height) the TELPOS block is
+// written unchanged, for array runs where sim_telarray needs the real heights.
 //
 // A telescope is either listed in the camera map (camera-frame or telescope-frame
 // photons) or ground-frame (not listed). Mixing ground frame with the others, or camera
@@ -554,7 +556,8 @@ struct SimtelOptions {
   std::optional<AtmosphereTable> atmprof; // atmospheric table (ATMPROF block), see the file comment
   std::ostream *warnings{nullptr};        // reports synthesised headers; null: silent
   std::set<std::string> allow_pending;    // efficiency_status factors accepted as they are
-  std::set<std::string> scaled; // efficiency_status factors whose camera table holds f/f_env
+  std::set<std::string> scaled;   // efficiency_status factors whose camera table holds f/f_env
+  bool keep_telpos_height{false}; // TELPOS z of camera-map telescopes kept (not set to 0)
 };
 
 // Writes a photon stream as sim_telarray input (EventIO, normal mode: one 1204
@@ -568,7 +571,7 @@ public:
   PsToSimtel(std::ostream &out, SimtelOptions options)
       : writer_{out}, camera_{std::move(options.camera)}, atmprof_{std::move(options.atmprof)},
         warnings_{options.warnings}, allow_pending_{std::move(options.allow_pending)},
-        scaled_{std::move(options.scaled)} {
+        scaled_{std::move(options.scaled)}, keep_telpos_height_{options.keep_telpos_height} {
     for (const auto &[id, telescope] : camera_) {
       if (id == 0) {
         throw std::invalid_argument("camera map telescope id must be at least 1");
@@ -719,12 +722,16 @@ private:
             throw std::runtime_error("camera map telescope " + std::to_string(entry.first) +
                                      " is not in the TELPOS block");
           }
-          pos.z[entry.first - 1] = 0.0;
+          if (!keep_telpos_height_) {
+            pos.z[entry.first - 1] = 0.0;
+          }
         }
-        Record zeroed = record;
-        zeroed.blob = simtel_detail::block_bytes(make_telpos_block(pos));
-        write_telpos(zeroed);
-        return;
+        if (!keep_telpos_height_) {
+          Record zeroed = record;
+          zeroed.blob = simtel_detail::block_bytes(make_telpos_block(pos));
+          write_telpos(zeroed);
+          return;
+        }
       }
       write_telpos(record);
       return;
@@ -1100,6 +1107,7 @@ private:
   bool have_evte_{};
   std::set<std::string> allow_pending_;
   std::set<std::string> scaled_;
+  bool keep_telpos_height_{};
   std::vector<Metadata> run_efficiency_statuses_;
   std::vector<Metadata> telescope_efficiency_statuses_;
   bool telescope_open_{};

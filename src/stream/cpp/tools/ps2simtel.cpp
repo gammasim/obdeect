@@ -20,7 +20,8 @@ constexpr std::size_t buffer_size = std::size_t{1} << 20;
 void usage() {
   std::fprintf(stderr, "usage: obdeect stream to-simtel [--camera-map FILE] [--atmprof FILE] "
                        "[--allow-pending FACTOR]... [--allow-pending-atmosphere] "
-                       "[--scaled-factor FACTOR]... [-o FILE|-] [input|-]\n");
+                       "[--scaled-factor FACTOR]... [--keep-telpos-height] "
+                       "[-o FILE|-] [input|-]\n");
 }
 
 } // namespace
@@ -35,6 +36,7 @@ int main(int argc, char **argv) {
     std::string atmprof_path;
     std::set<std::string> allow_pending;
     std::set<std::string> scaled;
+    bool keep_telpos_height = false;
     bool have_input = false;
     std::string arg;
     while (args.next(arg)) {
@@ -50,6 +52,8 @@ int main(int argc, char **argv) {
         allow_pending.insert("atmosphere");
       } else if (arg == "--scaled-factor") {
         scaled.insert(args.value(arg));
+      } else if (arg == "--keep-telpos-height") {
+        keep_telpos_height = true;
       } else if (arg == "--atmprof") {
         atmprof_path = args.value(arg);
       } else if (arg == "--camera-map") {
@@ -68,6 +72,7 @@ int main(int argc, char **argv) {
     options.warnings = &std::cerr;
     options.allow_pending = std::move(allow_pending);
     options.scaled = std::move(scaled);
+    options.keep_telpos_height = keep_telpos_height;
     if (!camera_path.empty()) {
       std::ifstream map_file(camera_path);
       if (!map_file) {

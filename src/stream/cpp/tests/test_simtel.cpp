@@ -405,6 +405,50 @@ std::string run_adapter_with(const std::vector<Record> &records, SimtelOptions o
   return out.str();
 }
 
+// keep_telpos_height (--keep-telpos-height): TELPOS written unchanged, the check stays.
+void test_telpos_height_kept_with_option() {
+  const CameraMap camera{{1, CameraTelescope{1, 0.0}}};
+  const std::vector<Record> records = {
+      record_of(RecordType::run, light_source_run()),
+      blob_of(telpos_block({2000.0, 2100.0})),
+      record_of(RecordType::event, Metadata{{"event_number", std::int64_t{1}}}),
+      record_of(RecordType::telescope,
+                Metadata{{"telescope_id", std::int64_t{1}}, {"array_index", std::int64_t{0}}}),
+      photons_of(chunk_of(1, Frame::camera, {0.5}, {0.2}, {0.1}, {-0.2})),
+      record_of(RecordType::telescope_end, Metadata{{"telescope_id", std::int64_t{1}}}),
+      record_of(RecordType::event_end),
+      record_of(RecordType::run_end),
+  };
+  SimtelOptions options;
+  options.camera = camera;
+  options.keep_telpos_height = true;
+  const std::vector<EventioBlock> blocks = read_blocks(run_adapter_with(records, options));
+  bool checked = false;
+  for (const EventioBlock &block : blocks) {
+    if (block.type == iact::telpos) {
+      const TelPos pos = decode_telpos(block);
+      CHECK(pos.z.size() == 2);
+      if (pos.z.size() == 2) {
+        CHECK_NEAR(pos.z[0], 2000.0, 1e-3); // camera-frame telescope 1 keeps its height
+        CHECK_NEAR(pos.z[1], 2100.0, 1e-3);
+      }
+      checked = true;
+      break;
+    }
+  }
+  CHECK(checked);
+
+  // A camera-map telescope missing from the TELPOS block is still an error.
+  SimtelOptions missing_options;
+  missing_options.camera = CameraMap{{3, CameraTelescope{1, 0.0}}};
+  missing_options.keep_telpos_height = true;
+  const std::vector<Record> missing = {
+      record_of(RecordType::run, light_source_run()),
+      blob_of(telpos_block({2000.0, 2100.0})),
+  };
+  CHECK(throws_error([&] { run_adapter_with(missing, missing_options); }));
+}
+
 // Telescope-frame chunk: emission points x y z [m], direction cx cy (cz below, or none),
 // times t [ns]; w = 1.
 PhotonChunk telescope_chunk(std::uint32_t telescope, const std::vector<double> &x,
@@ -1253,6 +1297,7 @@ int main() {
     test_camera_conversion();
     test_camera_frame_through_adapter();
     test_telpos_zeroed_for_camera_only();
+    test_telpos_height_kept_with_option();
     test_telescope_frame_through_adapter();
     test_telescope_frame_report_and_telpos();
     test_telescope_frame_rejected();
