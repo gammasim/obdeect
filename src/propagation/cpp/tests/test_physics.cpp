@@ -246,7 +246,8 @@ void test_zero_index_limit() {
 void test_extinction_gradient() {
   // tau is linear in log10(height) between the table heights and 0 at H2.
   const obdeect::propagation::TransmissionTable table(
-      "# H2= 2.000, H1= 3.000 4.000 5.000\n400 0.1 0.2 0.3\n401 0.1 0.2 0.3\n", 2000.0);
+      "# H2= 2.000, H1= 3.000 4.000 5.000\n400 0.1 0.2 0.3\n401 0.1 0.2 0.3\n", 2000.0,
+      obdeect::propagation::WavelengthInterpolation::floor);
   const double cz = 0.6, cx = 0.8;
   const double airmass = obdeect::propagation::airmass<double>(cx, 0.0);
   CHECK_NEAR(airmass, 1. / cz, 1e-14);
@@ -326,7 +327,9 @@ void test_public_argument_validation() {
   CHECK(throws_invalid([&] { (void)obdeect::propagation::airmass<double>(1.1, 0.); }));
   CHECK(throws_invalid([&] { (void)obdeect::propagation::airmass<double>(nan, 0.); }));
   CHECK(obdeect::propagation::airmass<double>(1., 0.) == obdeect::propagation::unlimited_airmass);
-  const obdeect::propagation::TransmissionTable open("# H2= 2.000, H1= 3.000\n400 0.5\n", 2000.);
+  const obdeect::propagation::TransmissionTable open(
+      "# H2= 2.000, H1= 3.000\n400 0.5\n", 2000.,
+      obdeect::propagation::WavelengthInterpolation::floor);
   CHECK(throws_invalid([&] { (void)open.transmission<double>(1500., nan, 1.); }));
   CHECK(obdeect::propagation::table_wavelength(400.5) == 400); // floor
   CHECK(throws_invalid([&] { (void)obdeect::propagation::table_wavelength(-1.); }));
@@ -346,7 +349,8 @@ void test_etadsn() {
 
 void test_table_header_comments() {
   const obdeect::propagation::TransmissionTable table(
-      "# H2= 2.000, H1= 3.000 4.000 # heights\n400 0.1 0.2 # first row\n401 0.1 0.2\n", 2000.0);
+      "# H2= 2.000, H1= 3.000 4.000 # heights\n400 0.1 0.2 # first row\n401 0.1 0.2\n", 2000.0,
+      obdeect::propagation::WavelengthInterpolation::floor);
   CHECK(table.last_wavelength_nm() == 401);
   // At most 100 heights including H2.
   std::string header = "# H2= 2.000, H1=", row = "400";
@@ -354,8 +358,10 @@ void test_table_header_comments() {
     header += " " + std::to_string(2.0 + 0.1 * i);
     row += " 0.5";
   }
-  CHECK(throws_invalid(
-      [&] { obdeect::propagation::TransmissionTable(header + "\n" + row + "\n", 2000.0); }));
+  CHECK(throws_invalid([&] {
+    obdeect::propagation::TransmissionTable(header + "\n" + row + "\n", 2000.0,
+                                            obdeect::propagation::WavelengthInterpolation::floor);
+  }));
   CHECK_NEAR(table.optical_depth<double>(400., 4000.), 0.2, 1e-14);
 }
 

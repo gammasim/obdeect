@@ -49,6 +49,19 @@ struct CurvedRayIntegrals {
   double excess_straight_ns{};
 };
 
+// Integrals of the profile with n-1 scaled by k (phase) and the group index by k_group
+// (dispersion), from the integrals of the unscaled profile, first order in the scale:
+//   shift_m            = k shift_m
+//   excess_bent_ns     = k excess_bent_ns + (k_group - k) excess_straight_ns
+//   excess_straight_ns = k_group excess_straight_ns
+// Exact at k = k_group = 1. See CurvedRefractionTables::lookup_scaled.
+inline void scale_ray_integrals(CurvedRayIntegrals &v, double k, double k_group) noexcept {
+  const double straight = v.excess_straight_ns;
+  v.shift_m = k * v.shift_m;
+  v.excess_bent_ns = k * v.excess_bent_ns + (k_group - k) * straight;
+  v.excess_straight_ns = k_group * straight;
+}
+
 namespace detail {
 
 // 8-point Gauss-Legendre nodes and weights on [-1, 1].
@@ -240,6 +253,28 @@ public:
     out.shift_m = interpolate(shift_, i_start, j_start, wi, wj);
     out.excess_bent_ns = interpolate(bent_, i_start, j_start, wi, wj);
     out.excess_straight_ns = interpolate(straight_, i_start, j_start, wi, wj);
+    return true;
+  }
+
+  // Integrals for the profile with n-1 scaled by k (phase) and the group index by k_group, from the
+  // tables of the unscaled profile, without rebuilding them. First order in the scale:
+  //   shift_m          = k shift_m(1)
+  //   excess_bent_ns   = k excess_bent_ns(1) + (k_group - k) excess_straight_ns(1)
+  //   excess_straight_ns = k_group excess_straight_ns(1)
+  // (geometry with k, time with k_group: k G + k_group S = k (G + S) + (k_group - k) S). Exact at
+  // k = k_group = 1. The error against direct quadrature is measured in test_dispersion.cpp.
+  // False (out unchanged) for non-finite or non-positive k or k_group, or when lookup() fails.
+  [[nodiscard]] bool lookup_scaled(double theta_s_rad, double emission_altitude_m, double k,
+                                   double k_group, CurvedRayIntegrals &out) const noexcept {
+    if (!std::isfinite(k) || !(k > 0.) || !std::isfinite(k_group) || !(k_group > 0.)) {
+      return false;
+    }
+    CurvedRayIntegrals base{};
+    if (!lookup(theta_s_rad, emission_altitude_m, base)) {
+      return false;
+    }
+    scale_ray_integrals(base, k, k_group);
+    out = base;
     return true;
   }
 

@@ -36,7 +36,8 @@ template <class Function> bool throws_invalid(Function function) {
 // other wavelengths are clamped to it).
 obdeect::propagation::TransmissionTable constant_table() {
   return obdeect::propagation::TransmissionTable(
-      "# H2= 2.000, H1=    3.000     4.000\n400 0.5 0.5\n", 2000.0);
+      "# H2= 2.000, H1=    3.000     4.000\n400 0.5 0.5\n", 2000.0,
+      obdeect::propagation::WavelengthInterpolation::floor);
 }
 
 // n photons, straight down (cx = cy = 0, cz = -1), zem 3500 m, weight 1, all at `wavelength`.

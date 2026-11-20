@@ -24,6 +24,9 @@ class TransmissionTable(_core.TransmissionTable):
     Args:
         path: transmission file in the extinction-table format (``# H2= ..., H1= ...`` header).
         site_altitude_m: observation level [m a.s.l.]; must match H2 within 25 m.
+        wavelength_interpolation: ``"linear"`` (default, continuous in wavelength between the
+            integer nm rows) or ``"floor"`` (the row at floor(lambda), as sim_telarray). Every
+            lookup of this object follows the mode, including :func:`apply_extinction`.
     """
 
     def optical_depth(self, wavelength_nm, height_m):

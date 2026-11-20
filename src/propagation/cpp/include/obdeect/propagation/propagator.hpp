@@ -18,6 +18,7 @@
 // make_efficiency_status().
 
 #include "obdeect/propagation/curved_refraction.hpp"
+#include "obdeect/propagation/dispersion.hpp"
 #include "obdeect/propagation/extinction.hpp"
 #include "obdeect/propagation/pipeline.hpp"
 #include "obdeect/propagation/profile.hpp"
@@ -109,6 +110,10 @@ struct PropagatorConfig {
   // refraction is already applied.
   std::optional<AtmosphereProfile> profile;
   std::string profile_source;
+  // Dispersion (docs/propagation/refraction.md): reference wavelength [nm] of the profile's n-1.
+  // Needs the profile; the bent sky-frame photons of a run with refraction_applied = 0 are scaled
+  // to their wavelength (200 to 2000 nm). Rejected for runs that are already refracted.
+  std::optional<double> dispersion_reference_nm;
   std::vector<EnvelopeFactor> envelope;
   // Wavelengths drawn from 1/lambda^2 for rows without one. Default: the run keys
   // wavelength_min_nm and wavelength_max_nm.
@@ -129,8 +134,13 @@ struct PropagatorConfig {
   unsigned threads{1};
   // Telescopes to keep (1-based ids). Blocks of other telescopes (telescope, photons,
   // telescope_end and their efficiency status) are dropped; their photons are not decoded when the
-  // stream is read with the same selection (propagate_stream). Default: all telescopes.
+  // stream is read with the same selection (propagate_stream). With scattering, the kept
+  // telescopes are the scattering targets; the blocks of other telescopes are still read for
+  // primaries (scattering_primaries) but not written. Default: all telescopes.
   std::optional<std::vector<std::uint32_t>> telescopes;
+  // Telescopes whose photons are scattered (1-based ids; needs scattering). Default: the blocks
+  // of all telescopes.
+  std::optional<std::vector<std::uint32_t>> scattering_primaries;
 };
 
 struct PropagationSummary {
@@ -212,6 +222,12 @@ public:
                                          config_.site_altitude_m) > altitude_tolerance_m) {
       throw std::invalid_argument("transmission table H2 does not match the site altitude");
     }
+    if (config_.dispersion_reference_nm) {
+      if (!config_.profile) {
+        throw std::invalid_argument("dispersion needs an atmospheric profile");
+      }
+      (void)refractivity_e8(*config_.dispersion_reference_nm); // validates 200 to 2000 nm
+    }
     if (config_.wavelength_range) {
       config_.wavelength_range->validate();
     }
@@ -235,6 +251,14 @@ public:
     check_curvature();
     if (config_.telescopes) {
       check_telescopes();
+    }
+    if (config_.scattering_primaries) {
+      check_scattering_primaries();
+    }
+    // Air delay of the scattered photons: the run's profile (points at config_.profile, which
+    // lives as long as this Propagator).
+    if (config_.profile) {
+      config_.scattering.air_profile = &*config_.profile;
     }
     for (std::size_t i = 0; i < config_.envelope.size(); ++i) {
       const auto &name = config_.envelope[i].name;
@@ -416,9 +440,7 @@ private:
     }
   }
 
-  // Telescope selection: at least one id, 1-based; sorted and without repeats. Scattered photons of
-  // a telescope come from the primaries of all telescopes of the event, so a selection cannot be
-  // combined with scattering.
+  // Telescope selection: at least one id, 1-based; sorted and without repeats.
   void check_telescopes() {
     auto &ids = *config_.telescopes;
     if (ids.empty()) {
@@ -431,9 +453,56 @@ private:
     }
     std::sort(ids.begin(), ids.end());
     ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
-    if (config_.scattering.enabled) {
-      throw std::invalid_argument("telescope selection cannot be combined with scattering (the "
-                                  "scattered photons need the primaries of all telescopes)");
+  }
+
+  // Scattering primaries: needs scattering; at least one id, 1-based; sorted and without repeats.
+  // Ids of the run are checked in begin_run.
+  void check_scattering_primaries() {
+    auto &ids = *config_.scattering_primaries;
+    if (!config_.scattering.enabled) {
+      throw std::invalid_argument("scattering_primaries needs scattering");
+    }
+    if (ids.empty()) {
+      throw std::invalid_argument("scattering_primaries is empty");
+    }
+    for (const auto id : ids) {
+      if (id < 1 || id > obdeect::stream::max_telescope) {
+        throw std::invalid_argument("scattering_primaries: telescope ids are 1-based");
+      }
+    }
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+  }
+
+  // Primary photons of telescope id are scattered (all blocks by default).
+  [[nodiscard]] bool is_scattering_primary(std::uint32_t telescope_id) const {
+    return !config_.scattering_primaries ||
+           std::binary_search(config_.scattering_primaries->begin(),
+                              config_.scattering_primaries->end(), telescope_id);
+  }
+
+  // Array reuse: the scattering needs one array_index per event (the primaries of an event are
+  // scattered on the same core positions).
+  static void check_single_array_index(const std::vector<obdeect::stream::Record> &records) {
+    std::optional<std::int64_t> first;
+    for (const auto &record : records) {
+      if (record.type != obdeect::stream::RecordType::telescope) {
+        continue;
+      }
+      const auto it = record.metadata.find("array_index");
+      if (it == record.metadata.end()) {
+        continue;
+      }
+      const auto *value = std::get_if<std::int64_t>(&it->second);
+      if (value == nullptr) {
+        throw std::invalid_argument("telescope key array_index is not an integer");
+      }
+      if (!first) {
+        first = *value;
+      } else if (*value != *first) {
+        throw std::invalid_argument("single scattering needs one array_index per event; run "
+                                    "CORSIKA without array reuse (CSCAT 1 ...)");
+      }
     }
   }
 
@@ -593,10 +662,26 @@ private:
                      number_field(metadata, "wavelength_max_nm")};
     }
     wavelengths.validate();
+    if (config_.dispersion_reference_nm) {
+      if (refraction_applied) {
+        throw std::invalid_argument(
+            "dispersion needs photons that are not refracted yet (run key refraction_applied = 1: "
+            "CORSIKA already refracted them); run without dispersion, then to-sky, or set "
+            "refraction_applied = 0");
+      }
+      if (wavelengths.lo_nm < refractivity_min_nm || wavelengths.hi_nm > refractivity_max_nm) {
+        throw std::invalid_argument("dispersion needs the wavelength range within 200 to 2000 nm");
+      }
+    }
     if (config_.scattering.enabled) {
       const auto &r_m = array_field(metadata, "telescope_r_m");
       if (r_m.size() != x_m.size()) {
         throw std::invalid_argument("single scattering needs telescope_r_m, one per telescope");
+      }
+      if (config_.scattering_primaries && config_.scattering_primaries->back() > x_m.size()) {
+        throw std::invalid_argument("scattering_primaries names telescope " +
+                                    std::to_string(config_.scattering_primaries->back()) +
+                                    ", the run has " + std::to_string(x_m.size()));
       }
       sphere_.clear();
       for (std::size_t i = 0; i < x_m.size(); ++i) {
@@ -679,6 +764,16 @@ private:
           std::string(config_.curvature == Curvature::corsika ? "corsika-curved" : "spherical");
       efficiency_status["atmosphere.earth_radius_m"] = config_.earth_radius_m;
     }
+    if (!config_.geometry_only) {
+      // The wavelength mode of the transmission table (WavelengthInterpolation; default linear).
+      efficiency_status["atmosphere.wavelength_interpolation"] = std::string(
+          config_.transmission->wavelength_interpolation() == WavelengthInterpolation::linear
+              ? "linear"
+              : "floor");
+    }
+    if (config_.dispersion_reference_nm) {
+      efficiency_status["atmosphere.dispersion_reference_nm"] = *config_.dispersion_reference_nm;
+    }
     efficiency_status["wavelength.state"] = std::string("applied");
     efficiency_status["wavelength.source"] = std::string("density 1/lambda^2, continuous");
     efficiency_status["wavelength.range_nm"] = std::vector<double>{range.lo_nm, range.hi_nm};
@@ -690,6 +785,11 @@ private:
                                                    : config_.scattering_source;
       efficiency_status["scattering.points_per_photon"] =
           static_cast<std::int64_t>(config_.scattering.points_per_photon);
+      if (config_.scattering_primaries) {
+        const auto &ids = *config_.scattering_primaries;
+        efficiency_status["scattering.primaries"] =
+            std::vector<double>(ids.begin(), ids.end()); // telescope ids, 1-based
+      }
     }
     for (const auto &factor : config_.envelope) {
       factors += "," + factor.name;
@@ -857,6 +957,7 @@ private:
   // Geometry of the open telescope for sky-frame photons (refraction tables built on first use).
   SkyPlane sky_plane() {
     SkyPlane plane;
+    plane.dispersion_reference_nm = config_.dispersion_reference_nm.value_or(0.0);
     plane.telescope_x_m = telescope_.x_m;
     plane.telescope_y_m = telescope_.y_m;
     plane.telescope_z_m = telescope_.z_m;
@@ -969,8 +1070,9 @@ private:
       list.clear();
     }
     for (const auto &record : records) {
-      if (record.type != obdeect::stream::RecordType::photons) {
-        continue;
+      if (record.type != obdeect::stream::RecordType::photons ||
+          !is_scattering_primary(record.chunk.telescope_id)) {
+        continue; // not a primary: its index does not advance either
       }
       const obdeect::stream::PhotonChunk &input = record.chunk;
       if (input.frame != obdeect::stream::Frame::sky) {
@@ -986,8 +1088,14 @@ private:
   }
 
   // Scattered photons of the open telescope: sky to G, envelope, output. Empties their list.
+  // Telescopes that are not kept get no output (their photons are computed with the others, as
+  // the draws of the kernel depend on the full sphere list).
   template <class Sink> void emit_scattered(Sink &sink) {
     auto &list = scattered_[telescope_.id - 1];
+    if (!selected(telescope_.id)) {
+      list.clear();
+      return;
+    }
     const bool weighted = config_.mode == OutputMode::weighted;
     for (const auto &scattered : list) {
       // Scattered photons point downwards by construction. Their cz column (float32) can disagree
@@ -1007,9 +1115,9 @@ private:
         }
       }
       sky_to_ground(plane_input, sky_plane());
-      for (auto &out : apply_envelope_chunk(std::move(plane_input), run_->envelope,
-                                            *telescope_.depths, weighted, config_.seed,
-                                            event_number_, telescope_.id, telescope_.out_index)) {
+      for (auto &out : apply_envelope_chunk(
+               std::move(plane_input), run_->envelope, *config_.transmission, *telescope_.depths,
+               weighted, config_.seed, event_number_, telescope_.id, telescope_.out_index)) {
         emit(out, sink);
       }
     }
@@ -1020,7 +1128,7 @@ private:
   template <class Sink>
   void write_scattered_blocks(const std::vector<bool> &has_block, Sink &sink) {
     for (std::size_t i = 0; i < scattered_.size(); ++i) {
-      if (has_block[i] || scattered_[i].empty()) {
+      if (has_block[i] || scattered_[i].empty() || !selected(static_cast<std::uint32_t>(i + 1))) {
         continue;
       }
       obdeect::stream::Record open;
@@ -1045,6 +1153,7 @@ private:
     records.swap(event_records_);
     const auto event = static_cast<std::uint32_t>(
         checked_integer(records.front().metadata, "event_number", max_u32));
+    check_single_array_index(records);
     scatter_event(records, event);
     std::vector<bool> has_block(sphere_.size(), false);
     for (const auto &record : records) {
@@ -1089,6 +1198,14 @@ private:
     }
     chunk_ = input;
     if (input.frame == obdeect::stream::Frame::sky) {
+      if (config_.dispersion_reference_nm) {
+        // The bending of a dispersive run needs each photon's wavelength. Assigning it here draws
+        // the same numbers as the later assignment (keyed on the row, see wavelength.hpp).
+        if (!chunk_.has(obdeect::stream::Column::wavelength)) {
+          chunk_[obdeect::stream::Column::wavelength].assign(chunk_.rows(), 0.0F);
+        }
+        assign_wavelengths(chunk_, run_->wavelengths, config_.seed, event_number_, telescope_.id);
+      }
       summary_.dropped += sky_to_ground(chunk_, sky_plane());
     }
 
@@ -1155,7 +1272,20 @@ inline PropagationSummary propagate_stream(std::istream &in, std::ostream &out,
                                            PropagatorConfig config,
                                            const std::string &producer = "obdeect propagation") {
   obdeect::stream::Writer writer(out, producer);
-  const auto telescopes = config.telescopes;
+  // Blocks whose photons are decoded (nullopt: all). Without a selection every block is written,
+  // so all are decoded. With a selection and no scattering: the kept blocks. With scattering, the
+  // primaries are all blocks unless scattering_primaries names them: then the kept blocks and
+  // those primaries are decoded, otherwise all.
+  std::optional<std::vector<std::uint32_t>> decoded;
+  if (config.telescopes && !config.scattering.enabled) {
+    decoded = *config.telescopes;
+  } else if (config.telescopes && config.scattering_primaries) {
+    std::vector<std::uint32_t> ids = *config.telescopes;
+    ids.insert(ids.end(), config.scattering_primaries->begin(), config.scattering_primaries->end());
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    decoded = std::move(ids);
+  }
   Propagator propagator(std::move(config));
   const auto sink = [&writer](const obdeect::stream::Record &record) {
     switch (record.type) {
@@ -1173,8 +1303,8 @@ inline PropagationSummary propagate_stream(std::istream &in, std::ostream &out,
     }
   };
   obdeect::stream::Reader reader(in);
-  if (telescopes) {
-    reader.keep_photons_of(*telescopes); // photons of other telescopes are not decoded
+  if (decoded) {
+    reader.keep_photons_of(*decoded); // photons of other telescopes are not decoded
   }
   obdeect::stream::Record record;
   while (reader.next(record)) {

@@ -213,6 +213,18 @@ void all_tests() {
   CHECK(contains(error_after("\"optics\": {", "\"optics\": {,"), "JSON syntax error"));
   CHECK(contains(error_after("\"optics\": {", "\"optics\": {\"axes_offset_m\": [1, 2],"),
                  "expected three components"));
+  // Optional dish vertex of a facet mirror: loaded and kept.
+  CHECK(!model.primary.vertex_z_m);
+  {
+    std::string text = kValid;
+    const std::string key = R"("reflectivity": {"wavelength_min_nm")";
+    text.replace(text.find(key), key.size(), R"("vertex_z_m": -0.25, )" + key);
+    const auto with_vertex = load_model(text);
+    CHECK(with_vertex.primary.vertex_z_m && *with_vertex.primary.vertex_z_m == -0.25);
+  }
+  CHECK(contains(error_after(R"("reflectivity": {"wavelength_min_nm")",
+                             R"("vertex_z_m": "low", "reflectivity": {"wavelength_min_nm")"),
+                 "vertex_z_m"));
   axes_offset_is_applied_by_the_tracer();
 }
 

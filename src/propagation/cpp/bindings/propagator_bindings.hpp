@@ -37,7 +37,10 @@ inline void bind_propagator(nb::module_ &module) {
          std::uint32_t scattering_points, double pathlen_m,
          const std::map<std::int64_t, double> &telescope_pathlen_m, bool geometry_only,
          const std::string &curvature, const std::optional<double> &earth_radius_m,
-         const std::optional<std::vector<std::int64_t>> &telescopes, std::int64_t threads) {
+         const std::optional<std::vector<std::int64_t>> &telescopes, std::int64_t threads,
+         const std::optional<std::vector<std::int64_t>> &scattering_primaries,
+         const std::string &wavelength_interpolation,
+         const std::optional<double> &dispersion_reference_nm) {
         if (threads < 1 || threads > 256) {
           throw std::invalid_argument("threads must be an integer from 1 to 256");
         }
@@ -54,6 +57,16 @@ inline void bind_propagator(nb::module_ &module) {
           }
           config.telescopes = std::move(selection);
         }
+        if (scattering_primaries) {
+          std::vector<std::uint32_t> selection;
+          for (const std::int64_t id : *scattering_primaries) {
+            if (id < 1 || id > static_cast<std::int64_t>(obdeect::stream::max_telescope)) {
+              throw std::invalid_argument("scattering_primaries: telescope ids are 1-based");
+            }
+            selection.push_back(static_cast<std::uint32_t>(id));
+          }
+          config.scattering_primaries = std::move(selection);
+        }
         config.curvature = obdeect::propagation::parse_curvature(curvature);
         if (earth_radius_m) {
           config.earth_radius_m = *earth_radius_m;
@@ -67,9 +80,11 @@ inline void bind_propagator(nb::module_ &module) {
         }
         if (transmission_path) {
           config.transmission.emplace(obdeect::propagation::TransmissionTable::from_file(
-              *transmission_path, site_altitude_m));
+              *transmission_path, site_altitude_m,
+              obdeect::propagation::parse_wavelength_interpolation(wavelength_interpolation)));
           config.transmission_source = *transmission_path;
         }
+        config.dispersion_reference_nm = dispersion_reference_nm;
         config.site_altitude_m = site_altitude_m;
         if (profile_path) {
           config.profile.emplace(obdeect::propagation::AtmosphereProfile::from_file(*profile_path));
@@ -124,15 +139,21 @@ inline void bind_propagator(nb::module_ &module) {
       nb::arg("telescope_pathlen_m") = std::map<std::int64_t, double>{},
       nb::arg("geometry_only") = false, nb::arg("curvature") = "none",
       nb::arg("earth_radius_m") = nb::none(), nb::arg("telescopes") = nb::none(),
-      nb::arg("threads") = std::int64_t{1},
+      nb::arg("threads") = std::int64_t{1}, nb::arg("scattering_primaries") = nb::none(),
+      nb::arg("wavelength_interpolation") = "linear",
+      nb::arg("dispersion_reference_nm") = nb::none(),
       "Run the atmosphere stage on a photon stream file (geometry_only: no extinction, see "
       "docs/propagation.md). envelope_paths: (name, file) pairs of "
       "two-column text tables (nm, value). scattering_path: optional scattering table (single "
       "scattering of the primaries, off when None). pathlen_m: path inside each telescope [m]; "
       "telescope_pathlen_m: {telescope_id (1-based): metres} overrides. curvature: none, corsika "
       "or spherical (see Curvature); earth_radius_m: Earth radius [m], None for the CORSIKA "
-      "CURVED radius. telescopes: ids (1-based) to keep, None for all; other telescopes' blocks "
+      "CURVED radius. scattering_primaries: ids (1-based) whose photons are scattered (needs "
+      "scattering; None: all blocks). telescopes: ids (1-based) to keep, None for all; other "
+      "telescopes' blocks "
       "are "
       "dropped and not decoded. threads: 1 to 256 worker threads, the output does not depend on "
-      "it.");
+      "it. wavelength_interpolation: linear (default) or floor (sim_telarray), see "
+      "WavelengthInterpolation. dispersion_reference_nm: wavelength [nm] of the profile's n-1; "
+      "None: no dispersion (needs a profile; rejected for refracted input).");
 }

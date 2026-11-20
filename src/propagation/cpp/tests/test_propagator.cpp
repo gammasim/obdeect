@@ -1,8 +1,10 @@
 #include "check.hpp"
 
+#include "obdeect/propagation/dispersion.hpp"
 #include "obdeect/propagation/profile.hpp"
 #include "obdeect/propagation/propagator.hpp"
 #include "obdeect/propagation/refraction.hpp"
+#include "obdeect/propagation/refraction_horizon.hpp"
 #include "obdeect/propagation/scattering.hpp"
 #include "obdeect/propagation/timing.hpp"
 #include "obdeect/propagation/transmission.hpp"
@@ -47,12 +49,14 @@ obdeect::propagation::TransmissionTable zero_table() {
   for (int nm = 200; nm < 1000; ++nm) {
     text += std::to_string(nm) + " 0 0\n";
   }
-  return obdeect::propagation::TransmissionTable(text, site_m);
+  return obdeect::propagation::TransmissionTable(
+      text, site_m, obdeect::propagation::WavelengthInterpolation::floor);
 }
 
 obdeect::propagation::TransmissionTable real_table() {
   return obdeect::propagation::TransmissionTable::from_file(
-      std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/atm_trans_2000_1_10_0_0_2000.dat", site_m);
+      std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/atm_trans_2000_1_10_0_0_2000.dat", site_m,
+      obdeect::propagation::WavelengthInterpolation::floor);
 }
 
 obdeect::propagation::AtmosphereProfile ecmwf_profile() {
@@ -633,6 +637,262 @@ void test_rejects_invalid_input() {
   CHECK(throws_invalid([&] { propagate(unknown, config_for(zero_table())); }));
 }
 
+// ---- Wavelength interpolation, dispersion and the horizon
+// ----------------------------------------
+
+// The real table of the test data in the given wavelength mode.
+obdeect::propagation::TransmissionTable
+real_table_in(obdeect::propagation::WavelengthInterpolation mode) {
+  return obdeect::propagation::TransmissionTable::from_file(
+      std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/atm_trans_2000_1_10_0_0_2000.dat", site_m,
+      mode);
+}
+
+// G-frame photons of telescope 1, one per wavelength (nm), direction cx = 0.2, zem = 2300 m.
+std::string ground_wavelength_stream(const std::vector<double> &lambda) {
+  return make_stream([&](obdeect::stream::Writer &writer) {
+    writer.write_metadata(RecordType::run, run_keys(0));
+    writer.write_metadata(RecordType::event, event_keys());
+    writer.write_metadata(RecordType::telescope, telescope_keys(1, Frame::ground));
+    obdeect::stream::PhotonChunk chunk;
+    chunk.telescope_id = 1;
+    chunk.frame = Frame::ground;
+    chunk.resize(
+        lambda.size(),
+        obdeect::stream::column_bit(Column::x) | obdeect::stream::column_bit(Column::y) |
+            obdeect::stream::column_bit(Column::cx) | obdeect::stream::column_bit(Column::cy) |
+            obdeect::stream::column_bit(Column::t) | obdeect::stream::column_bit(Column::w) |
+            obdeect::stream::column_bit(Column::zem) |
+            obdeect::stream::column_bit(Column::wavelength));
+    for (std::size_t r = 0; r < lambda.size(); ++r) {
+      chunk[Column::x][r] = 0.0F;
+      chunk[Column::y][r] = 0.0F;
+      chunk[Column::cx][r] = 0.2F;
+      chunk[Column::cy][r] = 0.0F;
+      chunk[Column::t][r] = 0.0F;
+      chunk[Column::zem][r] = 2300.0F;
+      chunk[Column::w][r] = 1.0F;
+      chunk[Column::wavelength][r] = static_cast<float>(lambda[r]);
+    }
+    writer.write_chunk(chunk);
+    writer.write_metadata(RecordType::telescope_end, telescope_end_keys(1));
+    writer.write_metadata(RecordType::event_end, {});
+    writer.write_metadata(RecordType::run_end, {});
+  });
+}
+
+// Sky-frame photons of telescope 1 (emission 10 km above the telescope plane, at the zenith angle
+// zenith_deg in the x-z plane), one per wavelength (nm; 0: assigned by the stage).
+std::string sky_wavelength_stream(const std::vector<double> &lambda, int refraction,
+                                  double zenith_deg = 60.0) {
+  const double zenith = zenith_deg * obdeect::stream::pi / 180.0;
+  const double cx = std::sin(zenith);
+  const double cz = -std::cos(zenith);
+  return make_stream([&](obdeect::stream::Writer &writer) {
+    writer.write_metadata(RecordType::run, run_keys(refraction));
+    writer.write_metadata(RecordType::event, event_keys());
+    writer.write_metadata(RecordType::telescope, telescope_keys(1, Frame::sky));
+    obdeect::stream::PhotonChunk chunk;
+    chunk.telescope_id = 1;
+    chunk.frame = Frame::sky;
+    chunk.resize(
+        lambda.size(),
+        obdeect::stream::column_bit(Column::x) | obdeect::stream::column_bit(Column::y) |
+            obdeect::stream::column_bit(Column::z) | obdeect::stream::column_bit(Column::cx) |
+            obdeect::stream::column_bit(Column::cy) | obdeect::stream::column_bit(Column::cz) |
+            obdeect::stream::column_bit(Column::t) | obdeect::stream::column_bit(Column::w) |
+            obdeect::stream::column_bit(Column::wavelength));
+    for (std::size_t r = 0; r < lambda.size(); ++r) {
+      chunk[Column::x][r] = 150.0F;
+      chunk[Column::y][r] = -40.0F;
+      chunk[Column::z][r] = 10000.0F;
+      chunk[Column::cx][r] = static_cast<float>(cx);
+      chunk[Column::cy][r] = 0.0F;
+      chunk[Column::cz][r] = static_cast<float>(cz);
+      chunk[Column::t][r] = 5.0F;
+      chunk[Column::w][r] = 1.0F;
+      chunk[Column::wavelength][r] = static_cast<float>(lambda[r]);
+    }
+    writer.write_chunk(chunk);
+    writer.write_metadata(RecordType::telescope_end, telescope_end_keys(1));
+    writer.write_metadata(RecordType::event_end, {});
+    writer.write_metadata(RecordType::run_end, {});
+  });
+}
+
+// Linear and floor modes of the stage. Weighted output w = p (no envelope: E from the envelope
+// factor below). Photons at 400.0, 400.25, 400.999 and 401.0 nm, path 28 m.
+void test_wavelength_interpolation_stage() {
+  using obdeect::propagation::EnvelopeFactor;
+  using obdeect::propagation::WavelengthInterpolation;
+  const std::vector<double> lambda{400.0, 400.25, 400.999, 401.0};
+  const auto input = ground_wavelength_stream(lambda);
+  // The envelope must cover the run's wavelength range (250 to 700 nm).
+  const EnvelopeFactor envelope{"eff", {250.0, 700.0}, {0.9, 0.5}, "eff.dat"};
+  const obdeect::propagation::Envelope efficiency(envelope.wavelength_nm, envelope.value);
+
+  std::vector<float> linear_w;
+  std::vector<float> floor_w;
+  for (const auto mode : {WavelengthInterpolation::linear, WavelengthInterpolation::floor}) {
+    const auto table = real_table_in(mode);
+    auto config = config_for(table);
+    config.mode = obdeect::propagation::OutputMode::weighted;
+    config.default_pathlen_m = 28.0;
+    config.envelope.push_back(envelope);
+    const auto result = propagate(input, config);
+    const auto records = records_of(result.bytes);
+    const auto status = first_efficiency_status(records);
+    CHECK(status != nullptr);
+    if (status == nullptr) {
+      return;
+    }
+    const std::string expected_mode = mode == WavelengthInterpolation::linear ? "linear" : "floor";
+    CHECK(text_of(*status, "atmosphere.wavelength_interpolation") == expected_mode);
+    const auto w = photon_column(records, 1, Column::w);
+    CHECK(w.size() == lambda.size());
+    if (w.size() != lambda.size()) {
+      return;
+    }
+    // The stage's value: the acceptance at the row's wavelength with the mode's telescope depths
+    // and the envelope at the continuous (linear) or integer (floor) wavelength.
+    const auto depths = table.telescope_depths(site_m, 28.0);
+    const double cx = 0.2;
+    const double airmass = obdeect::propagation::airmass<double>(cx, 0.0);
+    for (std::size_t r = 0; r < lambda.size(); ++r) {
+      const auto od = table.telescope_depths_at(depths, lambda[r]);
+      const double transmission =
+          table.transmission2<double>(lambda[r], 2300.0, airmass, od.od_tel, od.od_focus);
+      const double at = mode == WavelengthInterpolation::linear ? lambda[r] : std::floor(lambda[r]);
+      CHECK_NEAR(static_cast<double>(w[r]), transmission * efficiency(at), 2e-6);
+    }
+    (mode == WavelengthInterpolation::linear ? linear_w : floor_w) = w;
+  }
+  // Floor: 400.25 and 400.999 use the row of 400 nm. Linear: continuous, close to 401 nm.
+  CHECK(floor_w[1] == floor_w[0] && floor_w[2] == floor_w[0]);
+  CHECK(std::abs(linear_w[2] - linear_w[3]) < 1e-3);
+  CHECK(linear_w[1] != linear_w[0]);
+  CHECK(std::abs(linear_w[0] - floor_w[0]) < 1e-6); // integer nm: both modes agree
+  CHECK(std::abs(linear_w[3] - floor_w[3]) < 1e-6);
+}
+
+// Dispersion: the bent photon at 300 nm (reference 600 nm) follows bend() with k and k_group; the
+// 600 nm photon has k = 1, so its position is that of the dispersion-free run and only the time
+// changes, by (k_group - 1) times the straight-path air delay. Records and rejections.
+void test_dispersion_stage() {
+  const auto profile = ecmwf_profile();
+  const auto input = sky_wavelength_stream({300.0, 600.0}, 0);
+  auto config = config_for(zero_table());
+  config.mode = obdeect::propagation::OutputMode::weighted;
+  config.profile = profile;
+  const auto off_result = propagate(input, config);
+  const auto off = records_of(off_result.bytes);
+  CHECK(first_efficiency_status(off) != nullptr);
+  CHECK(first_efficiency_status(off)->count("atmosphere.dispersion_reference_nm") == 0);
+
+  config.dispersion_reference_nm = 600.0;
+  const auto on_result = propagate(input, config);
+  const auto on = records_of(on_result.bytes);
+  CHECK(on_result.summary.dropped == 0);
+  CHECK(first_efficiency_status(on) != nullptr);
+  if (first_efficiency_status(on) == nullptr) {
+    return;
+  }
+  CHECK(std::get<double>(first_efficiency_status(on)->at("atmosphere.dispersion_reference_nm")) ==
+        600.0);
+
+  const auto x_on = photon_column(on, 1, Column::x);
+  const auto y_on = photon_column(on, 1, Column::y);
+  const auto t_on = photon_column(on, 1, Column::t);
+  const auto x_off = photon_column(off, 1, Column::x);
+  const auto t_off = photon_column(off, 1, Column::t);
+  CHECK(x_on.size() == 2 && x_off.size() == 2);
+  if (x_on.size() != 2 || x_off.size() != 2) {
+    return;
+  }
+
+  // 300 nm against bend() with the factors of the dispersion formulas.
+  const obdeect::propagation::RefractionTables tables(profile, site_m);
+  const double k = obdeect::propagation::refractivity_ratio(300.0, 600.0);
+  const double k_group = obdeect::propagation::group_refractivity_ratio(300.0, 600.0);
+  const double cx = std::sqrt(3.0) / 2.0;
+  const double cz_magnitude = 0.5;
+  const double path = 10000.0 / cz_magnitude;
+  double dx = cx, dy = 0.0;
+  double xb = 150.0 + path * cx - 100.0, yb = -40.0, tb = 0.0;
+  CHECK(obdeect::propagation::bend(tables, 12000.0, dx, dy, xb, yb, tb, k, k_group));
+  CHECK_NEAR(static_cast<double>(x_on[0]), xb, 5e-3);
+  CHECK_NEAR(static_cast<double>(y_on[0]), yb, 1e-3);
+  CHECK_NEAR(static_cast<double>(t_on[0]), 5.0 + tb, 2e-2);
+  // The dispersion-free bend of the same photon differs from it by a few cm (the k - 1 effect).
+  double dx0 = cx, dy0 = 0.0, xb0 = 150.0 + path * cx - 100.0, yb0 = -40.0, tb0 = 0.0;
+  CHECK(obdeect::propagation::bend(tables, 12000.0, dx0, dy0, xb0, yb0, tb0));
+  CHECK(std::abs(xb - xb0) > 1e-3);
+
+  // 600 nm: k = 1 exactly, so the position is the dispersion-free one; the time differs by the
+  // group term only.
+  CHECK(x_on[1] == x_off[1]);
+  CHECK(photon_column(on, 1, Column::y)[1] == photon_column(off, 1, Column::y)[1]);
+  const double zenith = std::acos(cz_magnitude);
+  const double air_ns =
+      obdeect::propagation::straight_path_air_delay_ns(profile, site_m, 12000.0, zenith);
+  const double k_group_600 = obdeect::propagation::group_refractivity_ratio(600.0, 600.0);
+  CHECK_NEAR(static_cast<double>(t_on[1]) - static_cast<double>(t_off[1]),
+             (k_group_600 - 1.0) * air_ns, 2e-2);
+
+  // Rejections: refracted input, no profile, a wavelength range or reference outside the formulas.
+  CHECK(throws_invalid([&] { propagate(sky_wavelength_stream({500.0}, 1), config); }));
+  {
+    auto no_profile = config;
+    no_profile.profile.reset();
+    CHECK(throws_invalid([&] { propagate(input, no_profile); }));
+  }
+  {
+    auto narrow = config;
+    narrow.wavelength_range = obdeect::propagation::WavelengthRange{100.0, 700.0};
+    CHECK(throws_invalid([&] { propagate(input, narrow); }));
+  }
+  {
+    auto bad_reference = config;
+    bad_reference.dispersion_reference_nm = 150.0;
+    CHECK(throws_invalid([&] { propagate(input, bad_reference); }));
+  }
+}
+
+// Near the horizon (zenith 88 degrees, beyond the series limit of bend()) the photon is bent by
+// quadrature and not dropped; the position and time are those of bend_quadrature().
+void test_horizon_photons_not_dropped() {
+  const auto profile = ecmwf_profile();
+  // The stage takes |cz| from the float32 cx: at 88 degrees the rounding of cx moves the path by
+  // metres, so the expectation uses the same float32 direction.
+  const double zenith = 88.0 * obdeect::stream::pi / 180.0;
+  const double cx = static_cast<double>(static_cast<float>(std::sin(zenith)));
+  const double cz_magnitude = std::sqrt(1.0 - cx * cx);
+  const auto input = sky_wavelength_stream({500.0}, 0, 88.0);
+  auto config = config_for(zero_table());
+  config.mode = obdeect::propagation::OutputMode::weighted;
+  config.profile = profile;
+  const auto result = propagate(input, config);
+  CHECK(result.summary.dropped == 0);
+  CHECK(result.summary.photons_out == 1);
+  const auto records = records_of(result.bytes);
+  const auto x = photon_column(records, 1, Column::x);
+  const auto t = photon_column(records, 1, Column::t);
+  CHECK(x.size() == 1 && t.size() == 1);
+  if (x.size() != 1 || t.size() != 1) {
+    return;
+  }
+  const obdeect::propagation::RefractionTables tables(profile, site_m);
+  const double path = 10000.0 / cz_magnitude;
+  double dx = cx, dy = 0.0;
+  double xb = 150.0 + path * cx - 100.0, yb = -40.0, tb = 0.0;
+  CHECK(!obdeect::propagation::bend(tables, 12000.0, dx, dy, xb, yb, tb));
+  CHECK(obdeect::propagation::bend_series_limit_exceeded(tables, 12000.0, cx, 0.0));
+  CHECK(obdeect::propagation::bend_quadrature(tables, 12000.0, dx, dy, xb, yb, tb));
+  // float32 columns at 3e5 m: about 0.03 m and 0.06 ns per ulp.
+  CHECK_NEAR(static_cast<double>(x[0]), xb, 0.1);
+  CHECK_NEAR(static_cast<double>(t[0]), 5.0 + tb, 0.2);
+}
+
 // ---- Single scattering -------------------------------------------------------------------
 
 constexpr std::uint64_t scatter_seed = 20261107;
@@ -969,6 +1229,194 @@ std::string sky_stream(const obdeect::stream::Metadata &run, std::size_t n,
   });
 }
 
+// ---- Scattering selections: primaries, kept telescopes, array reuse ---------------------
+
+// Telescopes 1 (3 km east), 2 (2.5 km south) and 3 (1.5 km west, 1 km north); spheres of 12 m.
+obdeect::stream::Metadata scatter3_run_keys() {
+  obdeect::stream::Metadata m = scatter_run_keys();
+  m["telescope_x_m"] = std::vector<double>{3000.0, 0.0, -1500.0};
+  m["telescope_y_m"] = std::vector<double>{0.0, -2500.0, 1000.0};
+  m["telescope_z_m"] = std::vector<double>{0.0, 0.0, 0.0};
+  m["telescope_r_m"] = std::vector<double>{12.0, 12.0, 12.0};
+  return m;
+}
+
+// One telescope block of an event: id, number of beam photons (0: empty block), array_index
+// (negative: no key).
+struct Block {
+  std::uint32_t id;
+  std::size_t photons;
+  std::int64_t array_index;
+};
+
+// One event with the blocks in the given order. Block i has vertical beams at x = 200 m (i - 1),
+// in chunks of chunk_rows.
+std::string scatter3_stream(const std::vector<Block> &blocks, std::size_t chunk_rows) {
+  return make_stream([&](obdeect::stream::Writer &writer) {
+    writer.write_metadata(RecordType::run, scatter3_run_keys());
+    writer.write_metadata(RecordType::event, event_keys());
+    for (const Block &block : blocks) {
+      auto keys = telescope_keys(block.id, Frame::sky);
+      if (block.array_index >= 0) {
+        keys["array_index"] = i64(block.array_index);
+      }
+      writer.write_metadata(RecordType::telescope, keys);
+      for (std::size_t first = 0; first < block.photons; first += chunk_rows) {
+        writer.write_chunk(beam_chunk(block.id, first, std::min(chunk_rows, block.photons - first),
+                                      200.0 * static_cast<double>(block.id - 1)));
+      }
+      writer.write_metadata(RecordType::telescope_end, telescope_end_keys(block.id));
+    }
+    writer.write_metadata(RecordType::event_end, {});
+    writer.write_metadata(RecordType::run_end, {});
+  });
+}
+
+bool has_block(const std::vector<obdeect::stream::Record> &records, std::uint32_t telescope) {
+  for (const auto &record : records) {
+    if (record.type == RecordType::telescope &&
+        std::get<std::int64_t>(record.metadata.at("telescope_id")) == telescope) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Message of the std::invalid_argument thrown by fn; empty if fn does not throw it.
+std::string message_of(const std::function<void()> &fn) {
+  try {
+    fn();
+  } catch (const std::invalid_argument &error) {
+    return error.what();
+  }
+  return "";
+}
+
+bool same_columns(const std::vector<obdeect::stream::Record> &a,
+                  const std::vector<obdeect::stream::Record> &b, std::uint32_t telescope) {
+  for (const Column c : {Column::x, Column::y, Column::cx, Column::t, Column::w, Column::zem}) {
+    if (photon_column(a, telescope, c) != photon_column(b, telescope, c)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Only the photons of the selected primaries are scattered: the targets 2 and 3 (empty blocks)
+// get the same photons as in a run where telescope 1 is the only block; the draws do not depend
+// on the other blocks (order, chunk size).
+void test_scattering_primaries() {
+  const auto table = real_table();
+  const std::size_t n = 300;
+  auto config = scattering_config(table, true);
+  config.scattering_primaries = std::vector<std::uint32_t>{1};
+
+  const auto with_targets =
+      records_of(propagate(scatter3_stream({{1, n, -1}, {2, 0, -1}, {3, 0, -1}}, n), config).bytes);
+  const auto only_primary = records_of(propagate(scatter3_stream({{1, n, -1}}, n), config).bytes);
+  CHECK(photon_rows(with_targets, 2) > 0 && photon_rows(with_targets, 3) > 0);
+  CHECK(same_columns(with_targets, only_primary, 2));
+  CHECK(same_columns(with_targets, only_primary, 3));
+
+  // Blocks 2 and 3 have their own photons (not scattered): reordered blocks and other chunk sizes
+  // give the same output.
+  const auto reference =
+      records_of(propagate(scatter3_stream({{1, n, -1}, {2, n, -1}, {3, n, -1}}, n), config).bytes);
+  const auto reordered = records_of(
+      propagate(scatter3_stream({{1, n, -1}, {3, n, -1}, {2, n, -1}}, 77), config).bytes);
+  CHECK(photon_rows(reference, 1) > 0);
+  for (const std::uint32_t telescope : {1U, 2U, 3U}) {
+    CHECK(same_columns(reference, reordered, telescope));
+  }
+
+  // Primary telescope 2 only: the same holds for the targets 1 and 3.
+  auto config_2 = scattering_config(table, true);
+  config_2.scattering_primaries = std::vector<std::uint32_t>{2};
+  const auto primary_2 = records_of(
+      propagate(scatter3_stream({{1, 0, -1}, {2, n, -1}, {3, 0, -1}}, n), config_2).bytes);
+  const auto primary_2_only =
+      records_of(propagate(scatter3_stream({{2, n, -1}}, n), config_2).bytes);
+  CHECK(photon_rows(primary_2, 1) > 0);
+  CHECK(same_columns(primary_2, primary_2_only, 1));
+  CHECK(same_columns(primary_2, primary_2_only, 3));
+
+  // Efficiency status: the selection is recorded; absent without the option.
+  const auto *status = first_efficiency_status(with_targets);
+  CHECK(status != nullptr);
+  if (status != nullptr) {
+    CHECK(std::get<std::vector<double>>(status->at("scattering.primaries")) ==
+          std::vector<double>({1.0}));
+  }
+  const auto all =
+      records_of(propagate(scatter3_stream({{1, n, -1}}, n), scattering_config(table, true)).bytes);
+  const auto *all_status = first_efficiency_status(all);
+  CHECK(all_status != nullptr && all_status->count("scattering.primaries") == 0);
+}
+
+// --telescopes 2,3 with scattering: no block of telescope 1; blocks 2 and 3 equal the blocks of
+// the full run (the scattering targets are the kept telescopes). The summary counts the photons
+// that are written.
+void test_scattering_telescope_selection() {
+  const auto table = real_table();
+  const std::size_t n = 300;
+  const std::string input = scatter3_stream({{1, n, -1}, {2, n, -1}, {3, n, -1}}, n);
+  const auto full = records_of(propagate(input, scattering_config(table, true)).bytes);
+
+  auto kept_config = scattering_config(table, true);
+  kept_config.telescopes = std::vector<std::uint32_t>{3, 2};
+  const auto kept_result = propagate(input, kept_config);
+  const auto kept = records_of(kept_result.bytes);
+  CHECK(!has_block(kept, 1));
+  CHECK(has_block(kept, 2) && has_block(kept, 3));
+  CHECK(photon_rows(full, 2) > 0 && photon_rows(full, 3) > 0);
+  CHECK(same_columns(kept, full, 2));
+  CHECK(same_columns(kept, full, 3));
+
+  CHECK(kept_result.summary.photons_in == 2 * n);
+  CHECK(kept_result.summary.photons_out == photon_rows(kept, 2) + photon_rows(kept, 3));
+  CHECK_NEAR(kept_result.summary.weight_out,
+             telescope_photons(kept, 2) + telescope_photons(kept, 3),
+             1e-6 * kept_result.summary.weight_out);
+
+  // Telescope 1 is not a target and has no own block here: no block at all for it.
+  const auto only_1_primary = records_of(
+      propagate(scatter3_stream({{1, n, -1}, {2, 0, -1}, {3, 0, -1}}, n), kept_config).bytes);
+  CHECK(!has_block(only_1_primary, 1));
+  CHECK(photon_rows(only_1_primary, 2) > 0);
+}
+
+// A CORSIKA array reuse (several array_index values in one event) is rejected with scattering;
+// one array_index per event is accepted.
+void test_scattering_array_index() {
+  const auto table = real_table();
+  const std::size_t n = 100;
+  const auto config = scattering_config(table, true);
+  CHECK(!throws_invalid([&] { propagate(scatter3_stream({{1, n, 4}, {2, n, 4}}, n), config); }));
+  const std::string message =
+      message_of([&] { propagate(scatter3_stream({{1, n, 0}, {2, n, 1}}, n), config); });
+  CHECK(message.find("single scattering needs one array_index per event") != std::string::npos);
+}
+
+// Invalid ids and combinations are rejected: id 0, an id the run does not have, an empty list,
+// and the option without scattering.
+void test_scattering_primaries_rejects() {
+  const auto table = real_table();
+  const std::size_t n = 10;
+  const std::string input = scatter3_stream({{1, n, -1}, {2, n, -1}, {3, n, -1}}, n);
+  const auto with_primaries = [&](std::vector<std::uint32_t> ids) {
+    auto config = scattering_config(table, true);
+    config.scattering_primaries = std::move(ids);
+    return config;
+  };
+  CHECK(throws_invalid([&] { propagate(input, with_primaries({0})); }));
+  CHECK(throws_invalid([&] { propagate(input, with_primaries({4})); }));
+  CHECK(throws_invalid([&] { propagate(input, with_primaries({1, 4})); }));
+  CHECK(throws_invalid([&] { propagate(input, with_primaries({})); }));
+  auto no_scattering = config_for(table);
+  no_scattering.scattering_primaries = std::vector<std::uint32_t>{1};
+  CHECK(throws_invalid([&] { propagate(input, no_scattering); }));
+}
+
 // Same file, different spellings: the output must not truncate the input.
 void test_same_file() {
   const std::string data = OBDEECT_PROPAGATION_TEST_DATA_DIR;
@@ -1270,6 +1718,9 @@ int main() {
     test_chunk_size_determinism();
     test_sky_analytic();
     test_sky_refraction();
+    test_wavelength_interpolation_stage();
+    test_dispersion_stage();
+    test_horizon_photons_not_dropped();
     test_rejects_invalid_input();
     test_scattering_weights();
     test_scattering_not_attenuated_twice();
@@ -1283,5 +1734,9 @@ int main() {
     test_rejects_telescope_end_mismatch();
     test_run_observation_level();
     test_rejects_non_finite_input();
+    test_scattering_primaries();
+    test_scattering_telescope_selection();
+    test_scattering_array_index();
+    test_scattering_primaries_rejects();
   });
 }
