@@ -14,7 +14,7 @@ repos:
   - id: end-of-file-fixer
   - id: trailing-whitespace
 - repo: https://github.com/astral-sh/ruff-pre-commit
-  rev: v0.17.5
+  rev: v0.17.6
   hooks:
   - id: ruff-check
     args: [--fix]
@@ -24,9 +24,10 @@ repos:
   rev: v1.7.12
   hooks:
   - id: actionlint
+    args: ["-ignore", "label \"ubuntu-26.04\" is unknown", "-ignore", "label \"ubuntu-26.04-arm\" is unknown"]
 # https://pyproject-fmt.readthedocs.io/en/latest/
 - repo: https://github.com/tox-dev/pyproject-fmt
-  rev: "v2.30.6"
+  rev: "v2.31.2"
   hooks:
   - id: pyproject-fmt
     args: ["--max-supported-python", "3.15"]
