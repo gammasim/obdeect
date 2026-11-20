@@ -40,6 +40,14 @@ Telescopes not listed are ground-frame (sim_telarray `Bypass_Optics=0`). Listed 
 camera-frame photons are converted to the bypass convention and need `Bypass_Optics=1` (class 1)
 or `2` (class 2). `obdeect stream to-simtel` prints the value for each telescope.
 
+TELPOS z of the listed telescopes is set to 0, because their photons are already at the camera.
+For array runs, sim_telarray needs the real heights for the plane-wavefront delay between
+telescopes; `--keep-telpos-height` writes the TELPOS block unchanged. Default: off.
+
+```console
+$ obdeect stream to-simtel --camera-map cam.txt --keep-telpos-height run.pst > sim.simtel
+```
+
 ## ATMPROF and synthesised headers
 
 `--atmprof FILE` reads a CORSIKA/sim_telarray atmospheric table (altitude [km], density, thickness,
@@ -72,7 +80,8 @@ bunch:   x, y = 47.5, 20.0 cm   cx, cy = 0.6, 0   time = 5.085 ns   zem = 220050
 The bunch position is where the photon's line crosses z = 0 (path 0.625 m here, also for a photon
 moving away from the plane). The time is `t` plus that path over the speed of light; `zem` is the
 observation level plus `z`. Without a `cz` column the photon moves towards the plane. The camera
-rotation is not used, and TELPOS z is set to 0 as for camera-frame telescopes.
+rotation is not used, and TELPOS z is set to 0 as for camera-frame telescopes (unless
+`--keep-telpos-height` is given).
 
 ```console
 $ cat cam.txt
