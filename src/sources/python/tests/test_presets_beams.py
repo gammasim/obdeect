@@ -1,23 +1,29 @@
-"""Beam presets (laser-beam, lidar, night-sky) and the beam geometry they use."""
+"""Pulsed-laser presets (lidar, laser-beam) and night-sky: run descriptions from arguments."""
 
 import argparse
 import math
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
-from obdeect.sources.presets import _beam, laser_beam, lidar, night_sky
+from obdeect.sources.presets import _pulsed_beam, laser_beam, lidar, night_sky
 
 Z_AXIS = (0.0, 0.0, 1.0)
 DOWN = (0.0, 0.0, -1.0)
+C_M_NS = 0.299792458
+H_C = 6.62607015e-34 * 299792458.0
 
 LASER = (
-    "--observation-level 2150 --spectrum fixed:wavelength_nm=355 "
-    "--laser-position 1000,0,0 --laser-zenith 30 --laser-azimuth 180 --photons-per-m 1e4 "
-    "--telescope-zenith 0 --telescope-azimuth 0 --telescope-radius 12.5 --fov-deg 15"
+    "--observation-level 2150 --laser-position 1000,0,4000 --beam-zenith 180 --beam-azimuth 0 "
+    "--divergence 0.1 --pulse-energy 1e-6 --wavelength-nm 355 --telescope-radius 12.5"
 )
 LIDAR = (
-    "--observation-level 2150 --satellite-position 1000,0,4000 --beam-zenith 180 "
-    "--beam-azimuth 0 --divergence 0.1 --pulse-energy 1e-6 --wavelength-nm 532 "
-    "--telescope-zenith 0 --telescope-azimuth 0 --telescope-radius 12.5 --fov-deg 80"
+    "--observation-level 2150 --satellite-altitude 400000 --satellite-offset 1000,0 "
+    "--beam-zenith 180 --beam-azimuth 0 --divergence 0.1 --pulse-energy 1e-6 "
+    "--wavelength-nm 532 --telescope-radius 12.5"
 )
 NIGHT_SKY = (
     "--observation-level 2150 --spectrum table:{table} --photons 1e6 --viewcone-deg 10 "
@@ -39,6 +45,13 @@ def without(text, option):
     return " ".join(tokens[:index] + tokens[index + 2 :])
 
 
+def replaced(text, option, value):
+    """Option text with the value of one ``--option VALUE`` pair replaced."""
+    tokens = text.split()
+    tokens[tokens.index(option) + 1] = value
+    return " ".join(tokens)
+
+
 def emission(description):
     """The single emission of the first event of a run description."""
     emissions = description["events"][0]["emissions"]
@@ -46,205 +59,233 @@ def emission(description):
     return emissions[0]
 
 
-def on_cone_surface(point, axis_tan):
-    """True if the point lies on the cone of tan(half angle) ``axis_tan`` about the z axis."""
-    x, y, z = point
-    return math.hypot(x, y) == pytest.approx(axis_tan * z, rel=1e-9)
+def build_lidar(text):
+    return lidar.build(parse(lidar, text))
 
 
-# Geometry of the beam in the field-of-view cone (_beam).
+def build_laser(text):
+    return laser_beam.build(parse(laser_beam, text))
 
 
-def test_beam_along_cone_axis_is_inside_from_apex_to_start():
-    enter, length = _beam.cone_path((0.0, 0.0, 100.0), DOWN, Z_AXIS, 10.0)
-    assert enter == pytest.approx(0.0)
-    assert length == pytest.approx(100.0)
-
-
-def test_horizontal_beam_crosses_cone_at_expected_interval():
-    # Cone of half angle 45 deg about z: |x| <= z at z = 10. The beam at x = -100 enters at
-    # x = -10 (t = 90) and leaves at x = +10 (t = 110).
-    enter, length = _beam.cone_path((-100.0, 0.0, 10.0), (1.0, 0.0, 0.0), Z_AXIS, 45.0)
-    assert enter == pytest.approx(90.0, rel=1e-12)
-    assert length == pytest.approx(20.0, rel=1e-12)
-
-
-def test_beam_that_misses_cone_is_rejected():
-    with pytest.raises(ValueError, match="does not cross"):
-        _beam.cone_path((-100.0, 0.0, 10.0), (0.0, 1.0, 0.0), Z_AXIS, 45.0)
-
-
-def test_beam_pointing_away_from_cone_is_rejected():
-    with pytest.raises(ValueError, match="does not cross"):
-        _beam.cone_path((0.0, 0.0, -10.0), DOWN, Z_AXIS, 10.0)
-
-
-def test_beam_inside_cone_forever_is_unbounded():
-    with pytest.raises(ValueError, match="unbounded"):
-        _beam.cone_path((0.0, 0.0, 10.0), Z_AXIS, Z_AXIS, 10.0)
-
-
-def test_beam_parallel_to_cone_generator_is_unbounded():
-    # Direction (1, 0, 1)/sqrt(2) is a generator of the 45 deg cone: a = 0 (linear case).
-    direction = (1 / math.sqrt(2), 0.0, 1 / math.sqrt(2))
-    with pytest.raises(ValueError, match="unbounded"):
-        _beam.cone_path((-10.0, 0.0, 0.0), direction, Z_AXIS, 45.0)
-
-
-def test_t_max_clips_the_path():
-    enter, length = _beam.cone_path((0.0, 0.0, 100.0), DOWN, Z_AXIS, 10.0, t_max=40.0)
-    assert enter == pytest.approx(0.0)
-    assert length == pytest.approx(40.0)
+# Shared builder: direction convention, photons, bunches
 
 
 def test_unit_vector_convention():
-    assert _beam.unit_vector(90.0, 0.0) == pytest.approx((1.0, 0.0, 0.0), abs=1e-12)
-    assert _beam.unit_vector(90.0, 90.0) == pytest.approx((0.0, -1.0, 0.0), abs=1e-12)
-    assert _beam.unit_vector(0.0, 45.0) == pytest.approx(Z_AXIS)
+    assert _pulsed_beam.unit_vector(90.0, 0.0) == pytest.approx((1.0, 0.0, 0.0), abs=1e-12)
+    assert _pulsed_beam.unit_vector(90.0, 90.0) == pytest.approx((0.0, -1.0, 0.0), abs=1e-12)
+    assert _pulsed_beam.unit_vector(0.0, 45.0) == pytest.approx(Z_AXIS)
+    assert _pulsed_beam.unit_vector(180.0, 0.0) == pytest.approx(DOWN)
     with pytest.raises(ValueError, match="zenith"):
-        _beam.unit_vector(200.0, 0.0)
+        _pulsed_beam.unit_vector(200.0, 0.0)
 
 
-# laser-beam
+def test_photon_number_is_exact_si_count():
+    expected = 1e-6 * 532e-9 / H_C
+    assert _pulsed_beam.photons_per_pulse(1e-6, 532.0) == pytest.approx(expected, rel=1e-14)
+    assert emission(build_lidar(LIDAR))["photons"] == pytest.approx(expected, rel=1e-12)
+    assert expected == pytest.approx(2.6782e12, rel=1e-4)
 
 
-def test_laser_beam_is_one_line_with_cone_zero_and_beta_one():
-    description = laser_beam.build(parse(laser_beam, LASER))
-    assert len(description["events"]) == 1
-    assert description["events"][0]["repeat"] == 1
-    line = emission(description)
-    assert line["kind"] == "line"
-    assert line["beta"] == 1.0
-    assert line["angular"] == {"kind": "cone", "angle_deg": 0.0}
-    assert line["target"] == "none"
-    assert line["spectrum"] == {"kind": "fixed", "wavelength_nm": 355.0}
+def test_photon_number_is_independent_of_rows():
+    counts = {emission(build_lidar(LIDAR + f" --rows {rows}"))["photons"] for rows in (1e2, 1e5)}
+    assert len(counts) == 1
+
+
+def test_bunch_size_follows_rows():
+    photons = emission(build_lidar(LIDAR))["photons"]
+    assert emission(build_lidar(LIDAR))["bunch_size"] == pytest.approx(photons / 1e4, rel=1e-12)
+    line = emission(build_lidar(LIDAR + " --rows 1000"))
+    assert line["bunch_size"] == pytest.approx(photons / 1e3, rel=1e-12)
+    assert emission(build_lidar(LIDAR + " --rows 1e30"))["bunch_size"] == 1.0
+
+
+def test_laser_beam_is_one_downward_point_emission():
+    description = build_laser(LASER)
     assert description["telescopes"] == [{"id": 1, "position_m": [0.0, 0.0, 0.0], "radius_m": 12.5}]
-
-
-def test_laser_beam_enters_and_leaves_the_fov_cone():
-    line = emission(laser_beam.build(parse(laser_beam, LASER)))
-    tan_half = math.tan(math.radians(7.5))
-    start = line["start_m"]
-    end = [start[i] + line["direction"][i] * line["length_m"] for i in range(3)]
-    assert on_cone_surface(start, tan_half)
-    assert on_cone_surface(end, tan_half)
-    assert line["length_m"] > 0.0
-
-
-def test_laser_beam_photons_are_per_metre_times_length():
-    line = emission(laser_beam.build(parse(laser_beam, LASER + " --photons-per-m 2.5e3")))
-    assert line["photons"] == pytest.approx(2.5e3 * line["length_m"], rel=1e-12)
-
-
-def test_laser_beam_along_axis_length_is_path_to_apex():
-    text = (
-        "--observation-level 2150 --spectrum fixed:wavelength_nm=355 "
-        "--laser-position 0,0,100 --laser-zenith 180 --laser-azimuth 0 --photons-per-m 1e4 "
-        "--telescope-zenith 0 --telescope-azimuth 0 --telescope-radius 12.5 --fov-deg 10 "
-        "--events 3"
-    )
-    description = laser_beam.build(parse(laser_beam, text))
-    assert description["events"][0]["repeat"] == 3
-    line = emission(description)
-    assert line["start_m"] == pytest.approx([0.0, 0.0, 100.0], abs=1e-9)
-    assert line["length_m"] == pytest.approx(100.0)
-    assert line["photons"] == pytest.approx(1e6)
-
-
-def test_laser_beam_pointing_away_from_the_fov_is_rejected():
-    text = LASER.replace("--laser-position 1000,0,0", "--laser-position 0,0,-100").replace(
-        "--laser-zenith 30 --laser-azimuth 180", "--laser-zenith 180 --laser-azimuth 0"
-    )
-    with pytest.raises(ValueError, match="does not cross"):
-        laser_beam.build(parse(laser_beam, text))
-
-
-@pytest.mark.parametrize(
-    "option",
-    [
-        "--observation-level",
-        "--spectrum",
-        "--laser-position",
-        "--laser-zenith",
-        "--laser-azimuth",
-        "--photons-per-m",
-        "--telescope-zenith",
-        "--telescope-azimuth",
-        "--telescope-radius",
-        "--fov-deg",
-    ],
-)
-def test_laser_beam_required_options_are_rejected(option):
-    with pytest.raises(SystemExit):
-        parse(laser_beam, without(LASER, option))
-
-
-def test_laser_beam_fov_must_be_below_90():
-    with pytest.raises(ValueError, match="field of view"):
-        laser_beam.build(parse(laser_beam, LASER.replace("--fov-deg 15", "--fov-deg 90")))
-
-
-# lidar
-
-
-def test_photons_per_pulse_uses_exact_si_constants():
-    expected = 1e-6 * 532e-9 / (6.62607015e-34 * 299792458.0)
-    assert lidar.photons_per_pulse(1e-6, 532.0) == pytest.approx(expected, rel=1e-14)
-    assert lidar.photons_per_pulse(1e-6, 532.0) == pytest.approx(2.6782e12, rel=1e-4)
-
-
-def test_lidar_clipped_photons_scale_with_path_fraction():
-    line = emission(lidar.build(parse(lidar, LIDAR)))
-    # Beam straight down at x = 1000 m; cone of half angle 40 deg about z enters at
-    # z = 1000 / tan(40 deg) and the satellite is at z = 4000 m. Full length: 4000 m.
-    clipped = 4000.0 - 1000.0 / math.tan(math.radians(40.0))
-    assert line["length_m"] == pytest.approx(clipped, rel=1e-12)
-    assert line["start_m"] == pytest.approx([1000.0, 0.0, 4000.0], abs=1e-9)
-    per_pulse = lidar.photons_per_pulse(1e-6, 532.0)
-    assert line["photons"] == pytest.approx(per_pulse * clipped / 4000.0, rel=1e-12)
-
-
-def test_lidar_structure_and_divergence():
-    description = lidar.build(parse(lidar, LIDAR))
-    line = emission(description)
-    assert line["kind"] == "line"
-    assert line["beta"] == 1.0
-    assert line["target"] == "none"
-    assert line["spectrum"] == {"kind": "fixed", "wavelength_nm": 532.0}
-    assert line["angular"] == {"kind": "filled_cone", "angle_deg": pytest.approx(0.05)}
-    assert line["direction"] == pytest.approx(DOWN, abs=1e-12)
     assert description["events"][0]["repeat"] == 1
+    point = emission(description)
+    assert point["kind"] == "point"
+    assert point["position_m"] == pytest.approx([1000.0, 0.0, 4000.0])
+    assert point["axis"] == pytest.approx(DOWN, abs=1e-12)
+    assert point["angular"] == {"kind": "filled_cone", "angle_deg": pytest.approx(0.05)}
+    assert point["spectrum"] == {"kind": "fixed", "wavelength_nm": 355.0}
+    assert point["pulse"] == {"kind": "fixed", "time_ns": 0.0}
+    assert point["target"] == "none"
+    assert point["time_offset_ns"] == 0.0
+    assert point["to_plane_z0"] is False
 
 
-def test_lidar_zero_divergence_is_cone_zero():
-    line = emission(lidar.build(parse(lidar, LIDAR.replace("--divergence 0.1", "--divergence 0"))))
-    assert line["angular"] == {"kind": "cone", "angle_deg": 0.0}
+def test_lidar_structure_and_zero_divergence():
+    point = emission(build_lidar(LIDAR))
+    assert point["kind"] == "point"
+    assert point["position_m"] == pytest.approx([1000.0, 0.0, 400000.0])
+    assert point["spectrum"] == {"kind": "fixed", "wavelength_nm": 532.0}
+    point = emission(build_lidar(LIDAR.replace("--divergence 0.1", "--divergence 0")))
+    assert point["angular"] == {"kind": "cone", "angle_deg": 0.0}
 
 
-def test_lidar_on_axis_pulse_is_fully_inside_the_cone():
-    text = (
-        "--observation-level 2150 --satellite-altitude 400000 --beam-zenith 180 "
-        "--beam-azimuth 0 --divergence 0 --pulse-energy 2e-3 --wavelength-nm 355 "
-        "--telescope-zenith 0 --telescope-azimuth 0 --telescope-radius 12.5 --fov-deg 2 "
-        "--events 5"
+def test_pulse_profile_is_passed_through():
+    point = emission(build_lidar(LIDAR + " --pulse gauss:sigma_ns=2.5"))
+    assert point["pulse"] == {"kind": "gauss", "sigma_ns": 2.5}
+
+
+def test_run_metadata_records_the_pulse_and_beam():
+    metadata = build_lidar(LIDAR)["run"]["metadata"]
+    assert metadata["pulse_energy_j"] == 1e-6
+    assert metadata["wavelength_nm"] == 532.0
+    assert metadata["divergence_deg"] == 0.1
+    assert metadata["beam_zenith_deg"] == 180.0
+    assert metadata["beam_azimuth_deg"] == 0.0
+    assert metadata["laser_x_m"] == 1000.0
+    assert metadata["laser_y_m"] == 0.0
+    assert metadata["laser_z_m"] == 400000.0
+    assert metadata["start_height_m"] == 400000.0
+
+
+# Start height
+
+
+def test_start_height_moves_the_point_along_the_beam():
+    text = LIDAR.replace("--beam-zenith 180", "--beam-zenith 170").replace(
+        "--beam-azimuth 0", "--beam-azimuth 30"
     )
-    description = lidar.build(parse(lidar, text))
-    assert description["events"][0]["repeat"] == 5
-    line = emission(description)
-    assert line["start_m"] == pytest.approx([0.0, 0.0, 400000.0], abs=1e-6)
-    assert line["length_m"] == pytest.approx(400000.0)
-    assert line["photons"] == pytest.approx(lidar.photons_per_pulse(2e-3, 355.0), rel=1e-12)
+    description = build_lidar(text + " --start-height 100000")
+    point = emission(description)
+    laser = [1000.0, 0.0, 400000.0]
+    beam = _pulsed_beam.unit_vector(170.0, 30.0)
+    assert point["axis"] == pytest.approx(list(beam), abs=1e-12)
+    offset = [point["position_m"][i] - laser[i] for i in range(3)]
+    path = math.sqrt(sum(o * o for o in offset))
+    assert point["position_m"][2] == pytest.approx(100000.0, abs=1e-6)
+    assert offset == pytest.approx([path * b for b in beam], rel=1e-9, abs=1e-6)
+    assert point["time_offset_ns"] == pytest.approx(path / C_M_NS, rel=1e-12)
+    assert description["run"]["metadata"]["start_height_m"] == pytest.approx(100000.0)
 
 
-def test_lidar_beam_pointing_up_is_rejected():
-    with pytest.raises(ValueError, match="towards the ground"):
-        lidar.build(parse(lidar, LIDAR.replace("--beam-zenith 180", "--beam-zenith 60")))
+def test_start_height_zero_means_the_laser_itself():
+    point = emission(build_lidar(LIDAR))
+    assert point["time_offset_ns"] == 0.0
 
 
-def test_lidar_satellite_missing_the_fov_is_rejected():
-    text = LIDAR.replace("--satellite-position 1000,0,4000", "--satellite-position 5000,0,4000")
-    with pytest.raises(ValueError, match="does not cross"):
-        lidar.build(parse(lidar, text.replace("--fov-deg 80", "--fov-deg 10")))
+@pytest.mark.parametrize("height", ["400000", "500000", "-1"])
+def test_start_height_outside_the_beam_is_rejected(height):
+    with pytest.raises(ValueError, match="start-height"):
+        build_lidar(LIDAR + f" --start-height {height}")
+
+
+# Direction and tilt
+
+
+@pytest.mark.parametrize("zenith", ["60", "90", "0"])
+def test_upward_or_horizontal_beam_is_rejected(zenith):
+    with pytest.raises(ValueError, match="point downwards"):
+        build_lidar(replaced(LIDAR, "--beam-zenith", zenith))
+
+
+def test_too_tilted_beam_is_rejected_with_reason():
+    with pytest.raises(ValueError, match="plane-parallel"):
+        build_lidar(replaced(LIDAR, "--beam-zenith", "100"))
+
+
+def test_tilt_limit_is_inclusive_and_configurable():
+    build_lidar(replaced(LIDAR, "--beam-zenith", "120"))  # tilt 60 deg, the default limit
+    with pytest.raises(ValueError, match="max-tilt"):
+        build_laser(LASER.replace("--beam-zenith 180", "--beam-zenith 115") + " --max-tilt 30")
+    build_laser(LASER.replace("--beam-zenith 180", "--beam-zenith 115") + " --max-tilt 65")
+
+
+def test_max_tilt_must_be_below_90():
+    with pytest.raises(ValueError, match="max-tilt"):
+        build_lidar(LIDAR + " --max-tilt 90")
+
+
+def test_laser_below_the_observation_level_is_rejected():
+    with pytest.raises(ValueError, match="above the observation level"):
+        build_laser(LASER.replace("--laser-position 1000,0,4000", "--laser-position 1000,0,0"))
+
+
+def test_divergence_must_be_below_180():
+    with pytest.raises(ValueError, match="divergence"):
+        build_lidar(replaced(LIDAR, "--divergence", "180"))
+
+
+# Direct beam and telescopes
+
+
+def test_direct_beam_hitting_a_telescope_is_rejected():
+    text = LIDAR.replace("--satellite-offset 1000,0", "--satellite-offset 0,0")
+    with pytest.raises(ValueError, match="the direct laser beam hits telescope 1"):
+        build_lidar(text)
+
+
+def test_direct_beam_hit_is_kept_with_allow_direct_beam():
+    text = LIDAR.replace("--satellite-offset 1000,0", "--satellite-offset 0,0")
+    description = build_lidar(text + " --allow-direct-beam")
+    assert emission(description)["kind"] == "point"
+
+
+def test_direct_beam_missing_a_telescope_is_accepted():
+    assert emission(build_lidar(LIDAR))["kind"] == "point"  # 1000 m off axis
+
+
+def test_divergence_cone_radius_counts_in_the_direct_beam_check():
+    # Same 1000 m offset, but a 10 deg beam at 400 km has a radius of ~35 km at the telescope.
+    with pytest.raises(ValueError, match="hits telescope 1"):
+        build_lidar(LIDAR.replace("--divergence 0.1", "--divergence 10"))
+
+
+def test_telescope_above_the_start_is_not_hit_by_the_beam():
+    text = without(
+        LIDAR.replace("--satellite-offset 1000,0", "--satellite-offset 0,0"), "--telescope-radius"
+    )
+    description = build_lidar(text + " --telescope 0,0,500000,12.5")
+    assert description["telescopes"] == [
+        {"id": 1, "position_m": [0.0, 0.0, 500000.0], "radius_m": 12.5}
+    ]
+
+
+def test_several_telescopes_get_ids_and_the_hit_is_named():
+    text = without(
+        LIDAR.replace("--satellite-offset 1000,0", "--satellite-offset 0,0"), "--telescope-radius"
+    )
+    with pytest.raises(ValueError, match="hits telescope 2"):
+        build_lidar(text + " --telescope 1000,0,0,12.5 --telescope 0,0,0,12.5")
+    description = build_lidar(
+        text + " --telescope 1000,0,0,12.5 --telescope -1000,0,0,12.5 --telescope 0,0,0,1"
+        " --allow-direct-beam"
+    )
+    assert [t["id"] for t in description["telescopes"]] == [1, 2, 3]
+    assert description["telescopes"][1] == {
+        "id": 2,
+        "position_m": [-1000.0, 0.0, 0.0],
+        "radius_m": 12.5,
+    }
+
+
+def test_telescope_option_needs_four_numbers():
+    with pytest.raises(SystemExit):
+        parse(lidar, LIDAR.replace("--telescope-radius 12.5", "--telescope 1,2,3"))
+
+
+# Options
+
+
+def test_lidar_satellite_offset_only_with_altitude():
+    text = without(LIDAR, "--satellite-offset").replace(
+        "--satellite-altitude 400000", "--satellite-position 1000,0,400000"
+    )
+    assert emission(build_lidar(text))["position_m"] == pytest.approx([1000.0, 0.0, 400000.0])
+    with pytest.raises(ValueError, match="satellite-offset"):
+        build_lidar(text + " --satellite-offset 1,2")
+
+
+def test_lidar_satellite_position_or_altitude_exactly_one():
+    with pytest.raises(SystemExit):
+        parse(lidar, LIDAR + " --satellite-position 1,2,3")
+    with pytest.raises(SystemExit):
+        parse(
+            lidar, without(LIDAR, "--satellite-altitude").replace("--satellite-offset 1000,0", "")
+        )
 
 
 @pytest.mark.parametrize(
@@ -256,10 +297,7 @@ def test_lidar_satellite_missing_the_fov_is_rejected():
         "--divergence",
         "--pulse-energy",
         "--wavelength-nm",
-        "--telescope-zenith",
-        "--telescope-azimuth",
         "--telescope-radius",
-        "--fov-deg",
     ],
 )
 def test_lidar_required_options_are_rejected(option):
@@ -267,11 +305,27 @@ def test_lidar_required_options_are_rejected(option):
         parse(lidar, without(LIDAR, option))
 
 
-def test_lidar_satellite_position_or_altitude_exactly_one():
+@pytest.mark.parametrize(
+    "option",
+    [
+        "--observation-level",
+        "--laser-position",
+        "--beam-zenith",
+        "--beam-azimuth",
+        "--divergence",
+        "--pulse-energy",
+        "--wavelength-nm",
+        "--telescope-radius",
+    ],
+)
+def test_laser_beam_required_options_are_rejected(option):
     with pytest.raises(SystemExit):
-        parse(lidar, LIDAR + " --satellite-altitude 4000")
-    with pytest.raises(SystemExit):
-        parse(lidar, without(LIDAR, "--satellite-position"))
+        parse(laser_beam, without(LASER, option))
+
+
+def test_rows_must_be_positive():
+    with pytest.raises(ValueError, match="rows"):
+        build_lidar(LIDAR + " --rows 0")
 
 
 # night-sky
@@ -332,17 +386,68 @@ def test_night_sky_rejects_invalid_view_cone(tmp_path):
         night_sky.build(parse(night_sky, text))
 
 
-# Normalized run descriptions (only if the config module exists).
+# Normalized run descriptions and the end-to-end chain
 
 
-def test_normalize_accepts_preset_output(tmp_path):
+@pytest.mark.parametrize("module, text", [(laser_beam, LASER), (lidar, LIDAR)])
+def test_normalize_accepts_preset_output(module, text):
     config = pytest.importorskip("obdeect.sources.config")
-    table = tmp_path / "sky.dat"
-    table.write_text("300 1\n600 1\n")
-    for module, text in [
-        (laser_beam, LASER),
-        (lidar, LIDAR),
-        (night_sky, NIGHT_SKY.format(table=table)),
-    ]:
-        normalized = config.normalize(module.build(parse(module, text)))
-        assert normalized["events"][0]["emissions"]
+    normalized = config.normalize(module.build(parse(module, text)))
+    assert normalized["events"][0]["emissions"][0]["kind"] == "point"
+
+
+def _obdeect_command():
+    """The obdeect command of this interpreter's environment, or None."""
+    candidate = Path(sys.executable).with_name("obdeect")
+    if candidate.exists():
+        return str(candidate)
+    return shutil.which("obdeect")
+
+
+def _run(*args):
+    result = subprocess.run(args, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    return result.stdout + result.stderr
+
+
+@pytest.fixture
+def obdeect_cli():
+    command = _obdeect_command()
+    if command is None:
+        pytest.skip("obdeect command not available")
+    probe = subprocess.run(
+        [command, "propagation", "run", "--help"], capture_output=True, check=False
+    )
+    if probe.returncode != 0:
+        pytest.skip("obdeect propagation command not available")
+    return command
+
+
+def _photon_rows(command, path):
+    """Photons of a stream file, from ``obdeect stream cat --summary``."""
+    match = re.search(
+        r"^total: (\d+) photons", _run(command, "stream", "cat", "--summary", path), re.MULTILINE
+    )
+    assert match is not None
+    return int(match.group(1))
+
+
+def test_lidar_chain_to_scattered_light(obdeect_cli, tmp_path):
+    data = Path(__file__).resolve().parents[3] / "propagation" / "cpp" / "tests" / "data"
+    primaries = tmp_path / "primaries.pst"
+    scattered = tmp_path / "scattered.pst"
+    _run(
+        obdeect_cli, "sources", "run", "lidar",
+        "--observation-level", "2000", "--satellite-altitude", "100000",
+        "--satellite-offset", "1000,0", "--beam-zenith", "180", "--beam-azimuth", "0",
+        "--divergence", "0.01", "--pulse-energy", "1e-3", "--wavelength-nm", "355",
+        "--telescope-radius", "12.5", "--rows", "1000", "-o", str(primaries),
+    )  # fmt: skip
+    _run(
+        obdeect_cli, "propagation", "run",
+        "--transmission", str(data / "atm_trans_2000_1_10_0_0_2000.dat"),
+        "--site-altitude", "2000", "--seed", "1", "--mode", "weighted",
+        "--scattering", str(data / "scattering_exponential.dat"), "--scattering-points", "64",
+        "-i", str(primaries), "-o", str(scattered),
+    )  # fmt: skip
+    assert _photon_rows(obdeect_cli, scattered) > _photon_rows(obdeect_cli, primaries)

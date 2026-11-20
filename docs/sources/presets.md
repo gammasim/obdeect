@@ -76,46 +76,58 @@ obdeect sources run beam-scan --observation-level 2150 --spectrum fixed:waveleng
 
 ## laser-beam
 
-Primary photons of a laser beam inside a telescope field of view. One line emission in the sky
-frame: it starts where the beam enters the field-of-view cone, follows the beam, and ends where
-it leaves the cone. Its photons are `--photons-per-m` times that length. Time runs with the
-beam (beta 1). Target `none`. Only primary photons are generated; scattering is in propagation.
+A pulsed laser pointing down, at `--laser-position` (sky frame, z above the observation level).
+One point emission per event: the pulse is `E lambda / (h c)` primary photons, with pulse energy
+`--pulse-energy` (J) and `--wavelength-nm` (exact SI constants; the spectrum is fixed at that
+wavelength). `--divergence` is the full beam angle. Frame `sky`, target `none`. Scattering is not
+generated here; propagation computes it (see the chain below).
 
-Beam and telescope directions are zenith and astronomical azimuth in degrees (0 = north,
-clockwise seen from above). The beam must cross the field of view, or the command stops with
-`beam does not cross the field of view`.
-
-Required: `--laser-position X,Y,Z`, `--laser-zenith`, `--laser-azimuth`, `--photons-per-m`,
-`--telescope-zenith`, `--telescope-azimuth`, `--telescope-radius`, `--fov-deg` (full angle),
-`--spectrum`.
+Required: `--laser-position X,Y,Z`, `--beam-zenith` (> 90), `--beam-azimuth`, `--divergence`,
+`--pulse-energy`, `--wavelength-nm`, one of `--telescope-radius` or `--telescope X,Y,Z,R`.
 
 ```sh
-obdeect sources run laser-beam --observation-level 2150 --spectrum fixed:wavelength_nm=400 \
-    --laser-position 200,0,0 --laser-zenith 5 --laser-azimuth 180 --photons-per-m 10 \
-    --telescope-zenith 0 --telescope-azimuth 0 --telescope-radius 12.5 --fov-deg 5 -o /dev/null
+obdeect sources run laser-beam --observation-level 2150 --laser-position 200,0,3000 \
+    --beam-zenith 170 --beam-azimuth 180 --divergence 0.05 --pulse-energy 1e-3 \
+    --wavelength-nm 355 --telescope-radius 12.5 --rows 1000 -o /dev/null
 ```
 
 ## lidar
 
-One satellite lidar pulse seen by a ground telescope. The pulse is one line emission from the
-satellite (`--satellite-position`, or `--satellite-altitude` directly above the telescope),
-clipped to the telescope field of view and to the ground. Photons per pulse are
-`E lambda / (h c)` from `--pulse-energy` and `--wavelength-nm`. The beam has the full divergence
-`--divergence` (a filled cone). Frame `sky`, target `none`. Each pulse is one event (`--events`).
-`--rows` sets the sampled rows per pulse; the weights carry the physical photons.
+A pulsed satellite lidar pointing down. Same model as `laser-beam`, with the emission at the
+satellite: `--satellite-altitude M` above the observation level at `--satellite-offset X,Y`
+(default 0,0), or `--satellite-position X,Y,Z`. Each pulse is one event (`--events`).
 
-`--beam-zenith` must be above 90 deg (towards the ground).
-
-Required: `--observation-level`, `--satellite-position` or `--satellite-altitude`,
-`--beam-zenith`, `--beam-azimuth`, `--divergence`, `--pulse-energy`, `--wavelength-nm`,
-`--telescope-zenith`, `--telescope-azimuth`, `--telescope-radius`, `--fov-deg`.
+Required: `--satellite-altitude` or `--satellite-position`, `--beam-zenith` (> 90),
+`--beam-azimuth`, `--divergence`, `--pulse-energy`, `--wavelength-nm`, one of `--telescope-radius`
+or `--telescope X,Y,Z,R`. `--start-height M` moves the emission along the beam to that height
+(for example 100000 for a satellite); `--rows` sets the sampled rows per pulse.
 
 ```sh
 obdeect sources run lidar --observation-level 2150 --satellite-altitude 500000 \
-    --beam-zenith 180 --beam-azimuth 0 --divergence 0.01 --pulse-energy 1e-3 \
-    --wavelength-nm 532 --telescope-zenith 0 --telescope-azimuth 0 --telescope-radius 12.5 \
-    --fov-deg 1 --rows 1000 -o /dev/null
+    --satellite-offset 1000,0 --beam-zenith 180 --beam-azimuth 0 --divergence 0.01 \
+    --pulse-energy 1e-3 --wavelength-nm 532 --telescope-radius 12.5 --start-height 100000 \
+    --rows 1000 -o /dev/null
 ```
+
+Chain of `laser-beam` and `lidar` (the scattered light, with weighted mode because the primary
+weights exceed 2048):
+
+```sh
+obdeect sources run lidar ... -o primaries.pst
+obdeect propagation run --transmission T --site-altitude H --seed N --mode weighted \
+    --scattering S --scattering-points 64 -i primaries.pst -o scattered.pst
+```
+
+Model and limits, shared by both presets:
+
+- t = 0 is the laser firing. With `--start-height`, `time_offset_ns` is the path from the laser to
+  the start divided by c (vacuum), so the times stay relative to the firing.
+- The beam must point down (`--beam-zenith` > 90) and tilt at most `--max-tilt` (default 60 deg)
+  from nadir. The scattering model is plane-parallel.
+- Only single scattering. A beam that passes a telescope sphere (closest approach within the
+  sphere plus the beam radius at that point, below the start) is an error, unless
+  `--allow-direct-beam` is given.
+- `--beam-azimuth` is astronomical: clockwise from north (sky frame x north, y west).
 
 ## night-sky
 
