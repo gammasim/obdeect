@@ -552,6 +552,30 @@ void round_trip(bool with_profile) {
   }
 }
 
+void telescope_end_validation() {
+  for (bool opened : {false, true}) {
+    std::ostringstream bytes;
+    obdeect::stream::Writer writer(bytes, "test");
+    writer.write_metadata(RecordType::run, run_keys(0));
+    if (opened) {
+      obdeect::stream::Metadata telescope;
+      telescope["telescope_id"] = std::int64_t{1};
+      telescope["frame"] = std::int64_t{1};
+      writer.write_metadata(RecordType::telescope, telescope);
+    }
+    obdeect::stream::Metadata end;
+    end["telescope_id"] = std::int64_t{2};
+    end["photons"] = 0.0;
+    writer.write_metadata(RecordType::telescope_end, end);
+    writer.finish();
+    CHECK(rejects([&] {
+      std::istringstream in(bytes.str());
+      std::ostringstream out;
+      ground_to_sky_stream(in, out, std::nullopt);
+    }));
+  }
+}
+
 } // namespace
 
 int main() {
@@ -561,6 +585,7 @@ int main() {
     dropped_rows();
     chunk_size_independence();
     rejected_inputs();
+    telescope_end_validation();
     round_trip(false);
     round_trip(true);
   });

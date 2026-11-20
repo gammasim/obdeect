@@ -728,17 +728,18 @@ private:
       grid.push_back(lambda);
     }
     std::vector<double> product(grid.size(), 1.0);
+    std::vector<Envelope> factors;
     for (const auto &factor : config_.envelope) {
       if (factor.wavelength_nm.front() > first || factor.wavelength_nm.back() < last) {
         throw std::invalid_argument("envelope factor " + factor.name +
                                     " does not cover the wavelength range");
       }
-      const Envelope table(factor.wavelength_nm, factor.value);
+      factors.emplace_back(factor.wavelength_nm, factor.value);
       for (std::size_t i = 0; i < grid.size(); ++i) {
-        product[i] *= table(grid[i]);
+        product[i] *= factors.back()(grid[i]);
       }
     }
-    return Envelope(std::move(grid), std::move(product));
+    return Envelope(std::move(grid), std::move(product), std::move(factors));
   }
 
   [[nodiscard]] obdeect::stream::Metadata

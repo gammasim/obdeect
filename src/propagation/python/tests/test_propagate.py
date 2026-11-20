@@ -1622,3 +1622,53 @@ def test_geometry_only_rejects_wavelength_interpolation(tmp_path):
             seed=1,
             wavelength_interpolation="nearest",
         )
+
+
+def test_multiple_envelopes_are_multiplied_at_the_photon_wavelength(tmp_path):
+    source = tmp_path / "input.pst"
+    source.write_bytes(_ground_wavelength_stream([400.5]))
+    a, b = tmp_path / "a.dat", tmp_path / "b.dat"
+    a.write_text("250 0.0\n400 0.0\n401 1.0\n700 1.0\n", encoding="utf-8")
+    b.write_text("250 1.0\n400 1.0\n401 0.0\n700 0.0\n", encoding="utf-8")
+    out = tmp_path / "output.pst"
+    obdeect_propagation.propagate(
+        source,
+        out,
+        transmission=TABLE_PATH,
+        site_altitude_m=SITE_M,
+        seed=1,
+        mode="weighted",
+        envelope={"a": a, "b": b},
+    )
+    weight = _photon_block(read_records(out.read_bytes()), 1, "w")[0]
+    table = obdeect_propagation.TransmissionTable(str(TABLE_PATH), SITE_M)
+    expected = table.transmission2(400.5, 2300.0, 1 / np.sqrt(1 - 0.2**2), 0.0, 0.0) * 0.25
+    assert weight == pytest.approx(expected, rel=1e-6)
+
+
+def test_to_sky_updates_surviving_telescope_weight(tmp_path):
+    writer = StreamWriter()
+    writer.metadata("run", _geometry_run())
+    writer.metadata("event", {"event_number": 1})
+    writer.metadata("telescope", {"telescope_id": 1, "frame": 1})
+    writer.photons(
+        1,
+        1,
+        {
+            "x": [0, 0],
+            "y": [0, 0],
+            "cx": [0, 0],
+            "cy": [0, 0],
+            "t": [0, 0],
+            "zem": [3000, 1000],
+            "w": [2, 3],
+        },
+    )
+    writer.metadata("telescope_end", {"telescope_id": 1, "photons": 5.0})
+    writer.metadata("event_end")
+    writer.metadata("run_end")
+    source, out = tmp_path / "in.pst", tmp_path / "out.pst"
+    source.write_bytes(writer.getvalue())
+    obdeect_propagation.to_sky(source, out)
+    end = next(r for r in read_records(out.read_bytes()) if r["type"] == "telescope_end")
+    assert end["metadata"]["photons"] == pytest.approx(2.0)

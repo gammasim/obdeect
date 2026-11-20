@@ -308,6 +308,7 @@ inline ToSkySummary ground_to_sky_stream(std::istream &in, std::ostream &out,
   ToSkySummary summary;
   std::optional<to_sky_detail::RunSite> run;
   std::optional<std::uint32_t> open_telescope; // telescope whose photons may follow
+  double telescope_weight = 0.0;
   obdeect::stream::Record record;
   while (reader.next(record)) {
     switch (record.type) {
@@ -342,7 +343,11 @@ inline ToSkySummary ground_to_sky_stream(std::istream &in, std::ostream &out,
                                       " differs from the run's telescope position");
         }
       }
+      if (open_telescope) {
+        throw std::invalid_argument("telescope record while another telescope is open");
+      }
       open_telescope = static_cast<std::uint32_t>(id);
+      telescope_weight = 0.0;
       obdeect::stream::Metadata out_metadata = record.metadata;
       out_metadata["frame"] = static_cast<std::int64_t>(Frame::sky);
       writer.write_metadata(record.type, out_metadata);
@@ -362,12 +367,20 @@ inline ToSkySummary ground_to_sky_stream(std::istream &in, std::ostream &out,
                               profile ? &*profile : nullptr};
       for (const auto &piece : ground_to_sky(chunk, plane, summary.dropped)) {
         writer.write_chunk(piece);
+        for (float weight : piece[obdeect::stream::Column::w]) {
+          telescope_weight += weight;
+        }
         summary.photons_out += piece.rows();
       }
       break;
     }
     case RecordType::telescope_end: {
+      const auto id = integer(record.metadata, "telescope_id");
+      if (!open_telescope || id != *open_telescope) {
+        throw std::invalid_argument("telescope_end does not match an open telescope");
+      }
       open_telescope.reset();
+      record.metadata["photons"] = telescope_weight;
       writer.write_metadata(record.type, record.metadata);
       break;
     }
