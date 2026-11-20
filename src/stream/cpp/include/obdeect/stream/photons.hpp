@@ -3,6 +3,7 @@
 #include "obdeect/stream/format.hpp"
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -84,6 +85,17 @@ struct PhotonChunk {
 private:
   std::size_t rows_{};
 };
+
+// Largest allowed |cz^2 - (1 - cx^2 - cy^2)| for a stored direction. Float32 columns hold a unit
+// vector to about 1e-7; the squared form keeps that rounding from failing nearly horizontal
+// photons, for which an error in cz of the same size is amplified by 1 / (2 |cz|).
+inline constexpr double direction_norm_tolerance = 1e-5;
+
+// True if cz points downwards (cz < 0) and (cx, cy, cz) is a unit vector within the tolerance.
+// False for upwards or horizontal photons (cz >= 0) and for any NaN input.
+[[nodiscard]] inline bool cz_matches_direction(double cz, double cx, double cy) {
+  return cz < 0.0 && std::abs(cz * cz - (1.0 - cx * cx - cy * cy)) <= direction_norm_tolerance;
+}
 
 // One decoded record. `metadata` is used by all metadata records, `chunk` by
 // photons, `blob_*` by blob records.

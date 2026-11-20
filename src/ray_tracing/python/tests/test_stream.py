@@ -149,6 +149,16 @@ def test_rotation_maps_the_optical_axis_to_minus_z():
     assert np.allclose(rotation @ direction, [0.0, 0.0, -1.0], atol=1e-12)
 
 
+def test_cz_column_accepts_float32_near_horizontal_directions():
+    # Unit vector in float32 with |cz| ~ 6e-4: an absolute check on cz rejected it.
+    cx = np.array([0.989117742], dtype=np.float32)
+    cy = np.array([-0.147124648], dtype=np.float32)
+    assert stream_module._cz_matches(np.array([-0.000614837], dtype=np.float32), cx, cy)
+    # Upwards photons and a cz that does not match cx, cy are rejected.
+    assert not stream_module._cz_matches(np.array([0.000614837], dtype=np.float32), cx, cy)
+    assert not stream_module._cz_matches(np.array([-0.05], dtype=np.float32), cx, cy)
+
+
 def test_input_plane_is_above_the_incoming_obscurers(model):
     top = model.max_incoming_obscurer_z_m()
     assert minimum_input_plane_height_m(model, 0.0) == pytest.approx(top + 1.0)

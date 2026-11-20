@@ -552,11 +552,11 @@ inline void scatter_chunk(const ScatteringConfig &config, const ScatteringTable 
     if (!(r2 <= 1.0)) {
       throw std::invalid_argument("direction cosines must satisfy cx^2 + cy^2 <= 1");
     }
-    const double cz = -std::sqrt(1.0 - r2);
-    // Finite first: a NaN makes the comparison false and would pass the check.
+    // cz_matches_direction is false for NaN; the finiteness test is kept as the first check.
     if (chunk.has(Column::cz)) {
       const double cz_column = chunk[Column::cz][row];
-      if (!std::isfinite(cz_column) || std::abs(cz_column - cz) > 1e-5) {
+      if (!std::isfinite(cz_column) ||
+          !obdeect::stream::cz_matches_direction(cz_column, cx[row], cy[row])) {
         throw std::invalid_argument("cz column must be finite and match cx, cy "
                                     "(cz = -sqrt(1-cx^2-cy^2))");
       }

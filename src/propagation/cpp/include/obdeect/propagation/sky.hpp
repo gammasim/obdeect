@@ -273,7 +273,7 @@ inline std::uint64_t sky_to_ground(obdeect::stream::PhotonChunk &chunk, const Sk
       }
       if (cz >= 0.0) {
         reaches = false; // moving upwards or horizontally
-      } else if (std::abs(cz + cz_magnitude) > 1e-5) {
+      } else if (!obdeect::stream::cz_matches_direction(cz, dx, dy)) {
         throw std::invalid_argument("cz column does not match cx, cy (cz = -sqrt(1-cx^2-cy^2))");
       }
     }

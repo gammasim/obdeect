@@ -71,10 +71,10 @@ inline void validate_ground_chunk(obdeect::stream::PhotonChunk &chunk, bool need
       throw std::invalid_argument("direction cosines must satisfy cx^2 + cy^2 <= 1");
     }
     if (chunk.has(Column::cz)) {
-      const double cz = -std::sqrt(1.0 - r2);
       const auto cz_given = static_cast<double>(chunk[Column::cz][row]);
-      // NaN fails the finiteness test; a NaN difference would pass the tolerance test.
-      if (!std::isfinite(cz_given) || std::abs(cz_given - cz) > 1e-5) {
+      // cz_matches_direction is false for NaN; the finiteness test is kept as the first check.
+      if (!std::isfinite(cz_given) ||
+          !obdeect::stream::cz_matches_direction(cz_given, cx[row], cy[row])) {
         throw std::invalid_argument(
             "cz column must be finite and match cx, cy (cz = -sqrt(1-cx^2-cy^2))");
       }
