@@ -171,6 +171,18 @@ def test_ground_frame_on_and_off_axis(native, models, tmp_path, obdeect_stream):
     assert counts["photons_out"] > 0
 
 
+@pytest.mark.parametrize("cz", [-0.000614837, 0.000614837, -0.05])
+def test_near_horizontal_cz_validation(native, models, tmp_path, obdeect_stream, cz):
+    photons = beam(1, (0.989117742, -0.147124648))
+    photons["cz"] = np.array([cz], dtype=np.float32)
+    source = write_stream(tmp_path / "in.pst", {1: photons})
+    result = compare(native, models, tmp_path, obdeect_stream, source)
+    if cz < 0 and cz > -0.01:
+        assert result["photons_in"] == 1
+    else:
+        assert "cz" in result
+
+
 def test_stdin_matches_file_input(native, models, tmp_path):
     source = write_stream(tmp_path / "in.pst", {1: beam(4000, (0.0, 0.0), radius_m=6.0)})
     args = dict(telescopes=None, pointing=(0.0, 0.0), transmission="full", threads=1)

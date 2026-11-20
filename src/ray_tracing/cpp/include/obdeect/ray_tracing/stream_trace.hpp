@@ -43,8 +43,6 @@ using json::Value;
 inline constexpr double kPi = 3.141592653589793;
 // Margin above the highest incoming obscurer for the input plane [m] (as simtools).
 inline constexpr double kInputPlaneMarginM = 1.0;
-// Largest allowed difference between a cz column and -sqrt(1 - cx^2 - cy^2).
-inline constexpr double kCzTolerance = 1e-5;
 // Radial samples of an asphere mirror's aperture for its support.
 inline constexpr std::size_t kAsphereSamples = 2049;
 // NumPy's reduction buffer: float32 sums in float64 are pairwise within blocks of this size.
@@ -1037,19 +1035,17 @@ private:
     const auto &cx_in = chunk[Column::cx];
     const auto &cy_in = chunk[Column::cy];
     std::vector<double> cz(rows);
-    bool cz_nan = false, cz_mismatch = false, upward = false;
+    bool cz_mismatch = false, upward = false;
     for (std::size_t i = 0; i < rows; ++i) {
       const double cx = cx_in[i], cy = cy_in[i];
       const double v = 1.0 - cx * cx - cy * cy;
       cz[i] = -std::sqrt(std::isnan(v) ? v : std::max(0.0, v));
       if (chunk.has(Column::cz)) {
-        const double difference = std::abs(static_cast<double>(chunk[Column::cz][i]) - cz[i]);
-        cz_nan = cz_nan || std::isnan(difference);
-        cz_mismatch = cz_mismatch || difference > kCzTolerance;
+        cz_mismatch = cz_mismatch || !st::cz_matches_direction(chunk[Column::cz][i], cx, cy);
       }
       upward = upward || !(cz[i] < 0.0);
     }
-    if (cz_mismatch && !cz_nan)
+    if (cz_mismatch)
       throw ModelError("photon column cz does not match cx and cy");
     if (upward)
       throw ModelError("photons must move towards -z (downwards)");
