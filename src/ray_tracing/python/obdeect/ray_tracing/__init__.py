@@ -11,7 +11,7 @@ _EXPORTS = {
     "OpticalModel": "obdeect.ray_tracing.model",
     "ThreadPool": "obdeect.ray_tracing.model",
     "trace_many": "obdeect.ray_tracing.model",
-    "ModelError": "obdeect.ray_tracing.formats",
+    "ModelError": "obdeect.ray_tracing.errors",
 }
 __all__ = list(_EXPORTS)
 

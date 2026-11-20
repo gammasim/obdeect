@@ -425,15 +425,9 @@ inline Obscurer obscurer(const Node &node, std::vector<Plane> &planes) {
 
 } // namespace detail
 
-// Parse and validate an optical model (format obdeect.optical-model.v2).
-[[nodiscard]] inline OpticalModel load_model(std::string_view text) {
+// Validate an already structured optical model (format obdeect.optical-model.v2).
+[[nodiscard]] inline OpticalModel load_model(json::Value root_value) {
   using detail::Node;
-  json::Value root_value;
-  try {
-    root_value = json::Parser::parse(text);
-  } catch (const std::runtime_error &error) {
-    throw ModelError(error.what());
-  }
   const Node root{root_value, "model"};
   (void)root.object({"format", "sha256", "provenance", "notes", "sampling", "optics"});
   if (root["format"].string() != kModelFormat)
@@ -491,6 +485,17 @@ inline Obscurer obscurer(const Node &node, std::vector<Plane> &planes) {
     if (!unique.insert(id).second)
       throw ModelError("model.optics: surface id " + std::to_string(id) + " is used twice");
   return model;
+}
+
+// Parse an optical-model file using the same validation as structured inputs.
+[[nodiscard]] inline OpticalModel load_model(std::string_view text) {
+  json::Value root_value;
+  try {
+    root_value = json::Parser::parse(text);
+  } catch (const std::runtime_error &error) {
+    throw ModelError(error.what());
+  }
+  return load_model(std::move(root_value));
 }
 
 } // namespace obdeect::ray_tracing

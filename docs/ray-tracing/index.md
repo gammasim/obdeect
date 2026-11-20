@@ -6,8 +6,9 @@ surface and the optical responses such as mirror reflectivity. A photon ends at 
 entrance, or is lost on the way, and the trace records where.
 
 You can trace stars and point sources, calibration light and the photons of a photon stream.
-The optical model comes from the simulation-models database, so the same code serves any telescope
-that it describes. The stream step connects the atmosphere to sim_telarray's camera simulation.
+Simtools compiles an optical model from simulation-model records. This component loads that
+versioned model and traces it without depending on the source database. The stream step connects
+the atmosphere to sim_telarray's camera simulation.
 
 ::::{grid} 1 2 2 2
 :gutter: 3
@@ -17,7 +18,7 @@ that it describes. The stream step connects the atmosphere to sim_telarray's cam
 :link-type: doc
 :class-card: sd-shadow-sm
 
-Compile an optical model, trace a star and plot the result.
+Trace a star and plot the result from a compiled optical model.
 :::
 
 :::{grid-item-card} {fas}`code;pst-color-primary` Python
@@ -65,7 +66,7 @@ Accuracy checks, comparisons with sim_telarray and performance.
 :link-type: doc
 :class-card: sd-shadow-sm
 
-Optical-model methods, compilation and analysis helpers.
+Optical-model methods and analysis helpers.
 :::
 
 ::::

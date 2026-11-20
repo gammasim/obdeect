@@ -5,10 +5,9 @@ import math
 import numpy as np
 import pytest
 from obdeect.ray_tracing import OpticalModel, ThreadPool
-from obdeect.ray_tracing.compiler import model_hash
+from obdeect.ray_tracing.hashing import model_hash
 from obdeect.ray_tracing.model import _mirror_support, _obscurer_top_z_m
-from telescopes import dual as telescopes_dual
-from telescopes import record, segmented
+from optical_models import load_model
 
 IDENTITY = np.eye(3)
 ORIGIN = (0.0, 0.0, 0.0)
@@ -16,11 +15,6 @@ SEED = 20261026
 TOWARDS = (0.02, 0.01, math.sqrt(1 - 0.02**2 - 0.01**2))
 
 TRACE_COLUMNS = ("position_m", "direction", "time_ns", "weight")
-
-
-def compiled(**changes):
-    records, files = segmented(**changes)
-    return OpticalModel.from_records(records, files.__getitem__, configuration_seed=1)
 
 
 def edited(model, change):
@@ -121,7 +115,7 @@ def constant_acceptance(value):
 
 
 def test_without_responses_bunches_equal_traced_photons_bitwise():
-    model = compiled(telescope_transmission=None)
+    model = load_model("segmented-no-transmission")
     bunches, plane_z = star_bunches(model, 20000)
     out = trace_bunches(model, bunches, plane_z)
     ref = model.trace(as_photons(bunches, plane_z), seed=SEED, detected_only=True)
@@ -138,7 +132,7 @@ def test_without_responses_bunches_equal_traced_photons_bitwise():
 
 
 def test_expected_count_with_reflectivity_and_acceptance():
-    model = edited(compiled(telescope_transmission=None), constant_reflectivity(0.8))
+    model = edited(load_model("segmented-no-transmission"), constant_reflectivity(0.8))
     n = 200_000
     bunches, plane_z = star_bunches(model, n)
     geometry = model.trace(
@@ -160,7 +154,7 @@ def test_expected_count_with_reflectivity_and_acceptance():
 
 
 def test_fractional_sizes():
-    model = compiled(telescope_transmission=None)
+    model = load_model("segmented-no-transmission")
     n = 100_000
     bunches, plane_z = star_bunches(model, n)
     geometry = model.trace(
@@ -189,7 +183,7 @@ def test_fractional_sizes():
 
 def test_mean_rows_per_bunch_equal_the_size():
     # Vertical light on the mirror at x = 1.25 m, away from the camera shadow: all bunches hit.
-    model = compiled(telescope_transmission=None)
+    model = load_model("segmented-no-transmission")
     rng = np.random.default_rng(5)
     n = 100_000
     for size in (2.5, 0.5, 3.2):
@@ -232,7 +226,7 @@ def test_ks_distance_with_ties_and_unequal_sizes():
 
 
 def test_survivors_follow_the_weighted_trace_distribution():
-    model = edited(compiled(telescope_transmission=None), graded_responses)
+    model = edited(load_model("segmented-no-transmission"), graded_responses)
     n = 400_000
     bunches, plane_z = star_bunches(model, n, wavelength_nm=450.0)
     out = trace_bunches(model, bunches, plane_z)
@@ -259,12 +253,7 @@ def test_survivors_follow_the_weighted_trace_distribution():
 
 def test_threads_pool_and_splitting_do_not_change_the_result():
     model = edited(
-        compiled(
-            telescope_transmission=None,
-            mirror_reflection_random_angle=record(
-                "mirror_reflection_random_angle", [0.01, 0.2, 0.05], ["deg", "null", "deg"]
-            ),
-        ),
+        load_model("segmented-no-transmission-random-reflections"),
         graded_responses,
     )
     n = 30_000
@@ -300,7 +289,7 @@ def test_threads_pool_and_splitting_do_not_change_the_result():
 
 
 def test_invalid_input_is_rejected_before_tracing():
-    model = compiled(telescope_transmission=None)
+    model = load_model("segmented-no-transmission")
     bunches, plane_z = star_bunches(model, 100)
     slanted = IDENTITY.copy()
     slanted[0, 0] = 1.0 + 1e-9
@@ -332,7 +321,7 @@ def test_invalid_input_is_rejected_before_tracing():
 
 
 def test_sampled_wavelengths_follow_the_density():
-    model = compiled(telescope_transmission=None)
+    model = load_model("segmented-no-transmission")
     nodes = np.linspace(300.0, 600.0, 301)
     values = 1.0 / nodes**2
     n = 300_000
@@ -363,7 +352,7 @@ def test_sampled_wavelengths_follow_the_density():
 
 
 def test_inverse_square_law_gives_wavelengths_in_range():
-    model = edited(compiled(telescope_transmission=None), constant_reflectivity(1.0))
+    model = edited(load_model("segmented-no-transmission"), constant_reflectivity(1.0))
     bunches, plane_z = star_bunches(model, 20000, wavelength_nm=0.0)
     out = trace_bunches(model, bunches, plane_z, wavelength_law=(300.0, 600.0), roulette=False)
     w = out["wavelength_nm"]
@@ -374,7 +363,7 @@ def test_inverse_square_law_gives_wavelengths_in_range():
 def test_inverse_square_law_follows_the_law():
     # Density p(l) = (1/l^2) / (1/lo - 1/hi) on [lo, hi] has E[l] = ln(hi/lo) / (1/lo - 1/hi).
     lo, hi = 300.0, 600.0
-    model = edited(compiled(telescope_transmission=None), constant_reflectivity(1.0))
+    model = edited(load_model("segmented-no-transmission"), constant_reflectivity(1.0))
     n = 200_000
     bunches, plane_z = star_bunches(model, n, wavelength_nm=0.0)
     out = trace_bunches(model, bunches, plane_z, wavelength_law=(lo, hi), roulette=False)
@@ -389,7 +378,7 @@ def test_inverse_square_law_follows_the_law():
 
 
 def test_wavelength_law_rejects_invalid_limits():
-    model = compiled(telescope_transmission=None)
+    model = load_model("segmented-no-transmission")
     bunches, plane_z = star_bunches(model, 100, wavelength_nm=0.0)
     # lo below 1 nm is rejected.
     for law in (
@@ -414,7 +403,7 @@ def test_wavelength_law_rejects_invalid_limits():
 
 def test_frame_places_the_input_plane():
     # Rotating the input frame by 90 degrees about z and shifting it moves the photons.
-    model = compiled(telescope_transmission=None)
+    model = load_model("segmented-no-transmission")
     bunches, plane_z = star_bunches(model, 20000)
     base = trace_bunches(model, bunches, plane_z)
     rotation = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
@@ -441,9 +430,8 @@ def test_frame_places_the_input_plane():
 
 def with_transmission(on_axis):
     """A single-mirror telescope with this on-axis transmission (other values as in `segmented`)."""
-    return compiled(
-        telescope_transmission=record("telescope_transmission", [on_axis, 1, 0.1, 5.0, 2.0, 0.0])
-    )
+    assert on_axis == 0.8
+    return load_model("segmented-transmission-0.8")
 
 
 def test_normalised_transmission_is_off_by_default_and_weights_stay_within_bound():
@@ -554,7 +542,7 @@ def test_obscurer_top_bounds_square_plate_and_frustum_wall():
 
 
 def test_input_plane_below_an_incoming_obscurer_is_rejected():
-    model = compiled(telescope_transmission=None)
+    model = load_model("segmented-no-transmission")
     top = model.max_incoming_obscurer_z_m()
     assert top is not None
     bunches, _ = star_bunches(model, 1000)
@@ -567,7 +555,7 @@ def test_input_plane_below_an_incoming_obscurer_is_rejected():
 
 
 def test_input_plane_above_an_incoming_obscurer_is_accepted():
-    model = compiled(telescope_transmission=None)
+    model = load_model("segmented-no-transmission")
     top = model.max_incoming_obscurer_z_m()
     bunches, plane_z = star_bunches(model, 1000)
     assert plane_z > top
@@ -576,7 +564,7 @@ def test_input_plane_above_an_incoming_obscurer_is_accepted():
 
 
 def test_plane_height_is_taken_along_the_telescope_axis():
-    model = compiled(telescope_transmission=None)
+    model = load_model("segmented-no-transmission")
     top = model.max_incoming_obscurer_z_m()
     bunches, _ = star_bunches(model, 1000)
     # Rotation about x by 20 deg: the input z axis makes an angle of 20 deg with the telescope axis.
@@ -593,7 +581,7 @@ def test_plane_height_is_taken_along_the_telescope_axis():
 
 
 def test_tilted_plane_cuts_incoming_obscurer():
-    model = compiled(telescope_transmission=None)
+    model = load_model("segmented-no-transmission")
     top = model.max_incoming_obscurer_z_m()
     bunches, _ = star_bunches(model, 10)
     angle = math.radians(20.0)
@@ -639,7 +627,7 @@ def test_tilted_plane_above_a_slanted_cylinder_is_accepted():
     def only_cylinder(document):
         document["optics"]["obscurers"] = [cylinder]
 
-    model = edited(compiled(telescope_transmission=None), only_cylinder)
+    model = edited(load_model("segmented-no-transmission"), only_cylinder)
     bunches, _ = star_bunches(model, 10)
     # The segmented mirror reaches 1.44 along this normal, so the plane lies above it too.
     assert "weight" in trace_bunches(model, bunches, 1.6, frame_rotation=tilted)
@@ -649,7 +637,7 @@ def test_tilted_plane_above_a_slanted_cylinder_is_accepted():
 
 
 def test_simtools_plane_at_60_degrees_is_accepted():
-    model = compiled(telescope_transmission=None)
+    model = load_model("segmented-no-transmission")
     top = model.max_incoming_obscurer_z_m()
     bunches, _ = star_bunches(model, 10)
     angle = math.radians(60.0)
@@ -665,7 +653,7 @@ def test_simtools_plane_at_60_degrees_is_accepted():
 
 
 def test_plane_height_uses_the_length_unit():
-    model = compiled(telescope_transmission=None)
+    model = load_model("segmented-no-transmission")
     top = model.max_incoming_obscurer_z_m()
     bunches, _ = star_bunches(model, 1000)
     # Input in centimetres: the same height is 102 * top in input units.
@@ -675,9 +663,7 @@ def test_plane_height_uses_the_length_unit():
 
 
 def test_without_incoming_obscurers_no_height_is_rejected():
-    model = compiled(
-        telescope_transmission=None, camera_body_diameter=record("camera_body_diameter", 0.0, "cm")
-    )
+    model = load_model("segmented-no-transmission-no-camera-body")
     assert model.max_incoming_obscurer_z_m() is None
     bunches, plane_z = star_bunches(model, 1000)
     assert "weight" in trace_bunches(model, bunches, plane_z)
@@ -693,10 +679,7 @@ def without_obscurers(model):
 
 
 def dual_without_obscurers():
-    records, files = telescopes_dual()
-    return without_obscurers(
-        OpticalModel.from_records(records, files.__getitem__, configuration_seed=1)
-    )
+    return without_obscurers(load_model("dual"))
 
 
 def test_input_plane_below_a_mirror_is_rejected():
@@ -741,7 +724,7 @@ def test_mirror_support_is_the_highest_point_along_the_direction():
         support = dict(model.mirrors_support(direction))["primary"]
         assert support == pytest.approx(brute, abs=1e-5)
         assert support >= brute - 1e-9
-    segmented_model = compiled(telescope_transmission=None)
+    segmented_model = load_model("segmented-no-transmission")
     centres = [f["centre_m"] for f in segmented_model.document["optics"]["primary"]["facets"]]
     support = dict(segmented_model.mirrors_support(np.array([0.0, 0.0, 1.0])))["primary"]
     assert support >= max(c[2] for c in centres)

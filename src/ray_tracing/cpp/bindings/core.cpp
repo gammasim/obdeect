@@ -27,6 +27,46 @@ using namespace nb::literals;
 
 namespace {
 
+obdeect::ray_tracing::json::Value python_value(nb::handle value, unsigned depth = 0) {
+  using obdeect::ray_tracing::json::Value;
+  if (depth > 64)
+    throw nb::value_error("optical model nesting exceeds 64 levels");
+  if (value.is_none())
+    return Value{std::monostate{}};
+  if (nb::isinstance<nb::bool_>(value))
+    return Value{nb::cast<bool>(value)};
+  if (nb::isinstance<nb::int_>(value) || nb::isinstance<nb::float_>(value)) {
+    const double number = nb::cast<double>(value);
+    if (!std::isfinite(number))
+      throw nb::value_error("optical model numbers must be finite");
+    return Value{number};
+  }
+  if (nb::isinstance<nb::str>(value))
+    return Value{nb::cast<std::string>(value)};
+  if (nb::isinstance<nb::dict>(value)) {
+    Value::Object object;
+    Py_ssize_t position = 0;
+    PyObject *key = nullptr;
+    PyObject *item = nullptr;
+    while (PyDict_Next(value.ptr(), &position, &key, &item)) {
+      const nb::handle key_handle{key};
+      const nb::handle item_handle{item};
+      if (!nb::isinstance<nb::str>(key_handle))
+        throw nb::type_error("optical model object keys must be strings");
+      object.names.push_back(nb::cast<std::string>(key_handle));
+      object.values.push_back(python_value(item_handle, depth + 1));
+    }
+    return Value{std::move(object)};
+  }
+  if (nb::isinstance<nb::list>(value) || nb::isinstance<nb::tuple>(value)) {
+    Value::Array array;
+    for (nb::handle item : nb::iter(value))
+      array.push_back(python_value(item, depth + 1));
+    return Value{std::move(array)};
+  }
+  throw nb::type_error("optical model values must be JSON-compatible scalars, lists, or dicts");
+}
+
 template <class T> using In1 = nb::ndarray<const T, nb::ndim<1>, nb::c_contig, nb::device::cpu>;
 using In3 = nb::ndarray<const double, nb::shape<-1, 3>, nb::c_contig, nb::device::cpu>;
 
@@ -53,6 +93,13 @@ public:
   explicit Model(const std::string &json) {
     try {
       model_ = obdeect::ray_tracing::load_model(json);
+    } catch (const obdeect::ray_tracing::ModelError &error) {
+      throw nb::value_error(error.what());
+    }
+  }
+  explicit Model(nb::dict document) {
+    try {
+      model_ = obdeect::ray_tracing::load_model(python_value(document));
     } catch (const obdeect::ray_tracing::ModelError &error) {
       throw nb::value_error(error.what());
     }
@@ -512,6 +559,7 @@ NB_MODULE(_core, module) {
       .def_prop_ro("size", &obdeect::ray_tracing::ThreadPool::size);
   nb::class_<Model>(module, "Model")
       .def(nb::init<const std::string &>(), "json"_a)
+      .def(nb::init<nb::dict>(), "document"_a)
       .def("trace", &Model::trace, "position_m"_a, "direction"_a, "wavelength_nm"_a, "time_ns"_a,
            "weight"_a, "photon_id"_a, nb::kw_only(), "seed"_a, "apply_responses"_a = true,
            "threads"_a = 0U, "direct"_a = false, "outputs"_a = nb::none(),

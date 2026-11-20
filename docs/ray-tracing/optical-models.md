@@ -33,7 +33,7 @@ Some telescopes have the optical origin displaced from the rotation axes. The si
 `axes_offsets` record gives the horizontal offset between the azimuth and altitude axes,
 then the altitude-to-optical-axis offset, in its units (cm in sim_telarray).
 
-The compiler stores the offset in the telescope frame, in metres, as
+Simtools stores the offset in the telescope frame, in metres, as
 `optics.axes_offset_m` = [x, y, z]. The key is written only when the offset is non-zero,
 and needs the compilation zenith angle. For components `(O, T)` and zenith `theta`, the
 offset is `(O cos(theta) - T, 0, O sin(theta))`. The loader requires three numbers.

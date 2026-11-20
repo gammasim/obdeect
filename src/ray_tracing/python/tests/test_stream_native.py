@@ -12,9 +12,9 @@ import subprocess
 import numpy as np
 import pytest
 from obdeect.ray_tracing import OpticalModel
-from obdeect.ray_tracing.formats import ModelError
+from obdeect.ray_tracing.errors import ModelError
 from obdeect.ray_tracing.stream import trace_stream
-from telescopes import dual, segmented
+from optical_models import load_model
 from test_stream import RUN, SEED, beam, parallel_beam_in_both_frames, write_stream
 
 PROGRAM = "obdeect-ray-tracing-trace-stream"
@@ -44,12 +44,10 @@ def obdeect_stream():
 
 @pytest.fixture(scope="module")
 def models(tmp_path_factory):
-    folder = tmp_path_factory.mktemp("models")
     out = {}
-    for name, build in (("segmented", segmented), ("dual", dual)):
-        records, files = build()
-        model = OpticalModel.from_records(records, files.__getitem__, configuration_seed=1)
-        path = folder / f"{name}.json"
+    for name in ("segmented", "dual"):
+        model = load_model(name)
+        path = tmp_path_factory.mktemp("models") / f"{name}.json"
         model.save(path)
         out[name] = (OpticalModel.load(path), path)
     return out

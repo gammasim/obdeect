@@ -19,7 +19,7 @@ from typing import Any
 import numpy as np
 import obdeect.stream as obdeect_stream
 from obdeect.ray_tracing import __version__
-from obdeect.ray_tracing.formats import ModelError
+from obdeect.ray_tracing.errors import ModelError
 from obdeect.ray_tracing.model import OpticalModel, ThreadPool, _obscurer_support
 from obdeect.stream.stage import EFFICIENCY_STATUS_STATES
 from obdeect.stream.stream import FRAMES, reject_same_file

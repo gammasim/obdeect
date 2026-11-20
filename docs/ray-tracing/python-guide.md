@@ -3,16 +3,14 @@
 ```python
 from obdeect.ray_tracing import DETECTED, OpticalModel
 
-model = OpticalModel.from_simulation_models(
-    "../simulation-models", "LSTN-01", "7.0.0", configuration_seed=1, zenith_deg=20.0
-)
+model = OpticalModel.load("lst.json")
 photons = model.star_photons(100_000, seed=2, towards_source=(0.0087, 0.0, 0.99996))
 arrivals = model.trace(photons, seed=2)
 image = arrivals["position_m"][arrivals["status"] == DETECTED]
 ```
 
-`OpticalModel.from_records(records, read_file, ...)` compiles parameter records
-held in memory. `save` and `load` store the model as JSON.
+Use simtools to compile and save the optical model. `save` and `load` store the
+compiled model as JSON; ray tracing loads that model directly.
 
 `trace` takes photons as arrays: `position_m` (n, 3), `direction` (n, 3, unit
 vectors), `wavelength_nm`, `time_ns`, `weight` and `photon_id` (uint64; a photon's
