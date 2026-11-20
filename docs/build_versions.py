@@ -153,6 +153,7 @@ def prepare_legacy_binding(checkout):
     text = binding.read_text()
     header = "#include <nanobind/nanobind.h>"
     if header in text and text.index(header) > text.index("#include"):
+        text = text.replace(header + "\n", "", 1)
         binding.write_text(header + "\n" + text)
 
 
