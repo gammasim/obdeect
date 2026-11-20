@@ -98,8 +98,9 @@ record format is described in [](../stream/efficiency-status.md).
 ## Output
 
 - Thinned (default): one row per surviving photon, w = 1 ([](extinction.md)). `first_index` counts
-  output rows per telescope and event.
-- Weighted: all rows with w multiplied by p; rows with w = 0 removed.
+  output rows per telescope and event. Input weights must be at most 2048 photons per row.
+- Weighted: all rows with w multiplied by p; rows with w = 0 removed. Any finite weight >= 0 is
+  accepted, e.g. a laser pulse of 1e17 photons in 1e4 rows.
 - Column p is written only with `--store-p` (`store_p`).
 - `run`: `refraction_applied` = 1 when a profile is given.
 - `telescope`: frame set to G.
@@ -130,7 +131,7 @@ obdeect propagation run: photons in <n>, out <m> (weight <w>), dropped <d>
 | `--site-altitude M` | observation level [m a.s.l.] (required) |
 | `--profile FILE` | atmospheric profile (atmprof format): air delay and refraction |
 | `--envelope NAME=FILE` | efficiency bound of a later factor, two-column text (nm, value); repeatable |
-| `--wavelength-range LO HI` | wavelengths from 1/lambda² [nm]; default: run keys |
+| `--wavelength-range LO HI` | wavelengths from 1/lambda² [nm] for rows without one; LO = HI is a fixed wavelength; default: run keys |
 | `--seed N` | Philox seed (required) |
 | `--mode thinned\|weighted` | output mode (default thinned) |
 | `--store-p` | keep column p |

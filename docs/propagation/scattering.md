@@ -131,3 +131,6 @@ photons = out[1]  # dict of float32 arrays
 ```
 
 Random numbers: [](../stream/random-numbers.md). The transmission table and the optical depths are described in [](extinction.md).
+
+Scattered rays written to the telescope plane retain `cz` to preserve near-horizontal directions.
+Rays directed upward do not reach that plane and are dropped by the propagation stage.

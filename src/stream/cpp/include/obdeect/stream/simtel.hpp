@@ -20,6 +20,7 @@
 // emission altitude zem = observation_level_m + z. The sign of cz is not written. The
 // receiving run needs Bypass_Optics=1. The camera rotation is not used.
 //
+// Camera-frame (C) chunks without zem get zem = observation_level_m + z (as T photons).
 // Telescopes with C photons get z = 0 in TELPOS (1201), because their photons
 // are already at the camera. Ground-frame telescopes keep their height. With
 // keep_telpos_height (obdeect stream to-simtel --keep-telpos-height) the TELPOS block is
@@ -195,6 +196,32 @@ inline void camera_to_bypass_convention(PhotonChunk &chunk, const CameraTelescop
     cx[i] = static_cast<float>(cxi * c + cyi * s);
     cy[i] = static_cast<float>(cyi * c - cxi * s);
   }
+}
+
+// Adds the emission altitude zem = observation_level_m + z (z = 0 without a z column) to a
+// camera-frame chunk that has none; a chunk with zem is left unchanged. Throws
+// std::invalid_argument for a non-finite observation level or result.
+inline void add_camera_zem(PhotonChunk &chunk, double observation_level_m) {
+  if (chunk.has(Column::zem) || chunk.rows() == 0) {
+    return;
+  }
+  if (!std::isfinite(observation_level_m)) {
+    throw std::invalid_argument("observation level must be finite");
+  }
+  const std::size_t n = chunk.rows();
+  std::vector<float> zem(n, static_cast<float>(observation_level_m));
+  if (chunk.has(Column::z)) {
+    const std::vector<float> &z = chunk[Column::z];
+    for (std::size_t i = 0; i < n; ++i) {
+      zem[i] = static_cast<float>(observation_level_m + static_cast<double>(z[i]));
+    }
+  }
+  for (const float value : zem) {
+    if (!std::isfinite(value)) {
+      throw std::invalid_argument("camera-frame photon converts to a value out of range");
+    }
+  }
+  chunk[Column::zem] = std::move(zem);
 }
 
 // Converts telescope-frame (T) emission points and directions in place to bunches at the
@@ -675,6 +702,7 @@ private:
       note_frame(chunk, it->second);
       PhotonChunk converted = chunk;
       camera_to_bypass_convention(converted, it->second);
+      add_camera_zem(converted, simtel_detail::number_field(run_metadata_, "observation_level_m"));
       converted.frame = Frame::ground; // sim_telarray input is written as ground-frame bunches
       writer_.write_chunk(converted);
       return;

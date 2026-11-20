@@ -767,8 +767,10 @@ std::vector<double> kernel_weights(const obdeect::propagation::TransmissionTable
   std::vector<double> sums(sphere.size(), 0.0);
   for (std::size_t i = 0; i < sphere.size(); ++i) {
     for (const auto &chunk : lists[i]) {
-      for (const float w : chunk[Column::w]) {
-        sums[i] += static_cast<double>(w);
+      for (std::size_t r = 0; r < chunk.rows(); ++r) {
+        if (chunk[Column::cz][r] < 0.0F) {
+          sums[i] += static_cast<double>(chunk[Column::w][r]);
+        }
       }
     }
   }
@@ -843,10 +845,14 @@ void test_scattered_time_reaches_plane() {
     for (std::size_t r = 0; r < piece.rows(); ++r) {
       const double cx = piece[Column::cx][r];
       const double cy = piece[Column::cy][r];
-      const double cz_magnitude = std::sqrt(1.0 - cx * cx - cy * cy);
-      const double to_plane = piece[Column::z][r] / cz_magnitude; // plane at z = 0
+      const double cz = piece[Column::cz][r];
+      if (cz >= 0.0) {
+        continue;
+      }
+      const double to_plane = -piece[Column::z][r] / cz; // plane at z = 0
+      const double norm = std::sqrt(cx * cx + cy * cy + cz * cz);
       expected.push_back(static_cast<double>(piece[Column::t][r]) +
-                         to_plane / obdeect::propagation::speed_of_light_m_per_ns);
+                         to_plane * norm / obdeect::propagation::speed_of_light_m_per_ns);
     }
   }
   CHECK(!expected.empty());

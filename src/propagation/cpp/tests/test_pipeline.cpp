@@ -185,6 +185,32 @@ void test_wavelength_must_be_finite() {
       [&] { (void)obdeect::propagation::apply_extinction_chunk(valid, settings, 0); }));
 }
 
+// Thinned mode needs weights <= max_bunch_photons; weighted mode keeps any finite weight >= 0
+// (e.g. a lidar pulse of 1e17 photons in a few rows) and multiplies it by the acceptance.
+void test_large_weights_only_weighted() {
+  const auto table = constant_table();
+  const auto depths = table.telescope_depths(2030.0, 28.0);
+  const obdeect::propagation::Envelope envelope({200.0, 800.0}, {1.0, 1.0});
+  auto chunk = photons(2, 400.0F);
+  chunk[Column::w][0] = 1e13F;
+  const auto thinned = settings_for(table, depths, envelope, false);
+  CHECK(throws_invalid(
+      [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, thinned, 0); }));
+  const auto weighted = settings_for(table, depths, envelope, true);
+  const auto out = obdeect::propagation::apply_extinction_chunk(chunk, weighted, 0);
+  CHECK(total_rows(out) == 2);
+  if (total_rows(out) == 2) {
+    const double ratio = static_cast<double>(out[0][Column::w][0]) / out[0][Column::w][1];
+    CHECK(std::abs(ratio / 1e13 - 1.0) < 1e-6);
+  }
+  for (const float bad : {std::numeric_limits<float>::infinity(), -1.0F}) {
+    auto invalid = photons(1, 400.0F);
+    invalid[Column::w][0] = bad;
+    CHECK(throws_invalid(
+        [&] { (void)obdeect::propagation::apply_extinction_chunk(invalid, weighted, 0); }));
+  }
+}
+
 // Wavelengths at or above max_lambda_nm, including values beyond the int range, are dropped
 // without any conversion to int: p = 0 and no thinned photon. A NaN or inf is rejected.
 void test_wavelength_above_max_is_dropped() {
@@ -294,5 +320,6 @@ int main() {
     test_wavelength_must_be_finite();
     test_wavelength_above_max_is_dropped();
     test_atmospheric_acceptance_wavelength();
+    test_large_weights_only_weighted();
   });
 }
