@@ -547,9 +547,7 @@ inline void scatter_chunk(const ScatteringConfig &config, const ScatteringTable 
   const auto &w = chunk[Column::w];
   const auto &wavelength = chunk[Column::wavelength];
   for (std::size_t row = 0; row < rows; ++row) {
-    const double r2 =
-        static_cast<double>(cx[row]) * cx[row] + static_cast<double>(cy[row]) * cy[row];
-    if (!(r2 <= 1.0)) {
+    if (!obdeect::stream::direction_in_unit_disc(cx[row], cy[row])) {
       throw std::invalid_argument("direction cosines must satisfy cx^2 + cy^2 <= 1");
     }
     // cz_matches_direction is false for NaN; the finiteness test is kept as the first check.

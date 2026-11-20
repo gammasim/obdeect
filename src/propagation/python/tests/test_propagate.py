@@ -696,13 +696,15 @@ def sky_stream(n, seed, curvature_applied=None):
 
 
 # Float32 directions (cx, cy, cz) of photons with |cz| between 6e-4 and 2e-3. Each is a unit
-# vector to float32 precision; an absolute check on cz rejected them.
+# vector to float32 precision; an absolute check on cz rejected them. The last one has
+# cx^2 + cy^2 rounded above 1.
 NEAR_HORIZONTAL_DIRECTIONS = (
     (0.960585952, 0.277977228, -0.001825427),
     (0.946776211, -0.321888804, -0.001533536),
     (0.999714673, 0.023859283, -0.001124879),
     (0.989117742, -0.147124648, -0.000614837),
     (0.975054383, -0.221962571, -0.001266957),
+    (1.0000001192, 0.0, -0.0001),
 )
 
 

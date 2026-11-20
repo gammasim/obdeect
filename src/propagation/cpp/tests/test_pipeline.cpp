@@ -124,6 +124,25 @@ void test_near_horizontal_direction_accepted() {
       [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
 }
 
+// A float32 direction with cx^2 + cy^2 slightly above 1 (rounding of a horizontal photon) is
+// valid; a direction clearly outside the unit disc is rejected.
+void test_direction_rounding_outside_unit_disc_accepted() {
+  const auto table = constant_table();
+  const auto depths = table.telescope_depths(2030.0, 28.0);
+  const obdeect::propagation::Envelope envelope({200.0, 800.0}, {0.9, 0.3});
+  const auto settings = settings_for(table, depths, envelope, true);
+
+  auto chunk = photons(1, 400.0F);
+  chunk[Column::cx][0] = 1.0000001F;
+  chunk[Column::cy][0] = 0.0F;
+  CHECK(!throws_invalid(
+      [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
+
+  chunk[Column::cx][0] = 1.001F;
+  CHECK(throws_invalid(
+      [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
+}
+
 // Wavelengths are finite and non-negative (0 means not assigned). NaN, inf and negative values
 // are rejected before any conversion to int.
 void test_wavelength_must_be_finite() {
@@ -250,6 +269,7 @@ int main() {
     test_threads_do_not_change_output();
     test_cz_column_must_be_finite();
     test_near_horizontal_direction_accepted();
+    test_direction_rounding_outside_unit_disc_accepted();
     test_wavelength_must_be_finite();
     test_wavelength_above_max_is_dropped();
     test_atmospheric_acceptance_wavelength();

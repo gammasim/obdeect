@@ -256,10 +256,10 @@ inline std::uint64_t sky_to_ground(obdeect::stream::PhotonChunk &chunk, const Sk
     const double dx = cx[row];
     const double dy = cy[row];
     const double r2 = dx * dx + dy * dy;
-    if (!(r2 <= 1.0)) {
+    if (!obdeect::stream::direction_in_unit_disc(dx, dy)) {
       throw std::invalid_argument("direction cosines must satisfy cx^2 + cy^2 <= 1");
     }
-    const double cz_magnitude = std::sqrt(1.0 - r2);
+    const double cz_magnitude = std::sqrt(std::max(0.0, 1.0 - r2));
     const double emission_z = z[row];
     if (!std::isfinite(x[row]) || !std::isfinite(y[row]) || !std::isfinite(emission_z) ||
         !std::isfinite(t[row])) {
