@@ -103,6 +103,27 @@ void test_cz_column_must_be_finite() {
   }
 }
 
+// Near-horizontal float32 directions: cz rounds to a unit vector with cx and cy, but an absolute
+// difference of cz from -sqrt(1 - cx^2 - cy^2) exceeds 1e-5 (the error is about 1e-7 / |cz|).
+// Such photons are valid; a clearly wrong cz is still rejected.
+void test_near_horizontal_direction_accepted() {
+  const auto table = constant_table();
+  const auto depths = table.telescope_depths(2030.0, 28.0);
+  const obdeect::propagation::Envelope envelope({200.0, 800.0}, {0.9, 0.3});
+  const auto settings = settings_for(table, depths, envelope, true);
+
+  auto chunk = photons(1, 400.0F);
+  chunk[Column::cx][0] = 0.989117742F;
+  chunk[Column::cy][0] = -0.147124648F;
+  chunk[Column::cz].assign(1, -0.000614837F);
+  CHECK(!throws_invalid(
+      [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
+
+  chunk[Column::cz][0] = -0.05F;
+  CHECK(throws_invalid(
+      [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
+}
+
 // Wavelengths are finite and non-negative (0 means not assigned). NaN, inf and negative values
 // are rejected before any conversion to int.
 void test_wavelength_must_be_finite() {
@@ -228,6 +249,7 @@ int main() {
   return run_checks([] {
     test_threads_do_not_change_output();
     test_cz_column_must_be_finite();
+    test_near_horizontal_direction_accepted();
     test_wavelength_must_be_finite();
     test_wavelength_above_max_is_dropped();
     test_atmospheric_acceptance_wavelength();

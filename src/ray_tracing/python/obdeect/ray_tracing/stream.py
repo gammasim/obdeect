@@ -32,7 +32,8 @@ MAX_CHUNK_ROWS = obdeect_stream.max_chunk_rows
 SPEED_OF_LIGHT_M_PER_NS = 0.299792458
 # Margin above the highest incoming obscurer for the input plane [m] (as simtools).
 INPUT_PLANE_MARGIN_M = 1.0
-# Largest allowed difference between a cz column and -sqrt(1 - cx^2 - cy^2).
+# Largest allowed |cz^2 - (1 - cx^2 - cy^2)| for a cz column (float32 directions; the same
+# tolerance as direction_norm_tolerance in the C++ stream photon header).
 CZ_TOLERANCE = 1e-5
 # Efficiency status factors that the optical model applies, in full, in its trace.
 OWN_FACTORS = ("mirror_reflectivity", "telescope_transmission")
@@ -103,6 +104,13 @@ def _run_pointing(metadata: Mapping[str, Any]) -> tuple[float, float] | None:
         raise ModelError(f"run record: give both {' and '.join(RUN_POINTING_KEYS)} or neither")
     zenith, azimuth = (float(metadata[key]) for key in RUN_POINTING_KEYS)
     return (math.degrees(zenith), math.degrees(azimuth))
+
+
+def _cz_matches(cz_column: np.ndarray, cx: np.ndarray, cy: np.ndarray) -> bool:
+    """Return True if cz points downwards and (cx, cy, cz) is a unit vector within CZ_TOLERANCE."""
+    cz = cz_column.astype(np.float64)
+    norm_error = np.abs(cz * cz - (1.0 - cx * cx - cy * cy))
+    return bool(np.all(cz < 0.0) and np.max(norm_error, initial=0.0) <= CZ_TOLERANCE)
 
 
 def _names(text: Any) -> list[str]:
@@ -598,10 +606,7 @@ class _Tracer:
         cx = columns["cx"].astype(np.float64)
         cy = columns["cy"].astype(np.float64)
         cz = -np.sqrt(np.maximum(0.0, 1.0 - cx * cx - cy * cy))
-        if (
-            "cz" in columns
-            and np.max(np.abs(columns["cz"].astype(np.float64) - cz), initial=0.0) > CZ_TOLERANCE
-        ):
+        if "cz" in columns and not _cz_matches(columns["cz"], cx, cy):
             raise ModelError("photon column cz does not match cx and cy")
         if not np.all(cz < 0.0):
             raise ModelError("photons must move towards -z (downwards)")

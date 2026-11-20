@@ -695,6 +695,64 @@ def sky_stream(n, seed, curvature_applied=None):
     return writer.getvalue()
 
 
+# Float32 directions (cx, cy, cz) of photons with |cz| between 6e-4 and 2e-3. Each is a unit
+# vector to float32 precision; an absolute check on cz rejected them.
+NEAR_HORIZONTAL_DIRECTIONS = (
+    (0.960585952, 0.277977228, -0.001825427),
+    (0.946776211, -0.321888804, -0.001533536),
+    (0.999714673, 0.023859283, -0.001124879),
+    (0.989117742, -0.147124648, -0.000614837),
+    (0.975054383, -0.221962571, -0.001266957),
+)
+
+
+def near_horizontal_stream():
+    """Sky-frame photons on telescope 1 with the directions of NEAR_HORIZONTAL_DIRECTIONS."""
+    cx, cy, cz = (np.array(column, dtype=np.float32) for column in zip(*NEAR_HORIZONTAL_DIRECTIONS))
+    n = len(cx)
+    rng = np.random.default_rng(11)
+    writer = StreamWriter()
+    writer.metadata(
+        "run",
+        {
+            "run_number": 1,
+            "observation_level_m": SITE_M,
+            "telescope_x_m": [0.0],
+            "telescope_y_m": [0.0],
+            "telescope_z_m": [0.0],
+            "refraction_applied": 0,
+            "wavelength_min_nm": 250.0,
+            "wavelength_max_nm": 700.0,
+        },
+    )
+    writer.metadata("event", {"event_number": 1})
+    writer.metadata("telescope", {"telescope_id": 1, "frame": 0})
+    columns = {
+        "x": rng.uniform(-3000, 3000, n),
+        "y": rng.uniform(-3000, 3000, n),
+        "z": rng.uniform(3000, 15000, n),
+        "cx": cx,
+        "cy": cy,
+        "cz": cz,
+        "t": rng.uniform(0, 10, n),
+        "w": np.ones(n),
+    }
+    writer.photons(1, 0, columns)
+    writer.metadata("telescope_end", {"telescope_id": 1, "photons": 0.0})
+    writer.metadata("event_end")
+    writer.metadata("run_end")
+    return writer.getvalue()
+
+
+def test_near_horizontal_photons_pass_cz_check(tmp_path):
+    source = tmp_path / "in.pst"
+    source.write_bytes(near_horizontal_stream())
+    summary = obdeect_propagation.propagate(
+        source, tmp_path / "out.pst", extinction=False, **_geometry_options()
+    )
+    assert summary["photons_in"] == len(NEAR_HORIZONTAL_DIRECTIONS)
+
+
 def _geometry_options(**extra):
     # 400 to 700 nm: the extinction is far from zero, so the normal run drops no row.
     return {
