@@ -110,6 +110,25 @@ inline constexpr double direction_norm_tolerance = 1e-5;
   return cz < 0.0 && std::abs(cz * cz - (1.0 - cx * cx - cy * cy)) <= direction_norm_tolerance;
 }
 
+// True if (cx, cy) lies in the unit disc within the tolerance. A stored direction can round to
+// cx^2 + cy^2 slightly above 1 when cz is tiny; NaN is rejected. Use max(0, 1 - cx^2 - cy^2)
+// for the magnitude of cz.
+[[nodiscard]] inline bool direction_in_unit_disc(double cx, double cy) {
+  return cx * cx + cy * cy <= 1.0 + direction_norm_tolerance;
+}
+
+// Rescale (cx, cy) of a downward photon (cz < 0) whose cx^2 + cy^2 rounded above 1, so that
+// cx^2 + cy^2 = 1 - cz^2 and the magnitude of the validated cz is kept. Other directions are
+// unchanged.
+inline void snap_direction_to_cz(float &cx, float &cy, double cz) {
+  const double r2 = static_cast<double>(cx) * cx + static_cast<double>(cy) * cy;
+  if (cz < 0.0 && cz * cz <= 1.0 && r2 > 1.0) {
+    const double scale = std::sqrt((1.0 - cz * cz) / r2);
+    cx = static_cast<float>(cx * scale);
+    cy = static_cast<float>(cy * scale);
+  }
+}
+
 // One decoded record. `metadata` is used by all metadata records, `chunk` by
 // photons, `blob_*` by blob records.
 struct Record {

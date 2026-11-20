@@ -45,7 +45,7 @@ inline void validate(const CurvedPath &path) {
 // Plane-parallel airmass 1 / |cz| of a downward photon; unlimited_airmass for a horizontal one.
 template <class T> [[nodiscard]] T airmass(T cx, T cy) {
   const T cz2 = T(1) - cx * cx - cy * cy;
-  if (!std::isfinite(cz2) || cz2 < -T(4) * std::numeric_limits<T>::epsilon()) {
+  if (!std::isfinite(cz2) || cz2 < -static_cast<T>(obdeect::stream::direction_norm_tolerance)) {
     throw std::invalid_argument("direction cosines must satisfy cx^2 + cy^2 <= 1");
   }
   return cz2 > T(0) ? T(1) / std::sqrt(cz2) : static_cast<T>(unlimited_airmass);
@@ -103,7 +103,6 @@ void atmospheric_acceptance_curved(const obdeect::stream::PhotonChunk &chunk,
   const auto &cy = chunk[Column::cy];
   const auto &zem = chunk[Column::zem];
   const auto &wavelength = chunk[Column::wavelength];
-  const double eps = std::numeric_limits<double>::epsilon();
   end = std::min(end, rows);
   for (std::size_t row = begin; row < end; ++row) {
     check_wavelength(static_cast<double>(wavelength[row]));
@@ -115,7 +114,7 @@ void atmospheric_acceptance_curved(const obdeect::stream::PhotonChunk &chunk,
     const double x = static_cast<double>(cx[row]);
     const double y = static_cast<double>(cy[row]);
     const double cz2 = 1.0 - x * x - y * y;
-    if (!std::isfinite(cz2) || cz2 < -4.0 * eps) {
+    if (!std::isfinite(cz2) || cz2 < -obdeect::stream::direction_norm_tolerance) {
       throw std::invalid_argument("direction cosines must satisfy cx^2 + cy^2 <= 1");
     }
     // -(d . n) with d = (x, y, -sqrt(1 - x^2 - y^2)).

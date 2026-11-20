@@ -68,9 +68,7 @@ inline void validate_ground_chunk(obdeect::stream::PhotonChunk &chunk, bool need
   const auto &cy = chunk[Column::cy];
   const auto &w = chunk[Column::w];
   for (std::size_t row = 0; row < rows; ++row) {
-    const double r2 =
-        static_cast<double>(cx[row]) * cx[row] + static_cast<double>(cy[row]) * cy[row];
-    if (!(r2 <= 1.0)) {
+    if (!obdeect::stream::direction_in_unit_disc(cx[row], cy[row])) {
       throw std::invalid_argument("direction cosines must satisfy cx^2 + cy^2 <= 1");
     }
     if (chunk.has(Column::cz)) {

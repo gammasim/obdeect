@@ -52,6 +52,17 @@ def test_legacy_index_keeps_historical_content_and_adds_navigation(tmp_path):
     assert "INDEX.md" not in {path.name for path in tmp_path.iterdir()}
 
 
+def test_legacy_binding_loads_python_before_cpp_headers(tmp_path):
+    binding = tmp_path / "cpp" / "bindings" / "core.cpp"
+    binding.parent.mkdir(parents=True)
+    binding.write_text('#include "obdeect/model.hpp"\n#include <nanobind/nanobind.h>\n')
+    versions.prepare_legacy_binding(tmp_path)
+    text = binding.read_text()
+    assert text.index("<nanobind/nanobind.h>") < text.index('"obdeect/model.hpp"')
+    versions.prepare_legacy_binding(tmp_path)
+    assert binding.read_text() == text
+
+
 def test_publish_preserves_root_pages_and_provides_version_aliases(tmp_path):
     dev = tmp_path / "build"
     dev.mkdir()

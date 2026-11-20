@@ -4,6 +4,18 @@ All components are released together with one version (tags `vX.Y.Z`); the secti
 
 <!-- towncrier release notes start -->
 
+## [v0.10.1] - 2026-11-20
+
+### Fixed
+
+- Accept near-horizontal photon directions whose float32 cosines round to cx^2 + cy^2 slightly above 1 in propagation. (#74)
+- Fix building of documentation in CI for legacy obdeect versions. (#75)
+
+### Maintenance
+
+- Switch CI runners from ubuntu 24.04 to 26.04. (#73)
+
+
 ## [v0.10.0] - 2026-11-20
 
 ### Added
