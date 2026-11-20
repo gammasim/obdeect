@@ -259,7 +259,11 @@ inline std::uint64_t sky_to_ground(obdeect::stream::PhotonChunk &chunk, const Sk
     if (!obdeect::stream::direction_in_unit_disc(dx, dy)) {
       throw std::invalid_argument("direction cosines must satisfy cx^2 + cy^2 <= 1");
     }
-    const double cz_magnitude = std::sqrt(std::max(0.0, 1.0 - r2));
+    double cz_magnitude = std::sqrt(std::max(0.0, 1.0 - r2));
+    if (has_cz && cz_magnitude == 0.0 && cz_column[row] < 0.0) {
+      // cx^2 + cy^2 rounded above 1: the validated cz column gives the magnitude.
+      cz_magnitude = -cz_column[row];
+    }
     const double emission_z = z[row];
     if (!std::isfinite(x[row]) || !std::isfinite(y[row]) || !std::isfinite(emission_z) ||
         !std::isfinite(t[row])) {

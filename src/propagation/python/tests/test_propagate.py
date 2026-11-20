@@ -746,13 +746,15 @@ def near_horizontal_stream():
     return writer.getvalue()
 
 
-def test_near_horizontal_photons_pass_cz_check(tmp_path):
+def test_near_horizontal_photons_pass_checks_and_reach_ground(tmp_path):
+    # Geometry only: an atmospheric profile or transmission absorbs photons at this grazing angle.
     source = tmp_path / "in.pst"
     source.write_bytes(near_horizontal_stream())
     summary = obdeect_propagation.propagate(
-        source, tmp_path / "out.pst", extinction=False, **_geometry_options()
+        source, tmp_path / "out.pst", extinction=False, site_altitude_m=SITE_M, seed=1
     )
     assert summary["photons_in"] == len(NEAR_HORIZONTAL_DIRECTIONS)
+    assert summary["photons_out"] == len(NEAR_HORIZONTAL_DIRECTIONS)
 
 
 def _geometry_options(**extra):

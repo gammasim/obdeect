@@ -950,6 +950,8 @@ private:
         if (!(cz[row] < 0.0F)) {
           out[Column::w][row] = 0.0F;
         }
+        // The cz column is dropped below; cx, cy carry the direction of the scattering.
+        obdeect::stream::snap_direction_to_cz(out[Column::cx][row], out[Column::cy][row], cz[row]);
       }
     }
     return out;
