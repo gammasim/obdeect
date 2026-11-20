@@ -1,6 +1,5 @@
 #include "check.hpp"
 
-#include "obdeect/sources/programs/stream_output.hpp"
 #include "obdeect/sources/source.hpp"
 #include "obdeect/sources/streams.hpp"
 
@@ -22,9 +21,7 @@ int main() {
 
     // Stage ids are part of the random-number results: never changed.
     CHECK(obdeect::sources::stage_sources == 0x444C0001U);
-    CHECK(obdeect::sources::programs::stage_programs == 0x444C0002U);
     CHECK(obdeect::stream::stage_sources == obdeect::sources::stage_sources);
-    CHECK(obdeect::stream::stage_programs == obdeect::sources::programs::stage_programs);
 
     // Frame codes accepted by the Python binding (sky 0, T 2, C 3).
     CHECK(static_cast<std::uint32_t>(obdeect::stream::Frame::sky) == 0U);

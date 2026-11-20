@@ -38,7 +38,9 @@ The camera map lists the camera-frame telescopes, one per line:
 
 Telescopes not listed are ground-frame (sim_telarray `Bypass_Optics=0`). Listed telescopes with
 camera-frame photons are converted to the bypass convention and need `Bypass_Optics=1` (class 1)
-or `2` (class 2). `obdeect stream to-simtel` prints the value for each telescope.
+or `2` (class 2). `obdeect stream to-simtel` prints the value for each telescope. Camera-frame
+photons without a `zem` column (e.g. from `obdeect sources run led`) get `zem` = observation level
+plus `z`.
 
 TELPOS z of the listed telescopes is set to 0, because their photons are already at the camera.
 For array runs, sim_telarray needs the real heights for the plane-wavefront delay between
@@ -86,7 +88,10 @@ rotation is not used, and TELPOS z is set to 0 as for camera-frame telescopes (u
 ```console
 $ cat cam.txt
 1 2 0.0
-$ obdeect sources flasher --type secondary --photons 1e6 | obdeect stream to-simtel --camera-map cam.txt | sim_telarray -c <config> -C Bypass_Optics=1 -
+$ obdeect sources run flasher --type secondary --flasher-offset 0.5 --flasher-depth 0.3 \
+    --flasher-inclination 2 --mirror-camera-distance 16 --fiducial-radius 12.5 \
+    --observation-level 2150 --spectrum fixed:wavelength_nm=400 --photons 1e6 \
+    | obdeect stream to-simtel --camera-map cam.txt | sim_telarray -c <config> -C Bypass_Optics=1 -
 obdeect stream to-simtel: telescope 1: telescope frame, mirror class 2, Bypass_Optics=1
 ```
 

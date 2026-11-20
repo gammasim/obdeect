@@ -338,6 +338,58 @@ void test_camera_frame_through_adapter() {
   CHECK(found);
 }
 
+// Camera-frame chunks without zem (light sources) get zem = observation level + z; a chunk
+// with zem keeps it.
+void test_camera_zem_added() {
+  PhotonChunk chunk = chunk_of(2, Frame::camera, {0.5, 0.1}, {0.2, 0.0}, {0.1, 0.0}, {-0.2, 0.0});
+  chunk[Column::zem].clear();
+  std::vector<float> z = {0.0F, 1.5F};
+  chunk[Column::z] = z;
+  add_camera_zem(chunk, 2200.0);
+  CHECK(chunk.has(Column::zem));
+  CHECK_NEAR(chunk[Column::zem][0], 2200.0, 1e-3);
+  CHECK_NEAR(chunk[Column::zem][1], 2201.5, 1e-3);
+
+  PhotonChunk no_z = chunk_of(2, Frame::camera, {0.5}, {0.2}, {0.1}, {-0.2});
+  no_z[Column::zem].clear();
+  add_camera_zem(no_z, 2200.0);
+  CHECK_NEAR(no_z[Column::zem][0], 2200.0, 1e-3);
+
+  PhotonChunk kept = chunk_of(2, Frame::camera, {0.5}, {0.2}, {0.1}, {-0.2});
+  add_camera_zem(kept, 2200.0);
+  CHECK_NEAR(kept[Column::zem][0], 20000.0, 1e-3);
+
+  // Through the adapter: zem in cm in the bunch.
+  PhotonChunk source = chunk_of(2, Frame::camera, {0.5}, {0.2}, {0.1}, {-0.2});
+  source[Column::zem].clear();
+  const CameraMap camera{{2, CameraTelescope{1, 0.0}}};
+  const std::vector<Record> records = {
+      record_of(RecordType::run, light_source_run()),
+      record_of(RecordType::event, Metadata{{"event_number", std::int64_t{1}}}),
+      record_of(RecordType::telescope,
+                Metadata{{"telescope_id", std::int64_t{2}}, {"array_index", std::int64_t{0}}}),
+      photons_of(source),
+      record_of(RecordType::telescope_end, Metadata{{"telescope_id", std::int64_t{2}}}),
+      record_of(RecordType::event_end),
+      record_of(RecordType::run_end),
+  };
+  bool found = false;
+  for (const EventioBlock &block : read_blocks(run_adapter(records, camera))) {
+    if (block.type != iact::telarray) {
+      continue;
+    }
+    for (const EventioBlock &child : subblocks(block)) {
+      const TelPhotons p = decode_photons(child);
+      CHECK(p.bunches.size() == 1);
+      if (p.bunches.size() == 1) {
+        CHECK_NEAR(p.bunches[0].zem, 220000.0, 1.0);
+      }
+      found = true;
+    }
+  }
+  CHECK(found);
+}
+
 // TELPOS z is zeroed for camera-frame telescopes only (see simtel.hpp).
 void test_telpos_zeroed_for_camera_only() {
   const CameraMap camera{{1, CameraTelescope{1, 0.0}}};
@@ -1321,6 +1373,7 @@ int main() {
     test_invalid_camera_map();
     test_camera_conversion();
     test_camera_frame_through_adapter();
+    test_camera_zem_added();
     test_telpos_zeroed_for_camera_only();
     test_telpos_height_kept_with_option();
     test_synthesised_telpos_heights();

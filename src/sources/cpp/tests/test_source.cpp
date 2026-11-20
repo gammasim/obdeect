@@ -1,9 +1,8 @@
 #include "check.hpp"
 
+#include "obdeect/sources/emit.hpp"
 #include "obdeect/sources/source.hpp"
-#include "obdeect/sources/streams.hpp"
 
-#include "obdeect/stream/format.hpp"
 #include "obdeect/stream/photons.hpp"
 
 #include <algorithm>
@@ -25,7 +24,6 @@ constexpr double inf = std::numeric_limits<double>::infinity();
 // All photons of a test source, one array per column. A PhotonChunk holds at most 2^16
 // rows, so the test keeps the columns itself.
 struct Photons {
-  obdeect::stream::Frame frame{obdeect::stream::Frame::ground};
   std::array<std::vector<float>, obdeect::stream::n_columns> columns{};
 
   std::size_t rows() const { return columns[static_cast<std::size_t>(Column::x)].size(); }
@@ -34,28 +32,22 @@ struct Photons {
   }
 };
 
-// Emit photons [0, n) of a source in chunks of `chunk` rows.
+// Emit candidates [0, n) of a source in chunks of `chunk` candidates. Rows dropped by emit()
+// (line photons that miss their target) are not stored.
 Photons emit_all(const Source &source, std::uint64_t seed, std::uint64_t n,
                  std::size_t chunk = 1 << 16, std::uint32_t event = 1,
                  std::uint32_t telescope = 2) {
   Photons all;
-  all.frame = source.frame;
-  for (std::uint32_t c = 0; c < obdeect::stream::n_columns; ++c) {
-    if (source_columns & (std::uint32_t{1} << c))
-      all.columns[c].resize(n);
-  }
   obdeect::stream::PhotonChunk part;
   for (std::uint64_t first = 0; first < n; first += chunk) {
-    const std::size_t rows = static_cast<std::size_t>(std::min<std::uint64_t>(chunk, n - first));
-    emit(source, seed, event, telescope, first, rows, part);
+    const auto candidates = static_cast<std::size_t>(std::min<std::uint64_t>(chunk, n - first));
+    const std::size_t rows = emit(source, seed, event, telescope, first, candidates, part);
     for (std::uint32_t c = 0; c < obdeect::stream::n_columns; ++c) {
-      const auto bit = std::uint32_t{1} << c;
-      if (!(source_columns & bit))
+      if (!(source_columns & (std::uint32_t{1} << c)))
         continue;
-      auto &dst = all.columns[c];
       const auto &src = part.columns[c];
-      for (std::size_t i = 0; i < rows; ++i)
-        dst[first + i] = src[i];
+      all.columns[c].insert(all.columns[c].end(), src.begin(),
+                            src.begin() + static_cast<std::ptrdiff_t>(rows));
     }
   }
   return all;
@@ -72,17 +64,15 @@ bool same_chunk(const Photons &a, const Photons &b) {
 
 Source star_source(double distance, double photons = 1000.0) {
   Source s;
-  s.frame = obdeect::stream::Frame::telescope;
   s.photons = photons;
-  s.geometry = Star{normalised({0.01, 0.0, 1.0}), distance, 5.0, 0.0, 30.0};
+  s.geometry = PlaneWave{normalised({0.01, 0.0, 1.0}), distance, 5.0, 0.0, 30.0};
   return s;
 }
 
 Source lamp_source(double photons = 1e5) {
   Source s;
-  s.frame = obdeect::stream::Frame::camera;
   s.photons = photons;
-  s.geometry = Emitter{{0.0, 0.0, 10.0}, {0.0, 0.0, -1.0}, Isotropic{}};
+  s.geometry = Point{{0.0, 0.0, 10.0}, {0.0, 0.0, -1.0}, Isotropic{}};
   s.pulse = UniformRange{-1.0, 1.0};
   return s;
 }
@@ -118,9 +108,8 @@ void stars() {
   // Point source at 20 m, 1.5 m above the entrance plane, below the start plane:
   // photons leave the source itself (obdeect ray tracing PointSource, finite distance).
   Source lamp;
-  lamp.frame = obdeect::stream::Frame::telescope;
   lamp.photons = 50.0;
-  lamp.geometry = Star{normalised({0.6, 0.0, 0.8}), 20.0, 1.0, 1.5, 30.0};
+  lamp.geometry = PlaneWave{normalised({0.6, 0.0, 0.8}), 20.0, 1.0, 1.5, 30.0};
   // The source sits at (0.6, 0, 0.8) * 20 m above the disc centre (0, 0, 1.5 m): (12, 0, 17.5).
   const auto p = emit_all(lamp, 3, 50);
   for (std::size_t i = 0; i < p.rows(); ++i) {
@@ -141,6 +130,7 @@ void emitters_isotropic_disc() {
   const auto c = emit_all(s, 5, 4000);
   double sum = 0.0, sum2 = 0.0;
   const std::size_t rows = c.rows();
+  CHECK(rows == 4000);
   for (std::size_t i = 0; i < rows; ++i) {
     const double w = c[Column::w][i];
     CHECK(w > 0.0 && w <= 1.0);
@@ -163,7 +153,7 @@ void disc_target_angular_profile() {
   // positive inside the cone and zero outside it).
   Source s = lamp_source(1e5);
   s.geometry =
-      Emitter{{0.0, 0.0, 10.0}, {0.0, 0.0, -1.0}, FilledCone{1.0 - std::cos(5.0 * pi / 180.0)}};
+      Point{{0.0, 0.0, 10.0}, {0.0, 0.0, -1.0}, FilledCone{1.0 - std::cos(5.0 * pi / 180.0)}};
   s.target = DiscTarget{{0.0, 0.0, 0.0}, {0.0, 0.0, 1.0}, 2.0};
   const auto c = emit_all(s, 5, 10000);
   for (std::size_t i = 0; i < c.rows(); ++i) {
@@ -186,11 +176,11 @@ void chunks_and_determinism() {
   CHECK(same_chunk(whole, emit_all(s, 9, 3000, 7)));
   CHECK(!same_chunk(whole, emit_all(s, 10, 3000, 1 << 16)));   // Another seed differs.
   CHECK(!same_chunk(whole, emit_all(s, 9, 3000, 1 << 16, 2))); // Another event differs.
-  // A chunk starting at photon 2^20 is the same photons whatever came before.
+  // A chunk starting at photon 2^20 is the same photons whatever the chunk length.
   obdeect::stream::PhotonChunk late, check;
-  emit(s, 9, 1, 2, 1U << 20, 100, late);
-  emit(s, 9, 1, 2, 1U << 20, 50, check);
-  CHECK(late.first_index == (1U << 20) && check.first_index == (1U << 20));
+  const std::size_t rows_late = emit(s, 9, 1, 2, 1U << 20, 100, late);
+  const std::size_t rows_check = emit(s, 9, 1, 2, 1U << 20, 50, check);
+  CHECK(rows_late == 100 && rows_check == 50);
   for (std::size_t i = 0; i < 50; ++i)
     CHECK(late[Column::x][i] == check[Column::x][i] && late[Column::t][i] == check[Column::t][i]);
   bool rejected = false;
@@ -203,16 +193,14 @@ void chunks_and_determinism() {
   CHECK(rejected);
 }
 
-void directions_and_frames() {
-  // Directions are unit vectors for every profile; positions and frames are the source's.
+void directions_and_angles() {
+  // Directions are unit vectors for every profile; positions are the emission point's.
   const std::vector<Angular> profiles{Isotropic{}, FixedAngle{1.0 - std::cos(0.2)}, FilledCone{0.3},
                                       Lambertian{}, TabulatedAngular{gaussian_angular_table(0.2)}};
   for (const auto &profile : profiles) {
     Source s = lamp_source(1e4);
-    s.frame = obdeect::stream::Frame::camera;
-    s.geometry = Emitter{{1.0, -2.0, 3.0}, normalised({0.2, 0.1, -1.0}), profile};
+    s.geometry = Point{{1.0, -2.0, 3.0}, normalised({0.2, 0.1, -1.0}), profile};
     const auto c = emit_all(s, 1, 2000, 512);
-    CHECK(c.frame == obdeect::stream::Frame::camera || c.rows() == 0);
     for (std::size_t i = 0; i < c.rows(); ++i) {
       const double length = std::hypot(c[Column::cx][i], c[Column::cy][i], c[Column::cz][i]);
       CHECK_NEAR(length, 1.0, 1e-6);
@@ -224,16 +212,16 @@ void directions_and_frames() {
   // Fixed-angle (option "Cone:") emission is at exactly the given angle.
   Source cone = lamp_source(1e3);
   const Vec3 axis = normalised({0.2, 0.1, -1.0});
-  cone.geometry = Emitter{{0.0, 0.0, 10.0}, axis, FixedAngle{1.0 - std::cos(0.2)}};
+  cone.geometry = Point{{0.0, 0.0, 10.0}, axis, FixedAngle{1.0 - std::cos(0.2)}};
   const auto c = emit_all(cone, 4, 500);
   for (std::size_t i = 0; i < c.rows(); ++i) {
     const double cosine =
         c[Column::cx][i] * axis.x + c[Column::cy][i] * axis.y + c[Column::cz][i] * axis.z;
     CHECK_NEAR(cosine, std::cos(0.2), 1e-6);
   }
-  // A star in frame T keeps its start-plane height in the telescope frame.
+  // A plane wave keeps its start-plane height (30 m) in the emitted positions.
   const auto s = emit_all(star_source(inf, 10.0), 1, 10);
-  CHECK(s.frame == obdeect::stream::Frame::telescope);
+  CHECK(s.rows() == 10);
   CHECK_NEAR(s[Column::z][0], 30.0, 1e-4);
 }
 
@@ -272,51 +260,6 @@ void sphere_target() {
   }
 }
 
-void validation() {
-  const auto rejects = [](const Source &s) {
-    try {
-      validate(s);
-    } catch (const std::invalid_argument &) {
-      return true;
-    }
-    return false;
-  };
-  Source s = lamp_source(10.0);
-  CHECK(!rejects(s));
-  Source bad = s;
-  bad.photons = -1.0;
-  CHECK(rejects(bad));
-  bad = s;
-  bad.frame = obdeect::stream::Frame::ground;
-  CHECK(rejects(bad));
-  bad = s;
-  bad.geometry = Emitter{{0, 0, 1}, {0, 0, 2}, Isotropic{}};
-  CHECK(rejects(bad));
-  bad = s;
-  bad.geometry = Emitter{{0, 0, 10}, {0, 0, -1}, FixedAngle{0.1}};
-  bad.target = DiscTarget{{0, 0, 0}, {0, 0, 1}, 2.0};
-  CHECK(rejects(bad)); // No density for a disc target.
-  bad = s;
-  bad.geometry = Emitter{{0, 0, 10}, {0, 0, -1}, Lambertian{}};
-  bad.target = SphereTarget{{0, 0, 0}, 2.0};
-  CHECK(rejects(bad)); // A sphere target needs an isotropic emitter.
-  bad = s;
-  bad.target = SphereTarget{{0, 0, 9}, 2.0};
-  CHECK(rejects(bad)); // The emitter lies inside the sphere.
-  bad = star_source(inf);
-  bad.target = SphereTarget{{0, 0, 9}, 2.0};
-  CHECK(rejects(bad)); // A star takes no target.
-  bad = star_source(inf);
-  bad.geometry = Star{{0.0, 0.0, -1.0}, inf, 5.0, 0.0, 30.0};
-  CHECK(rejects(bad));
-  bad = s;
-  bad.spectrum = InverseSquare{600.0, 300.0};
-  CHECK(rejects(bad));
-  bad = s;
-  bad.pulse = Exponential{0.0, -1.0};
-  CHECK(rejects(bad));
-}
-
 template <class F> bool throws_invalid(F f) {
   try {
     f();
@@ -324,6 +267,41 @@ template <class F> bool throws_invalid(F f) {
     return true;
   }
   return false;
+}
+
+void validation() {
+  const auto rejects = [](const Source &s) { return throws_invalid([&] { validate(s); }); };
+  Source s = lamp_source(10.0);
+  CHECK(!rejects(s));
+  Source bad = s;
+  bad.photons = -1.0;
+  CHECK(rejects(bad));
+  bad = s;
+  bad.geometry = Point{{0, 0, 1}, {0, 0, 2}, Isotropic{}};
+  CHECK(rejects(bad));
+  bad = s;
+  bad.geometry = Point{{0, 0, 10}, {0, 0, -1}, FixedAngle{0.1}};
+  bad.target = DiscTarget{{0, 0, 0}, {0, 0, 1}, 2.0};
+  CHECK(rejects(bad)); // No density for a disc target.
+  bad = s;
+  bad.geometry = Point{{0, 0, 10}, {0, 0, -1}, Lambertian{}};
+  bad.target = SphereTarget{{0, 0, 0}, 2.0};
+  CHECK(rejects(bad)); // A sphere target needs an isotropic point.
+  bad = s;
+  bad.target = SphereTarget{{0, 0, 9}, 2.0};
+  CHECK(rejects(bad)); // The point lies inside the sphere.
+  bad = star_source(inf);
+  bad.target = SphereTarget{{0, 0, 9}, 2.0};
+  CHECK(rejects(bad)); // A plane wave takes no target.
+  bad = star_source(inf);
+  bad.geometry = PlaneWave{{0.0, 0.0, -1.0}, inf, 5.0, 0.0, 30.0};
+  CHECK(rejects(bad));
+  bad = s;
+  bad.spectrum = InverseSquare{600.0, 300.0};
+  CHECK(rejects(bad));
+  bad = s;
+  bad.pulse = Exponential{0.0, -1.0};
+  CHECK(rejects(bad));
 }
 
 void validation_bounds() {
@@ -335,21 +313,12 @@ void validation_bounds() {
   // A disc target at h = 1e-170 overflows the candidate count (h^2 underflows to zero):
   // expected_count and photon_count throw instead of returning inf.
   Source near = lamp_source(1.0);
-  near.geometry = Emitter{{0.0, 0.0, 1e-170}, {0.0, 0.0, -1.0}, Isotropic{}};
+  near.geometry = Point{{0.0, 0.0, 1e-170}, {0.0, 0.0, -1.0}, Isotropic{}};
   near.target = DiscTarget{{0.0, 0.0, 0.0}, {0.0, 0.0, 1.0}, 2.0};
   CHECK(throws_invalid([&] { (void)expected_count(near); }));
   CHECK(throws_invalid([&] { (void)photon_count(near, 1, 0, 0); }));
   // A large but valid count is still accepted.
   CHECK(!throws_invalid([] { (void)expected_count(lamp_source(1e15)); }));
-
-  // Frames: only sky, T and C are source frames (G and unknown codes are rejected).
-  Source frame = lamp_source(10.0);
-  frame.frame = static_cast<obdeect::stream::Frame>(7);
-  CHECK(throws_invalid([&] { validate(frame); }));
-  frame.frame = obdeect::stream::Frame::sky;
-  CHECK(!throws_invalid([&] { validate(frame); }));
-  frame.frame = obdeect::stream::Frame::telescope;
-  CHECK(!throws_invalid([&] { validate(frame); }));
 
   // Complex pulse: every width must be finite (+inf used to pass the >= 0 test).
   Source pulse = lamp_source(10.0);
@@ -367,7 +336,7 @@ void validation_bounds() {
   // Magnitudes: lengths, times and wavelengths stay within 1e30 (squares and float32
   // columns finite); positive wavelengths are at least 1e-30 (inverses finite).
   Source big = lamp_source(10.0);
-  big.geometry = Emitter{{1e31, 0.0, 0.0}, {0.0, 0.0, -1.0}, Isotropic{}};
+  big.geometry = Point{{1e31, 0.0, 0.0}, {0.0, 0.0, -1.0}, Isotropic{}};
   CHECK(throws_invalid([&] { validate(big); }));
   big = lamp_source(10.0);
   big.pulse = Fixed{1e31};
@@ -392,7 +361,7 @@ int main() {
     emitters_isotropic_disc();
     disc_target_angular_profile();
     chunks_and_determinism();
-    directions_and_frames();
+    directions_and_angles();
     counts();
     sphere_target();
     validation();

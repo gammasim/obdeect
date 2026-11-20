@@ -11,7 +11,7 @@ namespace obdeect::stream {
 // takes the next free value and is added to stage_ids below.
 inline constexpr std::uint32_t stage_sources = 0x444C0001U; // obdeect sources: light sources
 inline constexpr std::uint32_t stage_programs =
-    0x444C0002U; // obdeect sources: calibration programs
+    0x444C0002U; // obdeect sources: random choices of presets (not photons)
 inline constexpr std::uint32_t stage_ray_tracing =
     0x444C0003U; // obdeect ray tracing: reserved (see docs)
 inline constexpr std::uint32_t stage_atmosphere =
