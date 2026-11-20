@@ -171,6 +171,26 @@ def test_ground_frame_on_and_off_axis(native, models, tmp_path, obdeect_stream):
     assert counts["photons_out"] > 0
 
 
+def test_stdin_matches_file_input(native, models, tmp_path):
+    source = write_stream(tmp_path / "in.pst", {1: beam(4000, (0.0, 0.0), radius_m=6.0)})
+    args = dict(telescopes=None, pointing=(0.0, 0.0), transmission="full", threads=1)
+    model_args = [str(models["segmented"][1])]
+    file_result = subprocess.run(
+        _native_argv(native, model_args, source, "-", **args), capture_output=True, check=False
+    )
+    stdin_result = subprocess.run(
+        _native_argv(native, model_args, "-", "-", **args),
+        input=source.read_bytes(),
+        capture_output=True,
+        check=False,
+    )
+    assert file_result.returncode == 0, file_result.stderr
+    assert stdin_result.returncode == 0, stdin_result.stderr
+    assert b"4000 photons in" in stdin_result.stderr
+    assert stdin_result.stderr == file_result.stderr
+    assert stdin_result.stdout == file_result.stdout
+
+
 @pytest.mark.parametrize("pointing", [(12.0, 73.0), (35.0, 180.0)])
 def test_tilted_pointing(native, models, tmp_path, obdeect_stream, pointing):
     for frame, photons in zip(

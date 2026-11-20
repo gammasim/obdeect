@@ -226,6 +226,32 @@ def test_executable_matches_api(tmp_path, envelope_files):
     assert cli_out.read_bytes() == api_out.read_bytes()
 
 
+def test_executable_stdin_matches_file_input(tmp_path):
+    source = tmp_path / "in.pst"
+    source.write_bytes(ground_stream(5000, seed=2, chunk_rows=2048))
+    command = [
+        _executable(),
+        "--transmission",
+        str(TABLE_PATH),
+        "--site-altitude",
+        str(SITE_M),
+        "--seed",
+        "7",
+        "-i",
+    ]
+    file_result = subprocess.run(
+        [*command, str(source), "-o", "-"], capture_output=True, check=False
+    )
+    stdin_result = subprocess.run(
+        [*command, "-", "-o", "-"], input=source.read_bytes(), capture_output=True, check=False
+    )
+    assert file_result.returncode == 0, file_result.stderr
+    assert stdin_result.returncode == 0, stdin_result.stderr
+    assert b"photons in 10000" in stdin_result.stderr
+    assert stdin_result.stderr == file_result.stderr
+    assert stdin_result.stdout == file_result.stdout
+
+
 SCATTERING_TABLE = DATA / "scattering_exponential.dat"
 SCATTER_TELESCOPES = [(1, 3000.0, 0.0, 0.0, 12.0), (2, 0.0, -2500.0, 0.0, 12.0)]
 
