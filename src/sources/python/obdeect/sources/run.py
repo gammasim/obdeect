@@ -13,6 +13,7 @@ expected weights per emission (see ``_core.check_run``).
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,8 @@ def write(
             raise ValueError("seed must be an int in 0..2^64-1")
         run["run"]["seed"] = seed
     if max_rows is not None:
+        if not math.isfinite(max_rows) or max_rows < 0:
+            raise ValueError("max_rows must be finite and non-negative")
         rows = _core.check_run(run)["expected_candidates"]
         if rows > max_rows:
             raise ValueError(

@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <ostream>
 #include <stdexcept>
 #include <string>
@@ -111,6 +112,12 @@ inline void validate_run(const Run &run) {
           "run: frame must be sky, telescope or camera");
   require(std::isfinite(run.observation_level_m), "run: observation level must be finite");
   require(!run.telescopes.empty(), "run: needs at least one telescope");
+  std::uint64_t event_count = 0;
+  for (const auto &event : run.events) {
+    require(event.repeat <= std::numeric_limits<std::uint32_t>::max() - event_count,
+            "run: total event count exceeds the Philox event key range");
+    event_count += event.repeat;
+  }
   for (std::size_t i = 0; i < run.telescopes.size(); ++i) {
     const auto &t = run.telescopes[i];
     require(within_limits(t.position) && positive_within_limits(t.radius_m),

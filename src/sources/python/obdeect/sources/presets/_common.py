@@ -35,8 +35,8 @@ def read_table(path: str | Path) -> tuple[list[float], list[float]]:
         text = line.split("#", 1)[0].split()
         if not text:
             continue
-        if len(text) < 2:
-            raise ValueError(f"{path} line {number}: needs two numbers")
+        if len(text) != 2:
+            raise ValueError(f"{path} line {number}: needs exactly two columns")
         try:
             x.append(float(text[0]))
             y.append(float(text[1]))

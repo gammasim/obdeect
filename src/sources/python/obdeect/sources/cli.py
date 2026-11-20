@@ -206,6 +206,13 @@ def _load(command: str, argv: list[str]) -> tuple[dict, argparse.Namespace]:
         module = presets.preset(source)
         parser = _source_parser(command, source, module)
         args = parser.parse_args(rest)
+        if hasattr(args, "seed"):
+            if getattr(args, "seed_override", None) is not None:
+                args.seed = args.seed_override
+            for text in args.overrides:
+                path, value = parse_set(text)
+                if path == ["run", "seed"]:
+                    args.seed = value
         description = module.build(args)
     return _overrides(description, args), args
 
