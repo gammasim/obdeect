@@ -124,6 +124,45 @@ void test_near_horizontal_direction_accepted() {
       [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
 }
 
+// A float32 direction with cx^2 + cy^2 slightly above 1 (rounding of a horizontal photon) is
+// valid; a direction clearly outside the unit disc is rejected.
+void test_direction_rounding_outside_unit_disc_accepted() {
+  const auto table = constant_table();
+  const auto depths = table.telescope_depths(2030.0, 28.0);
+  const obdeect::propagation::Envelope envelope({200.0, 800.0}, {0.9, 0.3});
+  const auto settings = settings_for(table, depths, envelope, true);
+
+  auto chunk = photons(1, 400.0F);
+  chunk[Column::cx][0] = 1.0000001F;
+  chunk[Column::cy][0] = 0.0F;
+  CHECK(!throws_invalid(
+      [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
+
+  chunk[Column::cx][0] = 1.001F;
+  CHECK(throws_invalid(
+      [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
+}
+
+// A rounded over-unit direction takes the magnitude of its validated cz: cx^2 + cy^2 becomes
+// 1 - cz^2. Directions inside the unit disc, and upwards ones, are left unchanged.
+void test_snap_direction_to_cz() {
+  float cx = 1.0000001F;
+  float cy = 0.0F;
+  obdeect::stream::snap_direction_to_cz(cx, cy, -0.0001);
+  CHECK_NEAR(static_cast<double>(cx) * cx + static_cast<double>(cy) * cy, 1.0 - 1e-8, 1e-6);
+  CHECK(cx > 0.0F && cy == 0.0F);
+
+  float cx_in = 0.5F;
+  float cy_in = 0.5F;
+  obdeect::stream::snap_direction_to_cz(cx_in, cy_in, -0.7);
+  CHECK(cx_in == 0.5F && cy_in == 0.5F);
+
+  float cx_up = 1.0000001F;
+  float cy_up = 0.0F;
+  obdeect::stream::snap_direction_to_cz(cx_up, cy_up, 0.0001);
+  CHECK(cx_up == 1.0000001F && cy_up == 0.0F);
+}
+
 // Wavelengths are finite and non-negative (0 means not assigned). NaN, inf and negative values
 // are rejected before any conversion to int.
 void test_wavelength_must_be_finite() {
@@ -250,6 +289,8 @@ int main() {
     test_threads_do_not_change_output();
     test_cz_column_must_be_finite();
     test_near_horizontal_direction_accepted();
+    test_direction_rounding_outside_unit_disc_accepted();
+    test_snap_direction_to_cz();
     test_wavelength_must_be_finite();
     test_wavelength_above_max_is_dropped();
     test_atmospheric_acceptance_wavelength();
