@@ -20,4 +20,8 @@ obdeect sources run run.toml -o out.pst                  # run file
 obdeect sources check run.toml                           # validate a run file
 ```
 
+The `lidar` and `laser-beam` presets emit a sampled point pulse; use
+`obdeect propagation run --mode weighted --scattering TABLE --scattering-points N`
+for scattered light. Use `obdeect sources run lidar --help` for geometry and pulse options.
+
 Full documentation and the repository README: https://github.com/gammasim/obdeect

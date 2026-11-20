@@ -1041,6 +1041,7 @@ private:
       const double v = 1.0 - cx * cx - cy * cy;
       cz[i] = -std::sqrt(std::isnan(v) ? v : std::max(0.0, v));
       if (chunk.has(Column::cz)) {
+        cz[i] = chunk[Column::cz][i];
         cz_mismatch = cz_mismatch || !st::cz_matches_direction(chunk[Column::cz][i], cx, cy);
       }
       upward = upward || !(cz[i] < 0.0);
@@ -1085,7 +1086,9 @@ private:
       const double s = (plane - z) / cz[i];
       x[i] = static_cast<float>(static_cast<double>(x_in[i]) + s * static_cast<double>(cx_in[i]));
       y[i] = static_cast<float>(static_cast<double>(y_in[i]) + s * static_cast<double>(cy_in[i]));
-      time[i] = static_cast<float>(static_cast<double>(t_in[i]) + s / kSpeedOfLightMPerNs);
+      const double norm = std::sqrt(static_cast<double>(cx_in[i]) * cx_in[i] +
+                                    static_cast<double>(cy_in[i]) * cy_in[i] + cz[i] * cz[i]);
+      time[i] = static_cast<float>(static_cast<double>(t_in[i]) + s * norm / kSpeedOfLightMPerNs);
       bunch_id[i] = (static_cast<std::uint64_t>(event_number) << 32) | (chunk.first_index + i);
     }
     const std::vector<float> zeros(rows, 0.0F);
@@ -1100,7 +1103,8 @@ private:
                            chunk[Column::w].data(),
                            wavelength.data(),
                            bunch_id.data(),
-                           rows};
+                           rows,
+                           chunk.has(Column::cz) ? chunk[Column::cz].data() : nullptr};
     BunchFrame frame;
     std::copy(rotation.begin(), rotation.end(), frame.rotation);
     std::copy(offset.begin(), offset.end(), frame.offset_m);

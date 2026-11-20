@@ -102,21 +102,41 @@ Required: `--satellite-altitude` or `--satellite-position`, `--beam-zenith` (> 9
 or `--telescope X,Y,Z,R`. `--start-height M` moves the emission along the beam to that height
 (for example 100000 for a satellite); `--rows` sets the sampled rows per pulse.
 
+### Satellite lidar example
+
+From the repository root, simulate one 1 mJ, 355 nm pulse from 400 km above a site at
+2000 m a.s.l. The nadir beam passes 1 km from a telescope of radius 12.5 m. The emission
+starts at 100 km above the site; its time includes the 300 km path from the satellite.
+Check the 128 sampled primary rows first, then write and propagate them:
+
 ```sh
-obdeect sources run lidar --observation-level 2150 --satellite-altitude 500000 \
+obdeect sources check lidar --observation-level 2000 --satellite-altitude 400000 \
     --satellite-offset 1000,0 --beam-zenith 180 --beam-azimuth 0 --divergence 0.01 \
-    --pulse-energy 1e-3 --wavelength-nm 532 --telescope-radius 12.5 --start-height 100000 \
-    --rows 1000 -o /dev/null
+    --pulse-energy 1e-3 --wavelength-nm 355 --telescope-radius 12.5 \
+    --start-height 100000 --rows 128
+
+obdeect sources run lidar --observation-level 2000 --satellite-altitude 400000 \
+    --satellite-offset 1000,0 --beam-zenith 180 --beam-azimuth 0 --divergence 0.01 \
+    --pulse-energy 1e-3 --wavelength-nm 355 --telescope-radius 12.5 \
+    --start-height 100000 --rows 128 --max-rows 10000 -o lidar-primaries.pst
+
+obdeect propagation run --site-altitude 2000 --seed 7 --mode weighted \
+    --transmission src/propagation/cpp/tests/data/atm_trans_2000_1_10_0_0_2000.dat \
+    --scattering src/propagation/cpp/tests/data/scattering_exponential.dat \
+    --scattering-points 64 -i lidar-primaries.pst -o lidar-scattered.pst
 ```
 
-Chain of `laser-beam` and `lidar` (the scattered light, with weighted mode because the primary
-weights exceed 2048):
+The check reports 128 candidates and about 1.787e15 physical photons per pulse. The output
+contains the propagated primaries and telescope-directed scattered photons; their `w` values are
+physical photon weights. Weighted mode accommodates the large primary weights. Increase `--rows`
+and `--scattering-points` to study sampling and discretisation convergence.
 
-```sh
-obdeect sources run lidar ... -o primaries.pst
-obdeect propagation run --transmission T --site-altitude H --seed N --mode weighted \
-    --scattering S --scattering-points 64 -i primaries.pst -o scattered.pst
-```
+The two files under `src/propagation/cpp/tests/data/` are illustrative test tables, not a measured
+atmosphere. Use suitable transmission and scattering tables for a scientific simulation, including
+the laser wavelength and a high enough top node that the optical depth above it is negligible.
+The shortened start assumes negligible extinction and scattering along the 300 km above it;
+`--start-height` shifts time but does not apply attenuation there. See
+[single scattering](../propagation/scattering.md) for the table format and model assumptions.
 
 Model and limits, shared by both presets:
 

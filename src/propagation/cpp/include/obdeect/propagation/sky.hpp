@@ -180,10 +180,11 @@ inline bool curved_arrival(const SkyPlane &plane, double emission_altitude_m, do
 // level, so that row indices (and thus the random draws) do not change.
 //
 // Input: columns x y z cx cy t w (cz optional: if present its sign selects upwards photons).
-// Output: columns x y cx cy t zem w (plus the optional columns that were present); z and cz
-// are removed. zem is the emission altitude a.s.l.; t includes the vacuum path, the air delay
-// (profile) or the bent travel time (tables).
-inline std::uint64_t sky_to_ground(obdeect::stream::PhotonChunk &chunk, const SkyPlane &plane) {
+// Output: columns x y cx cy t zem w; z is removed. If preserve_cz is true, use and retain cz. zem
+// is the emission altitude a.s.l.; t includes the vacuum path, the air delay (profile) or the bent
+// travel time (tables).
+inline std::uint64_t sky_to_ground(obdeect::stream::PhotonChunk &chunk, const SkyPlane &plane,
+                                   bool preserve_cz = false) {
   using obdeect::stream::Column;
   if (chunk.frame != obdeect::stream::Frame::sky) {
     throw std::invalid_argument("sky_to_ground needs photons in frame sky");
@@ -249,17 +250,17 @@ inline std::uint64_t sky_to_ground(obdeect::stream::PhotonChunk &chunk, const Sk
   auto &t = chunk[Column::t];
   auto &zem = chunk[Column::zem];
   auto &w = chunk[Column::w];
-  const auto &cz_column = chunk[Column::cz];
+  auto &cz_column = chunk[Column::cz];
 
   std::uint64_t dropped = 0;
   for (std::size_t row = 0; row < rows; ++row) {
     const double dx = cx[row];
     const double dy = cy[row];
     const double r2 = dx * dx + dy * dy;
-    if (!(r2 <= 1.0)) {
+    if (!(r2 <= (has_cz ? 1.0 + obdeect::stream::direction_norm_tolerance : 1.0))) {
       throw std::invalid_argument("direction cosines must satisfy cx^2 + cy^2 <= 1");
     }
-    const double cz_magnitude = std::sqrt(1.0 - r2);
+    double cz_magnitude = std::sqrt(std::max(0.0, 1.0 - r2));
     const double emission_z = z[row];
     if (!std::isfinite(x[row]) || !std::isfinite(y[row]) || !std::isfinite(emission_z) ||
         !std::isfinite(t[row])) {
@@ -275,6 +276,10 @@ inline std::uint64_t sky_to_ground(obdeect::stream::PhotonChunk &chunk, const Sk
         reaches = false; // moving upwards or horizontally
       } else if (!obdeect::stream::cz_matches_direction(cz, dx, dy)) {
         throw std::invalid_argument("cz column does not match cx, cy (cz = -sqrt(1-cx^2-cy^2))");
+      }
+      if (preserve_cz && cz < 0.0) {
+        cz_magnitude = -cz;
+        reaches = emission_z >= plane_z;
       }
     }
     double emission_altitude = plane.observation_m + emission_z;
@@ -316,7 +321,9 @@ inline std::uint64_t sky_to_ground(obdeect::stream::PhotonChunk &chunk, const Sk
         reaches = bend(*plane.tables, emission_altitude, cx_out, cy_out, x_out, y_out, travel_ns);
         t_out = static_cast<double>(t[row]) + travel_ns;
       } else {
-        t_out = static_cast<double>(t[row]) + path / speed_of_light_m_per_ns;
+        t_out = static_cast<double>(t[row]) +
+                path * (preserve_cz && has_cz ? std::sqrt(r2 + cz_magnitude * cz_magnitude) : 1.0) /
+                    speed_of_light_m_per_ns;
         if (plane.profile != nullptr) {
           const double zenith = std::atan2(std::sqrt(r2), cz_magnitude);
           t_out +=
@@ -341,9 +348,19 @@ inline std::uint64_t sky_to_ground(obdeect::stream::PhotonChunk &chunk, const Sk
     cx[row] = static_cast<float>(cx_out);
     cy[row] = static_cast<float>(cy_out);
     t[row] = static_cast<float>(t_out);
+    if (has_cz && preserve_cz) {
+      if (!reaches) {
+        cz_column[row] = -1.0F;
+      } else if (plane.tables != nullptr || plane.curved_tables != nullptr) {
+        cz_column[row] =
+            static_cast<float>(-std::sqrt(std::max(0.0, 1.0 - cx_out * cx_out - cy_out * cy_out)));
+      }
+    }
   }
   chunk[Column::z].clear();
-  chunk[Column::cz].clear();
+  if (!preserve_cz) {
+    chunk[Column::cz].clear();
+  }
   chunk.frame = obdeect::stream::Frame::ground;
   return dropped;
 }

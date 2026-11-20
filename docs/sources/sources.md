@@ -7,8 +7,8 @@ A source emits photons from a geometry. A run file lists the sources (emissions)
 
 | `kind` | Photons start | Use for |
 | --- | --- | --- |
-| `point` | at a point, into a cone or 4 pi | flashers, LEDs, point sources, beam scans |
-| `line` | along a segment | laser beams, lidar pulses, muon tracks, air showers |
+| `point` | at a point, into a cone or 4 pi | flashers, LEDs, point sources, beam scans, laser pulses |
+| `line` | along a segment | muon tracks, air showers |
 | `plane_wave` | on a plane, parallel or from a finite distance | stars, parallel beams |
 | `sky_background` | on a sphere, travelling inwards | night-sky background |
 
@@ -146,3 +146,11 @@ than candidates; in the run example above the 1e5-photon line has an expected we
 Each emission has its own seed, derived from the run seed (see [run](spec/run.md)). Draws are
 counter-based (Philox), so the output does not depend on chunking or threads
 ([random numbers](../stream/random-numbers.md)).
+
+## Downward laser pulses
+
+The `lidar` and `laser-beam` presets emit a point pulse with a filled-cone divergence.
+The pulse contains E lambda / (h c) photons; `--rows` controls sampling. Propagation
+models scattering and transmission. Use `--help` for the required geometry and options.
+The presets reject a direct beam intersecting a telescope sphere and limit the tilt for
+the plane-parallel atmosphere.

@@ -97,7 +97,12 @@ def telescope_photons(path, telescope_id):
         for record in stream.Reader(str(path))
         if record["type"] == "photons" and record["telescope_id"] == telescope_id
     ]
-    return {name: np.concatenate([block[name] for block in blocks]) for name in blocks[0]}
+    columns = {name: np.concatenate([block[name] for block in blocks]) for name in blocks[0]}
+    columns["cz"] = np.concatenate([
+        block.get("cz", -np.sqrt(np.maximum(0.0, 1.0 - block["cx"] ** 2 - block["cy"] ** 2)))
+        for block in blocks
+    ])
+    return columns
 
 
 def chain(directory, d_m):
@@ -204,41 +209,38 @@ def test_arrival_time_is_emission_to_point_plus_point_to_ground(case):
         f"\nd={case['d']:.0f} m: arrival-time error max |dt| {np.max(np.abs(delta)):.4f} ns, "
         f"mean {np.mean(delta):.4f} ns"
     )
-    # float32 time at ~3.3e5 ns has a resolution of 1/32 ns; allow three steps.
-    assert np.max(np.abs(delta)) <= 0.1
+    # Float32 altitude rounding is amplified by the slant path for horizontal rays.
+    altitude_error = np.spacing(photons["zem"].astype(np.float32)).astype(np.float64) / 2
+    time_error = altitude_error * (1 + 1 / np.abs(photons["cz"])) / C_M_PER_NS
+    assert np.all(np.abs(delta) <= 0.1 + time_error)
+
+
+def closest_approach(photons):
+    """Distance to the telescope centre and travel time from the z=0 plane."""
+    cx, cy = photons["cx"], photons["cy"]
+    cz = photons["cz"]
+    norm = np.sqrt(cx**2 + cy**2 + cz**2)
+    cx, cy, cz = cx / norm, cy / norm, cz / norm
+    along = -(photons["x"] * cx + photons["y"] * cy)
+    distance = np.sqrt(
+        (photons["x"] + along * cx) ** 2 + (photons["y"] + along * cy) ** 2 + (along * cz) ** 2
+    )
+    return distance, along / C_M_PER_NS
 
 
 def test_arrival_spread_around_emission_height_over_c(case):
-    """Delay t - H/c = (|P - G| - z) / c, with P at height z and G the ground point."""
     photons = case["scattered"]
-    d_m = case["d"]
     w = photons["w"]
-    delay = photons["t"] - EMISSION_HEIGHT_M / C_M_PER_NS
+    _, time_shift = closest_approach(photons)
+    delay = photons["t"] + time_shift - EMISSION_HEIGHT_M / C_M_PER_NS
     order = np.argsort(delay)
     cumulative = np.cumsum(w[order]) / w.sum()
     median, p95 = (delay[order][np.searchsorted(cumulative, q)] for q in (0.5, 0.95))
-    on_sphere = np.hypot(photons["x"], photons["y"]) <= RADIUS_M
-    print(
-        f"\nd={d_m:.0f} m: weighted arrival delay vs H/c: median {median:.2f} ns, "
-        f"95% below {p95:.2f} ns, max {delay.max():.2f} ns; "
-        f"weight with ground point on the sphere {w[on_sphere].sum() / w.sum():.4f}"
-    )
-    # For rows whose ground point is on the sphere, |P - G| - z lies between -R and d + R
-    # (triangle inequality with the sphere centre O).
-    assert delay[on_sphere].min() >= -RADIUS_M / C_M_PER_NS - 0.1
-    assert delay[on_sphere].max() <= (d_m + RADIUS_M) / C_M_PER_NS + 0.1
+    print(f"\nd={case['d']:.0f} m: weighted delay median {median:.2f} ns, 95% {p95:.2f} ns")
+    assert delay.min() >= -RADIUS_M / C_M_PER_NS - 0.1
+    assert delay.max() <= (case["d"] + RADIUS_M) / C_M_PER_NS + 0.1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "open: the scattered photon is projected to the telescope plane (z = 0) along its ray, "
-        "so rows aimed at the upper sphere land outside it (rho > R, weight 21% at d = 100 m, "
-        "35% at 1000 m, 48% at 5000 m); docs/propagation/scattering.md says they land on the sphere"
-    ),
-)
-def test_scattered_rows_land_on_sphere(case):
-    photons = case["scattered"]
-    rho = np.hypot(photons["x"], photons["y"])
-    outside = photons["w"][rho > RADIUS_M].sum() / photons["w"].sum()
-    assert outside == 0.0, f"d={case['d']:.0f} m: weight fraction outside the sphere {outside:.4f}"
+def test_scattered_rays_pass_through_sphere(case):
+    distance, _ = closest_approach(case["scattered"])
+    assert np.all(distance <= RADIUS_M + 1e-3)
