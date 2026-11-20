@@ -1018,7 +1018,9 @@ private:
         throw std::runtime_error("camera map telescope " + std::to_string(entry.first) +
                                  " is not in the run metadata");
       }
-      pos.z[entry.first - 1] = 0.0;
+      if (!keep_telpos_height_) {
+        pos.z[entry.first - 1] = 0.0;
+      }
     }
     return make_telpos_block(pos);
   }

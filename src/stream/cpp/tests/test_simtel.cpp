@@ -449,6 +449,31 @@ void test_telpos_height_kept_with_option() {
   CHECK(throws_error([&] { run_adapter_with(missing, missing_options); }));
 }
 
+void test_synthesised_telpos_heights() {
+  Metadata run = light_source_run();
+  run["telescope_z_m"] = std::vector<double>{20.0, 21.0};
+  const std::vector<Record> records{record_of(RecordType::run, run),
+                                    record_of(RecordType::run_end)};
+  for (bool keep : {false, true}) {
+    SimtelOptions options;
+    options.camera = {{1, CameraTelescope{1, 0.0}}};
+    options.keep_telpos_height = keep;
+    bool checked = false;
+    for (const EventioBlock &block : read_blocks(run_adapter_with(records, options))) {
+      if (block.type == iact::telpos) {
+        const TelPos pos = decode_telpos(block);
+        CHECK(pos.z.size() == 2);
+        if (pos.z.size() == 2) {
+          CHECK_NEAR(pos.z[0], keep ? 2000.0 : 0.0, 1e-3);
+          CHECK_NEAR(pos.z[1], 2100.0, 1e-3);
+        }
+        checked = true;
+      }
+    }
+    CHECK(checked);
+  }
+}
+
 // Telescope-frame chunk: emission points x y z [m], direction cx cy (cz below, or none),
 // times t [ns]; w = 1.
 PhotonChunk telescope_chunk(std::uint32_t telescope, const std::vector<double> &x,
@@ -1298,6 +1323,7 @@ int main() {
     test_camera_frame_through_adapter();
     test_telpos_zeroed_for_camera_only();
     test_telpos_height_kept_with_option();
+    test_synthesised_telpos_heights();
     test_telescope_frame_through_adapter();
     test_telescope_frame_report_and_telpos();
     test_telescope_frame_rejected();
