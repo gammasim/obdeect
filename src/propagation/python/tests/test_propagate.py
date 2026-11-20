@@ -348,7 +348,8 @@ def test_scattering_adds_kernel_weight_times_envelope(tmp_path, mirror_file):
         n_points=8,
     )
     expected = 0.8 * sum(
-        float(np.sum(photons["w"], dtype=np.float64)) for photons in kernel.values()
+        float(np.sum(photons["w"][photons["cz"] < 0], dtype=np.float64))
+        for photons in kernel.values()
     )
     assert on["weight_out"] - base["weight_out"] == pytest.approx(expected, rel=1e-5)
     assert on["photons_out"] > base["photons_out"]

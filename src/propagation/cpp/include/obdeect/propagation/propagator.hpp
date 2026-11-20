@@ -1098,23 +1098,8 @@ private:
     }
     const bool weighted = config_.mode == OutputMode::weighted;
     for (const auto &scattered : list) {
-      // Scattered photons point downwards by construction. Their cz column (float32) can disagree
-      // with cx, cy by more than the tolerance of sky_to_ground for nearly horizontal photons, so
-      // their direction is taken from cx, cy, scaled inside the unit disc (float32 rounding).
-      obdeect::stream::PhotonChunk plane_input =
-          without_column(scattered, obdeect::stream::Column::cz);
-      auto &cx = plane_input[obdeect::stream::Column::cx];
-      auto &cy = plane_input[obdeect::stream::Column::cy];
-      for (std::size_t row = 0; row < plane_input.rows(); ++row) {
-        const double r2 =
-            static_cast<double>(cx[row]) * cx[row] + static_cast<double>(cy[row]) * cy[row];
-        if (r2 > 1.0) {
-          const double scale = (1.0 - 1e-6) / std::sqrt(r2);
-          cx[row] = static_cast<float>(cx[row] * scale);
-          cy[row] = static_cast<float>(cy[row] * scale);
-        }
-      }
-      sky_to_ground(plane_input, sky_plane());
+      obdeect::stream::PhotonChunk plane_input = scattered;
+      sky_to_ground(plane_input, sky_plane(), true);
       for (auto &out : apply_envelope_chunk(
                std::move(plane_input), run_->envelope, *config_.transmission, *telescope_.depths,
                weighted, config_.seed, event_number_, telescope_.id, telescope_.out_index)) {

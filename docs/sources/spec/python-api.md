@@ -1,58 +1,72 @@
 # Python API
 
-Package `obdeect.sources`: `__version__` (distribution version or `"0.0.0"` if not installed);
-extension `obdeect.sources._core` (nanobind) with `core_version()` (three-tuple), `stream_contract()`
-(dict: `format_major`, `format_minor`, `max_chunk_rows`, `sources_format_major`, `frames`
-{sky 0, telescope 2, camera 3}, `emitted_columns` list in obdeect stream order), `make_spectrum`,
-`make_pulse`, `make_angular` (kind, params, x, y) and classes `Emitter(position, pointing,
-angular)`, `Star(towards_source, distance_m, disk_radius_m, disk_z_m, start_z_m)`, `Source(frame
-int, geometry, spectrum, pulse, photons)` with `set_disc_target`, `set_sphere_target`,
-`validate`, `expected_count`, `photon_count(seed, event, telescope)`, `emit(seed, event,
-telescope, first_index, rows)` returning a dict of float32 numpy arrays (columns in
-`source_columns` order). Core `invalid_argument` becomes `ValueError`; vectors must have
-three finite components; frame int must be 0, 2 or 3.
+Package `obdeect.sources`. Errors are `ValueError`; the message starts with the key path
+(see [run file](run-file.md)).
+
+## `obdeect.sources.config`
+
+- `load(path) -> dict`: read a `.toml` or `.json` run file (not normalized).
+- `normalize(config) -> dict`: validate and fill defaults. The input is not changed. Pure Python.
+
+```python
+from obdeect.sources import config
+
+run = config.normalize(config.load("run.toml"))
+run["run"]["seed"]  # 1 (the default, an int)
+```
+
+## `obdeect.sources.run`
+
+- `write(config, output, ...) -> summary`: write the photon stream (`.pst`) to `output`. The
+  summary has the counts of [`RunSummary`](run.md#types). The normalized run description is
+  stored as the run metadata key `run_description`.
+- `check(config) -> dict`: validate and compute the expected values without writing photons.
+
+```python
+from obdeect.sources import config, run
+
+description = config.normalize(config.load("run.toml"))
+print(run.check(description))
+summary = run.write(description, "out.pst")
+```
 
 ## `obdeect.sources.source`
 
-Constants: `CHUNK_ROWS = 65536`, `FRAMES = {"sky":0,"telescope":2,"camera":3}`, `COLUMNS =
-("x","y","z","cx","cy","cz","t","w","wavelength")` (as in obdeect stream).
+Single emissions: an emission is one entry of `events[i].emissions` (with `kind`). Functions
+accept sparse emissions and normalize them first. An `auto` target is rejected: it needs the
+telescopes of a run.
 
-Source dictionary (unknown keys at any level are `ValueError("unknown <label> key(s): ...")`;
-`kind` allowed only in profile and target sections):
+- `normalize_emission(emission) -> dict`.
+- `expected_photons(emission) -> float`: mean candidate rows.
+- `expected_weight(emission) -> float`: expected sum of weights.
+- `photon_count(emission, *, seed, event=0, telescope=0) -> int`.
+- `emit(emission, *, seed, event=0, telescope=0) -> dict`: all rows as float32 arrays, keys
+  `x y z cx cy cz t w wavelength`. Holds everything in memory.
+- `iter_chunks(emission, *, seed, event=0, telescope=0)`: chunks of at most 65536 rows.
+- `emit_chunk(emission, *, seed, event=0, telescope=0, first_index=0, rows=65536)`.
+- Constants: `CHUNK_ROWS = 65536`, `COLUMNS`.
 
-- top level: `frame` (default `sky`), `photons` (required), exactly one of `emitter` / `star`,
-  `spectrum` (default fixed 400), `pulse` (default fixed 0), `target` (emitters only).
-- `emitter`: `position_m`, `pointing`, `angular`, all required.
-- `star`: `towards_source` (3 numbers, not all zero; normalised by the API), `distance_m`
-  (default inf), `disk_radius_m`, `disk_z_m`, `start_z_m` required.
-- spectrum kinds: `fixed{wavelength_nm}`, `uniform{low_nm,high_nm}`,
-  `inverse_square{low_nm,high_nm}`, `table{wavelength_nm[],density[]}`.
-- pulse kinds: `fixed{time_ns}`, `tophat{width_ns, delay_ns=0}` = UniformRange(delay -
-  width/2, delay + width/2), `gauss{sigma_ns, mean_ns=0}`, `exponential{decay_ns, mean_ns=0}`,
-  `complex{flat_ns,gauss_rms_ns,decay_ns,delay_ns=0}`, `table{time_ns[],rate[]}`.
-- angular kinds: `isotropic`, `cone{angle_deg}`, `filled_cone{angle_deg}`, `lambertian`,
-  `gauss{sigma_deg}`, `rayleigh`, `table{angle_deg[],value[]}` (angles finite in `[0,180]`,
-  converted to `u = 1 - cos`). Cone angles must be finite in `[0,180]` (message contains
-  `finite and in`).
-- target: `disc{centre_m, normal, radius_m}`, `sphere{centre_m, radius_m}`.
-- A missing parameter is `ValueError("missing '<name>'")`; missing `kind`: `the <label> needs a
-  'kind'`; unknown kind: `unknown <label> kind '<k>'`; both/neither emitter-star: message
-  contains `exactly one`; target on a star: `only emitters take a target`; fixed-angle with disc
-  target message contains `fixed-angle`; zero `towards_source`: message contains `zero`; frame
-  `ground`: message contains `frame`.
+```python
+from obdeect.sources.source import emit
 
-Functions: `build_source(spec)` (validates), `expected_photons(spec)`, `photon_count(spec, *,
-seed, event=0, telescope=0)`, `emit_chunk(spec, *, seed, event=0, telescope=0, first_index=0,
-rows=65536)` (rows in `1..65536`, message contains `rows`; `first_index >= 0`, message
-contains `first_index`), `iter_chunks(spec, *, seed, event, telescope)` (chunks of at most
-65536, `ceil(count/65536)` chunks), `emit(...)` (concatenation; empty float32 arrays when the
-count is 0). Semantics identical to [source-core](source-core.md) (the dictionary maps one to
-one; `photons` is the unnormalised source mean).
+point = {
+    "kind": "point",
+    "photons": 1e6,
+    "position_m": [0.0, 0.0, 300.0],
+    "angular": {"kind": "isotropic"},
+    "spectrum": {"kind": "fixed", "wavelength_nm": 400.0},
+    "target": {"kind": "sphere", "centre_m": [0.0, 0.0, 0.0], "radius_m": 12.5},
+}
+photons = emit(point, seed=3)
+photons["w"].sum()  # expected photons on the sphere, approximately
+```
 
-## `obdeect.sources.plot` (optional matplotlib)
+## `obdeect.sources.plot` (optional, needs matplotlib)
 
-`profile_figure(spec, *, seed=1, photons=200000)` -> figure with three axes whose x labels
-start with `angle`, `wavelength`, `emission time`; histograms (60 bins) of the first
-`min(photons, count, 65536)` photons weighted by `w`; angle between the direction and the
-emitter pointing (or `-towards_source` of a star). Zero photons: `ValueError("the source emits
-no photons")`.
+- `profile_figure(emission, *, seed=1, photons=200000)`: histograms of angle, wavelength and
+  emission time of the first photons (weighted by `w`). An emission with no photons raises
+  `ValueError`.
+
+## `obdeect.sources._core`
+
+Compiled extension (nanobind) used by the functions above. Not a public interface.

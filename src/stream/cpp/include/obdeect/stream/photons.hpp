@@ -67,6 +67,19 @@ struct PhotonChunk {
     }
   }
 
+  // Keep the first n rows of every present column (n <= rows()).
+  void truncate(std::size_t n) {
+    if (n > rows_) {
+      throw std::invalid_argument("photon chunk truncate beyond its rows");
+    }
+    rows_ = n;
+    for (auto &column : columns) {
+      if (!column.empty()) {
+        column.resize(n);
+      }
+    }
+  }
+
   // Throw unless all required columns are present with equal length.
   void validate() const {
     if ((mask() & required_columns) != required_columns && rows_ > 0) {

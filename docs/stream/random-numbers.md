@@ -11,8 +11,9 @@ page is the one place where they are described.
   order or the number of threads.
 - **Independent modules.** Each module uses its own stage id, so the atmosphere and the optics
   never draw the same numbers, even with the same seed.
-- **Independent sources.** Light sources with the same seed, event and telescope share their
-  draws. Give each independent source its own seed.
+- **Independent emissions.** Each emission of a run has its own seed, `source_seed(run seed, k)`
+  for emission `k` in event order, so emissions never share draws. Presets draw their random
+  choices from `stage_programs` (see below).
 
 ## Generator
 
@@ -21,7 +22,7 @@ function of a key, with no state to share between photons. The key combines:
 
 | Field | Bits | Meaning |
 |---|---|---|
-| seed | 64 | the `--seed` of the command |
+| seed | 64 | the `--seed` of the command; for sources, the emission seed |
 | stage | 32 | the module (table below) |
 | photon index | 40 | index of the photon within its telescope and event |
 | block | 24 | block of draws for one photon |
@@ -39,10 +40,13 @@ distinct. The values are fixed: changing one changes the random numbers.
 
 | Constant | Value | Module |
 |---|---|---|
-| `stage_sources` | `0x444C0001` | obdeect sources: light sources |
-| `stage_programs` | `0x444C0002` | obdeect sources: calibration programs |
+| `stage_sources` | `0x444C0001` | obdeect sources: photon and count draws, keyed on the emission seed |
+| `stage_programs` | `0x444C0002` | obdeect sources presets: random choices (pixels, core positions) |
 | `stage_ray_tracing` | `0x444C0003` | obdeect ray tracing |
 | `stage_atmosphere` | `0x444C5546` | obdeect propagation: atmosphere |
+
+Presets draw their random choices with numpy's Philox generator, keyed on (run seed,
+`0x444C0002`), not with the generator above. Photon draws never use this stage.
 
 A new module takes the next free value and adds it to `stage_ids`.
 

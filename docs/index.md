@@ -104,7 +104,8 @@ Extinction, refraction, timing and scattering between the emission point and the
 :link-type: doc
 :class-card: sd-shadow-sm
 
-Flashers, LEDs, lasers, point sources, night-sky background and muons.
+Flashers, LEDs, point sources, laser beams, satellite lidar, night-sky background,
+muon tracks and simple air showers.
 :::
 
 :::{grid-item-card} {fas}`eye;pst-color-primary` Ray tracing

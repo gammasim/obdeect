@@ -23,6 +23,7 @@ struct BunchBlock {
   const float *x{}, *y{}, *cx{}, *cy{}, *time_ns{}, *zem{}, *size{}, *wavelength_nm{};
   const std::uint64_t *bunch_id{}; // Unique per bunch for one seed.
   std::size_t n{};
+  const float *cz{}; // Optional vertical direction cosine.
 };
 
 // Input frame to telescope frame: p = R (u x, u y, u plane_z) + offset and
@@ -123,6 +124,10 @@ public:
           !(static_cast<double>(in_.cx[i]) * in_.cx[i] +
                 static_cast<double>(in_.cy[i]) * in_.cy[i] <=
             1.0 + 1e-6) ||
+          (in_.cz && (!(in_.cz[i] < 0.0F) ||
+                      std::abs(static_cast<double>(in_.cx[i]) * in_.cx[i] +
+                               static_cast<double>(in_.cy[i]) * in_.cy[i] +
+                               static_cast<double>(in_.cz[i]) * in_.cz[i] - 1.0) > 1e-5)) ||
           !std::isfinite(in_.time_ns[i]) || !std::isfinite(in_.zem[i]))
         bad = true;
       else
@@ -145,8 +150,14 @@ public:
     const auto &axes = model_.axes_offset_m;
     const auto transform = [&](std::size_t i) {
       const double x = u * in_.x[i], y = u * in_.y[i], z = u * frame_.plane_z;
-      const double cx = in_.cx[i], cy = in_.cy[i];
-      const double cz = -std::sqrt(std::max(0.0, 1.0 - cx * cx - cy * cy));
+      double cx = in_.cx[i], cy = in_.cy[i];
+      double cz = in_.cz ? in_.cz[i] : -std::sqrt(std::max(0.0, 1.0 - cx * cx - cy * cy));
+      if (in_.cz) {
+        const double norm = std::sqrt(cx * cx + cy * cy + cz * cz);
+        cx /= norm;
+        cy /= norm;
+        cz /= norm;
+      }
       return Ray{{r[0] * x + r[1] * y + r[2] * z + frame_.offset_m[0] - axes[0],
                   r[3] * x + r[4] * y + r[5] * z + frame_.offset_m[1] - axes[1],
                   r[6] * x + r[7] * y + r[8] * z + frame_.offset_m[2] - axes[2]},

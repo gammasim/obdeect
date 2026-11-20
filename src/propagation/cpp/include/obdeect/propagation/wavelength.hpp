@@ -26,12 +26,13 @@ struct WavelengthRange {
   double lo_nm{};
   double hi_nm{};
 
-  // Requires finite 1 <= lo < hi <= 2^24 (nm): the lower bound keeps 1 / lo finite and
-  // lookups at index >= 1, the upper bound is a float32-safe limit.
+  // Requires finite 1 <= lo <= hi <= 2^24 (nm): the lower bound keeps 1 / lo finite and
+  // lookups at index >= 1, the upper bound is a float32-safe limit. lo == hi is a fixed
+  // wavelength (a monochromatic light source), assigned as lo.
   void validate() const {
-    if (!(std::isfinite(lo_nm) && std::isfinite(hi_nm) && lo_nm >= 1.0 && hi_nm > lo_nm &&
+    if (!(std::isfinite(lo_nm) && std::isfinite(hi_nm) && lo_nm >= 1.0 && hi_nm >= lo_nm &&
           hi_nm <= max_exact_wavelength_nm)) {
-      throw std::invalid_argument("wavelength range needs finite 1 <= lo < hi <= 2^24 (nm)");
+      throw std::invalid_argument("wavelength range needs finite 1 <= lo <= hi <= 2^24 (nm)");
     }
   }
 };

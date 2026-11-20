@@ -40,8 +40,11 @@ struct ExtinctionSettings {
 namespace detail {
 
 // Validation shared by the ground-frame steps: frame G, direction cosines, bunch weights,
-// optional cz, zem (when needed), wavelength values. Throws std::invalid_argument.
-inline void validate_ground_chunk(obdeect::stream::PhotonChunk &chunk, bool need_zem) {
+// optional cz, zem (when needed), wavelength values. Weights are at most max_bunch_photons
+// only when they are thinned (limit_weights); weighted output keeps any finite weight >= 0.
+// Throws std::invalid_argument.
+inline void validate_ground_chunk(obdeect::stream::PhotonChunk &chunk, bool need_zem,
+                                  bool limit_weights) {
   using obdeect::stream::Column;
   if (chunk.frame != obdeect::stream::Frame::ground) {
     throw std::invalid_argument("photons must be in frame ground (G)");
@@ -77,9 +80,12 @@ inline void validate_ground_chunk(obdeect::stream::PhotonChunk &chunk, bool need
             "cz column must be finite and match cx, cy (cz = -sqrt(1-cx^2-cy^2))");
       }
     }
-    if (!(w[row] >= 0.0F &&
-          static_cast<double>(w[row]) <= static_cast<double>(max_bunch_photons))) {
-      throw std::invalid_argument("bunch weight must be within [0, max_bunch_photons]");
+    if (!(w[row] >= 0.0F && std::isfinite(w[row]))) {
+      throw std::invalid_argument("bunch weight must be finite and >= 0");
+    }
+    if (limit_weights && static_cast<double>(w[row]) > static_cast<double>(max_bunch_photons)) {
+      throw std::invalid_argument("bunch weight above max_bunch_photons (2048) cannot be "
+                                  "thinned: use weighted mode or a smaller bunch size");
     }
     if (need_zem && !std::isfinite(chunk[Column::zem][row])) {
       throw std::invalid_argument("zem must be finite");
@@ -103,7 +109,7 @@ inline void validate_ground_chunk(obdeect::stream::PhotonChunk &chunk, bool need
 assign_wavelength_chunk(obdeect::stream::PhotonChunk chunk, const WavelengthRange &wavelengths,
                         std::uint64_t seed, std::uint32_t event, std::uint32_t telescope) {
   wavelengths.validate();
-  detail::validate_ground_chunk(chunk, false);
+  detail::validate_ground_chunk(chunk, false, false);
   if (chunk.rows() == 0) {
     return {};
   }
@@ -125,7 +131,7 @@ apply_extinction_chunk(obdeect::stream::PhotonChunk chunk, const ExtinctionSetti
     throw std::invalid_argument("extinction settings incomplete");
   }
   settings.wavelengths.validate();
-  detail::validate_ground_chunk(chunk, true);
+  detail::validate_ground_chunk(chunk, true, !settings.weighted);
   const std::size_t rows = chunk.rows();
   if (rows == 0) {
     return {};
