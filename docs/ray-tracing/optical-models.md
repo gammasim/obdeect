@@ -19,7 +19,9 @@ An optical model (`obdeect.optical-model.v2`) is one JSON document:
   file hashes, seed, zenith angle, structure flag), `notes`;
 - `sampling`: the star-light disk;
 - `optics`: `primary`, optional `secondary` (each `facets` or an `asphere` with
-  `segments`, a `reflectivity` table, `scatter`, optional `degradation` map),
+  `segments`, a `reflectivity` table, `scatter`, optional `degradation` map; facets may store the
+  dish vertex `vertex_z_m` = -`mirror_offset` in metres, written by the compiler for segmented
+  primaries and used for the in-telescope path, see [](../propagation/propagation.md)),
   `focal_surface` (plane or asphere), `obscurers` (cylinder, polyhedron, plate, frustum;
   acting on the legs `incoming`, `after_primary`, `after_secondary`),
   `telescope_transmission`, `propagation_group_index`, and optional `axes_offset_m`.

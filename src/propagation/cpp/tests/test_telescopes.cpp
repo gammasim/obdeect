@@ -228,7 +228,8 @@ template <class Function> bool throws_invalid(Function function) {
 
 obdeect::propagation::TransmissionTable table() {
   return obdeect::propagation::TransmissionTable::from_file(
-      std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/atm_trans_2000_1_10_0_0_2000.dat", site_m);
+      std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/atm_trans_2000_1_10_0_0_2000.dat", site_m,
+      obdeect::propagation::WavelengthInterpolation::floor);
 }
 
 } // namespace
@@ -293,12 +294,21 @@ int main() {
       config.telescopes = std::vector<std::uint32_t>{};
       CHECK(throws_invalid([&] { propagate(input, config); }));
     }
+    // A telescope selection with scattering is allowed (the kept telescopes are the scattering
+    // targets; see test_propagator.cpp). This G-frame input is rejected for its frame, which the
+    // message must name: scattering needs sky-frame primaries.
     {
       auto config = config_for(table(), {2});
       config.scattering.enabled = true;
       config.scattering_table.emplace(obdeect::propagation::ScatteringTable::from_file(
           std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/scattering_exponential.dat"));
-      CHECK(throws_invalid([&] { propagate(input, config); }));
+      std::string message;
+      try {
+        propagate(input, config);
+      } catch (const std::invalid_argument &error) {
+        message = error.what();
+      }
+      CHECK(message.find("frame sky") != std::string::npos);
     }
   });
 }

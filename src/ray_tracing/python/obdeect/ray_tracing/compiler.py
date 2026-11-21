@@ -280,7 +280,9 @@ def _segmented_telescope(p: _Parameters, seed: int, zenith_deg: float | None) ->
                 "radius_of_curvature_m": 2.0 * f["focal_length_m"],
             }
             for f in facets
-        ]
+        ],
+        # Dish vertex on the optical axis: z = -mirror_offset (the facet sphere vertex is at 0).
+        "vertex_z_m": -overall_offset + 0.0,  # + 0.0: no -0.0 in the file
     }
     _mirror_response(p, primary, "mirror_reflectivity", "mirror_degraded_reflection")
     _scatter(p, primary, surface_slopes=False)

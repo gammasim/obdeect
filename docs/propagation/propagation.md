@@ -15,7 +15,7 @@ Per telescope and event, without scattering:
 | # | Step | Frame | Reference |
 |---|---|---|---|
 | 1 | Straight line from the emission point to the horizontal plane through the telescope sphere centre; bending (refraction) unless the run says it is applied; air delay | sky → G | [](refraction.md) |
-| 2 | Wavelength from 1/lambda² for rows without one | G | [](extinction.md) |
+| 2 | Wavelength from 1/lambda² for rows without one (drawn before step 1 with `--dispersion-reference-nm`, which needs the wavelength of each bent photon) | G | [](extinction.md) |
 | 3 | Extinction p_atm (plane-parallel airmass by default, zem = emission altitude; curved slant depth with `--curvature`) | G | [](extinction.md), [](curvature.md) |
 | 4 | Efficiency bound E = product of the `--envelope` tables; thinning or weighting | G | [](extinction.md) |
 
@@ -23,7 +23,7 @@ With `--scattering`, one more step runs per event, before the steps above:
 
 | # | Step | Frame | Reference |
 |---|---|---|---|
-| 0 | Single scattering of the primary photons (downwards): wavelengths first, then scattered photons towards every telescope sphere, in their telescope's block | sky | [](scattering.md) |
+| 0 | Single scattering of the primary photons (downwards; all blocks, or `--scattering-primaries`): wavelengths first, then scattered photons towards every telescope sphere, in their telescope's block (kept telescopes only with `--telescopes`) | sky | [](scattering.md) |
 | 1–4 | Primaries: as above (p = p_atm E) | sky → G | |
 | 1s | Scattered photons: sky → G, same run geometry (refraction, air delay) | sky → G | |
 | 4s | Scattered photons: p = E exp(-od_focus), thinning or weighting (own random stream, see [](../stream/random-numbers.md)) | G | |
@@ -69,6 +69,8 @@ factors                 atmosphere,wavelength,scattering,qe
 atmosphere.state        applied
 atmosphere.source       atm_trans_2000_1_10_0_0_2000.dat
 atmosphere.pathlen_m    [28, 0]
+atmosphere.wavelength_interpolation linear
+atmosphere.dispersion_reference_nm 500
 wavelength.state        applied
 wavelength.range_nm     [250, 700]
 scattering.state        applied
@@ -82,11 +84,17 @@ qe.value                [0.9, 0.5]
 
 - `atmosphere`: applied; source = transmission file; `pathlen_m` = path inside each telescope [m],
   in telescope_id order (entry 0 is telescope 1).
+- `atmosphere.wavelength_interpolation`: `linear` (default) or `floor`, the mode of the table
+  ([](extinction.md)). Not written for geometry-only runs.
+- `atmosphere.dispersion_reference_nm`: only with `--dispersion-reference-nm`; the wavelength [nm]
+  of the profile's n-1 ([](refraction.md#dispersion)).
 - `atmosphere.geometry`, `atmosphere.earth_radius_m`: only with `--curvature corsika` or
   `spherical` (`corsika-curved` or `spherical`, and the radius [m]); absent in mode `none`
   ([](curvature.md)).
 - `wavelength`: applied; rows without a wavelength get one from the range.
 - `scattering`: only with scattering; applied; source = scattering table; points per photon.
+- `scattering.primaries`: only with `--scattering-primaries`; the telescope ids (1-based) whose
+  photons are scattered.
 - Each efficiency bound: state `envelope` (its value is part of the thinning, not applied in full),
   with its table.
 
@@ -114,6 +122,9 @@ record format is described in [](../stream/efficiency-status.md).
   `telescope` and `telescope_end` records, photons and telescope status. The format allows any
   subset of telescope blocks in an event (`telescope photons* telescope_end`, repeated). Their
   photons are not decoded. Run and event records are unchanged.
+- With scattering, the blocks of other telescopes are still read for primaries (when they are
+  primaries) but not written, and they are not scattering targets. The summary counts only the
+  written photons.
 
 ## Command line
 
@@ -132,6 +143,8 @@ obdeect propagation run: photons in <n>, out <m> (weight <w>), dropped <d>
 | `--profile FILE` | atmospheric profile (atmprof format): air delay and refraction |
 | `--envelope NAME=FILE` | efficiency bound of a later factor, two-column text (nm, value); repeatable |
 | `--wavelength-range LO HI` | wavelengths from 1/lambda² [nm] for rows without one; LO = HI is a fixed wavelength; default: run keys |
+| `--wavelength-interpolation linear\|floor` | how the transmission table is read at a wavelength (default linear, continuous in lambda); `floor` reproduces sim_telarray; needs `--transmission` ([](extinction.md)) |
+| `--dispersion-reference-nm NM` | wavelength [nm], 200 to 2000, of the profile's n-1: bent photons are scaled to their wavelength; needs `--profile`; rejected for a run with `refraction_applied = 1` ([](refraction.md#dispersion)) |
 | `--seed N` | Philox seed (required) |
 | `--mode thinned\|weighted` | output mode (default thinned) |
 | `--store-p` | keep column p |
@@ -142,7 +155,8 @@ obdeect propagation run: photons in <n>, out <m> (weight <w>), dropped <d>
 | `--pathlen M` | path inside each telescope [m], finite and ≥ 0 (default 0) |
 | `--telescope-pathlen ID=M` | path inside telescope ID (1-based) [m]; overrides `--pathlen`; repeatable |
 | `--threads N` | threads for the rows of each chunk, 1 to 256 (default 1); the output does not depend on N |
-| `--telescopes ID[,ID...]` | keep only these telescopes (1-based ids); other telescope blocks are dropped and not decoded; not with `--scattering` (default all) |
+| `--scattering-primaries ID[,ID...]` | only the photons of these telescopes (1-based ids) are scattered; default all blocks; needs `--scattering`; ids must exist in the run |
+| `--telescopes ID[,ID...]` | keep only these telescopes (1-based ids); other telescope blocks are dropped and not decoded (with `--scattering`: the kept telescopes are the scattering targets) (default all) |
 | `-i FILE\|-`, `-o FILE\|-` | input and output stream (default stdin, stdout) |
 
 Path 28 m for all telescopes, 0 m for telescope 2:
@@ -159,6 +173,17 @@ $ obdeect propagation run ... --telescopes 1,3 -i in.pst -o out.pst
 
 The output for the kept telescopes is the same as the full run with the other blocks removed.
 The summary goes to stderr.
+
+Scatter only the photons of telescope 1 (a collector sphere, for example); telescopes 2 and 3 are
+targets:
+
+```console
+$ obdeect propagation run ... --scattering scattering_exponential.dat --scattering-primaries 1 \
+    -i in.pst -o out.pst
+```
+
+The scattered photons of telescopes 2 and 3 are the same as in a run whose input holds only the
+block of telescope 1.
 
 ## Python
 
@@ -177,6 +202,9 @@ summary = obdeect.propagation.propagate(
     mode="thinned",
     scattering="scattering_exponential.dat",
     scattering_points=8,  # optional
+    scattering_primaries=[1],  # optional, needs scattering
+    wavelength_interpolation="linear",  # default; "floor" for sim_telarray
+    dispersion_reference_nm=None,  # optional, needs profile; e.g. 500.0
     pathlen_m=28.0,
     telescope_pathlen_m={2: 0.0},  # optional
     telescopes=[1, 3],  # optional
@@ -214,19 +242,40 @@ The extinction inside the telescope covers the path from the telescope sphere pl
 With path length l (`pathlen_m`), the optical depth is tau(h_T + l) − tau(h_T), with h_T the
 telescope altitude. `--pathlen` sets l for all telescopes; `--telescope-pathlen`
 (`telescope_pathlen_m`, 1-based ids) overrides it for single telescopes. Default 0, so existing runs
-keep their result. Intended l per telescope: the focal length for single-mirror telescopes,
-`|p0-s0|+|s0-f0|` for dual-mirror ones (primary, secondary, focus). An id that the run does not
-have is an error.
+keep their result. An id that the run does not have is an error.
+
+The path follows from the optical model (`obdeect.propagation.in_telescope_path_m`, from
+`obdeect.ray_tracing`): the focal length for a single mirror, `|p0-s0|+|s0-f0|` for a dual mirror
+(primary vertex p0, secondary vertex s0, focus f0). The primary vertex is the dish vertex at
+`-mirror_offset`: an asphere stores it, and a segmented primary stores it as `vertex_z_m`. Models
+compiled before that key was written are rejected; compile them again.
+
+```console
+$ obdeect propagation pathlen telescope_model.json
+8.000000
+```
+
+The value is in metres. Use it as `--pathlen` (or `pathlen_m`) for the telescope:
+
+```console
+$ obdeect propagation run ... --pathlen "$(obdeect propagation pathlen telescope_model.json)"
+```
 
 ## Limits
 
+- Scattering needs one `array_index` per event (CORSIKA without array reuse, `CSCAT 1`); an event
+  with several is rejected.
 - Plane-parallel airmass, straight-line geometry and refraction by default (mode `none`). With
   `--curvature spherical` the airmass, bending and air delay are spherical ([](curvature.md)); with
   `corsika` CORSIKA has applied them.
 - Scattering is plane-parallel and needs sky-frame input and `telescope_r_m` in the run keys; not
   available for photons already in frame G, and rejected with a curved mode.
-- The in-telescope path is not derived from the optics (default 0).
-- Transmission tables hold one row per integer nm; a wavelength uses the row at its integer part.
+- The in-telescope path defaults to 0 m; the optical model gives it ([](propagation.md#in-telescope-path)).
+- Transmission tables hold one row per integer nm. The default linear mode interpolates between
+  the rows; `floor` uses the row at the integer part of the wavelength.
 - Efficiency-bound tables must cover the wavelength range (rounded outwards).
-- In mode `none`, photons within about 3 degrees of the horizon are not bent and are dropped (series
-  limit of the ray bending, see [](refraction.md)).
+- In mode `none`, photons near the horizon (zenith beyond about 87 degrees, where the series of
+  [](refraction.md) is not valid) are bent by quadrature and not dropped ([](refraction.md#near-the-horizon)).
+- Dispersion needs photons that are not refracted yet and a wavelength range within 200 to 2000 nm.
+  The travel time is scaled by the group factor, so the time at the reference wavelength is not
+  unchanged by the option (the group index of the reference is taken from the Ciddor formula).

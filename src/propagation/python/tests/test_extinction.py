@@ -134,7 +134,7 @@ WAVELENGTH_RANGE = (250.0, 700.0)
 
 @pytest.fixture(scope="module")
 def table():
-    return TransmissionTable(str(TABLE_PATH), OBSERVATION_LEVEL_M)
+    return TransmissionTable(str(TABLE_PATH), OBSERVATION_LEVEL_M, wavelength_interpolation="floor")
 
 
 def test_reference_transmission(table):
@@ -163,7 +163,7 @@ def test_reference_transmission_with_od_focus_from_table(table):
 def test_constant_optical_depth(tmp_path):
     path = tmp_path / "constant.dat"
     path.write_text("# H2= 2.000, H1=    3.000     4.000\n400 0.5 0.5\n", encoding="utf-8")
-    constant = TransmissionTable(str(path), 2000.0)
+    constant = TransmissionTable(str(path), 2000.0, wavelength_interpolation="floor")
     for airmass in (1.0, 1.5, 2.5):
         result = constant.transmission(400.0, 3500.0, airmass)
         assert result == pytest.approx(math.exp(-0.5 * airmass), rel=1e-14)
@@ -172,7 +172,7 @@ def test_constant_optical_depth(tmp_path):
 
 def test_table_rejects_wrong_altitude():
     with pytest.raises(ValueError):
-        TransmissionTable(str(TABLE_PATH), 1835.0)
+        TransmissionTable(str(TABLE_PATH), 1835.0, wavelength_interpolation="floor")
 
 
 def _photons(n, rng):

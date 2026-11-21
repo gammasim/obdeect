@@ -6,8 +6,10 @@
 // Per photon: no allocation and no I/O.
 
 #include "obdeect/propagation/curved_refraction.hpp"
+#include "obdeect/propagation/dispersion.hpp"
 #include "obdeect/propagation/profile.hpp"
 #include "obdeect/propagation/refraction.hpp"
+#include "obdeect/propagation/refraction_horizon.hpp"
 #include "obdeect/propagation/timing.hpp"
 
 #include "obdeect/stream/format.hpp"
@@ -62,6 +64,11 @@ struct SkyPlane {
   // gives the telescope level of the straight line, nu_t of the direction scale. Ignored in flat
   // geometry.
   double telescope_altitude_m{};
+  // Dispersion (docs/propagation/refraction.md, "Dispersion"): reference wavelength [nm] of the
+  // profile's n-1. 0: no dispersion. Otherwise each row's wavelength (column wavelength, assigned)
+  // scales the bending and its travel time by k and k_group (refractivity_ratio and
+  // group_refractivity_ratio). Needs bending (tables, or curved tables with curved_bending).
+  double dispersion_reference_nm{0.0};
 };
 
 // Impact parameter b = |(P - C) x d| [m] of the straight line from the emission point P = (x, y, z)
@@ -82,13 +89,14 @@ inline double impact_parameter_m(double x, double y, double z, double observatio
 // is asin(b / (R + a)). False if the line does not reach that level (b >= R + a) or the lookup
 // fails (emission below the level).
 inline bool curved_table_integrals(const CurvedRefractionTables &table, double impact_m,
-                                   double emission_altitude_m, CurvedRayIntegrals &out) {
+                                   double emission_altitude_m, double k, double k_group,
+                                   CurvedRayIntegrals &out) {
   const double radius = table.earth_radius_m() + table.telescope_altitude_m();
   if (!(impact_m < radius)) {
     return false;
   }
   const double theta = std::atan2(impact_m, std::sqrt((radius - impact_m) * (radius + impact_m)));
-  return table.lookup(theta, emission_altitude_m, out);
+  return table.lookup_scaled(theta, emission_altitude_m, k, k_group, out);
 }
 
 // Integrals of the photon at the exact telescope altitude by direct quadrature
@@ -96,7 +104,8 @@ inline bool curved_table_integrals(const CurvedRefractionTables &table, double i
 // to the telescope level (see curved_arrival). False if the line does not reach the telescope level
 // or the emission is below it.
 inline bool curved_direct_integrals(const SkyPlane &plane, double emission_altitude_m,
-                                    double impact_m, CurvedRayIntegrals &out) {
+                                    double impact_m, double k, double k_group,
+                                    CurvedRayIntegrals &out) {
   const double radius = plane.earth_radius_m + plane.telescope_altitude_m;
   if (!(impact_m < radius) || !(emission_altitude_m >= plane.telescope_altitude_m)) {
     return false;
@@ -105,6 +114,19 @@ inline bool curved_direct_integrals(const SkyPlane &plane, double emission_altit
   try {
     out = curved_ray_integrals(*plane.profile, plane.earth_radius_m, plane.telescope_altitude_m,
                                theta, emission_altitude_m);
+    scale_ray_integrals(out, k, k_group);
+    const double start = CurvedRefractionTables::accurate_dispersion_blend_start_rad();
+    const double end = CurvedRefractionTables::accurate_dispersion_blend_end_rad();
+    if (plane.dispersion_reference_nm != 0.0 && theta > start) {
+      const CurvedRayIntegrals exact =
+          curved_ray_integrals(*plane.profile, plane.earth_radius_m, plane.telescope_altitude_m,
+                               theta, emission_altitude_m, k, k_group);
+      const double u = std::clamp((theta - start) / (end - start), 0.0, 1.0);
+      const double weight = u * u * (3.0 - 2.0 * u);
+      out.shift_m += weight * (exact.shift_m - out.shift_m);
+      out.excess_bent_ns += weight * (exact.excess_bent_ns - out.excess_bent_ns);
+      out.excess_straight_ns += weight * (exact.excess_straight_ns - out.excess_straight_ns);
+    }
   } catch (const std::invalid_argument &) {
     return false;
   }
@@ -122,26 +144,30 @@ inline bool curved_direct_integrals(const SkyPlane &plane, double emission_altit
 // telescope altitude, which is exact and rare. Returns false if the photon is dropped (no
 // integrals, or the bent direction leaves the unit disc). No allocation.
 inline bool curved_arrival(const SkyPlane &plane, double emission_altitude_m, double impact_m,
-                           double cx, double cy, double path_m, double t_in, double &x_out,
-                           double &y_out, double &cx_out, double &cy_out, double &t_out) {
+                           double cx, double cy, double path_m, double t_in, double k,
+                           double k_group, double &x_out, double &y_out, double &cx_out,
+                           double &cy_out, double &t_out) {
   CurvedRayIntegrals v{};
   const double w = plane.curved_weight;
   const bool on_level = plane.curved_tables->telescope_altitude_m() == plane.telescope_altitude_m;
   bool have = false;
   if (on_level) {
-    have = curved_table_integrals(*plane.curved_tables, impact_m, emission_altitude_m, v);
+    have =
+        curved_table_integrals(*plane.curved_tables, impact_m, emission_altitude_m, k, k_group, v);
   } else {
     CurvedRayIntegrals lower{};
     CurvedRayIntegrals upper{};
     if (plane.curved_tables_upper != nullptr && w > 0.0 &&
-        curved_table_integrals(*plane.curved_tables, impact_m, emission_altitude_m, lower) &&
-        curved_table_integrals(*plane.curved_tables_upper, impact_m, emission_altitude_m, upper)) {
+        curved_table_integrals(*plane.curved_tables, impact_m, emission_altitude_m, k, k_group,
+                               lower) &&
+        curved_table_integrals(*plane.curved_tables_upper, impact_m, emission_altitude_m, k,
+                               k_group, upper)) {
       v.shift_m = (1.0 - w) * lower.shift_m + w * upper.shift_m;
       v.excess_bent_ns = (1.0 - w) * lower.excess_bent_ns + w * upper.excess_bent_ns;
       v.excess_straight_ns = (1.0 - w) * lower.excess_straight_ns + w * upper.excess_straight_ns;
       have = true;
     } else {
-      have = curved_direct_integrals(plane, emission_altitude_m, impact_m, v);
+      have = curved_direct_integrals(plane, emission_altitude_m, impact_m, k, k_group, v);
     }
   }
   if (!have) {
@@ -162,8 +188,9 @@ inline bool curved_arrival(const SkyPlane &plane, double emission_altitude_m, do
   // telescope altitude for nu_t; the emission altitude is clamped to the profile top as in the
   // integrals.
   const double top = plane.profile->top_m();
-  const double nu_e = plane.profile->index_minus_one_cm(100.0 * std::min(emission_altitude_m, top));
-  const double nu_t = plane.profile->index_minus_one_cm(100.0 * plane.telescope_altitude_m);
+  const double nu_e =
+      k * plane.profile->index_minus_one_cm(100.0 * std::min(emission_altitude_m, top));
+  const double nu_t = k * plane.profile->index_minus_one_cm(100.0 * plane.telescope_altitude_m);
   const double scale = (1.0 + nu_e) / (1.0 + nu_t);
   cx_out = cx * scale;
   cy_out = cy * scale;
@@ -241,6 +268,20 @@ inline std::uint64_t sky_to_ground(obdeect::stream::PhotonChunk &chunk, const Sk
     chunk[Column::zem].assign(rows, 0.0F);
   }
   const bool has_cz = chunk.has(Column::cz);
+  const bool dispersion = plane.dispersion_reference_nm != 0.0;
+  if (dispersion) {
+    if (!std::isfinite(plane.dispersion_reference_nm) || plane.dispersion_reference_nm < 0.0) {
+      throw std::invalid_argument("dispersion reference wavelength must be finite and positive");
+    }
+    const bool bending =
+        curved ? (plane.curved_bending && plane.curved_tables != nullptr) : plane.tables != nullptr;
+    if (!bending) {
+      throw std::invalid_argument("dispersion needs bending (a profile and photons not refracted)");
+    }
+    if (!chunk.has(Column::wavelength)) {
+      throw std::invalid_argument("dispersion needs the wavelength column (assigned)");
+    }
+  }
 
   auto &x = chunk[Column::x];
   auto &y = chunk[Column::y];
@@ -251,6 +292,8 @@ inline std::uint64_t sky_to_ground(obdeect::stream::PhotonChunk &chunk, const Sk
   auto &zem = chunk[Column::zem];
   auto &w = chunk[Column::w];
   auto &cz_column = chunk[Column::cz];
+  const std::vector<float> no_wavelength;
+  const auto &wavelength = dispersion ? chunk[Column::wavelength] : no_wavelength;
 
   std::uint64_t dropped = 0;
   for (std::size_t row = 0; row < rows; ++row) {
@@ -298,6 +341,17 @@ inline std::uint64_t sky_to_ground(obdeect::stream::PhotonChunk &chunk, const Sk
     double cx_out = 0.0;
     double cy_out = 0.0;
     double t_out = 0.0;
+    // Dispersion factors of this row (1 without dispersion; see SkyPlane::dispersion_reference_nm).
+    double k = 1.0;
+    double k_group = 1.0;
+    if (dispersion) {
+      const double lambda = static_cast<double>(wavelength[row]);
+      if (lambda == 0.0) {
+        throw std::invalid_argument("dispersion needs assigned wavelengths (none is 0 nm)");
+      }
+      k = refractivity_ratio(lambda, plane.dispersion_reference_nm);
+      k_group = group_refractivity_ratio(lambda, plane.dispersion_reference_nm);
+    }
     if (reaches) {
       const double path = (emission_z - plane_z) / cz_magnitude;
       x_out = static_cast<double>(x[row]) + path * dx - plane.telescope_x_m;
@@ -314,15 +368,22 @@ inline std::uint64_t sky_to_ground(obdeect::stream::PhotonChunk &chunk, const Sk
         if (reaches) {
           const double t_in = static_cast<double>(t[row]);
           if (plane.curved_tables != nullptr) {
-            reaches = curved_arrival(plane, emission_altitude, b, dx, dy, path, t_in, x_out, y_out,
-                                     cx_out, cy_out, t_out);
+            reaches = curved_arrival(plane, emission_altitude, b, dx, dy, path, t_in, k, k_group,
+                                     x_out, y_out, cx_out, cy_out, t_out);
           } else {
             t_out = t_in + path / speed_of_light_m_per_ns;
           }
         }
       } else if (plane.tables != nullptr) {
+        // Beyond the series limit of bend() (near the horizon) the ray is bent by quadrature
+        // instead of being dropped. Both leave the outputs unchanged when they fail.
         double travel_ns = 0.0;
-        reaches = bend(*plane.tables, emission_altitude, cx_out, cy_out, x_out, y_out, travel_ns);
+        reaches = bend(*plane.tables, emission_altitude, cx_out, cy_out, x_out, y_out, travel_ns, k,
+                       k_group);
+        if (!reaches && bend_series_limit_exceeded(*plane.tables, emission_altitude, dx, dy, k)) {
+          reaches = bend_quadrature(*plane.tables, emission_altitude, cx_out, cy_out, x_out, y_out,
+                                    travel_ns, k, k_group);
+        }
         t_out = static_cast<double>(t[row]) + travel_ns;
       } else {
         t_out = static_cast<double>(t[row]) +

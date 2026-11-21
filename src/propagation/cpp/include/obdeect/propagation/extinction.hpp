@@ -52,6 +52,7 @@ template <class T> [[nodiscard]] T airmass(T cx, T cy) {
 }
 
 // p[row] = atmospheric transmission of every row; 0 for wavelengths at or above max_lambda.
+// The telescope depths follow the table's wavelength mode (TransmissionTable::telescope_depths_at).
 // Rows [begin, end) only (default: all rows).
 template <class T>
 void atmospheric_acceptance(const obdeect::stream::PhotonChunk &chunk,
@@ -75,11 +76,10 @@ void atmospheric_acceptance(const obdeect::stream::PhotonChunk &chunk,
       p[row] = T(0);
       continue;
     }
-    const auto index = static_cast<std::size_t>(iwl);
+    const auto od = table.telescope_depths_at(depths, static_cast<double>(wavelength[row]));
     p[row] = table.transmission2<T>(static_cast<T>(wavelength[row]), static_cast<T>(zem[row]),
                                     airmass<T>(static_cast<T>(cx[row]), static_cast<T>(cy[row])),
-                                    static_cast<T>(depths.od_tel[index]),
-                                    static_cast<T>(depths.od_focus[index]));
+                                    static_cast<T>(od.od_tel), static_cast<T>(od.od_focus));
   }
 }
 
@@ -124,11 +124,11 @@ void atmospheric_acceptance_curved(const obdeect::stream::PhotonChunk &chunk,
       continue;
     }
     cos_zenith = std::clamp(cos_zenith, 0.0, 1.0);
-    const auto index = static_cast<std::size_t>(iwl);
-    p[row] = table.transmission_curved<T>(
-        static_cast<T>(wavelength[row]), static_cast<T>(zem[row]), static_cast<T>(cos_zenith),
-        static_cast<T>(path.telescope_altitude_m), static_cast<T>(depths.od_focus[index]),
-        path.earth_radius_m);
+    const auto od = table.telescope_depths_at(depths, static_cast<double>(wavelength[row]));
+    p[row] = table.transmission_curved<T>(static_cast<T>(wavelength[row]), static_cast<T>(zem[row]),
+                                          static_cast<T>(cos_zenith),
+                                          static_cast<T>(path.telescope_altitude_m),
+                                          static_cast<T>(od.od_focus), path.earth_radius_m);
   }
 }
 

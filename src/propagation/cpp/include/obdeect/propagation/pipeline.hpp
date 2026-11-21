@@ -156,6 +156,7 @@ apply_extinction_chunk(obdeect::stream::PhotonChunk chunk, const ExtinctionSetti
     }
   });
   const Envelope &envelope = *settings.envelope;
+  const bool linear = settings.table->wavelength_interpolation() == WavelengthInterpolation::linear;
   for_row_blocks(rows, threads, [&](std::size_t begin, std::size_t end) {
     for (std::size_t row = begin; row < end; ++row) {
       const int iwl = table_wavelength(static_cast<double>(wavelength[row]));
@@ -163,10 +164,13 @@ apply_extinction_chunk(obdeect::stream::PhotonChunk chunk, const ExtinctionSetti
         p[row] = 0.0;
         continue;
       }
-      if (iwl < envelope.min_wavelength_nm() || iwl > envelope.max_wavelength_nm()) {
+      // Floor mode: E at the integer nm of the row. Linear mode: E at the continuous wavelength,
+      // linear between the nodes of the envelope (as the table lookups).
+      const double lambda = linear ? static_cast<double>(wavelength[row]) : iwl;
+      if (lambda < envelope.min_wavelength_nm() || lambda > envelope.max_wavelength_nm()) {
         throw std::invalid_argument("wavelength outside the envelope table");
       }
-      p[row] *= envelope(static_cast<double>(iwl));
+      p[row] *= envelope(lambda);
     }
   });
 
@@ -182,13 +186,14 @@ apply_extinction_chunk(obdeect::stream::PhotonChunk chunk, const ExtinctionSetti
 
 // Envelope step for scattered photons (docs/scattering.md, frame G). Their transmission from the
 // scattering point to the telescope sphere is in w, so the acceptance is E(lambda) times
-// exp(-od_focus(lambda)), the in-telescope part of the extinction (the same od_focus as
-// apply_extinction_chunk). Thinned or weighted as apply_extinction_chunk; wavelengths must be
-// assigned.
+// exp(-od_focus(lambda)), the in-telescope part of the extinction (the same od_focus, and the same
+// wavelength mode, as apply_extinction_chunk). Thinned or weighted as apply_extinction_chunk;
+// wavelengths must be assigned.
 [[nodiscard]] inline std::vector<obdeect::stream::PhotonChunk>
 apply_envelope_chunk(obdeect::stream::PhotonChunk chunk, const Envelope &envelope,
-                     const TelescopeDepths &depths, bool weighted, std::uint64_t seed,
-                     std::uint32_t event, std::uint32_t telescope, std::uint64_t out_first_index) {
+                     const TransmissionTable &table, const TelescopeDepths &depths, bool weighted,
+                     std::uint64_t seed, std::uint32_t event, std::uint32_t telescope,
+                     std::uint64_t out_first_index) {
   using obdeect::stream::Column;
   if (chunk.frame != obdeect::stream::Frame::ground) {
     throw std::invalid_argument("envelope step needs photons in frame ground (G)");
@@ -202,6 +207,7 @@ apply_envelope_chunk(obdeect::stream::PhotonChunk chunk, const Envelope &envelop
     throw std::invalid_argument("envelope step needs wavelengths and no acceptance column p");
   }
   const auto &wavelength = chunk[Column::wavelength];
+  const bool linear = table.wavelength_interpolation() == WavelengthInterpolation::linear;
   std::vector<double> p(rows, 0.0);
   for (std::size_t row = 0; row < rows; ++row) {
     if (wavelength[row] == 0.0F) {
@@ -211,12 +217,14 @@ apply_envelope_chunk(obdeect::stream::PhotonChunk chunk, const Envelope &envelop
     if (iwl < 0) {
       continue; // at or above MAX_LAMBDA: p = 0
     }
-    if (iwl < envelope.min_wavelength_nm() || iwl > envelope.max_wavelength_nm()) {
+    const double lambda = linear ? static_cast<double>(wavelength[row]) : iwl;
+    if (lambda < envelope.min_wavelength_nm() || lambda > envelope.max_wavelength_nm()) {
       throw std::invalid_argument("wavelength outside the envelope table");
     }
     // od_focus is 0 for a path of 0 m, so the factor is exactly 1 then.
-    p[row] = envelope(static_cast<double>(iwl)) *
-             std::exp(-depths.od_focus[static_cast<std::size_t>(iwl)]);
+    const double od_focus =
+        table.telescope_depths_at(depths, static_cast<double>(wavelength[row])).od_focus;
+    p[row] = envelope(lambda) * std::exp(-od_focus);
   }
   if (weighted) {
     weight_chunk(chunk, p, true);

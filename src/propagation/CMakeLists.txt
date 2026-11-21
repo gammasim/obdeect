@@ -77,13 +77,24 @@ if(OBDEECT_PROPAGATION_BUILD_TOOLS)
   if(DEFINED SKBUILD_PLATLIB_DIR)
     install(TARGETS obdeect-propagation-run RUNTIME DESTINATION obdeect/propagation/bin)
   endif()
+  add_executable(obdeect-propagation-to-sky cpp/tools/to_sky.cpp)
+  target_link_libraries(obdeect-propagation-to-sky PRIVATE obdeect_propagation_core)
+  obdeect_propagation_enable_warnings(obdeect-propagation-to-sky)
+  if(OBDEECT_PROPAGATION_BUILD_TESTING)
+    add_test(NAME to_sky_version COMMAND obdeect-propagation-to-sky --version)
+    set_tests_properties(to_sky_version PROPERTIES PASS_REGULAR_EXPRESSION
+      "^obdeect propagation to-sky [0-9]+\\.[0-9]+\\.[0-9]+ \\(photon-stream format [0-9]+\\.[0-9]+\\)")
+  endif()
+  if(DEFINED SKBUILD_PLATLIB_DIR)
+    install(TARGETS obdeect-propagation-to-sky RUNTIME DESTINATION obdeect/propagation/bin)
+  endif()
 endif()
 
 if(OBDEECT_PROPAGATION_BUILD_TESTING)
   enable_testing()
   foreach(test_name version transmission thinning pipeline profile refraction timing
                     propagator scattering stream_contract physics curvature curvature_modes telescopes
-                    curved_refraction)
+                    curved_refraction dispersion horizon to_sky)
     add_executable(obdeect_propagation_test_${test_name} cpp/tests/test_${test_name}.cpp)
     target_link_libraries(obdeect_propagation_test_${test_name} PRIVATE obdeect_propagation_core)
     # check.hpp lives with the stream tests; tests are built from the repository only, never from an sdist.

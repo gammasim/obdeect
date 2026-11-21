@@ -7,12 +7,14 @@
 // point and every telescope sphere one scattered photon is aimed through a uniform point
 // of the sphere's projected disc, with weight
 //
-//   w_s = w P_scatter(segment) [(tau_mol' p_R + omega tau_aer' p_HG) / (tau_mol' + omega tau_aer')]
+//   w_s = w P_scatter(segment) [(tau_mol' p_R + omega tau_aer' p_aer) / (tau_mol' + omega
+//   tau_aer')]
 //         Omega_tel T(point -> telescope).
 //
 // Straight lines, plane-parallel atmosphere, single scattering, no polarisation, no refraction.
 // The primary photon itself is not changed; its extinction is applied by the extinction step.
 
+#include "obdeect/propagation/profile.hpp"
 #include "obdeect/propagation/streams.hpp"
 #include "obdeect/propagation/thinning.hpp"
 #include "obdeect/propagation/timing.hpp"
@@ -53,6 +55,14 @@ template <std::floating_point T> [[nodiscard]] T rayleigh_phase(T cos_theta) {
   return T{3.0 / (16.0 * std::numbers::pi)} * (T{1} + cos_theta * cos_theta);
 }
 
+// Rayleigh phase function with depolarisation gamma = rho / (2 - rho):
+// 3 / (8 pi (2 + gamma)) [(1 + gamma) + (1 - gamma) cos^2 theta], normalised over 4 pi.
+// gamma = 0 is rayleigh_phase(cos_theta).
+template <std::floating_point T> [[nodiscard]] T rayleigh_phase(T cos_theta, T gamma) {
+  return T{3.0 / (8.0 * std::numbers::pi)} / (T{2} + gamma) *
+         ((T{1} + gamma) + (T{1} - gamma) * cos_theta * cos_theta);
+}
+
 // Henyey-Greenstein phase function (1 - g^2) / (4 pi (1 + g^2 - 2 g cos theta)^{3/2}),
 // normalised over 4 pi; mean cosine g. cos_theta is measured from the propagation direction.
 template <std::floating_point T> [[nodiscard]] T henyey_greenstein_phase(T cos_theta, T asymmetry) {
@@ -72,8 +82,10 @@ template <std::floating_point T> struct ScatteringState {
 
 // Scattering table (plain text, docs/scattering.md): per integer wavelength the vertical
 // profiles of the molecular and aerosol optical depth (from the altitude to the top), the
-// aerosol single-scattering albedo and asymmetry parameter, interpolated linearly in
-// log10(altitude) and clamped to the table edges, as TransmissionTable does.
+// aerosol single-scattering albedo and asymmetry parameter. Linear in log10(altitude) and in
+// wavelength between the table nodes, clamped to the table edges. Optional keyword lines: a
+// tabulated aerosol phase function (angles_deg, phase) and the Rayleigh depolarisation
+// (depolarization).
 class ScatteringTable {
 public:
   // Parse the text of a scattering table. Throws std::invalid_argument on invalid input.
@@ -97,19 +109,58 @@ public:
   [[nodiscard]] double min_altitude_m() const noexcept { return altitude_m_.front(); }
   [[nodiscard]] double max_altitude_m() const noexcept { return altitude_m_.back(); }
 
-  // State at a wavelength (truncated to integer nm, clamped to the table) and altitude
-  // [m a.s.l.] (finite and positive). Throws std::invalid_argument otherwise.
+  // True if the table has a tabulated aerosol phase function (aerosol_phase()).
+  [[nodiscard]] bool has_phase() const noexcept { return !phase_.empty(); }
+
+  // Rayleigh depolarisation factor gamma = rho / (2 - rho); 0 without a depolarization line.
+  [[nodiscard]] double rayleigh_gamma() const noexcept { return gamma_; }
+
+  // State at a wavelength [nm] (finite; clamped to the table) and altitude [m a.s.l.] (finite
+  // and positive). Throws std::invalid_argument otherwise.
   template <std::floating_point T>
   [[nodiscard]] ScatteringState<T> state(double lambda_nm, T altitude_m) const {
-    if (!std::isfinite(altitude_m) || !(altitude_m > T{0})) {
-      throw std::invalid_argument("scattering table: altitude must be finite and positive");
+    const Bracket aw = wavelength_bracket(lambda_nm);
+    const Bracket ah = altitude_bracket(static_cast<double>(altitude_m));
+    const ScatteringState<T> lower = row_state<T>(aw.lower, ah);
+    if (aw.upper == aw.lower) {
+      return lower;
     }
-    const Row &row = rows_[row_index(lambda_nm)];
-    const T log_h = std::log10(altitude_m);
-    return {detail::rpol(log_h_m_, row.tau_mol.data(), log_h),
-            detail::rpol(log_h_m_, row.tau_aer.data(), log_h),
-            detail::rpol(log_h_m_, row.ssa.data(), log_h),
-            detail::rpol(log_h_m_, row.asymmetry.data(), log_h)};
+    const ScatteringState<T> upper = row_state<T>(aw.upper, ah);
+    const T f = static_cast<T>(aw.fraction);
+    return {lower.tau_mol + f * (upper.tau_mol - lower.tau_mol),
+            lower.tau_aer + f * (upper.tau_aer - lower.tau_aer),
+            lower.ssa + f * (upper.ssa - lower.ssa),
+            lower.asymmetry + f * (upper.asymmetry - lower.asymmetry)};
+  }
+
+  // Tabulated aerosol phase function p_aer(theta) [sr^-1] at a wavelength [nm] (finite), an
+  // altitude [m a.s.l.] (finite, positive) and cos(theta) (clamped to [-1, 1]). Linear in
+  // cos(theta) between the angle nodes, in log10(altitude) between the altitude rows and in
+  // wavelength between the integer rows. Requires has_phase(). Does not allocate.
+  template <std::floating_point T>
+  [[nodiscard]] T aerosol_phase(double lambda_nm, T altitude_m, T cos_theta) const {
+    if (!has_phase()) {
+      throw std::invalid_argument("scattering table: no tabulated phase function");
+    }
+    const Bracket aw = wavelength_bracket(lambda_nm);
+    const Bracket ah = altitude_bracket(static_cast<double>(altitude_m));
+    const Bracket ac =
+        bracket_of(cos_nodes_, std::clamp(static_cast<double>(cos_theta), -1.0, 1.0));
+    const std::size_t n_angles = cos_nodes_.size();
+    const std::size_t n_altitudes = altitude_m_.size();
+    const auto at_pair = [&](std::size_t iw, std::size_t ih) {
+      const double *p = phase_.data() + (iw * n_altitudes + ih) * n_angles;
+      return p[ac.lower] + ac.fraction * (p[ac.upper] - p[ac.lower]);
+    };
+    const auto at_wavelength = [&](std::size_t iw) {
+      const double lower = at_pair(iw, ah.lower);
+      return lower + ah.fraction * (at_pair(iw, ah.upper) - lower);
+    };
+    const double lower = at_wavelength(aw.lower);
+    if (aw.upper == aw.lower) {
+      return static_cast<T>(lower);
+    }
+    return static_cast<T>(lower + aw.fraction * (at_wavelength(aw.upper) - lower));
   }
 
 private:
@@ -120,21 +171,82 @@ private:
     std::vector<double> asymmetry;
   };
 
+  // Position of a value between two nodes: lower <= upper, fraction in [0, 1). Equal nodes
+  // (clamped values) have fraction 0 so that edge values are returned exactly.
+  struct Bracket {
+    std::size_t lower{};
+    std::size_t upper{};
+    double fraction{};
+  };
+
+  // Relative tolerance of the trapezoid normalisation of a phase row (docs/scattering.md).
+  static constexpr double phase_norm_tolerance = 0.05;
+
   int wl_first_{};
   std::vector<double> altitude_m_{};
   std::vector<double> log_h_m_{};
   std::vector<Row> rows_{};
+  std::vector<double> cos_nodes_{}; // cos(theta) of the angle nodes, ascending
+  std::vector<double> phase_{};     // [wavelength row][altitude row][cos node] [sr^-1]
+  double gamma_{0.0};
 
-  // Row of a wavelength: truncated to integer nm and clamped to the table, in floating point
-  // (a cast of an out-of-range value to an integer type is undefined).
-  [[nodiscard]] std::size_t row_index(double lambda_nm) const {
+  // Bracket of a value on ascending nodes x, clamped to the first and last node.
+  [[nodiscard]] static Bracket bracket_of(const std::vector<double> &x, double at) {
+    const std::size_t n = x.size();
+    if (at <= x.front()) {
+      return {0, 0, 0.0};
+    }
+    if (at >= x.back()) {
+      return {n - 1, n - 1, 0.0};
+    }
+    const auto upper = std::upper_bound(x.begin(), x.end(), at);
+    const auto i = static_cast<std::size_t>(upper - x.begin()) - 1;
+    return {i, i + 1, (at - x[i]) / (x[i + 1] - x[i])};
+  }
+
+  // Bracket of a wavelength [nm] over the integer rows (finite; clamped to the table).
+  [[nodiscard]] Bracket wavelength_bracket(double lambda_nm) const {
     if (!std::isfinite(lambda_nm)) {
       throw std::invalid_argument("scattering table: wavelength must be finite");
     }
-    const auto first = static_cast<double>(wl_first_);
-    const auto last = static_cast<double>(last_wavelength_nm());
-    const double clamped = std::clamp(std::trunc(lambda_nm), first, last);
-    return static_cast<std::size_t>(clamped - first);
+    const std::size_t n = rows_.size();
+    const double last = static_cast<double>(n - 1);
+    const double pos =
+        std::clamp(lambda_nm - static_cast<double>(wl_first_), 0.0, last); // in row units
+    if (pos >= last) {
+      return {n - 1, n - 1, 0.0};
+    }
+    const auto lower = static_cast<std::size_t>(std::floor(pos));
+    return {lower, lower + 1, pos - static_cast<double>(lower)};
+  }
+
+  // Bracket of an altitude [m a.s.l.] over the altitude rows, in log10(altitude).
+  [[nodiscard]] Bracket altitude_bracket(double altitude_m) const {
+    if (!std::isfinite(altitude_m) || !(altitude_m > 0.0)) {
+      throw std::invalid_argument("scattering table: altitude must be finite and positive");
+    }
+    return bracket_of(log_h_m_, std::log10(altitude_m));
+  }
+
+  // Row state at one wavelength row, interpolated in altitude.
+  template <std::floating_point T>
+  [[nodiscard]] ScatteringState<T> row_state(std::size_t iw, const Bracket &ah) const {
+    const Row &row = rows_[iw];
+    const auto at = [&ah](const std::vector<double> &y) {
+      const double lower = y[ah.lower];
+      return static_cast<T>(lower + ah.fraction * (y[ah.upper] - lower));
+    };
+    return {at(row.tau_mol), at(row.tau_aer), at(row.ssa), at(row.asymmetry)};
+  }
+
+  static long parse_wavelength(std::string_view token) {
+    const double wavelength = parse_number(token, "wavelength");
+    if (wavelength != std::floor(wavelength) || wavelength < 1.0 ||
+        wavelength > static_cast<double>(std::numeric_limits<int>::max())) {
+      throw std::invalid_argument("scattering table: wavelengths must be integer nm in "
+                                  "[1, INT_MAX]");
+    }
+    return static_cast<long>(wavelength);
   }
 
   void parse(std::string_view text) {
@@ -142,7 +254,17 @@ private:
       long wavelength;
       double altitude_km, tau_mol, tau_aer, ssa, asymmetry;
     };
+    struct PhaseEntry {
+      long wavelength;
+      double altitude_km;
+      std::vector<double> values; // in the order of angles_deg
+    };
     std::vector<Entry> entries;
+    std::vector<double> angles_deg;
+    std::vector<PhaseEntry> phase_entries;
+    bool has_depolarization = false;
+    double rho = 0.0;
+
     std::size_t pos = 0;
     while (pos < text.size()) {
       std::size_t end = text.find('\n', pos);
@@ -159,17 +281,61 @@ private:
       if (tokens.empty()) {
         continue;
       }
+      if (std::isalpha(static_cast<unsigned char>(tokens[0].front()))) {
+        const std::string_view keyword = tokens[0];
+        if (keyword == "angles_deg") {
+          if (!angles_deg.empty()) {
+            throw std::invalid_argument("scattering table: angles_deg given more than once");
+          }
+          if (tokens.size() < 3 || tokens.size() > 722) {
+            throw std::invalid_argument("scattering table: angles_deg needs 2 to 721 values");
+          }
+          for (std::size_t i = 1; i < tokens.size(); ++i) {
+            angles_deg.push_back(parse_number(tokens[i], "angle"));
+          }
+          if (angles_deg.front() != 0.0 || angles_deg.back() != 180.0) {
+            throw std::invalid_argument("scattering table: angles_deg must start at 0 and end "
+                                        "at 180");
+          }
+          for (std::size_t i = 0; i < angles_deg.size(); ++i) {
+            if (i > 0 && !(angles_deg[i] > angles_deg[i - 1])) {
+              throw std::invalid_argument("scattering table: angles_deg must be strictly "
+                                          "ascending");
+            }
+          }
+        } else if (keyword == "phase") {
+          if (tokens.size() < 4) {
+            throw std::invalid_argument("scattering table: phase needs wavelength, altitude "
+                                        "and at least one value");
+          }
+          PhaseEntry entry{parse_wavelength(tokens[1]), parse_number(tokens[2], "altitude"), {}};
+          for (std::size_t i = 3; i < tokens.size(); ++i) {
+            entry.values.push_back(parse_number(tokens[i], "phase value"));
+          }
+          phase_entries.push_back(std::move(entry));
+        } else if (keyword == "depolarization") {
+          if (has_depolarization) {
+            throw std::invalid_argument("scattering table: depolarization given more than once");
+          }
+          if (tokens.size() != 2) {
+            throw std::invalid_argument("scattering table: depolarization needs one value rho");
+          }
+          rho = parse_number(tokens[1], "depolarization");
+          if (!(rho >= 0.0 && rho < 0.5)) {
+            throw std::invalid_argument("scattering table: depolarization rho must be in [0, 0.5)");
+          }
+          has_depolarization = true;
+        } else {
+          throw std::invalid_argument("scattering table: unknown keyword '" + std::string(keyword) +
+                                      "'");
+        }
+        continue;
+      }
       if (tokens.size() != 6) {
         throw std::invalid_argument("scattering table: each row needs 6 values "
                                     "(wavelength altitude tau_mol tau_aer ssa g)");
       }
-      const double wavelength = parse_number(tokens[0], "wavelength");
-      if (wavelength != std::floor(wavelength) || wavelength < 1.0 ||
-          wavelength > static_cast<double>(std::numeric_limits<int>::max())) {
-        throw std::invalid_argument("scattering table: wavelengths must be integer nm in "
-                                    "[1, INT_MAX]");
-      }
-      entries.push_back({static_cast<long>(wavelength), parse_number(tokens[1], "altitude"),
+      entries.push_back({parse_wavelength(tokens[0]), parse_number(tokens[1], "altitude"),
                          parse_number(tokens[2], "tau_mol"), parse_number(tokens[3], "tau_aer"),
                          parse_number(tokens[4], "ssa"), parse_number(tokens[5], "g")});
     }
@@ -229,6 +395,73 @@ private:
         row.asymmetry[ih] = entry.asymmetry;
       }
     }
+
+    // Tabulated phase function: every (wavelength, altitude) pair once, K values per row.
+    if (angles_deg.empty() != phase_entries.empty()) {
+      throw std::invalid_argument(angles_deg.empty()
+                                      ? "scattering table: phase rows need angles_deg"
+                                      : "scattering table: angles_deg needs phase rows");
+    }
+    std::vector<double> cos_nodes;
+    std::vector<double> phase;
+    if (!angles_deg.empty()) {
+      const std::size_t n_angles = angles_deg.size();
+      // Ascending cos(theta): the angle 180 deg comes first. Phase rows are stored in this order.
+      cos_nodes.resize(n_angles);
+      for (std::size_t k = 0; k < n_angles; ++k) {
+        cos_nodes[k] = std::cos(angles_deg[n_angles - 1 - k] * std::numbers::pi / 180.0);
+      }
+      cos_nodes.front() = -1.0;
+      cos_nodes.back() = 1.0;
+      phase.assign(n_wavelengths * n_altitudes * n_angles, 0.0);
+      std::vector<bool> seen(n_wavelengths * n_altitudes, false);
+      for (const PhaseEntry &entry : phase_entries) {
+        if (entry.values.size() != n_angles) {
+          throw std::invalid_argument("scattering table: each phase row needs one value per "
+                                      "angle (K values)");
+        }
+        if (entry.wavelength < first ||
+            entry.wavelength >= first + static_cast<long>(n_wavelengths)) {
+          throw std::invalid_argument("scattering table: phase row wavelength is not in the table");
+        }
+        const auto altitude = std::find(altitudes.begin(), altitudes.end(), entry.altitude_km);
+        if (altitude == altitudes.end()) {
+          throw std::invalid_argument("scattering table: phase row altitude is not in the table");
+        }
+        const auto pair = static_cast<std::size_t>(entry.wavelength - first) * n_altitudes +
+                          static_cast<std::size_t>(altitude - altitudes.begin());
+        if (seen[pair]) {
+          throw std::invalid_argument("scattering table: duplicate phase row");
+        }
+        seen[pair] = true;
+        double *out = phase.data() + pair * n_angles;
+        for (std::size_t k = 0; k < n_angles; ++k) {
+          const double value = entry.values[n_angles - 1 - k];
+          if (!(value > 0.0)) {
+            throw std::invalid_argument("scattering table: phase values must be > 0");
+          }
+          out[k] = value;
+        }
+        // Trapezoid rule in cos(theta): 2 pi int p d(cos theta) must be 1 within the tolerance.
+        double norm = 0.0;
+        for (std::size_t k = 0; k + 1 < n_angles; ++k) {
+          norm += 0.5 * (out[k] + out[k + 1]) * (cos_nodes[k + 1] - cos_nodes[k]);
+        }
+        norm *= 2.0 * std::numbers::pi;
+        if (!(std::abs(norm - 1.0) <= phase_norm_tolerance)) {
+          throw std::invalid_argument("scattering table: phase row normalisation must be within "
+                                      "5 % of 1 (2 pi int p d(cos theta))");
+        }
+        for (std::size_t k = 0; k < n_angles; ++k) {
+          out[k] /= norm;
+        }
+      }
+      if (std::find(seen.begin(), seen.end(), false) != seen.end()) {
+        throw std::invalid_argument("scattering table: phase rows must cover every (wavelength, "
+                                    "altitude) pair");
+      }
+    }
+
     wl_first_ = static_cast<int>(first);
     altitude_m_.clear();
     log_h_m_.clear();
@@ -236,6 +469,9 @@ private:
       altitude_m_.push_back(h_km * 1000.0);
       log_h_m_.push_back(std::log10(h_km * 1000.0));
     }
+    cos_nodes_ = std::move(cos_nodes);
+    phase_ = std::move(phase);
+    gamma_ = rho / (2.0 - rho); // 0 without a depolarization line
   }
 
   static std::vector<std::string_view> split_whitespace(std::string_view text) {
@@ -279,6 +515,10 @@ struct ScatterTelescope {
 struct ScatteringConfig {
   bool enabled{false};                // off: scatter_chunk returns no photons
   std::uint32_t points_per_photon{8}; // N_s scattering points sampled per primary photon
+  // Air of the stage (not owned, must outlive the call). Null: vacuum timing. Otherwise the
+  // time at a scattering point adds the air delay of the straight path from the point up to the
+  // emission height at the primary's zenith angle (straight_path_air_delay_ns).
+  const AtmosphereProfile *air_profile{nullptr};
 };
 
 namespace detail {
@@ -324,6 +564,15 @@ template <std::floating_point T>
   return (tau_mol * rayleigh_phase(cos_theta) +
           ssa * tau_aer * henyey_greenstein_phase(cos_theta, asymmetry)) /
          scattering;
+}
+
+// Mixed phase bracket with the aerosol phase value p_aer given (tabulated or Henyey-Greenstein)
+// and the Rayleigh depolarisation gamma. Requires tau_mol + omega tau_aer > 0.
+template <std::floating_point T>
+[[nodiscard]] T mixed_phase_with_aerosol(T cos_theta, T tau_mol, T tau_aer, T ssa, T gamma,
+                                         T p_aer) {
+  const T scattering = tau_mol + ssa * tau_aer;
+  return (tau_mol * rayleigh_phase(cos_theta, gamma) + ssa * tau_aer * p_aer) / scattering;
 }
 
 inline constexpr std::size_t n_scatter_columns = 10;
@@ -458,15 +707,24 @@ inline void scatter_primary(const ScatteringConfig &config, const ScatteringTabl
       const double ny = ay / aim;
       const double nz = az / aim;
 
+      // Scattering angle: between the propagation direction and the direction to the aim point.
       const double cos_theta = cx * nx + cy * ny - abs_cz * nz;
-      const double bracket =
-          mixed_phase<double>(cos_theta, tau_mol, tau_aer, local.ssa, local.asymmetry);
+      const double p_aerosol = table.has_phase()
+                                   ? table.aerosol_phase<double>(lambda, h_s, cos_theta)
+                                   : henyey_greenstein_phase<double>(cos_theta, local.asymmetry);
+      const double bracket = mixed_phase_with_aerosol<double>(
+          cos_theta, tau_mol, tau_aer, local.ssa, table.rayleigh_gamma(), p_aerosol);
       const double scattered = weight * p_scatter * bracket * solid_angle * transmitted;
       if (!(scattered > 0.0)) {
         continue;
       }
       // Time at the scattering point; the stage adds the path from the point to the plane.
-      const double time_at_point = t0 + s_path / speed_of_light_m_per_ns;
+      double time_at_point = t0 + s_path / speed_of_light_m_per_ns;
+      if (config.air_profile != nullptr) {
+        // From |cz| directly: acos would round to pi/2 for |cz| below about 1e-16 (see
+        // straight_path_air_delay_from_cos_ns). abs_cz > 0 here.
+        time_at_point += straight_path_air_delay_from_cos_ns(*config.air_profile, h_s, h0, abs_cz);
+      }
       out[t].push_back({static_cast<float>(x_p), static_cast<float>(y_p), static_cast<float>(z_p),
                         static_cast<float>(nx), static_cast<float>(ny), static_cast<float>(nz),
                         static_cast<float>(time_at_point), static_cast<float>(h_s),
@@ -484,9 +742,10 @@ inline void scatter_primary(const ScatteringConfig &config, const ScatteringTabl
 // not depend on how the photons are split into chunks, as long as the chunks are passed in
 // order. Output photons of each list are numbered from the rows already in that list.
 //
-// Requires columns x y z cx cy t w wavelength (wavelength an integer nm within the scattering
-// table, > 0: assign it before this step); cz and zem, if present, must agree with cx, cy and
-// z; no p column (the acceptance is applied later). Only downward photons are scattered.
+// Requires columns x y z cx cy t w wavelength (wavelength in nm within the scattering table,
+// interpolated between its integer rows: assign it before this step); cz and zem, if present, must
+// agree with cx, cy and z; no p column (the acceptance is applied later). Only downward photons are
+// scattered.
 inline void scatter_chunk(const ScatteringConfig &config, const ScatteringTable &table,
                           const TransmissionTable &transmission,
                           std::span<const ScatterTelescope> telescopes,

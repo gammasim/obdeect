@@ -1,7 +1,9 @@
 #include "check.hpp"
 
+#include "obdeect/propagation/profile.hpp"
 #include "obdeect/propagation/scattering.hpp"
 #include "obdeect/propagation/streams.hpp"
+#include "obdeect/propagation/timing.hpp"
 #include "obdeect/propagation/transmission.hpp"
 
 #include "obdeect/stream/photons.hpp"
@@ -62,7 +64,8 @@ std::string exponential_table_text(double k, double scale_m) {
 // Site transmission table (obs 2000 m) shipped with the tests.
 obdeect::propagation::TransmissionTable site_transmission() {
   return obdeect::propagation::TransmissionTable::from_file(
-      std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/atm_trans_2000_1_10_0_0_2000.dat", obs_m);
+      std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/atm_trans_2000_1_10_0_0_2000.dat", obs_m,
+      obdeect::propagation::WavelengthInterpolation::floor);
 }
 
 // Analytic single-scattering integral (no sampling) for one downward photon of weight 1 from
@@ -597,10 +600,400 @@ void test_rejects_infinite_radius_and_nan_columns() {
   }));
 }
 
+std::string read_text(const std::string &path) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file) {
+    throw std::runtime_error("cannot read " + path);
+  }
+  std::ostringstream buffer;
+  buffer << file.rdbuf();
+  return buffer.str();
+}
+
+std::string data_path(const std::string &name) {
+  return std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/" + name;
+}
+
+// The same table without its angles_deg and phase lines (Henyey-Greenstein only).
+std::string without_phase_lines(const std::string &text) {
+  std::istringstream in(text);
+  std::ostringstream out;
+  std::string line;
+  while (std::getline(in, line)) {
+    if (line.rfind("angles_deg", 0) != 0 && line.rfind("phase", 0) != 0) {
+      out << line << '\n';
+    }
+  }
+  return out.str();
+}
+
+// Error message of a rejected table text (empty if accepted). Other exceptions propagate.
+std::string rejection(const std::string &text) {
+  try {
+    (void)obdeect::propagation::ScatteringTable(text);
+  } catch (const std::invalid_argument &error) {
+    return error.what();
+  }
+  return "";
+}
+
+// True if the table text is rejected and the error message contains fragment.
+bool rejected_with(const std::string &text, const std::string &fragment) {
+  const std::string message = rejection(text);
+  return !message.empty() && message.find(fragment) != std::string::npos;
+}
+
+// Two wavelengths (354, 355 nm) at 1 and 2 km (valid main rows) followed by extra lines.
+std::string small_table(const std::string &extra) {
+  return "354 1 0.5 0.1 0.9 0.65\n354 2 0.3 0.05 0.9 0.65\n"
+         "355 1 0.5 0.1 0.9 0.65\n355 2 0.3 0.05 0.9 0.65\n" +
+         extra;
+}
+
+std::string phase_line(long wavelength, const std::string &altitude, const std::string &values) {
+  return "phase " + std::to_string(wavelength) + " " + altitude + " " + values + "\n";
+}
+
+// n copies of v, separated by spaces.
+std::string values_of(std::size_t n, double v) {
+  std::ostringstream text;
+  text.precision(17);
+  for (std::size_t i = 0; i < n; ++i) {
+    text << (i > 0 ? " " : "") << v;
+  }
+  return text.str();
+}
+
+// Constant phase function 1 / (4 pi) at the angles 0, 90, 180 deg: normalised exactly by the
+// trapezoid rule for any scale of the angle nodes.
+const double constant_phase = 1.0 / (4.0 * std::numbers::pi);
+const std::string angles3 = "angles_deg 0 90 180\n";
+
+void test_parsing_rules() {
+  const std::string cv = values_of(3, constant_phase);
+  const std::string all_pairs = phase_line(354, "1", cv) + phase_line(354, "2", cv) +
+                                phase_line(355, "1", cv) + phase_line(355, "2", cv);
+  // Controls: valid tabulated table and valid depolarization lines are accepted.
+  CHECK(rejection(small_table(angles3 + all_pairs)).empty());
+  CHECK(rejection(small_table("depolarization 0.2\n")).empty());
+  CHECK(rejection(small_table("depolarization 0\n")).empty());
+  // Normalisation within 5 %: 4 % high is accepted (then rescaled to 1), 20 % and 20 % low not.
+  CHECK(rejection(small_table(angles3 + phase_line(354, "1", values_of(3, 1.04 * constant_phase)) +
+                              phase_line(354, "2", values_of(3, 1.04 * constant_phase)) +
+                              phase_line(355, "1", values_of(3, 1.04 * constant_phase)) +
+                              phase_line(355, "2", values_of(3, 1.04 * constant_phase))))
+            .empty());
+  CHECK(
+      rejected_with(small_table(angles3 + phase_line(354, "1", values_of(3, 1.2 * constant_phase))),
+                    "normalisation"));
+  CHECK(
+      rejected_with(small_table(angles3 + phase_line(354, "1", values_of(3, 0.8 * constant_phase))),
+                    "normalisation"));
+  // Every (wavelength, altitude) pair exactly once.
+  CHECK(rejected_with(small_table(angles3 + phase_line(354, "1", cv) + phase_line(354, "2", cv) +
+                                  phase_line(355, "1", cv)),
+                      "cover every"));
+  CHECK(rejected_with(small_table(angles3 + all_pairs + phase_line(354, "1", cv)),
+                      "duplicate phase"));
+  CHECK(rejected_with(small_table(angles3 + phase_line(354, "1", cv) + phase_line(354, "2", cv) +
+                                  phase_line(355, "1", cv) + phase_line(400, "2", cv)),
+                      "wavelength is not in the table"));
+  CHECK(rejected_with(small_table(angles3 + phase_line(354, "1", cv) + phase_line(354, "2", cv) +
+                                  phase_line(355, "1", cv) + phase_line(355, "1.5", cv)),
+                      "altitude is not in the table"));
+  // K values per row: too few, too many; values positive and finite.
+  CHECK(rejected_with(small_table(angles3 + phase_line(354, "1", values_of(2, constant_phase))),
+                      "one value per angle"));
+  CHECK(rejected_with(small_table(angles3 + phase_line(354, "1", values_of(4, constant_phase))),
+                      "one value per angle"));
+  CHECK(rejected_with(small_table(angles3 + phase_line(354, "1", "0 0.1 0.1")),
+                      "phase values must be > 0"));
+  CHECK(rejected_with(small_table(angles3 + phase_line(354, "1", "nan 0.1 0.1")),
+                      "invalid phase value"));
+  CHECK(rejected_with(small_table(phase_line(354, "1", cv)), "need angles_deg"));
+  CHECK(rejected_with(small_table(angles3), "needs phase rows"));
+  // Angles: at most once, 2 to 721 values, first 0, last 180, strictly ascending.
+  CHECK(rejected_with(small_table("angles_deg 0\n"), "2 to 721"));
+  std::string too_many = "angles_deg";
+  for (int i = 0; i < 722; ++i) {
+    too_many += " " + std::to_string(i);
+  }
+  CHECK(rejected_with(small_table(too_many + "\n"), "2 to 721"));
+  CHECK(rejected_with(small_table("angles_deg 10 90 180\n"), "start at 0"));
+  CHECK(rejected_with(small_table("angles_deg 0 90 170\n"), "start at 0"));
+  CHECK(rejected_with(small_table("angles_deg 0 90 90 180\n"), "ascending"));
+  CHECK(rejected_with(small_table(angles3 + angles3), "more than once"));
+  // Depolarisation: at most once, 0 <= rho < 0.5, one value.
+  CHECK(rejected_with(small_table("depolarization 0.5\n"), "rho must be"));
+  CHECK(rejected_with(small_table("depolarization -0.1\n"), "rho must be"));
+  CHECK(rejected_with(small_table("depolarization 0.2\ndepolarization 0.2\n"), "more than once"));
+  CHECK(rejected_with(small_table("depolarization\n"), "one value"));
+  CHECK(rejected_with(small_table("depolarization 0.1 0.2\n"), "one value"));
+  // Unknown keyword.
+  CHECK(rejected_with(small_table("phase_function 1 2 3\n"), "unknown keyword"));
+}
+
+// Tabulated phase function (scattering_tabulated.dat: Henyey-Greenstein g = 0.65 on 1 degree
+// nodes) against the analytic Henyey-Greenstein result, and the scatter_chunk output with the
+// tabulated phase against the same table without phase rows (HG). The sampling does not depend
+// on the phase function, so with the same seed the two outputs differ only through the phase.
+void test_tabulated_phase_matches_hg() {
+  const std::string text = read_text(data_path("scattering_tabulated.dat"));
+  const obdeect::propagation::ScatteringTable tab(text);
+  const obdeect::propagation::ScatteringTable hg(without_phase_lines(text));
+  CHECK(tab.has_phase());
+  CHECK(!hg.has_phase());
+  CHECK(tab.rayleigh_gamma() == 0.0);
+
+  // 1. Interpolated phase vs analytic HG at 354.5 nm (halfway between the 354 and 355 nm rows),
+  // altitudes
+  //    between and at the nodes, cos(theta) on a grid of 4001 points.
+  double worst_phase = 0.0;
+  for (const double h_m : {1000.0, 1500.0, 7000.0, 30000.0, 60000.0}) {
+    for (int i = 0; i <= 4000; ++i) {
+      const double mu = -1.0 + 2.0 * i / 4000.0;
+      const double analytic = obdeect::propagation::henyey_greenstein_phase(mu, 0.65);
+      const double tabulated = tab.aerosol_phase<double>(354.5, h_m, mu);
+      worst_phase = std::max(worst_phase, std::abs(tabulated / analytic - 1.0));
+    }
+  }
+  std::fprintf(stderr, "tabulated phase: max relative error vs HG %.3e\n", worst_phase);
+  // Linear interpolation in cos(theta) on 1 degree nodes: measured 4.3e-4 at worst (forward
+  // peak); the bound has a margin of about 2.3 for the 8-digit values and the sampling of mu.
+  CHECK(worst_phase <= 1e-3);
+
+  // 2. scatter_chunk with the same seed: per-primary scattered weights.
+  const obdeect::propagation::TransmissionTable tr = site_transmission();
+  const std::size_t n = 2000;
+  const auto totals_tab = per_primary_totals(tab, tr, 354.5, n, 32);
+  const auto totals_hg = per_primary_totals(hg, tr, 354.5, n, 32);
+  double worst_ratio = 0.0;
+  for (std::size_t i = 0; i < n; ++i) {
+    if (totals_hg[i] > 0.0) {
+      worst_ratio = std::max(worst_ratio, std::abs(totals_tab[i] / totals_hg[i] - 1.0));
+    } else {
+      CHECK(totals_tab[i] == 0.0);
+    }
+  }
+  // Analytic HG yield with 128 points per primary (as the example-table test).
+  const auto totals_128 = per_primary_totals(tab, tr, 354.5, n, 128);
+  double mean = 0.0, var = 0.0;
+  for (const double t : totals_128) {
+    mean += t;
+  }
+  mean /= static_cast<double>(n);
+  for (const double t : totals_128) {
+    var += (t - mean) * (t - mean);
+  }
+  const double std_error = std::sqrt(var / static_cast<double>(n - 1) / static_cast<double>(n));
+  const double analytic = analytic_yield(hg, tr, 354.5, h0_m, true);
+  std::fprintf(stderr,
+               "tabulated scatter: worst per-primary ratio error %.3e (32 points), MC %.6e +- "
+               "%.2e (128 points), analytic HG %.6e\n",
+               worst_ratio, mean, std_error, analytic);
+  // The aerosol bracket carries the phase error only in its aerosol share, so the per-primary
+  // ratio is bounded by the phase error bound above.
+  CHECK(worst_ratio <= 1e-3);
+  // The analytic reference differs from the converged MC by about 5e-5 relative for the HG table
+  // at every wavelength (measured; the example-table test shows the same size). The tabulated and
+  // HG MC means differ by 7e-6 relative (measured), so the bound allows the reference offset.
+  CHECK(std::abs(mean - analytic) <= 4.0 * std_error + 1e-4 * analytic);
+}
+
+// Rayleigh depolarisation: p_R(gamma) normalised over 4 pi, equal to the old function at gamma 0,
+// and the table's gamma = rho / (2 - rho).
+void test_depolarisation() {
+  const double rho = 0.3;
+  const double gamma = rho / (2.0 - rho);
+  const int n = 200000;
+  double norm = 0.0;
+  for (int i = 0; i < n; ++i) {
+    const double mu = -1.0 + (i + 0.5) * 2.0 / n;
+    norm += 2.0 * std::numbers::pi * obdeect::propagation::rayleigh_phase(mu, gamma) * (2.0 / n);
+  }
+  CHECK_NEAR(norm, 1.0, 1e-9);
+  for (const double mu : {-1.0, -0.4, 0.0, 0.3, 1.0}) {
+    CHECK_NEAR(obdeect::propagation::rayleigh_phase(mu, 0.0),
+               obdeect::propagation::rayleigh_phase(mu), 1e-16);
+    // Analytic: p(mu) = 3 / (8 pi (2 + gamma)) [(1 + gamma) + (1 - gamma) mu^2].
+    CHECK_NEAR(obdeect::propagation::rayleigh_phase(mu, gamma),
+               3.0 / (8.0 * std::numbers::pi * (2.0 + gamma)) *
+                   ((1.0 + gamma) + (1.0 - gamma) * mu * mu),
+               1e-15);
+  }
+  const obdeect::propagation::ScatteringTable depolarised(small_table("depolarization 0.3\n"));
+  CHECK_NEAR(depolarised.rayleigh_gamma(), gamma, 1e-15);
+  const obdeect::propagation::ScatteringTable plain(small_table(""));
+  CHECK(plain.rayleigh_gamma() == 0.0);
+}
+
+// Wavelength interpolation: linear between the integer rows, clamped at the table ends.
+void test_wavelength_interpolation() {
+  const obdeect::propagation::ScatteringTable table(
+      "354 1 0.4 0.1 0.9 0.6\n354 2 0.2 0.05 0.9 0.6\n"
+      "355 1 0.8 0.3 0.5 0.2\n355 2 0.6 0.15 0.5 0.2\n");
+  // Halfway between the rows (354.5 nm): the mean of the two rows.
+  const auto mid = table.state<double>(354.5, 1000.0);
+  CHECK_NEAR(mid.tau_mol, 0.6, 1e-12);
+  CHECK_NEAR(mid.tau_aer, 0.2, 1e-12);
+  CHECK_NEAR(mid.ssa, 0.7, 1e-12);
+  CHECK_NEAR(mid.asymmetry, 0.4, 1e-12);
+  // Not truncated: 354.9 nm is 0.9 of the way from the 354 nm row to the 355 nm row.
+  CHECK_NEAR(table.state<double>(354.9, 1000.0).tau_mol, 0.4 + 0.9 * 0.4, 1e-12);
+  // Clamped at the table ends (exact row values).
+  CHECK_NEAR(table.state<double>(300.0, 1000.0).tau_mol, 0.4, 0.0);
+  CHECK_NEAR(table.state<double>(1e300, 1000.0).tau_mol, 0.8, 0.0);
+  CHECK_NEAR(table.state<double>(355.0, 1000.0).tau_mol, 0.8, 0.0);
+}
+
+// Air timing: with an air profile the time at the scattering point exceeds the vacuum time by
+// straight_path_air_delay_ns from the scattering point to the emission height at the primary's
+// zenith angle. Same seed, so the photons correspond row by row.
+void test_air_timing_adds_straight_path_delay() {
+  const obdeect::propagation::AtmosphereProfile profile =
+      obdeect::propagation::AtmosphereProfile::from_file(
+          data_path("atmprof_ecmwf_north_winter_fixed.dat"));
+  const obdeect::propagation::ScatteringTable table(exponential_table_text(0.05, 7500.0));
+  const obdeect::propagation::TransmissionTable tr = site_transmission();
+  const std::vector<obdeect::propagation::ScatterTelescope> sphere = {
+      {1, distance_m, 0.0, 0.0, radius_m}};
+  const double cx = 0.2;
+  const double cy = 0.1;
+  const double t_emit = 7.0;
+  obdeect::stream::PhotonChunk chunk;
+  chunk.frame = obdeect::stream::Frame::sky;
+  chunk.resize(1, mask_of({Column::x, Column::y, Column::z, Column::cx, Column::cy, Column::t,
+                           Column::w, Column::wavelength}));
+  chunk[Column::z][0] = static_cast<float>(h0_m - obs_m);
+  chunk[Column::cx][0] = static_cast<float>(cx);
+  chunk[Column::cy][0] = static_cast<float>(cy);
+  chunk[Column::t][0] = static_cast<float>(t_emit);
+  chunk[Column::w][0] = 1.0F;
+  chunk[Column::wavelength][0] = static_cast<float>(lambda_nm);
+
+  obdeect::propagation::ScatteringConfig vacuum;
+  vacuum.enabled = true;
+  vacuum.points_per_photon = 16;
+  obdeect::propagation::ScatteringConfig air = vacuum;
+  air.air_profile = &profile;
+  std::vector<std::vector<obdeect::stream::PhotonChunk>> lists_vacuum;
+  std::vector<std::vector<obdeect::stream::PhotonChunk>> lists_air;
+  obdeect::propagation::scatter_chunk(vacuum, table, tr, sphere, chunk, seed, 1, 0, lists_vacuum);
+  obdeect::propagation::scatter_chunk(air, table, tr, sphere, chunk, seed, 1, 0, lists_air);
+
+  const double abs_cz = std::sqrt(1.0 - cx * cx - cy * cy);
+  const double zenith = std::acos(abs_cz);
+  std::vector<double> t_vacuum;
+  std::vector<double> t_air;
+  std::vector<double> heights;
+  for (const auto &piece : lists_vacuum.at(0)) {
+    for (std::size_t r = 0; r < piece.rows(); ++r) {
+      t_vacuum.push_back(piece[Column::t][r]);
+      heights.push_back(piece[Column::zem][r]);
+    }
+  }
+  for (const auto &piece : lists_air.at(0)) {
+    for (std::size_t r = 0; r < piece.rows(); ++r) {
+      t_air.push_back(piece[Column::t][r]);
+    }
+  }
+  CHECK(!t_vacuum.empty());
+  CHECK(t_air.size() == t_vacuum.size());
+  double worst = 0.0;
+  double smallest_delay = std::numeric_limits<double>::infinity();
+  double largest_delay = 0.0;
+  for (std::size_t i = 0; i < t_vacuum.size() && i < t_air.size(); ++i) {
+    const double delay = t_air[i] - t_vacuum[i];
+    const double expected =
+        obdeect::propagation::straight_path_air_delay_ns(profile, heights[i], h0_m, zenith);
+    worst = std::max(worst, std::abs(delay - expected));
+    smallest_delay = std::min(smallest_delay, delay);
+    largest_delay = std::max(largest_delay, delay);
+  }
+  std::fprintf(stderr,
+               "air timing: delay range %.4f to %.4f ns, worst |delay - straight path| %.3e ns\n",
+               smallest_delay, largest_delay, worst);
+  // Points near the emission height have a small delay; the largest one spans the atmosphere.
+  CHECK(smallest_delay >= 0.0);
+  CHECK(largest_delay > 1.0);
+  // float32 times near 1e5 ns resolve about 0.01 ns; two roundings.
+  CHECK(worst < 0.05);
+}
+
+// |cz| below about 1e-16: acos(|cz|) rounds to pi/2, so the zenith form of the air delay cannot be
+// used. The cos form is exact for any |cz| > 0 and the kernel uses it. Float32 columns give |cz| of
+// at least about 3e-4 for a nonzero direction, so the kernel check uses such a photon.
+void test_air_delay_near_horizontal() {
+  const obdeect::propagation::AtmosphereProfile profile =
+      obdeect::propagation::AtmosphereProfile::from_file(
+          data_path("atmprof_ecmwf_north_winter_fixed.dat"));
+  const double tiny = 1e-17;
+  CHECK(std::acos(tiny) == std::numbers::pi / 2.0);
+  const auto throws = [](auto &&f) {
+    try {
+      f();
+    } catch (const std::invalid_argument &) {
+      return true;
+    }
+    return false;
+  };
+  CHECK(throws([&] {
+    static_cast<void>(obdeect::propagation::straight_path_air_delay_ns(profile, 2000.0, 12000.0,
+                                                                       std::numbers::pi / 2.0));
+  }));
+  const double delay =
+      obdeect::propagation::straight_path_air_delay_from_cos_ns(profile, 2000.0, 12000.0, tiny);
+  const double reference =
+      obdeect::propagation::straight_path_air_delay_from_cos_ns(profile, 2000.0, 12000.0, 0.5);
+  CHECK(std::isfinite(delay) && delay > 0.0);
+  CHECK_NEAR(delay * tiny, reference * 0.5, 1e-12 * reference);
+  CHECK(throws([&] {
+    static_cast<void>(
+        obdeect::propagation::straight_path_air_delay_from_cos_ns(profile, 2000.0, 12000.0, 0.0));
+  }));
+
+  const obdeect::propagation::ScatteringTable table(exponential_table_text(0.05, 7500.0));
+  const obdeect::propagation::TransmissionTable tr = site_transmission();
+  const std::vector<obdeect::propagation::ScatterTelescope> sphere = {
+      {1, distance_m, 0.0, 0.0, radius_m}};
+  // cx just below 1 in float32: |cz| = sqrt(1 - cx^2) about 3.5e-4.
+  const double cx = 1.0 - std::ldexp(1.0, -24);
+  obdeect::stream::PhotonChunk chunk;
+  chunk.frame = obdeect::stream::Frame::sky;
+  chunk.resize(1, mask_of({Column::x, Column::y, Column::z, Column::cx, Column::cy, Column::t,
+                           Column::w, Column::wavelength}));
+  chunk[Column::z][0] = static_cast<float>(15000.0);
+  chunk[Column::cx][0] = static_cast<float>(cx);
+  chunk[Column::cy][0] = 0.0F;
+  chunk[Column::t][0] = 0.0F;
+  chunk[Column::w][0] = 1.0F;
+  chunk[Column::wavelength][0] = 355.0F;
+  obdeect::propagation::ScatteringConfig air;
+  air.enabled = true;
+  air.points_per_photon = 16;
+  air.air_profile = &profile;
+  std::vector<std::vector<obdeect::stream::PhotonChunk>> lists;
+  obdeect::propagation::scatter_chunk(air, table, tr, sphere, chunk, 20261107, 1, 0, lists);
+  std::size_t rows = 0;
+  for (const auto &piece : lists.at(0)) {
+    for (std::size_t r = 0; r < piece.rows(); ++r) {
+      ++rows;
+      CHECK(std::isfinite(piece[Column::t][r]));
+    }
+  }
+  std::fprintf(stderr, "near-horizontal scattering: %zu scattered rows\n", rows);
+}
+
 } // namespace
 
 int main() {
   return run_checks([] {
+    test_parsing_rules();
+    test_tabulated_phase_matches_hg();
+    test_depolarisation();
+    test_wavelength_interpolation();
+    test_air_timing_adds_straight_path_delay();
+    test_air_delay_near_horizontal();
     test_phase_functions();
     test_zero_optical_depth();
     test_vertical_beam_against_integral_and_step_sum();

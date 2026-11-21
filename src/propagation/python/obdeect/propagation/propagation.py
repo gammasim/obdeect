@@ -12,6 +12,7 @@ from obdeect.propagation import _core
 
 MODES = ("thinned", "weighted")
 CURVATURES = ("none", "corsika", "spherical")
+WAVELENGTH_INTERPOLATIONS = ("linear", "floor")
 DEFAULT_SCATTERING_POINTS = 8
 
 
@@ -29,6 +30,7 @@ def propagate(
     store_p: bool = False,
     scattering: str | os.PathLike | None = None,
     scattering_points: int | None = None,
+    scattering_primaries: Iterable[int] | None = None,
     pathlen_m: float | None = None,
     telescope_pathlen_m: Mapping[int, float] | None = None,
     extinction: bool = True,
@@ -36,6 +38,8 @@ def propagate(
     earth_radius_m: float | None = None,
     telescopes: Iterable[int] | None = None,
     threads: int = 1,
+    wavelength_interpolation: str = "linear",
+    dispersion_reference_nm: float | None = None,
 ) -> dict[str, float]:
     """Run the atmosphere stage on a photon stream file.
 
@@ -61,6 +65,8 @@ def propagate(
             block. The run needs telescope_r_m. Off when None.
         scattering_points: scattering points per photon (1 to 1024); used only with scattering.
             Default None: 8 points.
+        scattering_primaries: telescope ids (1-based) whose photons are scattered; needs
+            scattering. Default None: the photons of all telescopes. Ids must exist in the run.
         pathlen_m: optical path inside each telescope [m] (the in-telescope part of the
             extinction, see docs/propagation.md). Default None: 0 m.
         telescope_pathlen_m: per-telescope path [m] as {telescope_id: metres}, ids 1-based;
@@ -84,9 +90,18 @@ def propagate(
         telescopes: telescope ids (1-based) to keep. The blocks (telescope, photons,
             telescope_end and their efficiency status) of other telescopes are dropped from the
             output, and their photons are not decoded. The run-level records are unchanged.
-            Counts in the result are for the kept telescopes. Default None: all telescopes.
-            Not combined with scattering.
+            With scattering, the kept telescopes are the scattering targets; other blocks are
+            still read for primaries but not written. Counts in the result are for the kept
+            telescopes. Default None: all telescopes.
         threads: worker threads, 1 to 256. The output is identical for any count. Default 1.
+        wavelength_interpolation: how the transmission table is read at a wavelength:
+            ``"linear"`` (default, continuous in lambda: the depths and the envelope are
+            interpolated between the integer nm rows) or ``"floor"`` (the row at floor(lambda), as
+            sim_telarray). Needs transmission.
+        dispersion_reference_nm: wavelength [nm] (200 to 2000) of the profile's n-1. Scales the
+            bending and the travel time of the bent sky-frame photons to their wavelength
+            (docs/propagation/refraction.md, "Dispersion"). Needs profile; rejected for a run
+            with refraction_applied = 1. Default None: no dispersion.
 
     Returns:
         Dict with photons_in, photons_out, dropped (sky-frame photons not reaching the
@@ -101,6 +116,8 @@ def propagate(
         raise ValueError(f"mode must be one of {MODES}, not {mode!r}")
     if curvature not in CURVATURES:
         raise ValueError(f"curvature must be one of {CURVATURES}, not {curvature!r}")
+    if scattering_primaries is not None and scattering is None:
+        raise ValueError("scattering_primaries needs scattering")
     if extinction:
         if transmission is None:
             raise ValueError("transmission is required (or extinction=False)")
@@ -127,11 +144,18 @@ def propagate(
         selection = [operator.index(telescope) for telescope in telescopes]
         if not selection:
             raise ValueError("telescopes: give at least one telescope id")
-        if scattering is not None:
-            raise ValueError("telescopes cannot be combined with scattering")
     threads = operator.index(threads)
     if not 1 <= threads <= 256:
         raise ValueError("threads must be an integer from 1 to 256")
+    if wavelength_interpolation not in WAVELENGTH_INTERPOLATIONS:
+        raise ValueError(
+            f"wavelength_interpolation must be one of {WAVELENGTH_INTERPOLATIONS}, "
+            f"not {wavelength_interpolation!r}"
+        )
+    if dispersion_reference_nm is not None and profile is None:
+        raise ValueError("dispersion_reference_nm needs profile")
+    if not extinction and wavelength_interpolation != "linear":
+        raise ValueError("extinction=False cannot be combined with wavelength_interpolation")
     return dict(
         _core.propagate(
             os.fspath(input_path),
@@ -155,6 +179,48 @@ def propagate(
             None if earth_radius_m is None else float(earth_radius_m),
             selection,
             threads,
+            None
+            if scattering_primaries is None
+            else [operator.index(telescope) for telescope in scattering_primaries],
+            wavelength_interpolation,
+            None if dispersion_reference_nm is None else float(dispersion_reference_nm),
+        )
+    )
+
+
+def to_sky(
+    input_path: str | os.PathLike,
+    output_path: str | os.PathLike,
+    *,
+    profile: str | os.PathLike | None = None,
+) -> dict[str, int]:
+    """Convert the frame G photons of a photon stream to frame sky (the inverse of the stage).
+
+    The command ``obdeect propagation to-sky`` with the same arguments. For a run with a profile
+    (refraction_applied = 1), ``propagate(..., extinction=False, profile=...)`` on the output
+    reproduces the input's x, y, cx, cy, t and zem to float32 rounding; see
+    docs/propagation/ground-to-sky.md.
+
+    Args:
+        input_path: input photon stream with frame G photons (for example from CORSIKA).
+        output_path: output photon stream in frame sky (overwritten).
+        profile: the run's atmospheric profile; inverts the air delay. Needs
+            refraction_applied = 1 in the run (photons already refracted); None: no air delay.
+
+    Returns:
+        Dict with photons_in, photons_out and dropped (rows that cannot be converted).
+
+    Raises:
+        ValueError: invalid input (not frame G, curved run, bending that is not inverted).
+        RuntimeError: unreadable or truncated files.
+    """
+    from obdeect.propagation import _core
+
+    return dict(
+        _core.to_sky(
+            os.fspath(input_path),
+            os.fspath(output_path),
+            None if profile is None else os.fspath(profile),
         )
     )
 

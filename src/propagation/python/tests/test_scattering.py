@@ -22,7 +22,11 @@ def table():
 
 @pytest.fixture(scope="module")
 def transmission():
-    return TransmissionTable(str(TRANSMISSION_PATH), site_altitude_m=OBSERVATION_LEVEL_M)
+    return TransmissionTable(
+        str(TRANSMISSION_PATH),
+        site_altitude_m=OBSERVATION_LEVEL_M,
+        wavelength_interpolation="floor",
+    )
 
 
 def _primaries(n, z_m=48000.0, weight=1.0, cx=None, cy=None, first=0):

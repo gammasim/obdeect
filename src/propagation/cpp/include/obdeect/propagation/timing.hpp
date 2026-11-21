@@ -82,22 +82,36 @@ inline double propagation_time_ns(double path_m, double index) {
   return path_m * index / speed_of_light_m_per_ns;
 }
 
-// Extra travel time of a straight path at zenith angle zenith [rad] between two heights [m]
-// compared with vacuum: (1/c) integral of (n-1) dh / cos(zenith).
-inline double straight_path_air_delay_ns(const AtmosphereProfile &profile, double low_m,
-                                         double high_m, double zenith) {
-  if (!std::isfinite(low_m) || !std::isfinite(high_m) || !std::isfinite(zenith)) {
-    throw std::invalid_argument("air delay needs finite heights and zenith angle");
+// The same from cos(zenith) = |cz| > 0 (at most 1). Use this where the zenith angle itself would
+// round to pi/2 (|cz| below about 1e-16, acos returns pi/2 and the zenith check fails): the delay
+// is then finite and exact for any |cz| > 0. The result is large for nearly horizontal paths.
+inline double straight_path_air_delay_from_cos_ns(const AtmosphereProfile &profile, double low_m,
+                                                  double high_m, double cos_zenith) {
+  if (!std::isfinite(low_m) || !std::isfinite(high_m)) {
+    throw std::invalid_argument("air delay needs finite heights");
   }
   if (high_m < low_m) {
     throw std::invalid_argument("air delay needs low <= high");
   }
-  if (zenith < 0. || zenith >= 1.5707963267948966) {
-    throw std::invalid_argument("air delay needs 0 <= zenith < pi/2");
+  if (!std::isfinite(cos_zenith) || !(cos_zenith > 0.) || cos_zenith > 1.) {
+    throw std::invalid_argument("air delay needs 0 < cos(zenith) <= 1");
   }
   const double integral_cm =
       profile.index_integral_cm(100. * low_m) - profile.index_integral_cm(100. * high_m);
-  return integral_cm / 100. / (speed_of_light_m_per_ns * std::cos(zenith));
+  return integral_cm / 100. / (speed_of_light_m_per_ns * cos_zenith);
+}
+
+// Extra travel time of a straight path between two heights [m] compared with vacuum:
+// (1/c) integral of (n-1) dh / cos(zenith), for the zenith angle zenith [rad], 0 <= zenith < pi/2.
+inline double straight_path_air_delay_ns(const AtmosphereProfile &profile, double low_m,
+                                         double high_m, double zenith) {
+  if (!std::isfinite(zenith)) {
+    throw std::invalid_argument("air delay needs finite heights and zenith angle");
+  }
+  if (zenith < 0. || zenith >= 1.5707963267948966) {
+    throw std::invalid_argument("air delay needs 0 <= zenith < pi/2");
+  }
+  return straight_path_air_delay_from_cos_ns(profile, low_m, high_m, std::cos(zenith));
 }
 
 } // namespace obdeect::propagation

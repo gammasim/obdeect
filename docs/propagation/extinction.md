@@ -37,10 +37,24 @@ $$
 \tau(\lambda, h) = \tau_i + \frac{\log_{10} h - \log_{10} h_i}{\log_{10} h_{i+1} - \log_{10} h_i}\,(\tau_{i+1} - \tau_i).
 $$
 
-The table has one row per integer wavelength. A wavelength uses the row at its integer part
-(no interpolation in wavelength) and is clamped to the first and last row. Table rows are
-consecutive integer wavelengths below 1000 nm; there are at most 100 heights including H2, and the
-H1 heights rise above H2.
+The table has one row per integer wavelength. Table rows are consecutive integer wavelengths below
+1000 nm; there are at most 100 heights including H2, and the H1 heights rise above H2. Two
+wavelength modes select the rows (`WavelengthInterpolation`):
+
+- `linear` (default; `--wavelength-interpolation linear`, Python `wavelength_interpolation="linear"`):
+  $\tau$ is interpolated linearly in wavelength between rows $n$ and $n+1$, with
+  $f = \lambda - n$, after the height interpolation of each row. Every lookup is continuous in
+  $\lambda$, including the efficiency bound (below).
+- `floor`: the row at $n = \lfloor\lambda\rfloor$. This is the sim_telarray behaviour; the
+  reference values of the tests are for this mode, which the tests set explicitly.
+
+$$
+\tau(\lambda, h) = (1 - f)\,\tau_n(h) + f\,\tau_{n+1}(h).
+$$
+
+For example, at 400.25 nm, $\tau = 0.75\,\tau_{400} + 0.25\,\tau_{401}$. In both modes a wavelength
+below the first row uses the first row and one at or above the last row uses the last row (no
+extrapolation). At integer wavelengths the two modes are equal.
 
 Telescope optical depths, with h_T the telescope altitude and l the path inside the telescope:
 
@@ -50,7 +64,11 @@ $$
 $$
 
 where $T = e^{-\tau}$ is the vertical transmission. If T(400 nm, h_T) gives $\tau_{\text{tel}} > 1000$
-(the table does not fit the site), both are set to 0.
+(the table does not fit the site), both are set to 0. They are tabulated per integer nm; in linear
+mode they are blended in the same way, $\tau_{\text{tel}}(\lambda) = (1-f)\,\tau_{\text{tel},n} +
+f\,\tau_{\text{tel},n+1}$, so $\tau_{\text{tel}}(\lambda) = \tau(\lambda, h_T)$ in both modes. The
+curved slant depth (see [](curvature.md)) blends the row slopes the same way, which gives the
+blend of the floor depths at $n$ and $n+1$.
 
 Acceptance of a photon at emission altitude z with wavelength lambda:
 

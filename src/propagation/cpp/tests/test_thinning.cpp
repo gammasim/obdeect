@@ -266,7 +266,8 @@ void test_thinning_statistics() {
 // The output does not depend on how the input is split into chunks.
 void test_chunk_size_determinism() {
   const auto table = obdeect::propagation::TransmissionTable::from_file(
-      std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/atm_trans_2000_1_10_0_0_2000.dat", 2000.0);
+      std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/atm_trans_2000_1_10_0_0_2000.dat", 2000.0,
+      obdeect::propagation::WavelengthInterpolation::floor);
   const auto depths = table.telescope_depths(2030.0, 28.0);
   const obdeect::propagation::Envelope envelope({200.0, 800.0}, {0.9, 0.3});
   obdeect::propagation::ExtinctionSettings settings;

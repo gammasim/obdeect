@@ -22,6 +22,14 @@ physics.
 The command `obdeect propagation run`: steps, options, output and Python interface.
 :::
 
+:::{grid-item-card} {fas}`arrows-rotate;pst-color-primary` Ground frame to sky frame
+:link: ground-to-sky
+:link-type: doc
+:class-card: sd-shadow-sm
+
+Convert CORSIKA photons in frame G to the sky frame, the inverse of the atmosphere stage.
+:::
+
 :::{grid-item-card} {fas}`cloud;pst-color-primary` Extinction
 :link: extinction
 :link-type: doc
@@ -69,6 +77,7 @@ Convert older extinction tables to the current format.
 :maxdepth: 1
 
 propagation
+ground-to-sky
 extinction
 curvature
 refraction
