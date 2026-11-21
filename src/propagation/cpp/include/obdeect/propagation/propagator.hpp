@@ -1167,7 +1167,9 @@ private:
     records.swap(event_records_);
     const auto event = static_cast<std::uint32_t>(
         checked_integer(records.front().metadata, "event_number", max_u32));
-    check_single_array_index(records);
+    if (config_.scattering.enabled) {
+      check_single_array_index(records);
+    }
     scatter_event(records, event);
     std::vector<bool> has_block(sphere_.size(), false);
     for (const auto &record : records) {
