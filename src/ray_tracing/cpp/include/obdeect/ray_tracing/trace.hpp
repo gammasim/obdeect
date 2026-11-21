@@ -2,6 +2,7 @@
 
 #include "obdeect/ray_tracing/model.hpp"
 #include "obdeect/ray_tracing/random.hpp"
+#include "obdeect/ray_tracing/window.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -29,13 +30,21 @@ enum class Status : std::uint8_t {
   blocked,              // Absorbed by an obscurer (terminal_surface names it).
   invalid_input,        // Non-finite input, wavelength <= 0 or non-unit direction.
   numerical_failure,    // An intersection did not converge.
+  blocked_camera_window,
+  camera_window_total_reflection,
 };
-inline constexpr std::size_t kStatusCount = 7;
+inline constexpr std::size_t kStatusCount = 9;
 
 [[nodiscard]] constexpr std::string_view to_string(Status status) {
-  constexpr std::string_view names[kStatusCount] = {
-      "detected", "missed_primary", "missed_secondary", "missed_focal_surface",
-      "blocked",  "invalid_input",  "numerical_failure"};
+  constexpr std::string_view names[kStatusCount] = {"detected",
+                                                    "missed_primary",
+                                                    "missed_secondary",
+                                                    "missed_focal_surface",
+                                                    "blocked",
+                                                    "invalid_input",
+                                                    "numerical_failure",
+                                                    "blocked_camera_window",
+                                                    "camera_window_total_reflection"};
   return names[static_cast<std::size_t>(status)];
 }
 
@@ -200,13 +209,15 @@ trace_photon(const OpticalModel &model, Ray ray, double wavelength_nm, double ti
   ray.direction = ray.direction * (1.0 / length);
   out.weight = weight;
   double path = 0.0;
+  double time_path_extra = 0.0;
   const auto finish = [&](Status status, const Vec3 &position, std::uint32_t surface) {
     out.status = status;
     out.position = position;
     out.direction = ray.direction;
     out.terminal_surface = surface;
     out.path_length_m = path;
-    out.time_ns = time_ns + path * model.propagation_group_index / kSpeedOfLightMPerNs;
+    out.time_ns =
+        time_ns + (path * model.propagation_group_index + time_path_extra) / kSpeedOfLightMPerNs;
     if (status != Status::detected)
       out.weight = 0.0;
     return out;
@@ -283,6 +294,76 @@ trace_photon(const OpticalModel &model, Ray ray, double wavelength_nm, double ti
     }
   }
   const Leg leg = model.secondary ? Leg::after_secondary : Leg::after_primary;
+
+  // Optional camera window lies after the final mirror and before the focal
+  // surface. Reflected photons are accounted as losses; only transmitted rays
+  // continue through the second surface.
+  if (model.camera_window) {
+    const Window &window = *model.camera_window;
+    const auto outer = intersect_window_surface(window, ray, false, kMinDistanceM);
+    if (outer) {
+      if (auto b = blocked_on(leg, outer->t))
+        return *b;
+      const double radius = std::hypot(outer->point.x, outer->point.y);
+      if (radius > window.outer_radius) {
+        // Outside the modeled window footprint, the path remains in air.
+      } else if (radius > window.aperture_radius) {
+        path += outer->t;
+        return finish(Status::blocked_camera_window, outer->point, window.id);
+      } else {
+        path += outer->t;
+        const auto transmit = [&](const Vec3 &direction, const Vec3 &surface_normal, double n_from,
+                                  double n_to, Vec3 &out_direction, double &transmission) {
+          Vec3 normal = surface_normal;
+          if (dot(direction, normal) > 0.0)
+            normal = normal * -1.0;
+          const double cos_i = -dot(direction, normal);
+          const double eta = n_from / n_to;
+          const double sin2_t = eta * eta * std::max(0.0, 1.0 - cos_i * cos_i);
+          if (sin2_t >= 1.0)
+            return false;
+          const double cos_t = std::sqrt(1.0 - sin2_t);
+          const double rs = (n_from * cos_i - n_to * cos_t) / (n_from * cos_i + n_to * cos_t);
+          const double rp = (n_to * cos_i - n_from * cos_t) / (n_to * cos_i + n_from * cos_t);
+          transmission = 1.0 - 0.5 * (rs * rs + rp * rp);
+          out_direction = normalized(direction * eta + normal * (eta * cos_i - cos_t));
+          return true;
+        };
+        const double n = window.refractive_index.at(wavelength_nm, 0.0);
+        Vec3 refracted;
+        double t0 = 1.0;
+        if (!transmit(ray.direction, outer->normal, 1.0, n, refracted, t0))
+          return finish(Status::camera_window_total_reflection, outer->point, window.id);
+        if (apply_responses)
+          out.weight *= t0;
+        ray = {outer->point, refracted};
+        const auto inner = intersect_window_surface(window, ray, true, kMinDistanceM);
+        if (!inner)
+          return finish(Status::missed_focal_surface, ray.origin, kNoSurface);
+        if (const auto b = model.obscurers.nearest(ray, leg, inner->t)) {
+          path += b->t;
+          time_path_extra += b->t * (n - model.propagation_group_index);
+          return finish(Status::blocked, ray.at(b->t), b->id);
+        }
+        path += inner->t;
+        time_path_extra += inner->t * (n - model.propagation_group_index);
+        // Leaving through the non-spherical transition zone counts as a rim loss.
+        if (std::hypot(inner->point.x, inner->point.y) > window.aperture_radius)
+          return finish(Status::blocked_camera_window, inner->point, window.id);
+        if (apply_responses) {
+          const double tau = window.internal_transmittance.at(wavelength_nm, 0.0);
+          out.weight *= std::pow(tau, inner->t / window.thickness);
+        }
+        Vec3 emerged;
+        double t1 = 1.0;
+        if (!transmit(ray.direction, inner->normal, n, 1.0, emerged, t1))
+          return finish(Status::camera_window_total_reflection, inner->point, window.id);
+        if (apply_responses)
+          out.weight *= t1;
+        ray = {inner->point, emerged};
+      }
+    }
+  }
 
   // To the focal surface.
   std::optional<SurfaceHit> focal;

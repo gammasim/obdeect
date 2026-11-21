@@ -256,11 +256,17 @@ def secondary_segment_frame(segments: list[dict[str, Any]]) -> list[dict[str, An
 
 
 def read_response(
-    contents: str, name: str, value_column: str = "reflectivity", *, filename_options: str = ""
+    contents: str,
+    name: str,
+    value_column: str = "reflectivity",
+    *,
+    filename_options: str = "",
+    value_range: tuple[float, float] = (0.0, 1.0),
 ) -> dict[str, Any]:
     """Read a response versus wavelength, optionally versus incidence angle.
 
-    Returns ``{"x": wavelengths_nm, "y": incidence_deg (empty for 1-D),
+    Values must lie in ``value_range`` (fractions by default). Returns
+    ``{"x": wavelengths_nm, "y": incidence_deg (empty for 1-D),
     "values": [x][y] row-major, "interpolation": RPOL options}``.
     """
     rows = _data_lines(contents)
@@ -317,8 +323,9 @@ def read_response(
                 "coefficients": [],
             },
         }
-    if len(result["x"]) < 2 or any(not 0.0 <= v <= 1.0 for v in result["values"]):
-        raise ModelError(f"{name} needs at least two wavelengths and values in [0, 1]")
+    low, high = value_range
+    if len(result["x"]) < 2 or any(not low <= v <= high for v in result["values"]):
+        raise ModelError(f"{name} needs at least two wavelengths and values in [{low:g}, {high:g}]")
     return result
 
 

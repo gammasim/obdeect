@@ -63,6 +63,21 @@ struct FocalSurface {
   std::optional<Asphere> asphere;
 };
 
+// Optional refractive camera window. Spherical radii are measured from the
+// common centre; the outer sphere's vertex is at outer_apex_z.
+struct Window {
+  enum class Shape : std::uint8_t { flat, sphere };
+  std::uint32_t id{};
+  Shape shape{Shape::flat};
+  double outer_apex_z{};
+  double radius_of_curvature{};
+  double thickness{};
+  double aperture_radius{};
+  double outer_radius{};
+  Response refractive_index;
+  Response internal_transmittance;
+};
+
 struct OpticalModel {
   Mirror primary;
   std::optional<Mirror> secondary;
@@ -70,6 +85,7 @@ struct OpticalModel {
   // secondary mirror is absorbed there.
   bool secondary_blocks_incoming{};
   FocalSurface focal_surface;
+  std::optional<Window> camera_window;
   Obscurers obscurers;
   std::optional<TelescopeTransmission> telescope_transmission;
   double propagation_group_index{1.0};

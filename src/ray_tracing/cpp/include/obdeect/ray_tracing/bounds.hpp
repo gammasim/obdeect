@@ -59,6 +59,8 @@ inline void validate_bound_support(const OpticalModel &model) {
     bound *= detail::response_bound(*model.secondary, wavelength_nm);
   if (const auto &t = model.telescope_transmission)
     bound *= t->on_axis;
+  if (model.camera_window)
+    bound *= detail::response_bound(model.camera_window->internal_transmittance, wavelength_nm);
   return bound * (1.0 + 1e-12);
 }
 

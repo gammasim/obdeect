@@ -34,6 +34,97 @@ def test_segmented_telescope_without_mirror_offset_has_no_offset():
     assert optics["focal_surface"]["plane_z_m"] == pytest.approx(8.0)
 
 
+def window_records(**parameter_changes):
+    parameters = {
+        "shape": "sphere",
+        "radius_of_curvature_cm": 350.0,
+        "thickness_cm": 0.5,
+        "aperture_diameter_cm": 235.15,
+        "outer_diameter_cm": 250.34,
+        "flange_offset_cm": 2.0,
+    }
+    parameters.update(parameter_changes)
+    records, files = segmented(
+        camera_window_parameters=record("camera_window_parameters", parameters),
+        camera_window_refractive_index=record(
+            "camera_window_refractive_index", "window-index.ecsv", file=True
+        ),
+        camera_window_internal_transmittance=record(
+            "camera_window_internal_transmittance", "window-transmission.ecsv", file=True
+        ),
+    )
+    files["camera_window_refractive_index"] = (
+        "# %ECSV 1.0\n# ---\nwavelength refractive_index\n400 1.5\n700 1.48\n"
+    )
+    files["camera_window_internal_transmittance"] = (
+        "# %ECSV 1.0\n# ---\nwavelength transmittance\n400 0.91\n700 0.94\n"
+    )
+    return records, files
+
+
+def test_camera_window_compilation_and_surface_id():
+    model = build(window_records())
+    optics = model["optics"]
+    window = optics["camera_window"]
+    focal_z = optics["focal_surface"]["plane_z_m"]
+    sag = 3.5 - math.sqrt(3.5**2 - 1.17575**2)
+    assert window["outer_apex_z_m"] == pytest.approx(focal_z - 0.02 - sag)
+    assert window["id"] == optics["focal_surface"]["id"] + 1
+    assert window["thickness_m"] == pytest.approx(0.005)
+    assert window["aperture_radius_m"] == pytest.approx(1.17575)
+    assert window["outer_radius_m"] == pytest.approx(1.2517)
+    assert window["radius_of_curvature_m"] == pytest.approx(3.5)
+    assert window["refractive_index"]["values"][0] == [pytest.approx(1.5)]
+    assert window["internal_transmittance"]["values"][0] == [pytest.approx(0.91)]
+    assert "camera_window_parameters" in model["provenance"]["parameters"]
+    surface_ids = [f["id"] for f in optics["primary"]["facets"]]
+    surface_ids += [optics["focal_surface"]["id"], window["id"]]
+    assert len(surface_ids) == len(set(surface_ids))
+
+
+def test_flat_camera_window_has_zero_sag_and_no_curvature_key():
+    model = build(window_records(shape="flat", radius_of_curvature_cm=None))
+    window = model["optics"]["camera_window"]
+    assert window["shape"] == "flat"
+    assert window["outer_apex_z_m"] == pytest.approx(
+        model["optics"]["focal_surface"]["plane_z_m"] - 0.02
+    )
+    assert "radius_of_curvature_m" not in window
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"shape": "cylinder"}, "unsupported shape"),
+        ({"radius_of_curvature_cm": None}, "requires radius_of_curvature_cm"),
+        ({"aperture_diameter_cm": 260.0}, "exceeds outer diameter"),
+        ({"thickness_cm": 0.0}, "thickness_cm must be positive"),
+        ({"flange_offset_cm": 900.0}, "distance budget"),
+    ],
+)
+def test_camera_window_invalid_geometry_is_rejected(changes, message):
+    with pytest.raises(ModelError, match=message):
+        build(window_records(**changes))
+
+
+@pytest.mark.parametrize(
+    "missing",
+    ["camera_window_refractive_index", "camera_window_internal_transmittance"],
+)
+def test_camera_window_requires_response_tables(missing):
+    records, files = window_records()
+    records.pop(missing)
+    files.pop(missing)
+    with pytest.raises(ModelError, match=f"requires {missing} table"):
+        build((records, files))
+
+
+def test_no_camera_window_preserves_model_hash():
+    model = build(segmented())
+    assert "camera_window" not in model["optics"]
+    assert model["sha256"] == "ebd56b8945f4bcf5e7d2bffc8c9cbb9374d35af13455b91ec6457784853e739c"
+
+
 def test_random_errors_follow_the_seed():
     errors = {
         "mirror_align_random_horizontal": record(
