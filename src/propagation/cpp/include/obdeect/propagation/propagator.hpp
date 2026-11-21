@@ -946,17 +946,44 @@ private:
   // below it). A telescope altitude h_t between two adjacent levels is served by linear
   // interpolation in h_t between the two tables (sky_plane): the error of that interpolation is
   // second order in the 10 m spacing. Each table is looked up at its own level.
-  const CurvedRefractionTables &curved_tables_at(double level_m) {
-    const auto found = curved_tables_.find(level_m);
-    if (found != curved_tables_.end()) {
+  const CurvedRefractionTables &curved_tables_at(double level_m, bool accurate) {
+    auto &cache = accurate ? curved_dispersion_tables_ : curved_tables_;
+    const auto found = cache.find(level_m);
+    if (found != cache.end()) {
       return found->second;
     }
-    return curved_tables_.try_emplace(level_m, *config_.profile, config_.earth_radius_m, level_m)
+    return cache.try_emplace(level_m, *config_.profile, config_.earth_radius_m, level_m, accurate)
         .first->second;
   }
 
+  // Build the more accurate dispersion tables only for a chunk containing an inclined ray.
+  // The scan is outside the photon kernel and is independent of chunk size and order.
+  [[nodiscard]] bool
+  needs_curved_dispersion_table(const obdeect::stream::PhotonChunk &chunk) const {
+    using obdeect::stream::Column;
+    if (!config_.dispersion_reference_nm || config_.curvature != Curvature::spherical ||
+        !chunk.has(Column::z)) {
+      return false;
+    }
+    // A lower cached altitude can have a slightly larger zenith angle.
+    const double radius = config_.earth_radius_m + telescope_.altitude_m - curved_altitude_step_m;
+    const double threshold =
+        std::sin(CurvedRefractionTables::accurate_dispersion_blend_start_rad());
+    for (std::size_t i = 0; i < chunk.rows(); ++i) {
+      const double cx = chunk[Column::cx][i], cy = chunk[Column::cy][i];
+      const double cz = std::sqrt(std::max(0.0, 1.0 - cx * cx - cy * cy));
+      const double impact =
+          impact_parameter_m(chunk[Column::x][i], chunk[Column::y][i], chunk[Column::z][i],
+                             run_->observation_m, config_.earth_radius_m, cx, cy, cz);
+      if (impact >= threshold * radius) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   // Geometry of the open telescope for sky-frame photons (refraction tables built on first use).
-  SkyPlane sky_plane() {
+  SkyPlane sky_plane(const obdeect::stream::PhotonChunk &chunk) {
     SkyPlane plane;
     plane.dispersion_reference_nm = config_.dispersion_reference_nm.value_or(0.0);
     plane.telescope_x_m = telescope_.x_m;
@@ -986,8 +1013,9 @@ private:
         // below the profile top (the table needs its level inside the profile); then the lower
         // table alone is used, which is off by the first-order change over less than one step.
         const bool blend = h > lower && upper < top;
-        plane.curved_tables = &curved_tables_at(lower);
-        plane.curved_tables_upper = blend ? &curved_tables_at(upper) : nullptr;
+        const bool accurate = needs_curved_dispersion_table(chunk);
+        plane.curved_tables = &curved_tables_at(lower, accurate);
+        plane.curved_tables_upper = blend ? &curved_tables_at(upper, accurate) : nullptr;
         plane.curved_weight = blend ? (h - lower) / (upper - lower) : 0.0;
         plane.curved_bending = !run_->refraction_applied;
       }
@@ -1100,7 +1128,7 @@ private:
     const bool weighted = config_.mode == OutputMode::weighted;
     for (const auto &scattered : list) {
       obdeect::stream::PhotonChunk plane_input = scattered;
-      sky_to_ground(plane_input, sky_plane(), true);
+      sky_to_ground(plane_input, sky_plane(plane_input), true);
       for (auto &out : apply_envelope_chunk(
                std::move(plane_input), run_->envelope, *config_.transmission, *telescope_.depths,
                weighted, config_.seed, event_number_, telescope_.id, telescope_.out_index)) {
@@ -1192,7 +1220,7 @@ private:
         }
         assign_wavelengths(chunk_, run_->wavelengths, config_.seed, event_number_, telescope_.id);
       }
-      summary_.dropped += sky_to_ground(chunk_, sky_plane());
+      summary_.dropped += sky_to_ground(chunk_, sky_plane(chunk_));
     }
 
     if (config_.geometry_only) {
@@ -1241,7 +1269,8 @@ private:
   double tables_altitude_m_{};
   static constexpr double curved_altitude_step_m = 10.0;   // grid of the curved table levels [m]
   std::map<double, CurvedRefractionTables> curved_tables_; // by level [m a.s.l.]
-  obdeect::stream::PhotonChunk chunk_;                     // reused by photons()
+  std::map<double, CurvedRefractionTables> curved_dispersion_tables_;
+  obdeect::stream::PhotonChunk chunk_; // reused by photons()
   // Single scattering: sphere of telescope i+1, scattered photons per telescope (sky frame),
   // the records of the held event, and the running index of its primary photons.
   std::vector<ScatterTelescope> sphere_;

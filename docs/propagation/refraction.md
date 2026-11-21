@@ -153,7 +153,7 @@ The group term is first order: it treats `1 / cos(theta(h))` along the bent ray 
 The error is of second order in the bending. The 7-argument `bend` calls the scaled overload with
 `k = k_group = 1`, which gives the same result bit for bit.
 
-Spherical mode (`CurvedRefractionTables::lookup_scaled`): no rebuild of the tables. With the
+Spherical mode uses the following first-order scaling below 75 degrees. With the
 unscaled integrals `shift(1)`, `bent(1)` and `straight(1)` from the table:
 
 ```text
@@ -162,8 +162,14 @@ bent           = k bent(1) + (k_group - k) straight(1)
 straight       = k_group straight(1)
 ```
 
-This is first order in the scale. The geometry is scaled by `k` and the time by `k_group`, as
-`k G + k_group S = k (G + S) + (k_group - k) S` with `G + S = bent(1)`.
+Between 75 and 80 degrees the result blends smoothly into a wavelength-dependent table. Above
+80 degrees the table evaluates the ray geometry with the phase index and the travel time with
+the group index. It interpolates on nine refractivity-scale nodes covering all combinations of
+wavelength and reference wavelength from 200 to 2000 nm. The table is built on first use of a
+high-zenith photon and cached per telescope altitude level for the lifetime of the propagator.
+The direct quadrature fallback uses the same transition. Each cached altitude level requires
+additional memory and construction time; telescopes at different levels require separate tables.
+No dispersion tables are built when `--dispersion-reference-nm` is absent.
 
 Measured accuracy (`test_dispersion.cpp`, fixture ECMWF north winter, observation level 2180 m,
 reference numerical integrals with 20 000 Simpson intervals):
@@ -177,7 +183,7 @@ reference numerical integrals with 20 000 Simpson intervals):
 | spherical, `k = 0.97, 1.03`, 0-85 deg, 10 and 30 km, against direct quadrature of the scaled profile | shift 7.0e-4 rel (1.3 m absolute at 85 deg, 30 km), bent 7.0e-4 rel, straight 1.6e-7 rel |
 | spherical, `(k, k_group) = (0.97, 0.98)`, `(1.03, 1.02)` | bent 7.0e-4 rel, straight 1.6e-7 rel |
 
-The spherical error is second order in the scale: near the horizon the bent delay is not linear in
+For the first-order calculation, the spherical error is second order in the scale: near the horizon the bent delay is not linear in
 k, and the linear extrapolation is off by about 7e-4 of the total. Vertical photons are exact (bent =
 straight = k straight(1)). The plane-parallel error is set by the group approximation alone and grows with `|k_group - k|`.
 

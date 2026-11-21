@@ -1672,3 +1672,60 @@ def test_to_sky_updates_surviving_telescope_weight(tmp_path):
     obdeect_propagation.to_sky(source, out)
     end = next(r for r in read_records(out.read_bytes()) if r["type"] == "telescope_end")
     assert end["metadata"]["photons"] == pytest.approx(2.0)
+
+
+def test_spherical_dispersion_is_independent_of_chunk_size(tmp_path):
+    """A low-zenith chunk preceding a high-zenith chunk uses the same cached physics."""
+
+    def make_input(split):
+        writer = StreamWriter()
+        run = _geometry_run()
+        run.update({
+            "curvature_applied": 0,
+            "refraction_applied": 0,
+            "wavelength_min_nm": 300.0,
+            "wavelength_max_nm": 300.0,
+        })
+        writer.metadata("run", run)
+        writer.metadata("event", {"event_number": 5})
+        writer.metadata("telescope", {"telescope_id": 1, "frame": 0})
+        columns = {
+            "x": [0.0, -100000.0],
+            "y": [0.0, 0.0],
+            "z": [10000.0, 10000.0],
+            "cx": [0.0, np.sin(np.radians(85.0))],
+            "cy": [0.0, 0.0],
+            "t": [0.0, 0.0],
+            "w": [1.0, 1.0],
+            "wavelength": [300.0, 300.0],
+        }
+        if split:
+            for index in range(2):
+                writer.photons(1, 0, {k: [v[index]] for k, v in columns.items()}, first_index=index)
+        else:
+            writer.photons(1, 0, columns)
+        writer.metadata("telescope_end", {"telescope_id": 1, "photons": 2.0})
+        writer.metadata("event_end")
+        writer.metadata("run_end")
+        return writer.getvalue()
+
+    outputs = []
+    for split in (False, True):
+        source = tmp_path / f"source-{split}.pst"
+        source.write_bytes(make_input(split))
+        target = tmp_path / f"target-{split}.pst"
+        obdeect_propagation.propagate(
+            source,
+            target,
+            extinction=False,
+            site_altitude_m=SITE_M,
+            seed=1,
+            profile=PROFILE_PATH,
+            curvature="spherical",
+            dispersion_reference_nm=500.0,
+        )
+        outputs.append(read_records(target.read_bytes()))
+    for column in ("x", "y", "cx", "cy", "t", "w"):
+        np.testing.assert_array_equal(
+            _photon_block(outputs[0], 1, column), _photon_block(outputs[1], 1, column)
+        )

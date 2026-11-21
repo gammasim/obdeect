@@ -405,6 +405,64 @@ void test_spherical_scaled(const AtmosphereProfile &profile) {
   CHECK(worst_group_bent_rel <= 1e-3);
   CHECK(worst_group_straight <= 1e-5);
 
+  // 300 nm at the top of the refraction grid needs k outside the range covered above.
+  // Compare with independent direct quadrature at the same phase and group indices.
+  {
+    constexpr double wavelength_nm = 300.;
+    const double k = refractivity_ratio(wavelength_nm, 500.);
+    const double k_group = group_refractivity_ratio(wavelength_nm, 500.);
+    const double theta = radians(85.);
+    constexpr double h_e = 60000.;
+    const CurvedRayIntegrals ref =
+        reference_scaled(profile, kObservation, theta, h_e, k, k_group, 40000);
+    const CurvedRefractionTables accurate_tables(profile, kEarthRadius, kObservation, true);
+    CurvedRayIntegrals approx{};
+    CHECK(accurate_tables.lookup_scaled(theta, h_e, k, k_group, approx));
+    CHECK(std::abs(approx.shift_m - ref.shift_m) / std::abs(ref.shift_m) <= 1e-3);
+    CHECK(std::abs(approx.excess_bent_ns - ref.excess_bent_ns) / std::abs(ref.excess_bent_ns) <=
+          1e-3);
+
+    // Cover both ends of the supported scale range and the zenith transition.
+    for (const auto [lambda, reference] :
+         {std::pair{200., 2000.}, std::pair{200., 500.}, std::pair{225., 500.},
+          std::pair{250., 500.}, std::pair{300., 500.}, std::pair{350., 500.},
+          std::pair{400., 500.}, std::pair{500., 500.}, std::pair{700., 500.},
+          std::pair{1000., 500.}, std::pair{1500., 500.}, std::pair{2000., 500.},
+          std::pair{2000., 200.}}) {
+      const double phase = refractivity_ratio(lambda, reference);
+      const double group = group_refractivity_ratio(lambda, reference);
+      for (double deg : {75., 77.5, 80., 85., 89.}) {
+        const auto truth =
+            reference_scaled(profile, kObservation, radians(deg), h_e, phase, group, 40000);
+        CurvedRayIntegrals actual{};
+        CHECK(accurate_tables.lookup_scaled(radians(deg), h_e, phase, group, actual));
+        CHECK(std::abs(actual.shift_m - truth.shift_m) <=
+              std::max(0.005, 1e-3 * std::abs(truth.shift_m)));
+        CHECK(std::abs(actual.excess_bent_ns - truth.excess_bent_ns) <=
+              std::max(0.02, 1e-3 * std::abs(truth.excess_bent_ns)));
+      }
+    }
+
+    // Approaching either zenith transition from both sides must not jump.
+    for (double boundary : {75., 80.}) {
+      CurvedRayIntegrals before{}, after{};
+      constexpr double eps_deg = 1e-6;
+      CHECK(accurate_tables.lookup_scaled(radians(boundary - eps_deg), h_e, k, k_group, before));
+      CHECK(accurate_tables.lookup_scaled(radians(boundary + eps_deg), h_e, k, k_group, after));
+      CHECK(std::abs(after.shift_m - before.shift_m) < 1e-3);
+      CHECK(std::abs(after.excess_bent_ns - before.excess_bent_ns) < 1e-2);
+    }
+
+    // The scaled lookup must remain continuous around the physical wavelength scale.
+    CurvedRayIntegrals lower{}, upper{};
+    constexpr double dk = 1e-6;
+    CHECK(accurate_tables.lookup_scaled(theta, h_e, k - dk, k_group - dk, lower));
+    CHECK(accurate_tables.lookup_scaled(theta, h_e, k + dk, k_group + dk, upper));
+    CHECK(std::abs(upper.shift_m - lower.shift_m) / std::abs(ref.shift_m) < 1e-3);
+    CHECK(std::abs(upper.excess_bent_ns - lower.excess_bent_ns) / std::abs(ref.excess_bent_ns) <
+          1e-3);
+  }
+
   // Rejections: bad scales and bad angles or heights.
   CurvedRayIntegrals out{};
   CHECK(!tables.lookup_scaled(0.5, 20000., 0., 1., out));

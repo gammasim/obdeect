@@ -44,4 +44,8 @@ provider = "scikit_build_core.metadata.setuptools_scm"
 # All components are released together with one version.
 provider = "scikit_build_core.metadata.template"
 field = "dependencies"
-result = [ "numpy>=2.3", "obdeect-stream=={project[version]}" ]
+result = [
+  "numpy>=2.3",
+  "obdeect-ray-tracing=={project[version]}",
+  "obdeect-stream=={project[version]}",
+]

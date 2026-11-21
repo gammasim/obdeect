@@ -114,10 +114,22 @@ inline bool curved_direct_integrals(const SkyPlane &plane, double emission_altit
   try {
     out = curved_ray_integrals(*plane.profile, plane.earth_radius_m, plane.telescope_altitude_m,
                                theta, emission_altitude_m);
+    scale_ray_integrals(out, k, k_group);
+    const double start = CurvedRefractionTables::accurate_dispersion_blend_start_rad();
+    const double end = CurvedRefractionTables::accurate_dispersion_blend_end_rad();
+    if (plane.dispersion_reference_nm != 0.0 && theta > start) {
+      const CurvedRayIntegrals exact =
+          curved_ray_integrals(*plane.profile, plane.earth_radius_m, plane.telescope_altitude_m,
+                               theta, emission_altitude_m, k, k_group);
+      const double u = std::clamp((theta - start) / (end - start), 0.0, 1.0);
+      const double weight = u * u * (3.0 - 2.0 * u);
+      out.shift_m += weight * (exact.shift_m - out.shift_m);
+      out.excess_bent_ns += weight * (exact.excess_bent_ns - out.excess_bent_ns);
+      out.excess_straight_ns += weight * (exact.excess_straight_ns - out.excess_straight_ns);
+    }
   } catch (const std::invalid_argument &) {
     return false;
   }
-  scale_ray_integrals(out, k, k_group); // the same first-order scaling as lookup_scaled
   return true;
 }
 
