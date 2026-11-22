@@ -56,7 +56,8 @@ std::string data_file(const std::string &name) {
 
 obdeect::propagation::TransmissionTable real_table() {
   return obdeect::propagation::TransmissionTable::from_file(
-      data_file("atm_trans_2000_1_10_0_0_2000.dat"), site_m);
+      data_file("atm_trans_2000_1_10_0_0_2000.dat"), site_m,
+      obdeect::propagation::WavelengthInterpolation::floor);
 }
 
 // Two telescopes: at the array reference (z = 0) and 3 km east, 2.5 km south of it.

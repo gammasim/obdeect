@@ -5,10 +5,23 @@ component. They only read files, so no obdeect package needs to be installed.
 """
 
 import re
+import tomllib
 from pathlib import Path
 
 CITATION = Path(__file__).resolve().parents[1] / "CITATION.cff"
 CHANGELOG = Path(__file__).resolve().parents[1] / "CHANGELOG.md"
+
+
+def test_propagation_declares_ray_tracing_dependency():
+    pyproject = CHANGELOG.parent / "src/propagation/pyproject.toml"
+    with pyproject.open("rb") as file:
+        metadata = tomllib.load(file)
+    dependencies = next(
+        entry["result"]
+        for entry in metadata["tool"]["dynamic-metadata"]
+        if entry.get("field") == "dependencies"
+    )
+    assert "obdeect-ray-tracing=={project[version]}" in dependencies
 
 
 def test_citation_version_matches_latest_changelog_release():

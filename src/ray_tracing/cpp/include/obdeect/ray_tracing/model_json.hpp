@@ -269,11 +269,16 @@ inline Segment segment(const Node &node) {
 }
 
 inline Mirror mirror(const Node &node, std::vector<std::uint32_t> &ids) {
-  (void)node.object(
-      {"facets", "asphere", "asphere_id", "segments", "reflectivity", "scatter", "degradation"});
+  (void)node.object({"facets", "asphere", "asphere_id", "segments", "reflectivity", "scatter",
+                     "degradation", "vertex_z_m"});
   Mirror m;
   if (node.has("facets") == node.has("asphere"))
     node.fail("expected exactly one of 'facets' and 'asphere'");
+  if (node.has("vertex_z_m")) {
+    if (!node.has("facets"))
+      node["vertex_z_m"].fail("vertex_z_m is for facet mirrors; an asphere has its own vertex_z_m");
+    m.vertex_z_m = node["vertex_z_m"].number();
+  }
   if (node.has("facets")) {
     for (const auto &f : node["facets"].array()) {
       (void)f.object({"id", "centre_m", "normal", "tangent", "map_tangent", "shape", "diameter_m",

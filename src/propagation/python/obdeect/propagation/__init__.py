@@ -16,7 +16,9 @@ _EXPORTS = {
     "propagation_time_ns": "obdeect.propagation.profile",
     "refract": "obdeect.propagation.profile",
     "propagate": "obdeect.propagation.propagation",
+    "to_sky": "obdeect.propagation.propagation",
     "convert_table": "obdeect.propagation.convert",
+    "in_telescope_path_m": "obdeect.propagation.optics_path",
 }
 __all__ = [*_EXPORTS, "__version__"]
 

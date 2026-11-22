@@ -134,7 +134,8 @@ double flat_slant(const obdeect::propagation::TransmissionTable &table, double h
 }
 
 void test_flat_limit_fixture() {
-  const auto table = obdeect::propagation::TransmissionTable::from_file(kFixture, kSiteAltitude);
+  const auto table = obdeect::propagation::TransmissionTable::from_file(
+      kFixture, kSiteAltitude, obdeect::propagation::WavelengthInterpolation::floor);
   for (const double cos_t : {1.0, 0.7, 0.3}) {
     for (const double zem : {2500.0, 5000.0, 20000.0}) {
       const double curved = table.slant_optical_depth<double>(400.0, kTelescope, zem, cos_t, 1e12);
@@ -145,7 +146,8 @@ void test_flat_limit_fixture() {
 
 void test_flat_limit_and_brute_force_synthetic() {
   const auto synthetic = synthetic_table();
-  const obdeect::propagation::TransmissionTable table(table_text(synthetic), kSiteAltitude);
+  const obdeect::propagation::TransmissionTable table(
+      table_text(synthetic), kSiteAltitude, obdeect::propagation::WavelengthInterpolation::floor);
   // Flat-atmosphere limit on the synthetic grid.
   for (const double cos_t : {1.0, 0.7, 0.3}) {
     for (const double zem : {3000.0, 30000.0, 100000.0}) {
@@ -167,7 +169,8 @@ void test_flat_limit_and_brute_force_synthetic() {
 }
 
 void test_curvature_at_large_angles() {
-  const auto table = obdeect::propagation::TransmissionTable::from_file(kFixture, kSiteAltitude);
+  const auto table = obdeect::propagation::TransmissionTable::from_file(
+      kFixture, kSiteAltitude, obdeect::propagation::WavelengthInterpolation::floor);
   const double zem = 30000.0;
   const double cos80 = std::cos(80.0 * kPi / 180.0);
   const double curved80 =
@@ -203,7 +206,8 @@ void test_curvature_at_large_angles() {
 }
 
 void test_monotone_zero_and_validation() {
-  const auto table = obdeect::propagation::TransmissionTable::from_file(kFixture, kSiteAltitude);
+  const auto table = obdeect::propagation::TransmissionTable::from_file(
+      kFixture, kSiteAltitude, obdeect::propagation::WavelengthInterpolation::floor);
   const double cos_t = std::cos(70.0 * kPi / 180.0);
   double previous = 0.0;
   for (double zem = kTelescope - 500.0; zem <= 60000.0; zem += 250.0) {
@@ -259,7 +263,8 @@ void test_monotone_zero_and_validation() {
 }
 
 void test_transmission_curved() {
-  const auto table = obdeect::propagation::TransmissionTable::from_file(kFixture, kSiteAltitude);
+  const auto table = obdeect::propagation::TransmissionTable::from_file(
+      kFixture, kSiteAltitude, obdeect::propagation::WavelengthInterpolation::floor);
   const double cos_t = 0.5;
   const double zem = 20000.0;
   const double focus = 0.02;
@@ -275,8 +280,9 @@ void test_transmission_curved() {
       table.transmission_curved<double>(400.0, 2010.0, cos_t, kTelescope, focus, kEarthRadius),
       std::exp(-focus), 1e-14);
   // A total depth above max_total_depth gives zero: tau rises to 300 at 3 km.
-  const obdeect::propagation::TransmissionTable opaque("# H2= 2.000, H1= 3.000\n400 300\n",
-                                                       kSiteAltitude);
+  const obdeect::propagation::TransmissionTable opaque(
+      "# H2= 2.000, H1= 3.000\n400 300\n", kSiteAltitude,
+      obdeect::propagation::WavelengthInterpolation::floor);
   CHECK(opaque.slant_optical_depth<double>(400.0, kTelescope, 3000.0, 0.5, kEarthRadius) > 100.0);
   CHECK(opaque.transmission_curved<double>(400.0, 3000.0, 0.5, kTelescope, focus, kEarthRadius) ==
         0.0);
@@ -311,7 +317,8 @@ obdeect::stream::PhotonChunk make_chunk(std::size_t first, std::size_t count, bo
 }
 
 void test_acceptance_kernel() {
-  const auto table = obdeect::propagation::TransmissionTable::from_file(kFixture, kSiteAltitude);
+  const auto table = obdeect::propagation::TransmissionTable::from_file(
+      kFixture, kSiteAltitude, obdeect::propagation::WavelengthInterpolation::floor);
   const auto depths = table.telescope_depths(kTelescope, 28.0);
   const obdeect::propagation::CurvedPath path{kEarthRadius, kTelescope, 0.0, 0.0, 1.0};
   const std::size_t n = 240;
@@ -413,7 +420,8 @@ void test_acceptance_kernel() {
 
 // Settings for apply_extinction_chunk with the curved atmosphere, weighted output (p column).
 void test_apply_extinction_curved() {
-  const auto table = obdeect::propagation::TransmissionTable::from_file(kFixture, kSiteAltitude);
+  const auto table = obdeect::propagation::TransmissionTable::from_file(
+      kFixture, kSiteAltitude, obdeect::propagation::WavelengthInterpolation::floor);
   const auto depths = table.telescope_depths(kTelescope, 28.0);
   const obdeect::propagation::Envelope envelope({200.0, 800.0}, {1.0, 1.0});
   const obdeect::propagation::CurvedPath path{kEarthRadius, kTelescope, 0.0, 0.0, 1.0};
@@ -475,6 +483,62 @@ void test_apply_extinction_curved() {
   CHECK(largest_difference > 1e-3);
 }
 
+bool close(double value, double reference, double tolerance) {
+  return std::abs(value - reference) <= tolerance * std::max(1.0, std::abs(reference));
+}
+
+// Linear mode at lambda = n + f: the slant depth is linear in the row slopes, so for any radius it
+// is the (1 - f, f) mix of the floor depths at n and n + 1. For R -> infinity it is the
+// plane-parallel depth of the blended optical depth.
+void test_linear_curved() {
+  using obdeect::propagation::TransmissionTable;
+  using obdeect::propagation::WavelengthInterpolation;
+  const auto floor_table = TransmissionTable::from_file(
+      kFixture, kSiteAltitude, obdeect::propagation::WavelengthInterpolation::floor);
+  const auto linear_table =
+      TransmissionTable::from_file(kFixture, kSiteAltitude, WavelengthInterpolation::linear);
+  for (const double cos_t : {1.0, 0.5, 0.1}) {
+    for (const double zem : {2500.0, 8000.0, 20000.0}) {
+      const double at_400 =
+          floor_table.slant_optical_depth<double>(400.0, kTelescope, zem, cos_t, kEarthRadius);
+      const double at_401 =
+          floor_table.slant_optical_depth<double>(401.0, kTelescope, zem, cos_t, kEarthRadius);
+      const double at_400_5 =
+          linear_table.slant_optical_depth<double>(400.5, kTelescope, zem, cos_t, kEarthRadius);
+      CHECK(close(at_400_5, 0.5 * (at_400 + at_401), 1e-12));
+      CHECK(close(
+          linear_table.slant_optical_depth<double>(400.0, kTelescope, zem, cos_t, kEarthRadius),
+          at_400, 1e-12));
+      const double flat = std::abs(linear_table.optical_depth<double>(400.5, zem) -
+                                   linear_table.optical_depth<double>(400.5, kTelescope)) /
+                          cos_t;
+      const double limit =
+          linear_table.slant_optical_depth<double>(400.5, kTelescope, zem, cos_t, 1e12);
+      CHECK(close(limit, flat, 1e-6));
+    }
+  }
+  // transmission_curved in linear mode with od_focus, halfway between rows.
+  const double focus = 0.02;
+  const double zem = 20000.0;
+  const double cos_t = 0.5;
+  const double mid =
+      0.5 * (floor_table.slant_optical_depth<double>(400.0, kTelescope, zem, cos_t, kEarthRadius) +
+             floor_table.slant_optical_depth<double>(401.0, kTelescope, zem, cos_t, kEarthRadius));
+  CHECK_NEAR(
+      linear_table.transmission_curved<double>(400.5, zem, cos_t, kTelescope, focus, kEarthRadius),
+      std::exp(-(mid + focus)), 1e-14);
+  // Clamped below the first row (the fixture starts at 200 nm): the first row.
+  CHECK(linear_table.first_wavelength_nm() == 200);
+  CHECK_NEAR(
+      linear_table.transmission_curved<double>(150.0, zem, cos_t, kTelescope, focus, kEarthRadius),
+      floor_table.transmission_curved<double>(200.0, zem, cos_t, kTelescope, focus, kEarthRadius),
+      1e-14);
+  CHECK(throws_invalid([&] {
+    (void)linear_table.slant_optical_depth<double>(std::nan(""), kTelescope, zem, cos_t,
+                                                   kEarthRadius);
+  }));
+}
+
 } // namespace
 
 int main() {
@@ -486,5 +550,6 @@ int main() {
     test_transmission_curved();
     test_acceptance_kernel();
     test_apply_extinction_curved();
+    test_linear_curved();
   });
 }

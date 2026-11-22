@@ -50,10 +50,22 @@ inline std::vector<double> to_vector(const DoubleArray &array) {
 inline void bind_table(nb::module_ &module) {
   using obdeect::propagation::TransmissionTable;
   nb::class_<TransmissionTable>(module, "TransmissionTable")
-      .def(nb::new_([](const std::string &path, double site_altitude_m) {
-             return TransmissionTable::from_file(path, site_altitude_m);
+      .def(nb::new_([](const std::string &path, double site_altitude_m,
+                       const std::string &wavelength_interpolation) {
+             return TransmissionTable::from_file(
+                 path, site_altitude_m,
+                 obdeect::propagation::parse_wavelength_interpolation(wavelength_interpolation));
            }),
-           nb::arg("path"), nb::arg("site_altitude_m"))
+           nb::arg("path"), nb::arg("site_altitude_m"),
+           nb::arg("wavelength_interpolation") = "linear")
+      .def_prop_ro("wavelength_interpolation",
+                   [](const TransmissionTable &self) {
+                     return std::string(
+                         self.wavelength_interpolation() ==
+                                 obdeect::propagation::WavelengthInterpolation::linear
+                             ? "linear"
+                             : "floor");
+                   })
       .def_prop_ro("observation_level_m", &TransmissionTable::observation_level_m)
       .def_prop_ro("first_wavelength_nm", &TransmissionTable::first_wavelength_nm)
       .def_prop_ro("last_wavelength_nm", &TransmissionTable::last_wavelength_nm)

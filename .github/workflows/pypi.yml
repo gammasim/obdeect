@@ -46,10 +46,9 @@ jobs:
         env:
           CIBW_BUILD: >-
             ${{ github.event_name == 'pull_request' && 'cp314-manylinux_x86_64' || 'cp314-* cp315-*' }}
-          # The components require obdeect-stream of the same version, which is not on
-          # PyPI yet: install it from the same checkout before the tests.
+          # Component tests can import sibling packages; install the local wheels first.
           CIBW_BEFORE_TEST: >-
-            ${{ matrix.component != 'stream' && 'pip install {project}/src/stream' || '' }}
+            ${{ matrix.component == 'propagation' && 'pip install {project}/src/stream {project}/src/ray_tracing' || matrix.component != 'stream' && 'pip install {project}/src/stream' || '' }}
           CIBW_TEST_COMMAND: python -m pytest {package}/python/tests -q
         # Shared settings: [tool.cibuildwheel] in the root pyproject.toml.
         run: >-

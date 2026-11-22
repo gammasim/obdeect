@@ -26,11 +26,13 @@ namespace obdeect::propagation {
 // of the wavelength stream; split such bunches upstream.
 inline constexpr std::uint64_t max_bunch_photons = 2048;
 
-// Envelope E(lambda): piecewise linear in wavelength, values in [0, 1].
+// Envelope E(lambda): a piecewise-linear factor or a product of such factors, in [0, 1].
 class Envelope {
 public:
-  Envelope(std::vector<double> wavelength_nm, std::vector<double> value)
-      : wavelength_(std::move(wavelength_nm)), value_(std::move(value)) {
+  Envelope(std::vector<double> wavelength_nm, std::vector<double> value,
+           std::vector<Envelope> factors = {})
+      : wavelength_(std::move(wavelength_nm)), value_(std::move(value)),
+        factors_(std::move(factors)) {
     if (wavelength_.empty() || wavelength_.size() != value_.size()) {
       throw std::invalid_argument("envelope needs equal, non-empty wavelength and value arrays");
     }
@@ -45,9 +47,16 @@ public:
     }
   }
 
-  // Linear interpolation; outside the table the edge value is returned (callers check
-  // coverage before use).
+  // Interpolate each factor before multiplying; outside a factor the edge value is returned.
+  // Callers check wavelength coverage before use.
   [[nodiscard]] double operator()(double lambda_nm) const {
+    if (!factors_.empty()) {
+      double product = 1.0;
+      for (const auto &factor : factors_) {
+        product *= factor(lambda_nm);
+      }
+      return product;
+    }
     if (lambda_nm <= wavelength_.front()) {
       return value_.front();
     }
@@ -67,6 +76,7 @@ public:
 private:
   std::vector<double> wavelength_;
   std::vector<double> value_;
+  std::vector<Envelope> factors_;
 };
 
 // Deviate number `index` of a photon key: uniform4 block index / 4, lane index % 4.

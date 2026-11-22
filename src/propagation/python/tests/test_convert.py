@@ -56,7 +56,7 @@ def heights_of(path):
 
 
 def check_against_expected(path):
-    table = TransmissionTable(str(path), OBSERVATION_M)
+    table = TransmissionTable(str(path), OBSERVATION_M, wavelength_interpolation="floor")
     assert table.first_wavelength_nm == 180
     assert table.last_wavelength_nm == 200
     heights = heights_of(path)
@@ -109,10 +109,12 @@ def test_only_differences_matter(tmp_path):
     shifted = tmp_path / "b.ext"
     rows = [[float(v) + 7.0 for v in line.split()] for line in source.read_text().splitlines()]
     shifted.write_text("\n".join(" ".join(f"{v:.9e}" for v in r) for r in rows) + "\n")
-    first = TransmissionTable(str(converted(tmp_path, source, "kascade")), OBSERVATION_M)
+    first = TransmissionTable(
+        str(converted(tmp_path, source, "kascade")), OBSERVATION_M, wavelength_interpolation="floor"
+    )
     out = tmp_path / "shifted.dat"
     convert_table(shifted, out, format="kascade", observation_level_m=OBSERVATION_M)
-    second = TransmissionTable(str(out), OBSERVATION_M)
+    second = TransmissionTable(str(out), OBSERVATION_M, wavelength_interpolation="floor")
     assert second.optical_depth(190, 9000.0) == pytest.approx(first.optical_depth(190, 9000.0))
 
 
@@ -203,7 +205,7 @@ def test_too_many_heights_rejected_or_coarsened(tmp_path):
     out = tmp_path / "tall.dat"
     convert_table(source, out, format="kascade", observation_level_m=OBSERVATION_M)
     assert len(heights_of(out)) < 100  # H2 takes one of the 100 slots
-    TransmissionTable(str(out), OBSERVATION_M)
+    TransmissionTable(str(out), OBSERVATION_M, wavelength_interpolation="floor")
 
 
 def test_small_local_decrease_in_a_large_table_rejected(tmp_path):
