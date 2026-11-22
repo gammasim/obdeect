@@ -9,8 +9,9 @@ arrivals = model.trace(photons, seed=2)
 image = arrivals["position_m"][arrivals["status"] == DETECTED]
 ```
 
-Use simtools to compile and save the optical model. `save` and `load` store the
-compiled model as JSON; ray tracing loads that model directly.
+Use `OpticalModel.from_records` to compile structured simulation-model records, or
+`OpticalModel.from_simulation_models` to read them from a checkout. `save` and `load`
+store the compiled optical model as JSON.
 
 `trace` takes photons as arrays: `position_m` (n, 3), `direction` (n, 3, unit
 vectors), `wavelength_nm`, `time_ns`, `weight` and `photon_id` (uint64; a photon's

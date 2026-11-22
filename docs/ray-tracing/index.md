@@ -5,10 +5,11 @@ compiled **optical model**: the mirrors, the telescope structure that shadows th
 surface and the optical responses such as mirror reflectivity. A photon ends at the camera
 entrance, or is lost on the way, and the trace records where.
 
-You can trace stars and point sources, calibration light and the photons of a photon stream.
-Simtools compiles an optical model from simulation-model records. This component loads that
-versioned model and traces it without depending on the source database. The stream step connects
-the atmosphere to sim_telarray's camera simulation.
+You can compile from structured simulation-model records or a simulation-models checkout, then
+trace stars and point sources, calibration light and the photons of a photon stream. The native
+C++ loader accepts validated structured input from Python as well as JSON text, and traces without
+depending on the source database. The stream step connects the atmosphere to sim_telarray's camera
+simulation.
 
 ::::{grid} 1 2 2 2
 :gutter: 3
@@ -18,7 +19,7 @@ the atmosphere to sim_telarray's camera simulation.
 :link-type: doc
 :class-card: sd-shadow-sm
 
-Trace a star and plot the result from a compiled optical model.
+Compile an optical model, trace a star and plot the result.
 :::
 
 :::{grid-item-card} {fas}`code;pst-color-primary` Python

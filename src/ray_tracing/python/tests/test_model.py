@@ -12,7 +12,9 @@ from obdeect.ray_tracing.cli import main
 from obdeect.ray_tracing.hashing import model_hash
 from obdeect.ray_tracing.model import DETECTED, STATUS_NAMES
 from obdeect.ray_tracing.psf import containment, summary
+from obdeect.ray_tracing.repository import read_telescope
 from optical_models import load_model
+from telescopes import segmented, write_simulation_models
 
 
 def test_cli_version(capsys):
@@ -20,6 +22,37 @@ def test_cli_version(capsys):
         main(["--version"])
     assert error.value.code == 0
     assert capsys.readouterr().out.strip() == f"obdeect ray-tracing {__version__}"
+
+
+def test_repository_compile_command(tmp_path, capsys):
+    root = tmp_path / "simulation-models"
+    records, files = segmented()
+    write_simulation_models(root, "TEST-design", records, files)
+    telescope = read_telescope(root, "TEST-design", "9.9.9")
+    assert set(telescope.records) == set(records)
+    assert telescope.propagation_group_index == 1.0
+
+    output = tmp_path / "compiled.json"
+    assert (
+        main([
+            "compile",
+            "--simulation-models",
+            str(root),
+            "--model",
+            "TEST-design",
+            "--version",
+            "9.9.9",
+            "--seed",
+            "3",
+            "--output",
+            str(output),
+        ])
+        == 0
+    )
+    assert "TEST-design 9.9.9: optical model" in capsys.readouterr().out
+    compiled = OpticalModel.load(output)
+    assert compiled.document["provenance"]["configuration_seed"] == 3
+    assert compiled.document["optics"]["primary"]["vertex_z_m"] == 0.5
 
 
 def test_store_and_reload(tmp_path):
@@ -42,6 +75,14 @@ def test_native_structured_input_uses_same_validation_as_file_loader(tmp_path):
     path = tmp_path / "model.json"
     OpticalModel(document).save(path)
     native.Model(path.read_text())
+    structured_model = OpticalModel(document)
+    json_model = OpticalModel.load(path)
+    photons = structured_model.star_photons(64, seed=17)
+    structured_result = structured_model.trace(photons, seed=19)
+    json_result = json_model.trace(photons, seed=19)
+    assert structured_result.keys() == json_result.keys()
+    for name in structured_result:
+        np.testing.assert_array_equal(structured_result[name], json_result[name])
     invalid = dict(document)
     invalid["optics"] = dict(document["optics"], unexpected=True)
     with pytest.raises(ValueError, match="unknown key 'unexpected'"):

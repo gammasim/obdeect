@@ -1,11 +1,11 @@
 # Command line
 
-Use simtools to compile an optical model once, then reuse it to trace and plot.
+Compile an optical model from a simulation-models checkout, then reuse it to trace and plot.
 
 ```sh
-# Compile an optical model with the selected site and telescope.
-simtools-compile-obdeect-optical-model --model_version 7.0.0 --site north_site \
-  --telescope LSTN-01 --instrument_seed 1 --output_file lst.json
+# Compile an optical model with the selected telescope and production.
+obdeect ray-tracing compile --simulation-models ../simulation-models --model LSTN-01 \
+  --version 7.0.0 --seed 1 --output lst.json
 
 # Trace a star 0.5 deg off axis; print the image summary, keep every photon.
 obdeect ray-tracing trace --model lst.json --seed 2 --photons 100000 \

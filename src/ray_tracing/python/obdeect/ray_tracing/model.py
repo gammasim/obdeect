@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from obdeect.ray_tracing import _core
+from obdeect.ray_tracing.compiler import compile_model
 from obdeect.ray_tracing.errors import ModelError
 from obdeect.ray_tracing.hashing import model_hash
+from obdeect.ray_tracing.repository import read_telescope
 
 STATUS_NAMES: tuple[str, ...] = _core.STATUS_NAMES
 DETECTED = STATUS_NAMES.index("detected")
@@ -41,6 +43,49 @@ class OpticalModel:
     def document(self) -> dict[str, Any]:
         """Return a copy of the compiled document."""
         return deepcopy(self._document)
+
+    @classmethod
+    def from_records(
+        cls,
+        records: Mapping[str, dict[str, Any]],
+        read_file: Callable[[str], str],
+        *,
+        configuration_seed: int,
+        zenith_deg: float | None = None,
+        propagation_group_index: float = 1.0,
+        provenance: dict[str, Any] | None = None,
+    ) -> OpticalModel:
+        """Compile structured simulation-model parameter records into an optical model."""
+        document = compile_model(
+            records,
+            read_file,
+            configuration_seed=configuration_seed,
+            zenith_deg=zenith_deg,
+            propagation_group_index=propagation_group_index,
+            provenance=provenance,
+        )
+        return cls(document)
+
+    @classmethod
+    def from_simulation_models(
+        cls,
+        root: Path,
+        model: str,
+        version: str,
+        *,
+        configuration_seed: int,
+        zenith_deg: float | None = None,
+    ) -> OpticalModel:
+        """Compile a telescope model from a simulation-models checkout."""
+        telescope = read_telescope(Path(root), model, version)
+        return cls.from_records(
+            telescope.records,
+            telescope.read_file,
+            configuration_seed=configuration_seed,
+            zenith_deg=zenith_deg,
+            propagation_group_index=telescope.propagation_group_index,
+            provenance=telescope.provenance,
+        )
 
     @classmethod
     def load(cls, path: Path) -> OpticalModel:

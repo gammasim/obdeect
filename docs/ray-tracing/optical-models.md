@@ -26,8 +26,9 @@ An optical model (`obdeect.optical-model.v2`) is one JSON document:
   acting on the legs `incoming`, `after_primary`, `after_secondary`),
   `telescope_transmission`, `propagation_group_index`, and optional `axes_offset_m`.
 
-The C++ loader accepts only known keys, checks every value and names the JSON path of
-the first error. Surface and obscurer ids are unique.
+The C++ loader accepts either a structured JSON-compatible Python object or JSON text. It accepts
+only known keys, checks every value and reports the path of the first error. Surface and obscurer
+ids are unique.
 
 ## Axes offset
 
@@ -35,7 +36,7 @@ Some telescopes have the optical origin displaced from the rotation axes. The si
 `axes_offsets` record gives the horizontal offset between the azimuth and altitude axes,
 then the altitude-to-optical-axis offset, in its units (cm in sim_telarray).
 
-Simtools stores the offset in the telescope frame, in metres, as
+The compiler stores the offset in the telescope frame, in metres, as
 `optics.axes_offset_m` = [x, y, z]. The key is written only when the offset is non-zero,
 and needs the compilation zenith angle. For components `(O, T)` and zenith `theta`, the
 offset is `(O cos(theta) - T, 0, O sin(theta))`. The loader requires three numbers.
