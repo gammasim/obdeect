@@ -180,7 +180,9 @@ static void test_arguments(const char *directory) {
   CHECK(strlen(obdeect_stream_version()) > 0);
   CHECK(strcmp(obdeect_stream_record_type_name(OBDEECT_STREAM_RECORD_PHOTONS), "photons") == 0);
   CHECK(strcmp(obdeect_stream_column_name(OBDEECT_STREAM_COLUMN_WAVELENGTH), "wavelength") == 0);
-  CHECK(obdeect_stream_column_name(11) == NULL && obdeect_stream_record_type_name(77) == NULL);
+  CHECK(obdeect_stream_column_name(OBDEECT_STREAM_N_COLUMNS) == NULL);
+  CHECK(strcmp(obdeect_stream_column_name(OBDEECT_STREAM_COLUMN_PATH), "path") == 0);
+  CHECK(obdeect_stream_record_type_name(77) == NULL);
 
   CHECK(obdeect_stream_reader_open("/nonexistent/x.pst", &reader) == OBDEECT_STREAM_ERROR_IO);
   CHECK(reader == NULL && strlen(obdeect_stream_last_error()) > 0);

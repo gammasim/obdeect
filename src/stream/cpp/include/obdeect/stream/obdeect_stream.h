@@ -31,7 +31,7 @@ extern "C" {
 
 /* Version of this C ABI. Incremented when an existing function changes; new functions
  * do not change it. Compare obdeect_stream_abi_version() with it at start-up. */
-#define OBDEECT_STREAM_C_ABI_VERSION 1
+#define OBDEECT_STREAM_C_ABI_VERSION 2
 
 /* Maximum number of photons in one chunk. */
 #define OBDEECT_STREAM_MAX_CHUNK_ROWS 65536
@@ -87,7 +87,8 @@ enum {
   OBDEECT_STREAM_COLUMN_W = 8,
   OBDEECT_STREAM_COLUMN_WAVELENGTH = 9,
   OBDEECT_STREAM_COLUMN_P = 10,
-  OBDEECT_STREAM_N_COLUMNS = 11
+  OBDEECT_STREAM_COLUMN_PATH = 11,
+  OBDEECT_STREAM_N_COLUMNS = 12
 };
 
 /* Metadata value types. */

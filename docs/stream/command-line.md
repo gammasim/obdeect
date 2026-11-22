@@ -101,9 +101,29 @@ obdeect stream to-simtel: telescope 1: telescope frame, mirror class 2, Bypass_O
 ```
 
 Errors: T photons for a telescope without map entry or with `mirror_class` 1; a photon with
-`cz` >= 0 (upward or horizontal) or a non-finite `cz` in the ground or telescope frame; camera-frame and T photons for
-the same telescope in one run. The efficiency status of
-such a telescope is checked as for camera frame.
+`cz` >= 0 (upward or horizontal) or a non-finite `cz` in the ground or telescope frame; camera-frame
+and T photons for the same telescope in one run. The efficiency status of such a telescope is
+checked as for camera frame.
+
+## Sphere runs (ground frame)
+
+A run with `ground_representation` `sphere` (format 1.2, [](format.md)) has ground-frame rows on
+or inside the telescope sphere instead of at the plane z = 0. `obdeect stream to-simtel` converts
+them to sim_telarray's plane rows, which need a downward `cz`:
+
+- A downward photon that starts on the sphere (emitted outside it) is moved along its line to the
+  plane z = 0: `x`, `y` at the crossing, `t` plus the path over the speed of light (the path can be
+  negative when the entry point is below the plane), `zem` and `cz` unchanged. The `z` and `path`
+  columns are dropped.
+- A photon that starts inside the sphere (emitted inside it) cannot be represented and is rejected:
+  `ground-frame photon emitted inside the telescope sphere: not representable for sim_telarray`.
+- Upward and horizontal photons are rejected as in plane runs.
+
+The sim_telarray output is that of a plane run with the converted rows; the run key is not passed
+on. A sphere run with rows of the plane form (no `z` column) is rejected. `telescope_r_m` must list
+the telescope's sphere radius.
+
+`obdeect stream to-grisu` does not convert sphere runs and rejects them.
 
 ## Efficiency checks
 

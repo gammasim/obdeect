@@ -282,3 +282,51 @@ def test_reader_skips_photons_of_other_telescopes(tmp_path):
     assert len(chunks[1]["columns"]["w"]) == 50
     everything = [c for c in obdeect_stream.Reader(str(path)) if c["type"] == "photons"]
     np.testing.assert_array_equal(everything[1]["columns"]["x"], chunks[1]["columns"]["x"])
+
+
+@pytest.mark.parametrize("frame", ["sky", "ground", "telescope", "camera"])
+def test_path_column_round_trip(tmp_path, frame):
+    path = tmp_path / "path.pst"
+    columns = _columns(50, REQUIRED + ("path",))
+    columns["path"][0] = np.float32(0.0)
+    columns["path"][1] = np.float32(1e-38)
+    columns["path"][2] = np.float32(3.4e38)
+    with obdeect_stream.Writer(str(path), "pytest") as writer:
+        writer.write_photons(2, frame, 0, columns)
+    (chunk,) = [r for r in obdeect_stream.Reader(str(path)) if r["type"] == "photons"]
+    assert set(chunk["columns"]) == set(columns)
+    for name, values in columns.items():
+        assert np.array_equal(chunk["columns"][name], values)
+
+
+def test_path_column_must_be_finite_and_not_negative(tmp_path):
+    with obdeect_stream.Writer(str(tmp_path / "bad.pst"), "pytest") as writer:
+        for bad in (-1.0, np.nan, np.inf):
+            columns = _columns(2, REQUIRED + ("path",))
+            columns["path"][1] = np.float32(bad)
+            with pytest.raises(ValueError):
+                writer.write_photons(1, "ground", 0, columns)
+
+
+def test_ground_representation_default_and_values():
+    assert obdeect_stream.ground_representation({}) == "plane"
+    assert obdeect_stream.ground_representation({"run_number": 1}) == "plane"
+    assert obdeect_stream.ground_representation({"ground_representation": "plane"}) == "plane"
+    assert obdeect_stream.ground_representation({"ground_representation": "sphere"}) == "sphere"
+    for bad in ("flat", "Sphere", "", 1, None):
+        with pytest.raises(ValueError):
+            obdeect_stream.ground_representation({"ground_representation": bad})
+
+
+def test_sphere_run_round_trip(tmp_path):
+    path = tmp_path / "sphere.pst"
+    rows = _columns(4, ("x", "y", "z", "cx", "cy", "cz", "t", "zem", "w"))
+    with obdeect_stream.Writer(str(path), "pytest") as writer:
+        writer.write("run", {"ground_representation": "sphere", "telescope_r_m": np.array([12.0])})
+        writer.write_photons(1, "ground", 0, rows)
+    records = list(obdeect_stream.Reader(str(path)))
+    run = next(r for r in records if r["type"] == "run")["metadata"]
+    assert obdeect_stream.ground_representation(run) == "sphere"
+    (chunk,) = [r for r in records if r["type"] == "photons"]
+    assert set(chunk["columns"]) == set(rows)
+    assert np.array_equal(chunk["columns"]["z"], rows["z"])
