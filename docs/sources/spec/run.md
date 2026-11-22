@@ -11,8 +11,8 @@ run file (TOML or JSON) is converted to a `Run` by the Python layer ([run file](
 - `Event{repeat (default 1), emissions, metadata}`.
 - `Run{number (1), seed (1), observation_level_m, atmosphere_id (-1), frame (sky), telescopes,
   events, metadata, producer}`.
-- `RunSummary{events, rows, weight, expected}`: rows written, sum of weights, expected sum of
-  weights, all telescopes.
+- `RunSummary{events, rows, weight, expected, not_on_plane}`: rows written, sum of weights,
+  expected sum of weights, all telescopes; photons dropped by `to_plane_z0` (once per event).
 
 ## Stream layout
 
@@ -53,6 +53,9 @@ The Python layer also stores the normalized run description as `run_description`
 
 `telescope_end` record: `telescope_id` (i64), `photons` (f64, sum of the weights written).
 
+`run_end` record: `not_on_plane` (i64), the photons dropped by `to_plane_z0` in the run (see
+[bunch, time and plane moves](#bunch-time-and-plane-moves)).
+
 ## Seeds and draws
 
 - Emission `k` in event order (counting all events, once per emission entry) uses
@@ -66,8 +69,10 @@ The Python layer also stores the normalized run description as `run_description`
 For each emission, candidates are `photons / bunch_size` and each row has weight `w * bunch_size`.
 Then, per row:
 
-1. `to_plane_z0`: move straight down to z = 0 (requires `cz < 0` and `z >= 0`, else error);
-   time `+ path / c`.
+1. `to_plane_z0`: a row with `z = 0` stays; a row with `z * cz < 0` moves along its direction to
+   z = 0 (`path = -z / cz`, time `+ path / c`). Other rows (`z * cz >= 0`, `z != 0`, horizontal
+   included) are dropped and counted in `not_on_plane`. Kept rows keep their order and are
+   numbered consecutively (`first_index`); the draws of the kept photons are unchanged.
 2. `t += time_offset_ns`.
 3. Sky frame: `zem = observation_level_m + z`.
 
@@ -93,3 +98,4 @@ telescope. The output is the same.
 - `expected` = `expected_weight(run)`: expected sum of weights, all events and telescopes. Disc
   targets use a 2000 x 2000 midpoint grid; line sphere targets use 20000 steps along the line.
 - `weight` = sum of the written weights; for a run with targets this approaches `expected`.
+  Dropped photons (`not_on_plane`) are in `expected` but not in `weight`.

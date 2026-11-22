@@ -248,3 +248,48 @@ Accuracy (measured with `test_horizon`, observation level 2180 m): for zenith 0 
 halving the largest sub-interval (250 to 125 m) changes the displacement by at most 4e-6 m and the
 time by at most 1.4e-5 ns. The cost is 8 profile lookups per sub-interval, about 1300 lookups for
 a 40 km emission.
+
+## Upward photons
+
+A photon emitted at height $h_e$ below the plane at $h_t$ ($h_e \le h_t$) and moving upwards
+(cz > 0) is bent by the same Snell's law, $n(h)\sin\theta(h) = n_e \sin\theta_e$ with
+$n = 1 + k\,\nu(h)$, where $\theta$ is measured from the upward vertical. The index decreases with
+height, so $\sin\theta$ grows: upward photons bend away from the vertical, and a nearly horizontal
+one can turn over before the plane. With $s = \sin\theta$ and $s_t = s_e (1 + k\nu_e)/(1 + k\nu_t)$:
+
+- If $s_t \ge 1$ the photon turns over before the plane and is dropped (`turns_over`).
+- Otherwise the displacement of the straight-line position at the plane is
+  $\Delta x = \int_{h_e}^{h_t} (\tan\theta(h) - \tan\theta_e)\,dh$ along $(c_x, c_y)/s_e$, the travel
+  time is
+  $$
+  \Delta t = \frac{h_t - h_e}{c\,\cos\theta_e} + \frac{1}{c}\int_{h_e}^{h_t}
+  \left(\frac{n_g(h)}{\cos\theta(h)} - \frac{1}{\cos\theta_e}\right) dh,
+  $$
+  with $n_g = 1 + k_g \nu$ as in [Timing](#timing), and the exit direction is $(c_x, c_y)\, s_t/s_e$
+  with $c_z = +\sqrt{1 - s_t^2}$.
+
+`bend_upward` (`obdeect/propagation/refraction_horizon.hpp`) evaluates these integrals with the
+quadrature of [Near the horizon](#near-the-horizon) (same nodes, sub-intervals and near-horizontal
+substitution). By reciprocity it integrates downwards from the plane, where $\cos\theta$ is
+smallest, with the same Snell constant, and converts the reference angle exactly:
+$\int (\tan\theta - \tan\theta_e)\,dh = \int (\tan\theta - \tan\theta_t)\,dh +
+(\tan\theta_t - \tan\theta_e)(h_t - h_e)$, likewise for $1/\cos\theta$.
+
+As for downward photons, $|c_z| = \sqrt{1 - c_x^2 - c_y^2}$ is taken from the stored $c_x, c_y$
+for the straight line and for the bending (the `cz` column gives the sign, and the magnitude only
+where $c_x^2 + c_y^2$ rounds to 1 or above). Near the horizon a float32 rounding of the direction
+changes $|c_z|$ noticeably (about 1e-5 relative at 88 degrees); using one source for both parts
+keeps the straight line and the bent displacement consistent. It returns `false` and leaves its arguments
+unchanged for a turning photon, and `upward_turns_over` tells that case from other failures
+(reported as `not_bendable`). The reciprocity check in `test_upward.cpp` bends the exit ray back
+down with `bend_quadrature` from tables at the emission level: it returns to the start within 1e-6 m
+and 1e-6 ns.
+
+The flat geometry is used for the path below the plane. In the `spherical` mode the emission and
+telescope altitudes are the spherical ones, but the bending is the plane-parallel integral above.
+The neglected curvature changes $s$ by about $L/R$ relative to the refraction over the path length
+$L$ ($R$ the Earth radius, 6.37 x 10^6 m, about 1.6 x 10^-4 per km), so the bending displacement
+is wrong by about $(L/R)\,\Delta x$. For $\Delta x \approx 0.2$ m (1 km path, zenith 80 degrees,
+$\nu \approx 3 \times 10^{-4}$) this is about 3 x 10^-5 m, and below 3 x 10^-4 m at 89 degrees.
+The straight path of the G plane is taken as in the downward case, and its altitudes are the
+spherical ones in the `spherical` mode.

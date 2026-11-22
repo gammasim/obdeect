@@ -15,7 +15,14 @@ from obdeect.ray_tracing import OpticalModel
 from obdeect.ray_tracing.formats import ModelError
 from obdeect.ray_tracing.stream import trace_stream
 from telescopes import dual, segmented
-from test_stream import RUN, SEED, beam, parallel_beam_in_both_frames, write_stream
+from test_stream import (
+    RUN,
+    SEED,
+    beam,
+    parallel_beam_in_both_frames,
+    with_direction,
+    write_stream,
+)
 
 PROGRAM = "obdeect-ray-tracing-trace-stream"
 
@@ -177,10 +184,29 @@ def test_near_horizontal_cz_validation(native, models, tmp_path, obdeect_stream,
     photons["cz"] = np.array([cz], dtype=np.float32)
     source = write_stream(tmp_path / "in.pst", {1: photons})
     result = compare(native, models, tmp_path, obdeect_stream, source)
-    if cz < 0 and cz > -0.01:
+    if 0 < abs(cz) < 0.01:
+        # Nearly horizontal photons, either way up, are traced (upwards ones are not detected).
         assert result["photons_in"] == 1
     else:
         assert "cz" in result
+
+
+def test_mixed_directions_match_python(native, models, tmp_path, obdeect_stream):
+    down = with_direction(beam(3000, (0.0, 0.0), radius_m=0.5), 0.0, 0.0, -1.0)
+    up = with_direction(beam(1500, (0.01, 0.0), radius_m=0.5, seed=8), 0.01, 0.0, +1.0)
+    photons = {name: np.concatenate([down[name], up[name]]) for name in down}
+    source = write_stream(tmp_path / "in.pst", {1: photons})
+    counts = compare(native, models, tmp_path, obdeect_stream, source)
+    assert counts["photons_in"] == 4500
+    assert counts["photons_out"] > 0
+
+
+def test_horizontal_photons_error_matches_python(native, models, tmp_path, obdeect_stream):
+    photons = with_direction(beam(5, (1.0, 0.0)), 1.0, 0.0, 1.0)
+    photons["cz"] = np.zeros(5, np.float32)
+    source = write_stream(tmp_path / "in.pst", {1: photons})
+    error = compare(native, models, tmp_path, obdeect_stream, source)
+    assert isinstance(error, str) and "horizontal photons" in error
 
 
 def test_stdin_matches_file_input(native, models, tmp_path):

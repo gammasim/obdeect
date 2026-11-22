@@ -154,8 +154,8 @@ def test_cz_column_accepts_float32_near_horizontal_directions():
     cx = np.array([0.989117742], dtype=np.float32)
     cy = np.array([-0.147124648], dtype=np.float32)
     assert stream_module._cz_matches(np.array([-0.000614837], dtype=np.float32), cx, cy)
-    # Upwards photons and a cz that does not match cx, cy are rejected.
-    assert not stream_module._cz_matches(np.array([0.000614837], dtype=np.float32), cx, cy)
+    # Upwards photons are accepted too; a cz that does not match cx, cy is rejected.
+    assert stream_module._cz_matches(np.array([0.000614837], dtype=np.float32), cx, cy)
     assert not stream_module._cz_matches(np.array([-0.05], dtype=np.float32), cx, cy)
 
 
@@ -503,6 +503,23 @@ def test_output_does_not_depend_on_chunking_or_threads(model, tmp_path, obdeect_
         output = tmp_path / f"c{index}.out"
         trace_stream(model, source, output, seed=SEED, pointing=(0.0, 0.0), threads=threads)
         outputs.append(camera_photons(output, obdeect_stream))
+    for other in outputs[1:]:
+        for name in outputs[0]:
+            assert np.array_equal(outputs[0][name], other[name]), name
+
+
+def test_mixed_directions_do_not_depend_on_chunking_or_threads(model, tmp_path, obdeect_stream):
+    down = with_direction(beam(1500, (0.0, 0.0), radius_m=0.5), 0.0, 0.0, -1.0)
+    up = with_direction(beam(1500, (0.0, 0.01), radius_m=0.5, seed=8), 0.0, 0.01, +1.0)
+    photons = {name: np.concatenate([down[name], up[name]]) for name in down}
+    outputs = []
+    for index, (chunk, threads) in enumerate([(None, 1), (333, 2), (7, 1)]):
+        source = tmp_path / f"m{index}.in"
+        write_chunks(source, {1: photons}, chunk, obdeect_stream)
+        output = tmp_path / f"m{index}.out"
+        trace_stream(model, source, output, seed=SEED, pointing=(0.0, 0.0), threads=threads)
+        outputs.append(camera_photons(output, obdeect_stream))
+    assert len(outputs[0]["x"]) > 0
     for other in outputs[1:]:
         for name in outputs[0]:
             assert np.array_equal(outputs[0][name], other[name]), name
@@ -1098,3 +1115,106 @@ def test_cli_rejects_a_non_integer_telescope_id(tmp_path, capsys):
     with pytest.raises(SystemExit):
         main(["trace-stream", "--model", "LST=x.json", "--seed", "3"])
     assert "TELESCOPE_ID=PATH" in capsys.readouterr().err
+
+
+def with_direction(photons, cx, cy, cz_sign):
+    """Photons with the direction (cx, cy, cz_sign sqrt(1 - cx^2 - cy^2)) and a cz column."""
+    count = len(photons["w"])
+    cz = cz_sign * math.sqrt(1.0 - cx * cx - cy * cy)
+    return {
+        **photons,
+        "cx": np.full(count, cx, np.float32),
+        "cy": np.full(count, cy, np.float32),
+        "cz": np.full(count, cz, np.float32),
+    }
+
+
+def test_photons_from_below_are_not_detected(model, tmp_path, obdeect_stream):
+    # The dish is seen from its back: the photons are blocked, or reach the focal plane from below.
+    photons = with_direction(beam(4000, (0.0, 0.0), radius_m=3.0), 0.0, 0.0, +1.0)
+    source = write_stream(tmp_path / "up.in", {1: photons})
+    counts = trace_stream(model, source, tmp_path / "up.out", seed=SEED, pointing=(0.0, 0.0))
+    assert counts["photons_in"] == 4000
+    assert counts["photons_out"] == 0
+
+
+def test_mixed_directions_keep_the_downward_output(model, tmp_path, obdeect_stream):
+    down = with_direction(beam(4000, (0.0, 0.0), radius_m=0.5), 0.0, 0.0, -1.0)
+    up = with_direction(beam(2000, (0.01, 0.0), radius_m=0.5, seed=8), 0.01, 0.0, +1.0)
+    # The upward photons follow the downward ones in the same chunk: their ids do not shift
+    # the downward photons' random numbers, and the camera photons are the same.
+    mixed = {name: np.concatenate([down[name], up[name]]) for name in down}
+    alone = trace_stream(
+        model,
+        write_stream(tmp_path / "a.in", {1: down}),
+        tmp_path / "a.out",
+        seed=SEED,
+        pointing=(0.0, 0.0),
+    )
+    both = trace_stream(
+        model,
+        write_stream(tmp_path / "b.in", {1: mixed}),
+        tmp_path / "b.out",
+        seed=SEED,
+        pointing=(0.0, 0.0),
+    )
+    assert both["photons_in"] == 6000 and alone["photons_in"] == 4000
+    assert both["photons_out"] == alone["photons_out"] > 0
+    a = camera_photons(tmp_path / "a.out", obdeect_stream)
+    b = camera_photons(tmp_path / "b.out", obdeect_stream)
+    for name in a:
+        assert a[name].tobytes() == b[name].tobytes(), name
+
+
+def test_horizontal_photons_are_rejected(model, tmp_path, obdeect_stream):
+    photons = with_direction(beam(10, (1.0, 0.0)), 1.0, 0.0, 1.0)
+    photons["cz"] = np.zeros(10, np.float32)
+    source = write_stream(tmp_path / "h.in", {1: photons})
+    with pytest.raises(ModelError, match="horizontal photons"):
+        trace_stream(model, source, tmp_path / "h.out", seed=SEED, pointing=(0.0, 0.0))
+
+
+def test_lower_input_plane_is_below_every_optic(model):
+    normal = np.array([0.0, 0.0, 1.0])
+    bottoms = dict(model.optics_bottoms(normal))
+    assert set(bottoms) >= {"primary"}
+    plane = stream_module._Optics.of(model, "full").telescope_lower_plane_m
+    assert plane == pytest.approx(min(bottoms.values()) - 1.0)
+    # Ground frame: the same plane along the zenith of a tilted pointing, above the optics' bottoms.
+    zenith = ground_to_telescope_rotation(60.0, 0.0)[:, 2]
+    height = stream_module.lower_input_plane_height_m(model, 60.0)
+    for name, bottom in model.optics_bottoms(zenith):
+        assert height + float(np.dot(zenith, model.axes_offset_m)) < bottom, name
+
+
+def test_upward_bunches_need_a_lower_plane_below_the_optics(model):
+    bunches = {
+        "x": np.zeros(1, np.float32),
+        "y": np.zeros(1, np.float32),
+        "cx": np.zeros(1, np.float32),
+        "cy": np.zeros(1, np.float32),
+        "cz": np.ones(1, np.float32),
+        "time_ns": np.zeros(1, np.float32),
+        "zem": np.zeros(1, np.float32),
+        "size": np.ones(1, np.float32),
+        "wavelength_nm": np.full(1, 400.0, np.float32),
+        "bunch_id": np.arange(1, dtype=np.uint64),
+    }
+    common = {"frame_rotation": np.eye(3), "frame_offset_m": np.zeros(3), "length_unit_m": 1.0}
+    plane = stream_module._Optics.of(model, "full").telescope_plane_m
+    lower = stream_module._Optics.of(model, "full").telescope_lower_plane_m
+    model.trace_bunches(bunches, seed=1, plane_z=plane, lower_plane_z=lower, **common)
+    with pytest.raises(ValueError, match="from below"):
+        model.trace_bunches(bunches, seed=1, plane_z=plane, lower_plane_z=plane, **common)
+    with pytest.raises(ValueError):
+        model.trace_bunches(bunches, seed=1, plane_z=plane, **common)
+
+
+def test_sources_from_below_emit_upward_photons(model):
+    photons = model.star_photons(50, seed=3, towards_source=(0.0, 0.0, -1.0))
+    assert np.all(photons["direction"][:, 2] > 0.0)
+    # The photons start on a plane below every optic, the lowest one less the margin.
+    bottom = min(b for _, b in model.optics_bottoms(np.array([0.0, 0.0, 1.0])))
+    assert np.allclose(photons["position_m"][:, 2], bottom - 1.0, atol=1e-6)
+    with pytest.raises(ValueError):
+        model.star_photons(5, seed=3, towards_source=(1.0, 0.0, 0.0))

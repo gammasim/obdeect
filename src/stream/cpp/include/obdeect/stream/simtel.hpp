@@ -17,8 +17,16 @@
 // is written as a bunch at the plane z = 0 of the T frame (through its origin): the
 // crossing point of the photon's line with that plane (x, y), the direction (cx, cy), the
 // arrival time t + |s| / c with s the path from the emission point to the plane, and the
-// emission altitude zem = observation_level_m + z. The sign of cz is not written. The
-// receiving run needs Bypass_Optics=1. The camera rotation is not used.
+// emission altitude zem = observation_level_m + z. The receiving run needs Bypass_Optics=1.
+// The camera rotation is not used.
+//
+// Ground (G) and telescope (T) photons must move downwards: cz < 0, or no cz column (cz =
+// -sqrt(1 - cx^2 - cy^2)). sim_telarray and the CORSIKA 1205 bunch format do not store the sign
+// of cz, so an upward (cz > 0), horizontal (cz = 0) or non-finite cz in these frames is rejected
+// with std::invalid_argument naming the frame; such photons are never written as downward ones.
+// Camera-frame (C) photons are already at the camera entrance: sim_telarray (Bypass_Optics=2)
+// uses only (cx, cy) there, and the sign of cz depends on the side the camera faces (+z after
+// a single mirror), so it is not checked.
 //
 // Camera-frame (C) chunks without zem get zem = observation_level_m + z (as T photons).
 // Telescopes with C photons get z = 0 in TELPOS (1201), because their photons
@@ -224,13 +232,28 @@ inline void add_camera_zem(PhotonChunk &chunk, double observation_level_m) {
   chunk[Column::zem] = std::move(zem);
 }
 
+// Throws std::invalid_argument, naming the frame, if the cz column is present and a row is not
+// downward (cz >= 0 or not finite). A chunk without cz is downward by definition.
+inline void require_downward_cz(const PhotonChunk &chunk, const char *frame) {
+  if (!chunk.has(Column::cz)) {
+    return;
+  }
+  for (const float cz : chunk[Column::cz]) {
+    if (!std::isfinite(cz) || !is_downward(cz)) {
+      throw std::invalid_argument(std::string(frame) +
+                                  "-frame photon must move downwards (cz < 0): sim_telarray does "
+                                  "not store the sign of cz");
+    }
+  }
+}
+
 // Converts telescope-frame (T) emission points and directions in place to bunches at the
 // plane z = 0 (see the file comment): position (x, y) of the crossing, direction (cx, cy),
 // time t + |s| / c and emission altitude zem = observation_level_m + z, all in metres and
 // ns as in the stream. Without a cz column cz = -sqrt(1 - cx^2 - cy^2). Arithmetic in
 // double, rounded to float once. Throws std::invalid_argument, leaving the chunk unchanged,
 // for a photon with a non-finite value or result, with a direction that is not a unit vector,
-// or parallel to the plane.
+// or that does not move downwards (cz >= 0, horizontal photons included).
 inline void telescope_to_bypass_convention(PhotonChunk &chunk, double observation_level_m) {
   if (!(chunk.has(Column::x) && chunk.has(Column::y) && chunk.has(Column::z) &&
         chunk.has(Column::cx) && chunk.has(Column::cy) && chunk.has(Column::t))) {
@@ -268,8 +291,9 @@ inline void telescope_to_bypass_convention(PhotonChunk &chunk, double observatio
       throw std::invalid_argument("telescope-frame photon direction (cx, cy, cz) is not a unit "
                                   "vector");
     }
-    if (czi == 0.0) {
-      throw std::invalid_argument("telescope-frame photon parallel to the plane z = 0");
+    if (!is_downward(czi)) {
+      throw std::invalid_argument("telescope-frame photon must move downwards (cz < 0): "
+                                  "sim_telarray does not store the sign of cz");
     }
     const double path = -static_cast<double>(z[i]) / czi;
     new_x[i] = static_cast<float>(x[i] + path * cxi);
@@ -672,6 +696,7 @@ private:
         throw std::runtime_error("telescope " + std::to_string(chunk.telescope_id) +
                                  " is in the camera map but has ground-frame photons");
       }
+      require_downward_cz(chunk, "ground");
       writer_.write_chunk(chunk);
       return;
     case Frame::telescope: {
@@ -685,6 +710,7 @@ private:
                                  " has telescope-frame photons but is not a dual-mirror "
                                  "telescope (mirror_class 2 in the camera map)");
       }
+      require_downward_cz(chunk, "telescope");
       note_frame(chunk, it->second);
       PhotonChunk converted = chunk;
       telescope_to_bypass_convention(

@@ -147,7 +147,9 @@ struct PropagationSummary {
   std::uint64_t photons_in{};  // rows of the input photon records (selected telescopes only)
   std::uint64_t photons_out{}; // rows written (thinned: surviving photons, weighted: w > 0)
   std::uint64_t dropped{};     // sky-frame photons that do not reach the telescope plane
-  double weight_out{};         // sum of w of the output
+  // The dropped photons by reason (DropCounts): dropped == dropped_by_reason.total().
+  DropCounts dropped_by_reason{};
+  double weight_out{}; // sum of w of the output
 };
 
 // Reads a two-column text table (wavelength nm, value; '#' starts a comment).
@@ -1034,40 +1036,22 @@ private:
     return plane;
   }
 
-  // The chunk without column `dropped`; the other columns, telescope, frame and first_index are
-  // kept.
-  static obdeect::stream::PhotonChunk without_column(const obdeect::stream::PhotonChunk &input,
-                                                     obdeect::stream::Column dropped) {
-    using obdeect::stream::Column;
-    obdeect::stream::PhotonChunk out;
-    out.telescope_id = input.telescope_id;
-    out.frame = input.frame;
-    out.first_index = input.first_index;
-    out.resize(input.rows(), input.mask() & ~obdeect::stream::column_bit(dropped));
-    for (std::uint32_t c = 0; c < obdeect::stream::n_columns; ++c) {
-      const auto column = static_cast<Column>(c);
-      if (column == dropped || !input.has(column)) {
-        continue;
-      }
-      std::copy(input.columns[c].begin(), input.columns[c].end(), out.columns[c].begin());
-    }
-    return out;
-  }
-
-  // Primary photons for the scattering kernel: the input without cz (the kernel takes
-  // cz = -sqrt(1 - cx^2 - cy^2)), with a wavelength column. Rows of upward or horizontal photons
-  // get w = 0 (they are not scattered, as sky_to_ground drops them).
+  // Primary photons for the scattering kernel: the input with a wavelength column (assigned later)
+  // and its cz column kept (signed: upward primaries are scattered upwards to the top of the
+  // table, downward ones down to the observation level). Horizontal photons (cz = 0) are not
+  // scattered by the kernel. The direction is snapped to cz, so the kernel's consistency check
+  // holds.
   static obdeect::stream::PhotonChunk
   scattering_primaries(const obdeect::stream::PhotonChunk &input) {
     using obdeect::stream::Column;
-    // Checked before the loop below writes out.w; scatter_chunk checks the rest later.
+    // Checked before the loop below writes out.wavelength; scatter_chunk checks the rest later.
     for (const Column required :
          {Column::x, Column::y, Column::z, Column::cx, Column::cy, Column::t, Column::w}) {
       if (!input.has(required)) {
         throw std::invalid_argument("scattering needs the columns x y z cx cy t w");
       }
     }
-    obdeect::stream::PhotonChunk out = without_column(input, Column::cz);
+    obdeect::stream::PhotonChunk out = input;
     if (!out.has(Column::wavelength)) {
       out[Column::wavelength].assign(out.rows(), 0.0F);
     }
@@ -1077,10 +1061,6 @@ private:
         if (!std::isfinite(cz[row])) {
           throw std::invalid_argument("cz must be finite");
         }
-        if (!(cz[row] < 0.0F)) {
-          out[Column::w][row] = 0.0F;
-        }
-        // The cz column is dropped below; cx, cy carry the direction of the scattering.
         obdeect::stream::snap_direction_to_cz(out[Column::cx][row], out[Column::cy][row], cz[row]);
       }
     }
@@ -1128,7 +1108,7 @@ private:
     const bool weighted = config_.mode == OutputMode::weighted;
     for (const auto &scattered : list) {
       obdeect::stream::PhotonChunk plane_input = scattered;
-      sky_to_ground(plane_input, sky_plane(plane_input), true);
+      sky_to_ground(plane_input, sky_plane(plane_input), true); // stored cz of the scattering
       for (auto &out : apply_envelope_chunk(
                std::move(plane_input), run_->envelope, *config_.transmission, *telescope_.depths,
                weighted, config_.seed, event_number_, telescope_.id, telescope_.out_index)) {
@@ -1222,7 +1202,9 @@ private:
         }
         assign_wavelengths(chunk_, run_->wavelengths, config_.seed, event_number_, telescope_.id);
       }
-      summary_.dropped += sky_to_ground(chunk_, sky_plane(chunk_));
+      const DropCounts counts = sky_to_ground(chunk_, sky_plane(chunk_));
+      summary_.dropped_by_reason += counts;
+      summary_.dropped = summary_.dropped_by_reason.total();
     }
 
     if (config_.geometry_only) {

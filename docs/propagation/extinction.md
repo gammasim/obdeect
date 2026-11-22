@@ -79,6 +79,24 @@ $$
 with $T_{\text{atm}} = 0$ below the observation level, for $\tau_{\text{tel}} > 1000$, or for an optical
 depth above 100. Photons with lambda ≥ 1000 nm get 0.
 
+### Upward photons
+
+An upward photon (cz > 0) emitted between the observation level and the telescope ($z < h_T$) has the
+same formula: the absolute value is the optical depth between emission and telescope, and the
+airmass is $1/|c_z|$ with $|c_z| = \sqrt{1 - c_x^2 - c_y^2}$ (the sign of cz does not enter). For
+a photon from height $h_e$ to the telescope at $h_t$ in a plane-parallel atmosphere,
+
+$$
+T_{\text{atm}} = \exp\!\left[-\,\frac{|\tau(\lambda, h_t) - \tau(\lambda, h_e)|}{|c_z|}\right]
+$$
+
+(tested against the table at both heights, `test_upward.cpp`). In the spherical mode the
+slant depth is the integral over the heights between $h_e$ and $h_t$ of
+$|d\tau/dh|/\cos\theta(h)$, where $\cos\theta_t = u$ is the cosine of the upward direction to the
+local vertical at the telescope (the cz column gives it, $u = d \cdot n > 0$). An upward photon moving
+down against the local vertical ($u < 0$) gets 0. The spherical slant depth is checked against a
+fine integral of the table and, for $R \to \infty$, against the plane-parallel value.
+
 Wavelength: for photons without one, density ∝ $1/\lambda^2$ on [lo, hi], by inverse CDF,
 $\lambda = 1 / (1/\lambda_{lo} - u\,(1/\lambda_{lo} - 1/\lambda_{hi}))$ with u uniform in (0, 1). The
 value is continuous, not rounded. The range needs finite $1 \le \lambda_{lo} < \lambda_{hi} \le 2^{24}$ nm.

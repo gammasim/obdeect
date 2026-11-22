@@ -66,6 +66,35 @@ The candidate count is Poisson distributed and weights lie in [0, 1]. Keeping ea
 candidate with the probability of its weight gives the photons crossing the target disk;
 the sum of weights estimates their mean number.
 
+## Photons from below
+
+Photons may move up as well as down. `towards_source` may have any nonzero z component: a
+source below the telescope (`towards_source` with negative z) gives upward photons, which
+start on the input plane below the optics.
+
+`star_photons` starts such photons on a plane a margin below the lowest optic. Bunches from
+`trace_bunches` with cz > 0 start on the lower input plane, which lies a margin of 1 m below
+every obscurer (any leg) and every mirror (primary and secondary) along the telescope axis.
+
+The trace branch is chosen by the direction in the telescope frame: a photon whose traced
+direction has z >= 0 takes the first-hit path below, whatever the sign of cz in the input frame.
+For a telescope at a large zenith angle, a ground-frame photon with cz < 0 can move up in the
+telescope frame; it arrives from behind the dish and is blocked by its back. Photons moving
+down in the telescope frame are traced exactly as before.
+
+`trace` and `trace_bunches` report the first hit of an upward photon:
+
+- an obscurer, or the back face of a mirror: `blocked`, with the surface recorded;
+- the reflecting face of the primary: the sequential path continues (the photon may be detected);
+- the reflecting face of the secondary: `non_sequential` (phase 1 does not trace further);
+- the focal surface from below (on its receiving side): `direct_focal`;
+- nothing: `missed_primary`.
+
+Phase 1 counts `non_sequential` and `direct_focal` photons as losses with weight zero; they
+are the light that the planned phase 2 (non-sequential tracing) will recover. A photon that
+moves horizontally (zero component along the axis of its input plane) has no plane to start on
+and is rejected with an error.
+
 ## Air-shower photons and custom inputs
 
 `trace_bunches` traces photon bunches from an external air-shower simulation; it does not

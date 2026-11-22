@@ -5,6 +5,11 @@ optional single scattering (off by default) for light-source photons. Each prima
 scattered at N_s points along its path. Each scattering point gives one photon per telescope
 sphere, aimed at the sphere. The primary photon is unchanged.
 
+Primaries may move downwards or upwards. A downward primary is scattered on its path down to the
+observation level, an upward primary on its path up to the top of the scattering table (no scattering
+above it). A horizontal primary (cz = 0) is not scattered. Scattered photons move in any direction:
+a scattering point below the telescope centre sends light upwards to the sphere.
+
 Assumptions: single scattering, no polarisation (the Rayleigh depolarisation enters only the phase
 function), straight lines, plane-parallel atmosphere (no Earth curvature), no refraction. Timing is
 in vacuum, or with the air delay of the straight path when the stage passes an air profile (see
@@ -88,11 +93,14 @@ $$
 
 ## Next-event estimation
 
-Input: primary photons of frame sky (position, direction, wavelength, weight w at emission). The path
-from the emission altitude down to the observation level has slant extinction optical depth
-$D_{tot}$ (tau_mol + tau_aer, divided by $|c_z|$). Split it into N_s segments of equal depth
+Input: primary photons of frame sky (position, direction, wavelength, weight w at emission). The
+direction is the signed `cz` column if present (negative downward, positive upward, zero horizontal
+and not scattered); without `cz` a photon moves downward. The path from the emission altitude to the
+end of the scattering (the observation level for downward photons, the top of the table for upward
+photons) has slant extinction optical depth $D_{tot}$ (tau_mol + tau_aer, divided by $|c_z|$; for an
+upward photon $\tau(h_0) - \tau(h_{top})$). Split it into N_s segments of equal depth
 $\Delta D = D_{tot}/N_s$, boundaries $D_j = j\Delta D$. In segment $j$ the scattering point has density
-$\propto e^{-D}$ (drawn by inverse CDF). The probability of scattering in the segment is
+$\propto e^{-D}$ (drawn by inverse CDF, along the path of the photon's direction). The probability of scattering in the segment is
 
 $$
 P_{scatter} = e^{-D_j}\,(1 - e^{-\Delta D})\,\omega_{mix}, \qquad
@@ -109,13 +117,18 @@ w_s = w\, P_{scatter}\, p_{mix}(\theta)\, \Omega_{tel}\, T(P \to C), \qquad
 $$
 
 $$
-T = \exp\!\left[-\left(\tau_{tab}(h_P) - \tau_{tab}(h_C)\right) \frac{D}{h_P - h_C}\right],
+T = \exp\!\left[-\left|\tau_{tab}(h_P) - \tau_{tab}(h_C)\right| \frac{D}{|h_P - h_C|}\right],
 $$
 
-where $\tau_{tab}$ is the optical depth of the transmission table (from the observation level). The
-scattered photon is aimed at a uniform point of the sphere's projected disc (radius R, perpendicular
-to the line of sight through C), so it lands on the sphere. Points with $h_P \le h_C$ or $D \le R$ give
-nothing (photons travel downwards only).
+where $\tau_{tab}$ is the optical depth of the transmission table (from the observation level, growing
+with altitude). The scattered photon is aimed at a uniform point of the sphere's projected disc (radius
+R, perpendicular to the line of sight through C), so it lands on the sphere. The scattered photon
+travels down if $h_P > h_C$ and up if $h_P < h_C$; the same solid angle, aim point and phase function
+apply in both cases. A point with $h_P = h_C$ would emit horizontal photons, which are not part of the
+sphere's phase function: it gives nothing. Points with $D \le R$ give nothing.
+
+The angle $\theta$ is between the primary's direction and the direction to the aim point, so
+$\cos\theta = c_x n_x + c_y n_y + c_z n_z$ with the signed $c_z$.
 
 The sum over $j$ of $w_s$ is the expected scattered weight, unbiased for $N_s \to \infty$. Approximations:
 
@@ -127,6 +140,31 @@ The sum over $j$ of $w_s$ is the expected scattered weight, unbiased for $N_s \t
 - the air delay (with an air profile) uses the straight path at the primary's zenith angle, not a
   refracted path. It is evaluated from $|c_z|$ directly, so it stays finite for any nonzero $|c_z|$;
 - the discretisation error falls as $N_s^{-2}$ (test: 3e-4 relative at 32 points, 1.5e-5 at 128).
+
+### Upward primaries
+
+An upward primary (cz > 0) is scattered on its path from the emission altitude up to the highest
+altitude of the scattering table. As for downward primaries, a primary emitted at or below the
+observation level (z <= 0) is not scattered: a laser on the ground must start above it (for example
+at z = 1 m), and the path below that start point is not simulated. The boundaries are at equal slant depth from the emission, with the
+depth $\tau(h_0) - \tau(h)$ (the table's optical depth counts from the altitude to the top). The
+scattering point $P$ is at $s = (h_P - h_0)/|c_z|$ along the path. The time at $P$ is
+$t_{in} + s / c$, plus the air delay of the straight path from $h_0$ to $h_P$ with an air profile.
+The scattered light from a point below the telescope centre travels upwards to the sphere; this is
+the only way light from a source below the telescope reaches it.
+
+### Scattering below the telescope (changed behaviour)
+
+Before this change, a scattering point at or below the telescope centre gave nothing (the scattered
+photon had to travel downwards). Now the scattered photon travels upwards to the sphere when
+$h_P < h_C$, with the transmission and airmass of the path between the two heights. Light is added,
+nothing is removed: for downward primaries the scattered weight of a run with telescopes above the
+observation level grows by the upward part of the path. Telescopes on the ground (telescope_z_m = 0
+for the centre at the observation level) are not changed, since no point lies below their centre.
+
+The photons that point to a part of the sphere below the telescope centre travel downwards at a
+point below the centre; in the plane representation they never reach the telescope plane, and the
+propagation stage counts them as `moving_away`.
 
 ## Output
 
@@ -173,5 +211,8 @@ photons = out[1]  # dict of float32 arrays
 
 Random numbers: [](../stream/random-numbers.md). The transmission table and the optical depths are described in [](extinction.md).
 
-Scattered rays written to the telescope plane retain `cz` to preserve near-horizontal directions.
-Rays directed upward do not reach that plane and are dropped by the propagation stage.
+Scattered photons keep the signed `cz` of their direction (the aim point direction), so near-horizontal
+and upward directions are preserved. The propagation stage (sky to G, [](ground-to-sky.md)) takes the
+magnitude of `cz` from this column. An upward scattered photon from below the telescope plane reaches
+the plane and is written with `cz > 0`; one from above the plane moves away from it and is not
+written.

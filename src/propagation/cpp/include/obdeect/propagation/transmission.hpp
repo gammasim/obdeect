@@ -227,6 +227,21 @@ public:
         static_cast<double>(emission_altitude_m), static_cast<double>(cos_zenith), earth_radius_m));
   }
 
+  // Slant optical depth of an upward photon (emission below the telescope, zem < h_t): the same
+  // integral over the heights between zem and h_t, with cos_zenith the cosine of the photon's
+  // upward direction to the local vertical at the telescope. Zero if zem >= h_t. Only for upward
+  // photons: slant_optical_depth keeps its zero below the telescope for downward photons. The
+  // plane-parallel limit R -> infinity is |tau(h_t) - tau(zem)| / cos_zenith.
+  template <class T>
+  [[nodiscard]] T slant_optical_depth_upward(T wavelength_nm, T telescope_altitude_m,
+                                             T emission_altitude_m, T cos_zenith,
+                                             double earth_radius_m) const {
+    return static_cast<T>(slant_depth(static_cast<double>(wavelength_nm),
+                                      static_cast<double>(telescope_altitude_m),
+                                      static_cast<double>(emission_altitude_m),
+                                      static_cast<double>(cos_zenith), earth_radius_m, true));
+  }
+
   // Transmission exp(-(slant optical depth + od_focus)) in a spherical atmosphere (see
   // slant_optical_depth). The telescope depth od_tel is tau(h_t). Zero below the observation
   // level, for od_tel above max_telescope_depth and for a total depth above max_total_depth.
@@ -234,6 +249,25 @@ public:
   [[nodiscard]] T transmission_curved(T wavelength_nm, T zem_m, T cos_zenith,
                                       T telescope_altitude_m, T od_focus,
                                       double earth_radius_m) const {
+    return transmission_curved_impl<T>(wavelength_nm, zem_m, cos_zenith, telescope_altitude_m,
+                                       od_focus, earth_radius_m, false);
+  }
+
+  // transmission_curved for an upward photon (zem < h_t): the slant depth is the integral over
+  // [zem, h_t] (slant_optical_depth_upward). Same zero rules as transmission_curved.
+  template <class T>
+  [[nodiscard]] T transmission_curved_upward(T wavelength_nm, T zem_m, T cos_zenith,
+                                             T telescope_altitude_m, T od_focus,
+                                             double earth_radius_m) const {
+    return transmission_curved_impl<T>(wavelength_nm, zem_m, cos_zenith, telescope_altitude_m,
+                                       od_focus, earth_radius_m, true);
+  }
+
+  // Body of transmission_curved and transmission_curved_upward (upward selects the slant depth).
+  template <class T>
+  [[nodiscard]] T transmission_curved_impl(T wavelength_nm, T zem_m, T cos_zenith,
+                                           T telescope_altitude_m, T od_focus,
+                                           double earth_radius_m, bool upward) const {
     const double lambda = static_cast<double>(wavelength_nm);
     const double zem = static_cast<double>(zem_m);
     const double h_t = static_cast<double>(telescope_altitude_m);
@@ -250,7 +284,9 @@ public:
       return T(0);
     }
     const double cos_t = std::min(static_cast<double>(cos_zenith), 1.0);
-    const double depth = slant_depth_row(at, h_t, zem, cos_t, earth_radius_m) + focus;
+    const double slant = upward ? slant_depth_upward_row(at, h_t, zem, cos_t, earth_radius_m)
+                                : slant_depth_row(at, h_t, zem, cos_t, earth_radius_m);
+    const double depth = slant + focus;
     if (depth > max_total_depth) {
       return T(0);
     }
@@ -356,11 +392,14 @@ private:
 
   [[nodiscard]] double slant_depth(double wavelength_nm, double telescope_altitude_m,
                                    double emission_altitude_m, double cos_zenith,
-                                   double earth_radius_m) const {
+                                   double earth_radius_m, bool upward = false) const {
     const Lookup at = validate_curved(wavelength_nm, telescope_altitude_m, emission_altitude_m,
                                       cos_zenith, earth_radius_m);
-    return slant_depth_row(at, telescope_altitude_m, emission_altitude_m, std::min(cos_zenith, 1.0),
-                           earth_radius_m);
+    const double cos_t = std::min(cos_zenith, 1.0);
+    return upward ? slant_depth_upward_row(at, telescope_altitude_m, emission_altitude_m, cos_t,
+                                           earth_radius_m)
+                  : slant_depth_row(at, telescope_altitude_m, emission_altitude_m, cos_t,
+                                    earth_radius_m);
   }
 
   // Slant optical depth of validated rows, cos_zenith in [0, 1]. Segments are the table
@@ -377,6 +416,29 @@ private:
     if (!(emission_altitude_m > telescope_altitude_m)) {
       return 0.0;
     }
+    return slant_integral(at, telescope_altitude_m, emission_altitude_m, telescope_altitude_m,
+                          cos_zenith, earth_radius_m);
+  }
+
+  // Upward photon: the integral over [emission, h_t] (zero unless emission < h_t).
+  [[nodiscard]] double slant_depth_upward_row(const Lookup &at, double telescope_altitude_m,
+                                              double emission_altitude_m, double cos_zenith,
+                                              double earth_radius_m) const {
+    if (!(emission_altitude_m < telescope_altitude_m)) {
+      return 0.0;
+    }
+    return slant_integral(at, emission_altitude_m, telescope_altitude_m, telescope_altitude_m,
+                          cos_zenith, earth_radius_m);
+  }
+
+  // Integral over the heights [lo_altitude, hi_altitude] (lo < hi) of the slant depth for the ray
+  // of the telescope altitude telescope_altitude_m (d = h - h_t in the expressions below).
+  [[nodiscard]] double slant_integral(const Lookup &at, double lo_altitude, double hi_altitude,
+                                      double telescope_altitude_m, double cos_zenith,
+                                      double earth_radius_m) const {
+    if (!(hi_altitude > lo_altitude)) {
+      return 0.0;
+    }
     const std::size_t n = grid_.size();
     const double *tau = &tau_[static_cast<std::size_t>(at.lower - first_) * n];
     const bool blend = at.upper != at.lower;
@@ -387,8 +449,8 @@ private:
     const double ln10 = std::log(10.0);
     double sum = 0.0;
     for (std::size_t i = 0; i + 1 < grid_.size(); ++i) {
-      const double seg_lo = std::max(height_m_[i], telescope_altitude_m);
-      const double seg_hi = std::min(height_m_[i + 1], emission_altitude_m);
+      const double seg_lo = std::max(height_m_[i], lo_altitude);
+      const double seg_hi = std::min(height_m_[i + 1], hi_altitude);
       if (!(seg_hi > seg_lo)) {
         continue;
       }
@@ -407,12 +469,14 @@ private:
         return slope / ((telescope_altitude_m + d) * std::sqrt(std::max(cos2, 0.0)));
       };
       double part = 0.0;
-      if (substitute && height_m_[i] <= telescope_altitude_m) {
-        // Segment starting at h_t: h = h_t + u^2, dh = 2 u du, u in [0, sqrt(seg_hi - h_t)].
-        const double top = std::sqrt(seg_hi - telescope_altitude_m);
+      if (substitute && height_m_[i] <= lo_altitude) {
+        // Segment starting at lo: h = lo + u^2, dh = 2 u du, u in [0, sqrt(seg_hi - lo)]. For a
+        // downward photon lo = h_t, so seg_lo - h_t = 0 and the integrand is that of h = h_t + u^2.
+        const double top = std::sqrt(seg_hi - seg_lo);
+        const double d0 = seg_lo - telescope_altitude_m;
         for (std::size_t j = 0; j < detail::gauss_points; ++j) {
           const double u = 0.5 * top * (1.0 + detail::gauss_nodes[j]);
-          part += detail::gauss_weights[j] * 2.0 * u * integrand(u * u);
+          part += detail::gauss_weights[j] * 2.0 * u * integrand(d0 + u * u);
         }
         sum += 0.5 * top * part;
       } else {

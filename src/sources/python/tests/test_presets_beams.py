@@ -176,22 +176,70 @@ def test_start_height_outside_the_beam_is_rejected(height):
 # Direction and tilt
 
 
-@pytest.mark.parametrize("zenith", ["60", "90", "0"])
-def test_upward_or_horizontal_beam_is_rejected(zenith):
-    with pytest.raises(ValueError, match="point downwards"):
-        build_lidar(replaced(LIDAR, "--beam-zenith", zenith))
+@pytest.mark.parametrize("zenith", ["0", "30", "60", "120", "150", "180"])
+def test_upward_and_downward_beams_within_the_tilt_are_accepted(zenith):
+    point = emission(build_lidar(replaced(LIDAR, "--beam-zenith", zenith)))
+    beam = _pulsed_beam.unit_vector(float(zenith), 0.0)
+    assert point["axis"] == pytest.approx(list(beam), abs=1e-12)
+    assert point["time_offset_ns"] == 0.0
+    assert point["to_plane_z0"] is False
+
+
+def test_upward_beam_axis_and_metadata():
+    description = build_laser(LASER.replace("--beam-zenith 180", "--beam-zenith 20"))
+    point = emission(description)
+    assert point["axis"] == pytest.approx([
+        math.sin(math.radians(20.0)),
+        0.0,
+        math.cos(math.radians(20.0)),
+    ])
+    assert point["axis"][2] > 0.0
+    assert description["run"]["metadata"]["beam_zenith_deg"] == 20.0
+    assert description["run"]["metadata"]["start_height_m"] == 4000.0
+
+
+def test_horizontal_beam_is_rejected_with_reason():
+    with pytest.raises(ValueError, match="horizontal beams are not supported yet"):
+        build_lidar(replaced(LIDAR, "--beam-zenith", "90"))
+    with pytest.raises(ValueError, match="horizontal"):
+        build_laser(LASER.replace("--beam-zenith 180", "--beam-zenith 90") + " --max-tilt 89")
 
 
 def test_too_tilted_beam_is_rejected_with_reason():
     with pytest.raises(ValueError, match="plane-parallel"):
-        build_lidar(replaced(LIDAR, "--beam-zenith", "100"))
+        build_lidar(replaced(LIDAR, "--beam-zenith", "100"))  # downward, 80 deg from nadir
+    with pytest.raises(ValueError, match="from the zenith"):
+        build_lidar(replaced(LIDAR, "--beam-zenith", "70"))  # upward, 70 deg from the zenith
 
 
 def test_tilt_limit_is_inclusive_and_configurable():
     build_lidar(replaced(LIDAR, "--beam-zenith", "120"))  # tilt 60 deg, the default limit
+    build_lidar(replaced(LIDAR, "--beam-zenith", "60"))  # upward, tilt 60 deg from the zenith
     with pytest.raises(ValueError, match="max-tilt"):
         build_laser(LASER.replace("--beam-zenith 180", "--beam-zenith 115") + " --max-tilt 30")
     build_laser(LASER.replace("--beam-zenith 180", "--beam-zenith 115") + " --max-tilt 65")
+    with pytest.raises(ValueError, match="max-tilt"):
+        build_laser(LASER.replace("--beam-zenith 180", "--beam-zenith 65") + " --max-tilt 30")
+    build_laser(LASER.replace("--beam-zenith 180", "--beam-zenith 65") + " --max-tilt 65")
+
+
+def test_upward_start_height_lies_above_the_laser():
+    text = replaced(LIDAR, "--beam-zenith", "0")  # straight up from (1000, 0, 400000)
+    description = build_lidar(text + " --start-height 500000")
+    point = emission(description)
+    assert point["position_m"] == pytest.approx([1000.0, 0.0, 500000.0], abs=1e-6)
+    assert point["time_offset_ns"] == pytest.approx(100000.0 / C_M_NS, rel=1e-12)
+    assert description["run"]["metadata"]["start_height_m"] == pytest.approx(500000.0)
+    # Below the laser is behind the upward beam.
+    with pytest.raises(ValueError, match="start-height"):
+        build_lidar(text + " --start-height 300000")
+
+
+def test_upward_beam_hitting_a_telescope_above_the_laser_is_rejected():
+    text = without(LIDAR.replace("--beam-zenith 180", "--beam-zenith 0"), "--telescope-radius")
+    with pytest.raises(ValueError, match="hits telescope 1"):
+        build_lidar(text + " --telescope 1000,0,500000,12.5")
+    build_lidar(text + " --telescope 1000,0,500000,12.5 --allow-direct-beam")
 
 
 def test_max_tilt_must_be_below_90():
@@ -394,6 +442,14 @@ def test_normalize_accepts_preset_output(module, text):
     config = pytest.importorskip("obdeect.sources.config")
     normalized = config.normalize(module.build(parse(module, text)))
     assert normalized["events"][0]["emissions"][0]["kind"] == "point"
+
+
+@pytest.mark.parametrize("module, text", [(laser_beam, LASER), (lidar, LIDAR)])
+def test_normalize_accepts_upward_preset_output(module, text):
+    config = pytest.importorskip("obdeect.sources.config")
+    upward = replaced(text, "--beam-zenith", "20" if module is laser_beam else "10")
+    normalized = config.normalize(module.build(parse(module, upward)))
+    assert normalized["events"][0]["emissions"][0]["axis"][2] > 0.0
 
 
 def _obdeect_command():

@@ -60,7 +60,11 @@ struct RunSummary {
   std::uint64_t events{};
   std::uint64_t rows{}; // rows written, all telescopes
   double weight{};      // sum of weights, all telescopes
-  double expected{};    // expected sum of weights, all telescopes
+  double expected{};    // expected sum of weights of all emitted photons, all telescopes
+  // Photons of to_plane_z0 emissions that move away from the plane z = 0 and are dropped. Counted
+  // once per event (the photons are the same for every telescope); not in rows or weight. The
+  // run_end record holds the same count.
+  std::uint64_t not_on_plane{};
 };
 
 // Sphere that holds every telescope sphere: centred on the mean telescope position.
@@ -134,7 +138,11 @@ inline void validate_run(const Run &run) {
 }
 
 // Rows of one emission chunk: bunch weight, time offset, move to z = 0 and zem (sky frame).
-inline void finish_rows(const Emission &e, const Run &run, obdeect::stream::PhotonChunk &chunk) {
+// With to_plane_z0 a row reaches the plane when z == 0 (no move) or z * cz < 0 (towards the
+// plane from either side); other rows are dropped and counted in dropped. Kept rows are compacted
+// to the front in their order, so the rows of the chunk stay in emission order.
+inline void finish_rows(const Emission &e, const Run &run, obdeect::stream::PhotonChunk &chunk,
+                        std::uint64_t &dropped) {
   using obdeect::stream::Column;
   const std::size_t rows = chunk.rows();
   auto &x = chunk[Column::x];
@@ -142,25 +150,43 @@ inline void finish_rows(const Emission &e, const Run &run, obdeect::stream::Phot
   auto &z = chunk[Column::z];
   auto &t = chunk[Column::t];
   auto &w = chunk[Column::w];
+  std::size_t kept = 0;
   for (std::size_t i = 0; i < rows; ++i) {
+    // Read the row before it is written to the position kept (kept <= i).
+    float xi = x[i];
+    float yi = y[i];
+    float zi = z[i];
     double time = static_cast<double>(t[i]) + e.time_offset_ns;
-    if (e.to_plane_z0) {
-      const double cz = chunk[Column::cz][i];
-      if (!(cz < 0.0) || !(z[i] >= 0.0F))
-        throw std::invalid_argument("a photon does not travel down to the plane z = 0");
-      const double path = static_cast<double>(z[i]) / -cz;
-      x[i] = static_cast<float>(x[i] + path * chunk[Column::cx][i]);
-      y[i] = static_cast<float>(y[i] + path * chunk[Column::cy][i]);
-      z[i] = 0.0F;
+    if (e.to_plane_z0 && zi != 0.0F) {
+      const double zd = static_cast<double>(zi);
+      const double cz = static_cast<double>(chunk[Column::cz][i]);
+      if (!(zd * cz < 0.0)) {
+        ++dropped;
+        continue;
+      }
+      const double path = -zd / cz;
+      xi = static_cast<float>(x[i] + path * chunk[Column::cx][i]);
+      yi = static_cast<float>(y[i] + path * chunk[Column::cy][i]);
+      zi = 0.0F;
       time += path / speed_of_light_m_per_ns;
     }
-    t[i] = static_cast<float>(time);
-    w[i] = static_cast<float>(static_cast<double>(w[i]) * e.bunch_size);
+    const double weight = static_cast<double>(w[i]) * e.bunch_size;
+    if (kept != i)
+      for (auto &column : chunk.columns)
+        if (!column.empty())
+          column[kept] = column[i];
+    x[kept] = xi;
+    y[kept] = yi;
+    z[kept] = zi;
+    t[kept] = static_cast<float>(time);
+    w[kept] = static_cast<float>(weight);
+    ++kept;
   }
+  chunk.truncate(kept);
   if (run.frame == obdeect::stream::Frame::sky) {
     auto &zem = chunk[Column::zem];
-    zem.resize(rows);
-    for (std::size_t i = 0; i < rows; ++i)
+    zem.resize(kept);
+    for (std::size_t i = 0; i < kept; ++i)
       zem[i] = static_cast<float>(run.observation_level_m + static_cast<double>(z[i]));
   }
 }
@@ -277,15 +303,18 @@ inline RunSummary write_run(std::ostream &out, const Run &run,
         counts.push_back(photon_count(p.emission.source, p.seed, event, key));
         total += counts.back();
       }
-      // Calls f(chunk) for every chunk of the event, in emission and photon order.
-      const auto generate = [&](auto &&f) {
+      // Calls f(chunk) for every chunk of the event, in emission and photon order; dropped photons
+      // are added to dropped_sink.
+      std::uint64_t dropped = 0;
+      std::uint64_t dropped_again = 0; // drops of the telescopes after the first (not counted)
+      const auto generate = [&](auto &&f, std::uint64_t &dropped_sink) {
         for (std::size_t k = 0; k < emissions.size(); ++k) {
           const auto &p = emissions[k];
           for (std::uint64_t done = 0; done < counts[k];) {
             const auto rows = static_cast<std::size_t>(
                 std::min<std::uint64_t>(obdeect::stream::max_chunk_rows, counts[k] - done));
             emit(p.emission.source, p.seed, event, key, done, rows, chunk);
-            detail::finish_rows(p.emission, run, chunk);
+            detail::finish_rows(p.emission, run, chunk, dropped_sink);
             done += rows;
             if (chunk.rows() > 0)
               f(chunk);
@@ -296,8 +325,10 @@ inline RunSummary write_run(std::ostream &out, const Run &run,
           run.telescopes.size() > 1 && total <= max_cached_bytes / cached_bytes_per_photon;
       cached.clear();
       if (use_cache)
-        generate([&](const obdeect::stream::PhotonChunk &c) { cached.push_back(c); });
+        generate([&](const obdeect::stream::PhotonChunk &c) { cached.push_back(c); }, dropped);
       for (const auto &tel : run.telescopes) {
+        // The photons of the event are the same for every telescope: count the drops once.
+        std::uint64_t &dropped_sink = &tel == &run.telescopes.front() ? dropped : dropped_again;
         obdeect::stream::Metadata tm;
         tm["telescope_id"] = static_cast<std::int64_t>(tel.id);
         tm["frame"] = static_cast<std::int64_t>(run.frame);
@@ -321,17 +352,19 @@ inline RunSummary write_run(std::ostream &out, const Run &run,
           for (auto &block : cached)
             write_block(block);
         else
-          generate(write_block);
+          generate(write_block, dropped_sink);
         writer.write_metadata(
             RecordType::telescope_end,
             {{"telescope_id", static_cast<std::int64_t>(tel.id)}, {"photons", weight}});
         summary.rows += written;
         summary.weight += weight;
       }
+      summary.not_on_plane += dropped;
       writer.write_metadata(RecordType::event_end, {});
     }
   }
-  writer.write_metadata(RecordType::run_end, {});
+  writer.write_metadata(RecordType::run_end,
+                        {{"not_on_plane", static_cast<std::int64_t>(summary.not_on_plane)}});
   writer.finish();
   return summary;
 }

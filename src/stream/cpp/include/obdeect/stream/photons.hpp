@@ -104,11 +104,18 @@ private:
 // photons, for which an error in cz of the same size is amplified by 1 / (2 |cz|).
 inline constexpr double direction_norm_tolerance = 1e-5;
 
-// True if cz points downwards (cz < 0) and (cx, cy, cz) is a unit vector within the tolerance.
-// False for upwards or horizontal photons (cz >= 0) and for any NaN input.
-[[nodiscard]] inline bool cz_matches_direction(double cz, double cx, double cy) {
-  return cz < 0.0 && std::abs(cz * cz - (1.0 - cx * cx - cy * cy)) <= direction_norm_tolerance;
+// True if (cx, cy, cz) is a unit vector within the tolerance, for cz of either sign (cz = 0 is
+// horizontal). False for any non-finite cz and for NaN.
+[[nodiscard]] inline bool cz_is_consistent(double cz, double cx, double cy) {
+  return std::isfinite(cz) &&
+         std::abs(cz * cz - (1.0 - cx * cx - cy * cy)) <= direction_norm_tolerance;
 }
+
+// True if the photon moves downwards (cz < 0). False for upwards, horizontal and NaN.
+[[nodiscard]] inline bool is_downward(double cz) { return cz < 0.0; }
+
+// True if the photon moves upwards (cz > 0). False for downwards, horizontal and NaN.
+[[nodiscard]] inline bool is_upward(double cz) { return cz > 0.0; }
 
 // True if (cx, cy) lies in the unit disc within the tolerance. A stored direction can round to
 // cx^2 + cy^2 slightly above 1 when cz is tiny; NaN is rejected. Use max(0, 1 - cx^2 - cy^2)
@@ -117,12 +124,12 @@ inline constexpr double direction_norm_tolerance = 1e-5;
   return cx * cx + cy * cy <= 1.0 + direction_norm_tolerance;
 }
 
-// Rescale (cx, cy) of a downward photon (cz < 0) whose cx^2 + cy^2 rounded above 1, so that
-// cx^2 + cy^2 = 1 - cz^2 and the magnitude of the validated cz is kept. Other directions are
-// unchanged.
+// Rescale (cx, cy) of a photon with any finite cz, |cz| <= 1, whose cx^2 + cy^2 rounded above
+// 1, so that cx^2 + cy^2 = 1 - cz^2 and the magnitude of the validated cz is kept (the sign of cz
+// does not matter). Other directions are unchanged.
 inline void snap_direction_to_cz(float &cx, float &cy, double cz) {
   const double r2 = static_cast<double>(cx) * cx + static_cast<double>(cy) * cy;
-  if (cz < 0.0 && cz * cz <= 1.0 && r2 > 1.0) {
+  if (std::isfinite(cz) && cz * cz <= 1.0 && r2 > 1.0) {
     const double scale = std::sqrt((1.0 - cz * cz) / r2);
     cx = static_cast<float>(cx * scale);
     cy = static_cast<float>(cy * scale);

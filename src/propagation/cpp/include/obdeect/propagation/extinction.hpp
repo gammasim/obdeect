@@ -86,7 +86,9 @@ void atmospheric_acceptance(const obdeect::stream::PhotonChunk &chunk,
 // Spherical-atmosphere variant of atmospheric_acceptance (frame ground). Per row the direction is
 // d = (cx, cy, cz) with cz = -sqrt(1 - cx^2 - cy^2), and the zenith cosine relative to the local
 // vertical n is cos_zenith = -(d . n). A photon moving away from the ground (cos_zenith clearly
-// negative) gets p = 0; rounding-size negatives are taken as 0. Wavelengths are handled as in
+// negative) gets p = 0; rounding-size negatives are taken as 0. An upward photon (cz > 0 in the
+// cz column, which is then used) has cos_zenith = d . n with d = (cx, cy, cz), and its slant depth
+// is the integral over [zem, h_t] (transmission_curved_upward). Wavelengths are handled as in
 // atmospheric_acceptance. Per-row pure: the result does not depend on row order or chunking.
 template <class T>
 void atmospheric_acceptance_curved(const obdeect::stream::PhotonChunk &chunk,
@@ -103,6 +105,9 @@ void atmospheric_acceptance_curved(const obdeect::stream::PhotonChunk &chunk,
   const auto &cy = chunk[Column::cy];
   const auto &zem = chunk[Column::zem];
   const auto &wavelength = chunk[Column::wavelength];
+  const bool has_cz = chunk.has(Column::cz);
+  const std::vector<float> no_cz;
+  const auto &cz_column = has_cz ? chunk[Column::cz] : no_cz;
   end = std::min(end, rows);
   for (std::size_t row = begin; row < end; ++row) {
     check_wavelength(static_cast<double>(wavelength[row]));
@@ -117,18 +122,37 @@ void atmospheric_acceptance_curved(const obdeect::stream::PhotonChunk &chunk,
     if (!std::isfinite(cz2) || cz2 < -obdeect::stream::direction_norm_tolerance) {
       throw std::invalid_argument("direction cosines must satisfy cx^2 + cy^2 <= 1");
     }
-    // -(d . n) with d = (x, y, -sqrt(1 - x^2 - y^2)).
-    double cos_zenith = std::sqrt(std::max(cz2, 0.0)) * path.nz - x * path.nx - y * path.ny;
-    if (cos_zenith < -detail::curved_cos_tolerance) {
-      p[row] = T(0);
-      continue;
+    const bool upward = has_cz && cz_column[row] > 0.0F;
+    double cos_zenith = 0.0;
+    if (upward) {
+      // d . n with d = (x, y, cz). A photon moving down against the local vertical (cos clearly
+      // negative) cannot arrive from below and gets p = 0.
+      cos_zenith = static_cast<double>(cz_column[row]) * path.nz + x * path.nx + y * path.ny;
+      if (cos_zenith < -detail::curved_cos_tolerance) {
+        p[row] = T(0);
+        continue;
+      }
+    } else {
+      // -(d . n) with d = (x, y, -sqrt(1 - x^2 - y^2)).
+      cos_zenith = std::sqrt(std::max(cz2, 0.0)) * path.nz - x * path.nx - y * path.ny;
+      if (cos_zenith < -detail::curved_cos_tolerance) {
+        p[row] = T(0);
+        continue;
+      }
     }
     cos_zenith = std::clamp(cos_zenith, 0.0, 1.0);
     const auto od = table.telescope_depths_at(depths, static_cast<double>(wavelength[row]));
-    p[row] = table.transmission_curved<T>(static_cast<T>(wavelength[row]), static_cast<T>(zem[row]),
-                                          static_cast<T>(cos_zenith),
-                                          static_cast<T>(path.telescope_altitude_m),
-                                          static_cast<T>(od.od_focus), path.earth_radius_m);
+    if (upward) {
+      p[row] = table.transmission_curved_upward<T>(
+          static_cast<T>(wavelength[row]), static_cast<T>(zem[row]), static_cast<T>(cos_zenith),
+          static_cast<T>(path.telescope_altitude_m), static_cast<T>(od.od_focus),
+          path.earth_radius_m);
+    } else {
+      p[row] = table.transmission_curved<T>(static_cast<T>(wavelength[row]),
+                                            static_cast<T>(zem[row]), static_cast<T>(cos_zenith),
+                                            static_cast<T>(path.telescope_altitude_m),
+                                            static_cast<T>(od.od_focus), path.earth_radius_m);
+    }
   }
 }
 

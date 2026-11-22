@@ -58,3 +58,11 @@ before any window refraction is added.
   of metres.
 - **Diffraction and polarisation:** irrelevant at the size of IACT mirrors and for unpolarised
   Cherenkov light.
+
+## Photons from below (ray tracing phase 1)
+
+Photons moving up are traced from a plane below the optics, and their first hit is classified.
+Reflections off the secondary and direct hits on the focal surface from below are counted as
+losses (`non_sequential`, `direct_focal`); they are not traced further. Full non-sequential
+tracing is planned (phase 2). Horizontal photons are rejected until the sphere representation
+of the telescope sphere is added. See [Light sources](light-sources.md#photons-from-below).

@@ -115,8 +115,8 @@ def test_camera_frame_conversion(tmp_path, camera_map):
     np.testing.assert_allclose(_column(converted, "cy"), -_column(original, "cy"), atol=1e-6)
 
 
-def _write_flasher_stream(path):
-    """One telescope-frame photon: emission point (0.1, 0.2, 0.5) m, direction (0.6, 0, -0.8)."""
+def _write_flasher_stream(path, frame="telescope", cz=-0.8):
+    """One photon: emission point (0.1, 0.2, 0.5) m, direction (0.6, 0, cz)."""
 
     def column(value):
         return np.array([value], dtype=np.float32)
@@ -134,22 +134,20 @@ def _write_flasher_stream(path):
             },
         )
         writer.write("event", {"event_number": 1})
-        writer.write("telescope", {"telescope_id": 1, "frame": "telescope", "array_index": 0})
-        writer.write_photons(
-            1,
-            "telescope",
-            0,
-            {
-                "x": column(0.1),
-                "y": column(0.2),
-                "z": column(0.5),
-                "cx": column(0.6),
-                "cy": column(0.0),
-                "cz": column(-0.8),
-                "t": column(3.0),
-                "w": column(1.0),
-            },
-        )
+        writer.write("telescope", {"telescope_id": 1, "frame": frame, "array_index": 0})
+        photons = {
+            "x": column(0.1),
+            "y": column(0.2),
+            "z": column(0.5),
+            "cx": column(0.6),
+            "cy": column(0.0),
+            "cz": column(cz),
+            "t": column(3.0),
+            "w": column(1.0),
+        }
+        if frame == "ground":
+            photons["zem"] = column(2200.5)  # sim_telarray input needs zem
+        writer.write_photons(1, frame, 0, photons)
         writer.write("telescope_end", {"telescope_id": 1, "photons": 1.0})
         writer.write("event_end", {})
         writer.write("run_end", {})
@@ -168,6 +166,31 @@ def test_telescope_frame_conversion(tmp_path):
     np.testing.assert_allclose(_column(converted, "y"), [0.2], atol=1e-6)
     np.testing.assert_allclose(_column(converted, "t"), [3.0 + 0.625 / 0.299792458], atol=1e-4)
     np.testing.assert_allclose(_column(converted, "zem"), [2200.5], atol=1e-3)
+
+
+@pytest.mark.parametrize(
+    ("frame", "cz", "message"),
+    [
+        ("telescope", 0.8, "telescope-frame photon must move downwards"),
+        ("telescope", 0.0, "telescope-frame photon must move downwards"),
+        ("ground", 0.8, "ground-frame photon must move downwards"),
+    ],
+)
+def test_upward_or_horizontal_photons_rejected(tmp_path, frame, cz, message):
+    stream = tmp_path / "upward.pst"
+    _write_flasher_stream(stream, frame=frame, cz=cz)
+    camera = {1: (2, 0.0)} if frame == "telescope" else {}
+    with pytest.raises(ValueError, match=message):
+        obdeect_stream.stream_to_simtel(stream, tmp_path / "bad.simtel", camera)
+
+
+def test_downward_ground_frame_photons_accepted(tmp_path):
+    stream = tmp_path / "ground.pst"
+    simtel = tmp_path / "ground.simtel"
+    _write_flasher_stream(stream, frame="ground", cz=-0.8)
+    obdeect_stream.stream_to_simtel(stream, simtel)
+    assert simtel.exists()
+    assert simtel.stat().st_size > 0
 
 
 def test_telescope_frame_needs_dual_mirror_entry(tmp_path):

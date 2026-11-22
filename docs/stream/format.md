@@ -43,6 +43,12 @@ order. CORSIKA split-mode markers (1213, 1214) are blobs between the telescopes 
 The format has a major and a minor version (`obdeect stream --version` prints them). Readers
 reject a stream whose `format_major` differs from theirs and accept any `format_minor`.
 
+Version history:
+
+- 1.0: photons move downwards; the `cz` column, if present, is negative.
+- 1.1: the `cz` column may be positive (upward) or zero (horizontal) in every frame. Without a
+  `cz` column a photon moves downwards. Streams without upward photons are the same in 1.0 and 1.1.
+
 ## Metadata
 
 A metadata payload is a u32 entry count followed by entries:
@@ -88,7 +94,7 @@ Event keys (from CORSIKA EVTH and TELOFF): `event_number`,
 | 2 | `z` | position z [m] (frame sky and T; in G and C the plane is z = 0) |
 | 3 | `cx` | direction cosine x |
 | 4 | `cy` | direction cosine y |
-| 5 | `cz` | direction cosine z (if absent: cz = −sqrt(1 − cx² − cy²)) |
+| 5 | `cz` | direction cosine z: negative downwards, positive upwards (format 1.1), zero horizontal (format 1.1); if absent: cz = −sqrt(1 − cx² − cy²), i.e. downwards |
 | 6 | `t` | arrival time [ns] |
 | 7 | `zem` | emission altitude [m a.s.l.] |
 | 8 | `w` | weight (photons in the bunch) |
@@ -97,6 +103,11 @@ Event keys (from CORSIKA EVTH and TELOFF): `event_number`,
 
 Columns `x y cx cy t w` are required; the others are optional. A chunk with 0 rows has column
 mask 0.
+
+Direction `(cx, cy, cz)` is a unit vector. Without a `cz` column the photon moves downwards. A
+photon moving upwards or horizontally needs the `cz` column (format 1.1). Consumers that cannot
+handle upward photons must check the sign of `cz` and reject the photon rather than assume it is
+downward.
 
 Frames:
 

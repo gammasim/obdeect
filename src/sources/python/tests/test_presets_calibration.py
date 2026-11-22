@@ -345,6 +345,20 @@ def test_beam_scan_structure():
     assert_normalizes(d)
 
 
+def test_beam_scan_beam_direction():
+    up = beam_scan.build(parse(beam_scan, SCAN + ["--beam-zenith", "0"]))
+    assert all(em["axis"] == [0.0, 0.0, 1.0] for em in up["events"][0]["emissions"])
+    tilted = beam_scan.build(
+        parse(beam_scan, SCAN + ["--beam-zenith", "120", "--beam-azimuth", "90"])
+    )
+    axis = tilted["events"][0]["emissions"][0]["axis"]
+    assert axis[2] == pytest.approx(-0.5)
+    assert axis[1] == pytest.approx(-math.sqrt(3) / 2)  # azimuth 90 deg is -y (east)
+    assert_normalizes(up)
+    with pytest.raises(ValueError, match="horizontal beams are not supported yet"):
+        beam_scan.build(parse(beam_scan, SCAN + ["--beam-zenith", "90"]))
+
+
 def test_beam_scan_rejects_bad_scan_and_missing_options():
     with pytest.raises(ValueError, match="step"):
         beam_scan.build(parse(beam_scan, drop(SCAN, "--scan-step") + ["--scan-step", "0"]))

@@ -1,19 +1,24 @@
-"""Beam scan: a parallel downward beam moved along two lines over the camera area (sky frame).
+"""Beam scan: a parallel beam moved along two lines over the camera area (sky frame).
 
 The scan starts at ``--scan-start``, runs along x for ``--scan-extent-x`` and then along y for
 ``--scan-extent-y``, in steps of ``--scan-step``. Each scan position is one point emission of a
-single event. Old program: ``beam-scan.hpp`` (its extents and step were fractions of the radius).
+single event, at ``--height``. The beam points downwards by default; ``--beam-zenith`` (zenith,
+> 90 down, < 90 up) and ``--beam-azimuth`` set another direction. A horizontal beam is rejected:
+it never reaches the camera plane (planned with the sphere representation). Old program:
+``beam-scan.hpp`` (its extents and step were fractions of the radius).
 """
 
 import argparse
 import math
 
 from obdeect.sources.presets import _common
+from obdeect.sources.presets._beam import unit_vector
 
 NAME = "beam-scan"
 HELP = "parallel beam scanned along two lines over the camera area (sky frame)"
 
 _PARALLEL = {"kind": "cone", "angle_deg": 0.0}
+_DOWNWARD_ZENITH = 180.0
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
@@ -36,6 +41,22 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         required=True,
         metavar="M",
         help="camera radius [m]; telescope radius at the origin",
+    )
+    beam = parser.add_argument_group("beam")
+    beam.add_argument(
+        "--beam-zenith",
+        type=float,
+        default=_DOWNWARD_ZENITH,
+        metavar="DEG",
+        help="zenith of the beam: 180 (default) points down, 0 up; 90 (horizontal) is rejected "
+        "[deg]",
+    )
+    beam.add_argument(
+        "--beam-azimuth",
+        type=float,
+        default=0.0,
+        metavar="DEG",
+        help="astronomical azimuth of the beam: clockwise from north (default 0) [deg]",
     )
     scan = parser.add_argument_group("scan")
     scan.add_argument(
@@ -95,6 +116,12 @@ def scan_positions(
 
 def build(args: argparse.Namespace) -> dict:
     """Run description: one event with a point emission per scan position."""
+    axis = list(unit_vector(args.beam_zenith, args.beam_azimuth))
+    if abs(axis[2]) <= 1e-12:
+        raise ValueError(
+            f"--beam-zenith {args.beam_zenith} deg is horizontal: horizontal beams are not "
+            "supported yet (the photons never reach the camera plane)"
+        )
     positions = scan_positions(
         tuple(args.scan_start), args.scan_extent_x, args.scan_extent_y, args.scan_step
     )
@@ -108,7 +135,7 @@ def build(args: argparse.Namespace) -> dict:
             "time_offset_ns": 0.0,
             "to_plane_z0": False,
             "position_m": [x, y, args.height],
-            "axis": [0.0, 0.0, -1.0],
+            "axis": axis,
             "angular": _PARALLEL,
             "spectrum": spectrum,
             "pulse": pulse,

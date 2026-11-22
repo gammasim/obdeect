@@ -73,8 +73,9 @@ struct SkyPlane {
 
 // Impact parameter b = |(P - C) x d| [m] of the straight line from the emission point P = (x, y, z)
 // (run frame, z above the observation level) with direction d = (cx, cy, -cz_magnitude), about the
-// Earth centre C = (0, 0, -(R + observation_m)). The line reaches the telescope level r_t = R + h_t
-// if b < r_t, at zenith angle theta_s with sin(theta_s) = b / r_t.
+// Earth centre C = (0, 0, -(R + observation_m)). Pass cz_magnitude > 0 for a downward photon and
+// -|cz| for an upward one. The line reaches the telescope level r_t = R + h_t if b < r_t, at zenith
+// angle theta_s with sin(theta_s) = b / r_t.
 inline double impact_parameter_m(double x, double y, double z, double observation_m,
                                  double earth_radius_m, double cx, double cy, double cz_magnitude) {
   const double vertical = earth_radius_m + observation_m + z; // (P - C) z-component
@@ -201,17 +202,118 @@ inline bool curved_arrival(const SkyPlane &plane, double emission_altitude_m, do
   return true;
 }
 
-// Converts a chunk in frame sky to frame G in place and returns the number of photons that do
-// not reach the plane: photons moving upwards or horizontally, emitted below the plane, or not
-// bendable. Their rows stay in the chunk with w = 0, cx = cy = 0, t = 0 and zem = observation
-// level, so that row indices (and thus the random draws) do not change.
+// Why a sky-frame row does not reach the plane. Each dropped row has exactly one reason.
+enum class Drop : std::uint8_t {
+  none,
+  moving_away,
+  horizontal,
+  below_ground,
+  turns_over,
+  not_bendable,
+  misses_level
+};
+
+// Dropped rows of sky_to_ground by reason (docs/propagation/propagation.md, "Dropped photons").
+// total() is the number of dropped rows.
+struct DropCounts {
+  std::uint64_t moving_away{};  // downward emitted below the plane, or upward emitted above it
+  std::uint64_t horizontal{};   // cz = 0 (or cx^2 + cy^2 = 1 without a cz column)
+  std::uint64_t below_ground{}; // emitted below the observation level (z < 0)
+  std::uint64_t turns_over{};   // upward ray turned over (sin theta >= 1) before the plane
+  std::uint64_t not_bendable{}; // bending failed otherwise (series limit, quadrature, unit disc)
+  std::uint64_t misses_level{}; // spherical geometry: the line does not reach the telescope level
+
+  [[nodiscard]] std::uint64_t total() const noexcept {
+    return moving_away + horizontal + below_ground + turns_over + not_bendable + misses_level;
+  }
+
+  void count(Drop reason) noexcept {
+    switch (reason) {
+    case Drop::none:
+      break;
+    case Drop::moving_away:
+      ++moving_away;
+      break;
+    case Drop::horizontal:
+      ++horizontal;
+      break;
+    case Drop::below_ground:
+      ++below_ground;
+      break;
+    case Drop::turns_over:
+      ++turns_over;
+      break;
+    case Drop::not_bendable:
+      ++not_bendable;
+      break;
+    case Drop::misses_level:
+      ++misses_level;
+      break;
+    }
+  }
+
+  DropCounts &operator+=(const DropCounts &other) noexcept {
+    moving_away += other.moving_away;
+    horizontal += other.horizontal;
+    below_ground += other.below_ground;
+    turns_over += other.turns_over;
+    not_bendable += other.not_bendable;
+    misses_level += other.misses_level;
+    return *this;
+  }
+};
+
+// Arrival of an upward photon at the plane (flat or spherical geometry). The straight line is
+// already in x_out, y_out (relative to the telescope, x_out and y_out are not changed here) with
+// the direction (dx, dy) and path_m the straight path to the plane. With bend (and a profile),
+// the photon is bent by bend_upward(); otherwise only the air delay of the straight path is added
+// (profile given). Without a profile the time is the vacuum time. Returns the drop reason.
+inline Drop upward_arrival(const AtmosphereProfile *profile, bool bend, double emission_m,
+                           double plane_m, double dx, double dy, double path_m, double zenith,
+                           double t_in, double k, double k_group, double &x_out, double &y_out,
+                           double &cx_out, double &cy_out, double &t_out) {
+  cx_out = dx;
+  cy_out = dy;
+  const double vacuum_ns = path_m / obdeect::stream::speed_of_light_m_per_ns;
+  if (profile == nullptr) {
+    t_out = t_in + vacuum_ns;
+    return Drop::none;
+  }
+  if (!bend) {
+    t_out = t_in + vacuum_ns;
+    t_out += straight_path_air_delay_ns(*profile, emission_m, plane_m, zenith);
+    return Drop::none;
+  }
+  t_out = t_in;
+  if (bend_upward(*profile, emission_m, plane_m, cx_out, cy_out, x_out, y_out, t_out, k, k_group)) {
+    return Drop::none;
+  }
+  return upward_turns_over(*profile, emission_m, plane_m, dx, dy, k) ? Drop::turns_over
+                                                                     : Drop::not_bendable;
+}
+
+// Converts a chunk in frame sky to frame G in place and returns the dropped rows by reason (see
+// DropCounts). Photons of either direction reach the plane: a downward photon if its emission is
+// at or above the plane, an upward photon (cz > 0) if its emission is between the observation
+// level and the plane, and it is then bent (refraction) or delayed (profile) as below. Horizontal
+// photons (cz = 0) and photons that do not reach are dropped. Dropped rows stay in the chunk with
+// w = 0, cx = cy = 0, t = 0, zem = observation level and cz = -1, so that row indices (and thus the
+// random draws) do not change.
 //
-// Input: columns x y z cx cy t w (cz optional: if present its sign selects upwards photons).
-// Output: columns x y cx cy t zem w; z is removed. If preserve_cz is true, use and retain cz. zem
-// is the emission altitude a.s.l.; t includes the vacuum path, the air delay (profile) or the bent
-// travel time (tables).
-inline std::uint64_t sky_to_ground(obdeect::stream::PhotonChunk &chunk, const SkyPlane &plane,
-                                   bool preserve_cz = false) {
+// Input: columns x y z cx cy t w (cz optional: if present its sign selects upwards photons and
+// cz must match cx, cy). Output: columns x y cx cy t zem w; z is removed. A cz column of the input
+// is kept for all rows: the sign of cz follows the direction of the output (downward rows keep
+// the input cz unless the direction is bent; upward bent rows get +sqrt(1 - cx^2 - cy^2)).
+// zem is the emission altitude a.s.l.; t includes the vacuum path, the air delay (profile) or the
+// bent travel time (tables).
+//
+// use_cz_column selects where the magnitude |cz| comes from (both directions; the sign is always
+// that of the cz column): false (sky photons of the input): from cx, cy, as the bending does
+// (the column only where cx^2 + cy^2 rounded to 1 or above); true (scattered photons, whose stored
+// cz is the direction the kernel used): from the cz column, with the norm of (cx, cy, cz) as the
+// path length factor. Without a cz column the magnitude is from cx, cy.
+inline DropCounts sky_to_ground(obdeect::stream::PhotonChunk &chunk, const SkyPlane &plane,
+                                bool use_cz_column = false) {
   using obdeect::stream::Column;
   if (chunk.frame != obdeect::stream::Frame::sky) {
     throw std::invalid_argument("sky_to_ground needs photons in frame sky");
@@ -294,8 +396,12 @@ inline std::uint64_t sky_to_ground(obdeect::stream::PhotonChunk &chunk, const Sk
   auto &cz_column = chunk[Column::cz];
   const std::vector<float> no_wavelength;
   const auto &wavelength = dispersion ? chunk[Column::wavelength] : no_wavelength;
+  // Profile of the flat geometry: the one of the refraction tables when there is no profile.
+  const AtmosphereProfile *flat_profile =
+      plane.profile != nullptr ? plane.profile
+                               : (plane.tables != nullptr ? &plane.tables->profile() : nullptr);
 
-  std::uint64_t dropped = 0;
+  DropCounts dropped;
   for (std::size_t row = 0; row < rows; ++row) {
     const double dx = cx[row];
     const double dy = cy[row];
@@ -304,31 +410,51 @@ inline std::uint64_t sky_to_ground(obdeect::stream::PhotonChunk &chunk, const Sk
       throw std::invalid_argument("direction cosines must satisfy cx^2 + cy^2 <= 1");
     }
     double cz_magnitude = std::sqrt(std::max(0.0, 1.0 - r2));
-    if (has_cz && cz_magnitude == 0.0 && cz_column[row] < 0.0) {
-      // cx^2 + cy^2 rounded above 1: the validated cz column gives the magnitude.
-      cz_magnitude = -cz_column[row];
-    }
     const double emission_z = z[row];
     if (!std::isfinite(x[row]) || !std::isfinite(y[row]) || !std::isfinite(emission_z) ||
         !std::isfinite(t[row])) {
       throw std::invalid_argument("sky photon position and time must be finite");
     }
-    bool reaches = cz_magnitude > 0.0 && emission_z >= plane_z;
+    bool upward = false;
+    bool horizontal = cz_magnitude == 0.0;
+    // Length factor of the flat straight path (no tables, no profile): the norm of the direction
+    // (cx, cy, cz) when |cz| comes from the column, else 1.
+    double length_factor = 1.0;
     if (has_cz) {
       const double cz = cz_column[row];
       if (!std::isfinite(cz)) {
         throw std::invalid_argument("sky photon cz must be finite");
       }
-      if (cz >= 0.0) {
-        reaches = false; // moving upwards or horizontally
-      } else if (!obdeect::stream::cz_matches_direction(cz, dx, dy)) {
+      if (!obdeect::stream::cz_is_consistent(cz, dx, dy)) {
         throw std::invalid_argument("cz column does not match cx, cy (cz = -sqrt(1-cx^2-cy^2))");
       }
-      if (preserve_cz && cz < 0.0) {
-        cz_magnitude = -cz;
-        reaches = emission_z >= plane_z;
+      horizontal = cz == 0.0;
+      upward = cz > 0.0;
+      // Upward and downward rows take |cz| from cx, cy, as the bending does (bend, bend_upward):
+      // the straight line and the bent displacement then use the same direction.
+      if (use_cz_column) {
+        cz_magnitude = std::fabs(cz);
+        length_factor = std::sqrt(r2 + cz_magnitude * cz_magnitude);
+      } else if (cz_magnitude == 0.0) {
+        cz_magnitude = std::fabs(cz); // cx^2 + cy^2 rounded above 1: the validated cz gives it
       }
     }
+
+    // Reason for not reaching the plane, before any geometry. Downward photons reach the plane
+    // from above it; upward photons from below it.
+    Drop reason = Drop::none;
+    if (horizontal) {
+      reason = Drop::horizontal;
+    } else if (upward) {
+      if (emission_z < 0.0) {
+        reason = Drop::below_ground;
+      } else if (emission_z > plane_z) {
+        reason = Drop::moving_away;
+      }
+    } else if (emission_z < plane_z) {
+      reason = emission_z < 0.0 ? Drop::below_ground : Drop::moving_away;
+    }
+
     double emission_altitude = plane.observation_m + emission_z;
     if (curved) {
       const double x_emit = x[row];
@@ -352,52 +478,69 @@ inline std::uint64_t sky_to_ground(obdeect::stream::PhotonChunk &chunk, const Sk
       k = refractivity_ratio(lambda, plane.dispersion_reference_nm);
       k_group = group_refractivity_ratio(lambda, plane.dispersion_reference_nm);
     }
-    if (reaches) {
-      const double path = (emission_z - plane_z) / cz_magnitude;
+    if (reason == Drop::none) {
+      const double plane_distance = upward ? plane_z - emission_z : emission_z - plane_z;
+      const double path = plane_distance / cz_magnitude;
+      const double t_in = static_cast<double>(t[row]);
       x_out = static_cast<double>(x[row]) + path * dx - plane.telescope_x_m;
       y_out = static_cast<double>(y[row]) + path * dy - plane.telescope_y_m;
       cx_out = dx;
       cy_out = dy;
+      const double zenith = std::atan2(std::sqrt(r2), cz_magnitude);
       if (curved) {
         // The straight line must reach the telescope level r_t = R + h_t (impact parameter b).
+        // The signed cz gives the direction: negative downward, positive upward.
         const double r_t = plane.earth_radius_m + plane.telescope_altitude_m;
         const double b =
             impact_parameter_m(static_cast<double>(x[row]), static_cast<double>(y[row]), emission_z,
-                               plane.observation_m, plane.earth_radius_m, dx, dy, cz_magnitude);
-        reaches = b < r_t;
-        if (reaches) {
-          const double t_in = static_cast<double>(t[row]);
-          if (plane.curved_tables != nullptr) {
-            reaches = curved_arrival(plane, emission_altitude, b, dx, dy, path, t_in, k, k_group,
-                                     x_out, y_out, cx_out, cy_out, t_out);
+                               plane.observation_m, plane.earth_radius_m, dx, dy,
+                               upward ? -cz_magnitude : cz_magnitude);
+        if (!(b < r_t)) {
+          reason = Drop::misses_level;
+        } else if (upward) {
+          if (emission_altitude > plane.telescope_altitude_m) {
+            reason = Drop::moving_away; // above the telescope level in the spherical geometry
           } else {
-            t_out = t_in + path / speed_of_light_m_per_ns;
+            reason = upward_arrival(plane.profile, plane.curved_bending, emission_altitude,
+                                    plane.telescope_altitude_m, dx, dy, path, zenith, t_in, k,
+                                    k_group, x_out, y_out, cx_out, cy_out, t_out);
           }
+        } else if (plane.curved_tables != nullptr) {
+          if (!curved_arrival(plane, emission_altitude, b, dx, dy, path, t_in, k, k_group, x_out,
+                              y_out, cx_out, cy_out, t_out)) {
+            reason = Drop::not_bendable;
+          }
+        } else {
+          t_out = t_in + path / obdeect::stream::speed_of_light_m_per_ns;
         }
+      } else if (upward) {
+        reason = upward_arrival(flat_profile, plane.tables != nullptr, emission_altitude,
+                                plane_altitude, dx, dy, path * length_factor, zenith, t_in, k,
+                                k_group, x_out, y_out, cx_out, cy_out, t_out);
       } else if (plane.tables != nullptr) {
         // Beyond the series limit of bend() (near the horizon) the ray is bent by quadrature
         // instead of being dropped. Both leave the outputs unchanged when they fail.
         double travel_ns = 0.0;
-        reaches = bend(*plane.tables, emission_altitude, cx_out, cy_out, x_out, y_out, travel_ns, k,
-                       k_group);
-        if (!reaches && bend_series_limit_exceeded(*plane.tables, emission_altitude, dx, dy, k)) {
-          reaches = bend_quadrature(*plane.tables, emission_altitude, cx_out, cy_out, x_out, y_out,
-                                    travel_ns, k, k_group);
+        bool bent = bend(*plane.tables, emission_altitude, cx_out, cy_out, x_out, y_out, travel_ns,
+                         k, k_group);
+        if (!bent && bend_series_limit_exceeded(*plane.tables, emission_altitude, dx, dy, k)) {
+          bent = bend_quadrature(*plane.tables, emission_altitude, cx_out, cy_out, x_out, y_out,
+                                 travel_ns, k, k_group);
         }
-        t_out = static_cast<double>(t[row]) + travel_ns;
+        t_out = t_in + travel_ns;
+        if (!bent) {
+          reason = Drop::not_bendable;
+        }
       } else {
-        t_out = static_cast<double>(t[row]) +
-                path * (preserve_cz && has_cz ? std::sqrt(r2 + cz_magnitude * cz_magnitude) : 1.0) /
-                    speed_of_light_m_per_ns;
+        t_out = t_in + path * length_factor / obdeect::stream::speed_of_light_m_per_ns;
         if (plane.profile != nullptr) {
-          const double zenith = std::atan2(std::sqrt(r2), cz_magnitude);
           t_out +=
               straight_path_air_delay_ns(*plane.profile, plane_altitude, emission_altitude, zenith);
         }
       }
     }
-    if (!reaches) {
-      ++dropped;
+    if (reason != Drop::none) {
+      dropped.count(reason);
       x_out = 0.0;
       y_out = 0.0;
       cx_out = 0.0;
@@ -413,19 +556,16 @@ inline std::uint64_t sky_to_ground(obdeect::stream::PhotonChunk &chunk, const Sk
     cx[row] = static_cast<float>(cx_out);
     cy[row] = static_cast<float>(cy_out);
     t[row] = static_cast<float>(t_out);
-    if (has_cz && preserve_cz) {
-      if (!reaches) {
+    if (has_cz) {
+      if (reason != Drop::none) {
         cz_column[row] = -1.0F;
       } else if (plane.tables != nullptr || plane.curved_tables != nullptr) {
-        cz_column[row] =
-            static_cast<float>(-std::sqrt(std::max(0.0, 1.0 - cx_out * cx_out - cy_out * cy_out)));
-      }
+        const double magnitude = std::sqrt(std::max(0.0, 1.0 - cx_out * cx_out - cy_out * cy_out));
+        cz_column[row] = static_cast<float>(upward ? magnitude : -magnitude);
+      } // else the direction is unchanged and the input cz is kept
     }
   }
   chunk[Column::z].clear();
-  if (!preserve_cz) {
-    chunk[Column::cz].clear();
-  }
   chunk.frame = obdeect::stream::Frame::ground;
   return dropped;
 }

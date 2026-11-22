@@ -3,7 +3,8 @@
 // Optional single scattering of light-source photons (docs/scattering.md).
 //
 // Each primary photon (frame sky: position, direction, wavelength, weight at emission) is
-// scattered at N_s points sampled along its downward path, by optical depth. For every
+// scattered at N_s points sampled along its path (downward to the observation level, or upward
+// to the top of the table), by optical depth. For every
 // point and every telescope sphere one scattered photon is aimed through a uniform point
 // of the sphere's projected disc, with weight
 //
@@ -586,38 +587,153 @@ inline constexpr std::array<obdeect::stream::Column, n_scatter_columns> scatter_
 
 namespace detail {
 
-// Scattered photons of one primary photon (row of the chunk), appended to out[telescope].
-// Sampling: the path from the emission altitude to the observation level is cut into N_s
-// segments of equal slant optical depth D_j = j dD. In segment j the scattering point is
-// drawn with density proportional to exp(-D), by inverse CDF, so the probability that the
-// photon scatters in the segment is P = exp(-D_j) (1 - exp(-dD)) omega_mix. Each point gives
-// one scattered photon per telescope.
-inline void scatter_primary(const ScatteringConfig &config, const ScatteringTable &table,
-                            const TransmissionTable &transmission,
-                            std::span<const ScatterTelescope> telescopes,
-                            const obdeect::stream::PhotonChunk &chunk, std::size_t row,
-                            std::uint64_t photon, std::uint64_t seed, std::uint32_t event,
-                            std::span<double> boundary,
-                            std::vector<std::vector<std::array<float, n_scatter_columns>>> &out) {
-  using obdeect::stream::Column;
-  const double observation_level = transmission.observation_level_m();
-  const double x0 = chunk[Column::x][row];
-  const double y0 = chunk[Column::y][row];
-  const double z0 = chunk[Column::z][row];
-  const double cx = chunk[Column::cx][row];
-  const double cy = chunk[Column::cy][row];
-  const double t0 = chunk[Column::t][row];
-  const double weight = chunk[Column::w][row];
-  const double lambda = chunk[Column::wavelength][row];
-  const double abs_cz = std::sqrt(std::max(0.0, 1.0 - cx * cx - cy * cy));
-  const double h0 = observation_level + z0;
-  if (weight <= 0.0 || abs_cz <= 0.0 || h0 <= observation_level) {
-    return;
-  }
+// One primary photon of the kernel: position and direction (cz signed: negative downward,
+// positive upward, |cz| = abs_cz > 0), emission altitude h0 and the observation level (m a.s.l.).
+struct Primary {
+  double x0{};
+  double y0{};
+  double cx{};
+  double cy{};
+  double cz{};
+  double abs_cz{};
+  double t0{};
+  double weight{};
+  double lambda{};
+  double h0{};
+  double observation_level{};
+};
 
-  const std::size_t n = config.points_per_photon;
+// A scattering point of a primary: position (z above the observation level), altitude a.s.l.,
+// time at the point, the probability of scattering in its segment, the segment's vertical optical
+// depths and the albedo and asymmetry at the point.
+struct ScatterPoint {
+  double x{};
+  double y{};
+  double z{};
+  double h{};
+  double time{};
+  double p_scatter{};
+  double tau_mol{};
+  double tau_aer{};
+  double ssa{};
+  double asymmetry{};
+};
+
+using ScatteredLists = std::vector<std::vector<std::array<float, n_scatter_columns>>>;
+
+// Scattered photons of one scattering point towards every telescope sphere, appended to
+// out[telescope]. The point lies in segment j of n points per photon; the aim point of telescope
+// t uses the draws n + 2 (j n_telescopes + t) and the next one. A point below the telescope
+// (h_s < h_c) gives an upward scattered photon, with optical depth |tau(h_s) - tau(h_c)| and
+// airmass distance / |h_s - h_c|. A point at h_s == h_c would emit horizontal photons, which are
+// not part of the sphere's phase function: they are skipped.
+inline void scatter_to_telescopes(const ScatteringTable &table,
+                                  const TransmissionTable &transmission,
+                                  std::span<const ScatterTelescope> telescopes,
+                                  const Primary &primary, const ScatterPoint &point, std::size_t n,
+                                  std::size_t j, const obdeect::stream::DrawKey &key,
+                                  ScatteredLists &out) {
   const std::size_t n_telescopes = telescopes.size();
-  const obdeect::stream::DrawKey key{seed, stage_atmosphere, event, 0, photon, stream_scattering};
+  const double lambda = primary.lambda;
+  const double h_s = point.h;
+  for (std::size_t t = 0; t < n_telescopes; ++t) {
+    const ScatterTelescope &tel = telescopes[t];
+    const double h_c = primary.observation_level + tel.z_m;
+    if (h_s == h_c) {
+      continue;
+    }
+    const double dx = tel.x_m - point.x;
+    const double dy = tel.y_m - point.y;
+    const double dz = tel.z_m - point.z;
+    const double distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (!(distance > tel.radius_m)) {
+      continue;
+    }
+    // Solid angle of the sphere seen from the point and transmission along the path. The
+    // transmission table counts from the observation level, so its depth grows with altitude;
+    // the absolute value covers both directions.
+    const double ratio = tel.radius_m / distance;
+    const double solid_angle = 2.0 * std::numbers::pi * (1.0 - std::sqrt(1.0 - ratio * ratio));
+    const double optical_depth = std::abs(transmission.optical_depth<double>(lambda, h_s) -
+                                          transmission.optical_depth<double>(lambda, h_c));
+    const double airmass = distance / std::abs(h_s - h_c);
+    const double transmitted = std::exp(-optical_depth * airmass);
+
+    // Aim point: uniform over the projected disc of the sphere, perpendicular to the line of
+    // sight through the centre.
+    const std::array<double, 3> axis = {dx / distance, dy / distance, dz / distance};
+    std::array<double, 3> e1{};
+    std::array<double, 3> e2{};
+    detail::perpendicular_basis(axis, e1, e2);
+    const std::size_t draw = n + 2 * (j * n_telescopes + t);
+    const double radial = tel.radius_m * std::sqrt(deviate(key, draw));
+    const double phi = 2.0 * std::numbers::pi * deviate(key, draw + 1);
+    const std::array<double, 3> offset = {radial * (std::cos(phi) * e1[0] + std::sin(phi) * e2[0]),
+                                          radial * (std::cos(phi) * e1[1] + std::sin(phi) * e2[1]),
+                                          radial * (std::cos(phi) * e1[2] + std::sin(phi) * e2[2])};
+    const double ax = dx + offset[0];
+    const double ay = dy + offset[1];
+    const double az = dz + offset[2];
+    const double aim = std::sqrt(ax * ax + ay * ay + az * az);
+    const double nx = ax / aim;
+    const double ny = ay / aim;
+    const double nz = az / aim;
+
+    // Scattering angle between the propagation direction (signed cz) and the direction to the
+    // aim point.
+    const double cos_theta = primary.cx * nx + primary.cy * ny + primary.cz * nz;
+    const double p_aerosol = table.has_phase()
+                                 ? table.aerosol_phase<double>(lambda, h_s, cos_theta)
+                                 : henyey_greenstein_phase<double>(cos_theta, point.asymmetry);
+    const double bracket = mixed_phase_with_aerosol<double>(
+        cos_theta, point.tau_mol, point.tau_aer, point.ssa, table.rayleigh_gamma(), p_aerosol);
+    const double scattered = primary.weight * point.p_scatter * bracket * solid_angle * transmitted;
+    if (!(scattered > 0.0)) {
+      continue;
+    }
+    out[t].push_back({static_cast<float>(point.x), static_cast<float>(point.y),
+                      static_cast<float>(point.z), static_cast<float>(nx), static_cast<float>(ny),
+                      static_cast<float>(nz), static_cast<float>(point.time),
+                      static_cast<float>(h_s), static_cast<float>(scattered),
+                      static_cast<float>(lambda)});
+  }
+}
+
+// Segment j of a path, from its altitudes: local is the state at the point, lower and upper the
+// states at the segment's lower and upper boundary. Returns false if the segment is empty.
+// p_scatter = exp(-D_j) (1 - exp(-dD)) omega_mix (docs/propagation/scattering.md).
+inline bool segment_point(const ScatteringState<double> &local,
+                          const ScatteringState<double> &lower,
+                          const ScatteringState<double> &upper, double step, double segment_weight,
+                          std::size_t j, ScatterPoint &point) {
+  // Vertical optical depths of the segment (ratios only enter, so vertical is enough).
+  const double tau_mol = lower.tau_mol - upper.tau_mol;
+  const double tau_aer = lower.tau_aer - upper.tau_aer;
+  const double scattering = tau_mol + local.ssa * tau_aer;
+  if (!(tau_mol + tau_aer > 0.0) || !(scattering > 0.0)) {
+    return false;
+  }
+  point.p_scatter = std::exp(-step * static_cast<double>(j)) * segment_weight *
+                    (scattering / (tau_mol + tau_aer));
+  point.tau_mol = tau_mol;
+  point.tau_aer = tau_aer;
+  point.ssa = local.ssa;
+  point.asymmetry = local.asymmetry;
+  return true;
+}
+
+// Downward primary: the path from the emission altitude down to the observation level. The
+// boundaries are taken at equal slant depth D_j = j dD; boundary[0] = h0, boundary[n] = ground.
+inline void scatter_downward(const ScatteringConfig &config, const ScatteringTable &table,
+                             const TransmissionTable &transmission,
+                             std::span<const ScatterTelescope> telescopes, const Primary &primary,
+                             const obdeect::stream::DrawKey &key, std::span<double> boundary,
+                             ScatteredLists &out) {
+  const std::size_t n = config.points_per_photon;
+  const double observation_level = primary.observation_level;
+  const double lambda = primary.lambda;
+  const double h0 = primary.h0;
+  const double abs_cz = primary.abs_cz;
   const auto extinction = [&](double altitude) {
     const auto s = table.state<double>(lambda, altitude);
     return s.tau_mol + s.tau_aer;
@@ -630,7 +746,6 @@ inline void scatter_primary(const ScatteringConfig &config, const ScatteringTabl
   const double step = total / static_cast<double>(n);
   const double segment_weight = -std::expm1(-step); // 1 - exp(-dD)
 
-  // Altitude of the segment boundaries D_j (boundary[0] = emission, boundary[n] = ground).
   boundary[0] = h0;
   boundary[n] = observation_level;
   for (std::size_t j = 1; j < n; ++j) {
@@ -645,91 +760,120 @@ inline void scatter_primary(const ScatteringConfig &config, const ScatteringTabl
     const double depth = step * static_cast<double>(j) + depth_in_segment;
     const double h_s = altitude_at_depth<double>(table, lambda, tau0 + abs_cz * depth,
                                                  boundary[j + 1], boundary[j]);
-    const auto local = table.state<double>(lambda, h_s);
-    const auto lower = table.state<double>(lambda, boundary[j + 1]);
-    const auto upper = table.state<double>(lambda, boundary[j]);
-    // Vertical optical depths of the segment (ratios only enter, so vertical is enough).
-    const double tau_mol = lower.tau_mol - upper.tau_mol;
-    const double tau_aer = lower.tau_aer - upper.tau_aer;
-    const double scattering = tau_mol + local.ssa * tau_aer;
-    if (!(tau_mol + tau_aer > 0.0) || !(scattering > 0.0)) {
+    ScatterPoint point;
+    if (!segment_point(table.state<double>(lambda, h_s),
+                       table.state<double>(lambda, boundary[j + 1]),
+                       table.state<double>(lambda, boundary[j]), step, segment_weight, j, point)) {
       continue;
     }
-    // P_scatter(segment) = exp(-D_j) (1 - exp(-dD)) omega_mix, omega_mix = (tau_mol + omega
-    // tau_aer) / (tau_mol + tau_aer).
-    const double p_scatter = std::exp(-step * static_cast<double>(j)) * segment_weight *
-                             (scattering / (tau_mol + tau_aer));
-
-    const double s_path = (h0 - h_s) / abs_cz; // emission to scattering point
-    const double x_p = x0 + cx * s_path;
-    const double y_p = y0 + cy * s_path;
-    const double z_p = h_s - observation_level;
-
-    for (std::size_t t = 0; t < n_telescopes; ++t) {
-      const ScatterTelescope &tel = telescopes[t];
-      const double h_c = observation_level + tel.z_m;
-      if (!(h_s > h_c)) {
-        continue; // the scattered photon must travel downwards
-      }
-      const double dx = tel.x_m - x_p;
-      const double dy = tel.y_m - y_p;
-      const double dz = tel.z_m - z_p;
-      const double distance = std::sqrt(dx * dx + dy * dy + dz * dz);
-      if (!(distance > tel.radius_m)) {
-        continue;
-      }
-      // Solid angle of the sphere seen from the point and transmission along the path.
-      const double ratio = tel.radius_m / distance;
-      const double solid_angle = 2.0 * std::numbers::pi * (1.0 - std::sqrt(1.0 - ratio * ratio));
-      const double optical_depth = transmission.optical_depth<double>(lambda, h_s) -
-                                   transmission.optical_depth<double>(lambda, h_c);
-      const double airmass = distance / (h_s - h_c);
-      const double transmitted = std::exp(-optical_depth * airmass);
-
-      // Aim point: uniform over the projected disc of the sphere, perpendicular to the line
-      // of sight through the centre.
-      const std::array<double, 3> axis = {dx / distance, dy / distance, dz / distance};
-      std::array<double, 3> e1{};
-      std::array<double, 3> e2{};
-      detail::perpendicular_basis(axis, e1, e2);
-      const std::size_t draw = n + 2 * (j * n_telescopes + t);
-      const double radial = tel.radius_m * std::sqrt(deviate(key, draw));
-      const double phi = 2.0 * std::numbers::pi * deviate(key, draw + 1);
-      const std::array<double, 3> offset = {
-          radial * (std::cos(phi) * e1[0] + std::sin(phi) * e2[0]),
-          radial * (std::cos(phi) * e1[1] + std::sin(phi) * e2[1]),
-          radial * (std::cos(phi) * e1[2] + std::sin(phi) * e2[2])};
-      const double ax = dx + offset[0];
-      const double ay = dy + offset[1];
-      const double az = dz + offset[2];
-      const double aim = std::sqrt(ax * ax + ay * ay + az * az);
-      const double nx = ax / aim;
-      const double ny = ay / aim;
-      const double nz = az / aim;
-
-      // Scattering angle: between the propagation direction and the direction to the aim point.
-      const double cos_theta = cx * nx + cy * ny - abs_cz * nz;
-      const double p_aerosol = table.has_phase()
-                                   ? table.aerosol_phase<double>(lambda, h_s, cos_theta)
-                                   : henyey_greenstein_phase<double>(cos_theta, local.asymmetry);
-      const double bracket = mixed_phase_with_aerosol<double>(
-          cos_theta, tau_mol, tau_aer, local.ssa, table.rayleigh_gamma(), p_aerosol);
-      const double scattered = weight * p_scatter * bracket * solid_angle * transmitted;
-      if (!(scattered > 0.0)) {
-        continue;
-      }
-      // Time at the scattering point; the stage adds the path from the point to the plane.
-      double time_at_point = t0 + s_path / speed_of_light_m_per_ns;
-      if (config.air_profile != nullptr) {
-        // From |cz| directly: acos would round to pi/2 for |cz| below about 1e-16 (see
-        // straight_path_air_delay_from_cos_ns). abs_cz > 0 here.
-        time_at_point += straight_path_air_delay_from_cos_ns(*config.air_profile, h_s, h0, abs_cz);
-      }
-      out[t].push_back({static_cast<float>(x_p), static_cast<float>(y_p), static_cast<float>(z_p),
-                        static_cast<float>(nx), static_cast<float>(ny), static_cast<float>(nz),
-                        static_cast<float>(time_at_point), static_cast<float>(h_s),
-                        static_cast<float>(scattered), static_cast<float>(lambda)});
+    const double s_path = (h0 - h_s) / abs_cz; // emission to the scattering point
+    point.x = primary.x0 + primary.cx * s_path;
+    point.y = primary.y0 + primary.cy * s_path;
+    point.z = h_s - observation_level;
+    point.h = h_s;
+    point.time = primary.t0 + s_path / speed_of_light_m_per_ns;
+    if (config.air_profile != nullptr) {
+      // From |cz| directly: acos would round to pi/2 for |cz| below about 1e-16 (see
+      // straight_path_air_delay_from_cos_ns). abs_cz > 0 here.
+      point.time += straight_path_air_delay_from_cos_ns(*config.air_profile, h_s, h0, abs_cz);
     }
+    scatter_to_telescopes(table, transmission, telescopes, primary, point, n, j, key, out);
+  }
+}
+
+// Upward primary (cz > 0): the path from the emission altitude up to the top of the scattering
+// table, where the scattering stops. The boundaries are at equal slant depth from the emission,
+// counted with the depth tau(h0) - tau(h) (tau is the depth above the altitude, so it decreases
+// with altitude). boundary[0] = h0, boundary[n] = top.
+inline void scatter_upward(const ScatteringConfig &config, const ScatteringTable &table,
+                           const TransmissionTable &transmission,
+                           std::span<const ScatterTelescope> telescopes, const Primary &primary,
+                           const obdeect::stream::DrawKey &key, std::span<double> boundary,
+                           ScatteredLists &out) {
+  const std::size_t n = config.points_per_photon;
+  const double lambda = primary.lambda;
+  const double h0 = primary.h0;
+  const double abs_cz = primary.abs_cz;
+  const double top = table.max_altitude_m();
+  const auto extinction = [&](double altitude) {
+    const auto s = table.state<double>(lambda, altitude);
+    return s.tau_mol + s.tau_aer;
+  };
+  const double tau0 = extinction(h0);
+  const double total = (tau0 - extinction(top)) / abs_cz;
+  if (!(total > 0.0)) {
+    return;
+  }
+  const double step = total / static_cast<double>(n);
+  const double segment_weight = -std::expm1(-step); // 1 - exp(-dD)
+
+  boundary[0] = h0;
+  boundary[n] = top;
+  for (std::size_t j = 1; j < n; ++j) {
+    boundary[j] = altitude_at_depth<double>(table, lambda,
+                                            tau0 - abs_cz * step * static_cast<double>(j), h0, top);
+  }
+
+  for (std::size_t j = 0; j < n; ++j) {
+    const double u = deviate(key, j);
+    const double depth_in_segment = -std::log1p(-u * segment_weight);
+    const double depth = step * static_cast<double>(j) + depth_in_segment;
+    const double h_s = altitude_at_depth<double>(table, lambda, tau0 - abs_cz * depth, boundary[j],
+                                                 boundary[j + 1]);
+    ScatterPoint point;
+    if (!segment_point(table.state<double>(lambda, h_s), table.state<double>(lambda, boundary[j]),
+                       table.state<double>(lambda, boundary[j + 1]), step, segment_weight, j,
+                       point)) {
+      continue;
+    }
+    const double s_path = (h_s - h0) / abs_cz; // emission to the scattering point, upwards
+    point.x = primary.x0 + primary.cx * s_path;
+    point.y = primary.y0 + primary.cy * s_path;
+    point.z = h_s - primary.observation_level;
+    point.h = h_s;
+    point.time = primary.t0 + s_path / speed_of_light_m_per_ns;
+    if (config.air_profile != nullptr) {
+      point.time += straight_path_air_delay_from_cos_ns(*config.air_profile, h0, h_s, abs_cz);
+    }
+    scatter_to_telescopes(table, transmission, telescopes, primary, point, n, j, key, out);
+  }
+}
+
+// Scattered photons of one primary photon (row of the chunk), appended to out[telescope].
+// Horizontal primaries (cz = 0) are not scattered. Downward and upward primaries take their own
+// branch (scatter_downward, scatter_upward); both use the same draws and sphere geometry.
+inline void scatter_primary(const ScatteringConfig &config, const ScatteringTable &table,
+                            const TransmissionTable &transmission,
+                            std::span<const ScatterTelescope> telescopes,
+                            const obdeect::stream::PhotonChunk &chunk, std::size_t row,
+                            std::uint64_t photon, std::uint64_t seed, std::uint32_t event,
+                            std::span<double> boundary, ScatteredLists &out) {
+  using obdeect::stream::Column;
+  Primary primary;
+  primary.observation_level = transmission.observation_level_m();
+  primary.x0 = chunk[Column::x][row];
+  primary.y0 = chunk[Column::y][row];
+  primary.cx = chunk[Column::cx][row];
+  primary.cy = chunk[Column::cy][row];
+  primary.t0 = chunk[Column::t][row];
+  primary.weight = chunk[Column::w][row];
+  primary.lambda = chunk[Column::wavelength][row];
+  primary.abs_cz =
+      std::sqrt(std::max(0.0, 1.0 - primary.cx * primary.cx - primary.cy * primary.cy));
+  primary.h0 = primary.observation_level + chunk[Column::z][row];
+  // Sign from the cz column (absent: downward). cz = 0 is a horizontal primary: not scattered.
+  const float cz_column = chunk.has(Column::cz) ? chunk[Column::cz][row] : -1.0F;
+  if (cz_column == 0.0F || primary.weight <= 0.0 || primary.abs_cz <= 0.0 ||
+      primary.h0 <= primary.observation_level) {
+    return;
+  }
+  const bool upward = cz_column > 0.0F;
+  primary.cz = upward ? primary.abs_cz : -primary.abs_cz;
+  const obdeect::stream::DrawKey key{seed, stage_atmosphere, event, 0, photon, stream_scattering};
+  if (upward) {
+    scatter_upward(config, table, transmission, telescopes, primary, key, boundary, out);
+  } else {
+    scatter_downward(config, table, transmission, telescopes, primary, key, boundary, out);
   }
 }
 
@@ -744,8 +888,8 @@ inline void scatter_primary(const ScatteringConfig &config, const ScatteringTabl
 //
 // Requires columns x y z cx cy t w wavelength (wavelength in nm within the scattering table,
 // interpolated between its integer rows: assign it before this step); cz and zem, if present, must
-// agree with cx, cy and z; no p column (the acceptance is applied later). Only downward photons are
-// scattered.
+// agree with cx, cy and z; no p column (the acceptance is applied later). Upward and downward
+// photons are scattered; horizontal ones (cz = 0) are not.
 inline void scatter_chunk(const ScatteringConfig &config, const ScatteringTable &table,
                           const TransmissionTable &transmission,
                           std::span<const ScatterTelescope> telescopes,
@@ -809,13 +953,14 @@ inline void scatter_chunk(const ScatteringConfig &config, const ScatteringTable 
     if (!obdeect::stream::direction_in_unit_disc(cx[row], cy[row])) {
       throw std::invalid_argument("direction cosines must satisfy cx^2 + cy^2 <= 1");
     }
-    // cz_matches_direction is false for NaN; the finiteness test is kept as the first check.
+    // cz_is_consistent is false for NaN; the finiteness test is kept as the first check.
     if (chunk.has(Column::cz)) {
+      // Either sign (upward and horizontal primaries too; cz = 0 is not scattered).
       const double cz_column = chunk[Column::cz][row];
       if (!std::isfinite(cz_column) ||
-          !obdeect::stream::cz_matches_direction(cz_column, cx[row], cy[row])) {
+          !obdeect::stream::cz_is_consistent(cz_column, cx[row], cy[row])) {
         throw std::invalid_argument("cz column must be finite and match cx, cy "
-                                    "(cz = -sqrt(1-cx^2-cy^2))");
+                                    "(cz = +-sqrt(1-cx^2-cy^2))");
       }
     }
     if (chunk.has(Column::zem)) {

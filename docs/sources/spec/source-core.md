@@ -11,7 +11,7 @@ sampling. Headers `obdeect/sources/source.hpp` (types, validation, counts) and
 - `Point{position, axis (unit, default +z), angular (default Isotropic)}`.
 - `Line{start, direction (unit), length_m, beta (default 1), angular (default FixedAngle 0),
   profile (LinearDensity over distance, empty = uniform)}`.
-- `PlaneWave{towards_source (unit, z > 0), distance_m (default +inf), disc_radius_m, disc_z_m,
+- `PlaneWave{towards_source (unit, z != 0), distance_m (default +inf), disc_radius_m, disc_z_m,
   start_z_m}`.
 - `SkyBackground{centre, radius_m, axis (unit, default -z), viewcone_deg (default 90)}`.
 - `Geometry = Point | Line | PlaneWave | SkyBackground`.
@@ -37,8 +37,8 @@ sampling. Headers `obdeect/sources/source.hpp` (types, validation, counts) and
   not in the disc plane. Sphere target: isotropic only, point outside the sphere.
 - Line: start within limits; direction unit; `length_m >= 0`; `beta` in `[0, 1]`; profile within
   `[0, length]`; no disc target; sphere target only with fixed angle or isotropic.
-- PlaneWave: no target; `towards_source` unit with z > 0; distance infinite or positive;
-  disc radius positive.
+- PlaneWave: no target; `towards_source` unit with z != 0 (horizontal rejected); start plane on
+  the source side of the disc; distance infinite or positive; disc radius positive.
 - SkyBackground: no target; radius positive; axis unit; viewcone in `(0, 180]` deg.
 
 ## Counts
@@ -97,8 +97,13 @@ PlaneWave, infinite distance: target point `T` on the disc (target stream); dire
 direction) / c`. Weight 1.
 
 PlaneWave, finite distance: source at `(0,0,disc_z) + towards_source * distance`; direction from
-the source to `T`; start at the source if it is below `start_z`, else at the crossing of
-`start_z`. Time `+ (|start - source| - distance) / c`.
+the source to `T`; start at the source if it lies on the target side of the start plane
+(`direction.z * (source.z - start_z) >= 0`), else at the crossing of `start_z`. Time
+`+ (|start - source| - distance) / c`.
+
+The start plane lies on the source side of the disc: `(start_z - disc_z) * towards_source.z >= 0`
+(above the disc for a beam from above, below it for a beam from below). Horizontal `towards_source`
+(z = 0) is rejected: horizontal plane waves need the sphere representation (planned).
 
 SkyBackground: direction in the viewcone about the axis, `cos = 1 - u0 (1 - cos_cone)`. The start
 is uniform over the disc seen along the direction (target stream), lifted onto the sphere of

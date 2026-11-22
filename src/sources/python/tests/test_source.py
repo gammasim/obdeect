@@ -110,6 +110,32 @@ def test_plane_wave_starts_on_the_start_plane():
     assert inside == pytest.approx(0.25, abs=4.0 * math.sqrt(0.25 * 0.75 / len(hit)))
 
 
+def test_upward_plane_wave_starts_on_the_start_plane_below_the_disc():
+    # towards_source z < 0: the beam comes from below; photons travel up from the start plane
+    # z = -30 m through the disc at z = 0.
+    photons = emit(dict(PLANE_WAVE, towards_source=[0.01, 0.0, -1.0], start_z_m=-30.0), seed=2)
+    assert np.allclose(photons["z"], -30.0)
+    towards = np.array([0.01, 0.0, -1.0]) / np.hypot(0.01, 1.0)
+    assert np.allclose(photons["cz"], -towards[2], atol=1e-6)
+    assert np.all(photons["cz"] > 0.0)
+    s = 30.0 / photons["cz"].astype(float)
+    hit = np.hypot(photons["x"] + s * photons["cx"], photons["y"] + s * photons["cy"])
+    assert np.all(hit <= 5.0 + 1e-3)
+
+
+@pytest.mark.parametrize(
+    "change, message",
+    [
+        ({"towards_source": [1.0, 0.0, 0.0]}, "horizontal"),
+        ({"towards_source": [0.0, 0.0, -1.0]}, "source side"),  # start plane 30 m above the disc
+        ({"towards_source": [0.0, 0.0, 1.0], "start_z_m": -30.0}, "source side"),
+    ],
+)
+def test_plane_wave_side_and_horizontal_rules_are_rejected(change, message):
+    with pytest.raises(ValueError, match=message):
+        emit(dict(PLANE_WAVE, **change), seed=1)
+
+
 def test_plane_wave_at_finite_distance_emits_from_its_position():
     spec = {
         "kind": "plane_wave",

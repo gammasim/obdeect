@@ -6,7 +6,7 @@ from obdeect.stream import stream
 
 def test_format_constants():
     assert obdeect_stream.format_major == 1
-    assert obdeect_stream.format_minor == 0
+    assert obdeect_stream.format_minor == 1
     assert obdeect_stream.max_chunk_rows == 2**16
 
 

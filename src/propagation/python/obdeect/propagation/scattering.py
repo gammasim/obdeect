@@ -43,15 +43,17 @@ def scatter(
 ) -> dict[int, dict[str, np.ndarray]]:
     """Single scattering of primary photons (frame sky) towards telescope spheres.
 
-    Each primary photon is scattered at n_points points along its downward path (sampled by
-    optical depth). For each point and telescope one scattered photon is aimed at the sphere
-    centre (through a uniform point of its projected disc). Its weight is
+    Each primary photon is scattered at n_points points along its path (sampled by optical depth):
+    downward to the observation level, or upward (cz > 0) to the top of the scattering table;
+    horizontal photons (cz = 0) are not scattered. For each point and telescope one scattered
+    photon is aimed at the sphere (through a uniform point of its projected disc). It travels down
+    if the point is above the sphere centre and up if it is below. Its weight is
     w * P_scatter * phase * Omega_tel * T(point -> telescope). Position and zem are those of the
     scattering point; t is t_in + (emission -> point) / c in vacuum, without the path from the point
     to the telescope plane (the atmosphere stage adds it).
 
     Columns (float32, equal length): x, y, z (z above the observation level, m), cx, cy, t, w,
-    wavelength (integer nm, > 0); optional cz and zem (consistency checked).
+    wavelength (integer nm, > 0); optional cz (either sign) and zem (consistency checked).
     The primary photons are not changed; their extinction is applied by the extinction step.
     Scattered photons carry T in their weight: do not apply the atmospheric acceptance to them.
 

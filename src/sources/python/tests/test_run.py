@@ -96,6 +96,32 @@ def test_seed_override_is_stored_and_changes_the_photons(tmp_path):
     assert not np.array_equal(_positions(first), _positions(second))
 
 
+def test_to_plane_drops_and_counts_the_photons_moving_away(tmp_path):
+    # Isotropic light from 80 m above the plane: half the photons move down onto it. The other
+    # half is dropped and counted; the run record holds the same count.
+    emission = dict(EMISSIONS[0], position_m=[0.0, 0.0, 80.0], to_plane_z0=True, target="none")
+    description = {
+        "run": {"seed": 4, "observation_level_m": 2150.0, "frame": "sky"},
+        "telescopes": [{"id": 1, "position_m": [0.0, 0.0, 0.0], "radius_m": 12.5}],
+        "events": [{"repeat": 1, "emissions": [emission]}],
+    }
+    path = tmp_path / "plane.pst"
+    summary = run.write(dict(description), path, max_rows=1e9)
+    assert summary["rows"] + summary["not_on_plane"] == 2000
+    assert abs(summary["not_on_plane"] - 1000) <= 4 * np.sqrt(2000 * 0.25)
+    assert run.check(description)["expected_candidates"] == pytest.approx(2000.0)
+    assert summary["weight"] == pytest.approx(summary["rows"], rel=1e-9)
+    chunk = next(r for r in records(path) if r["type"] == "photons")
+    assert np.all(np.asarray(chunk["columns"]["z"]) == 0.0)
+    end = next(r for r in records(path) if r["type"] == "run_end")
+    assert end["metadata"]["not_on_plane"] == summary["not_on_plane"]
+
+
+def test_downward_runs_report_no_photons_off_the_plane(tmp_path):
+    summary = run.write(RUN, tmp_path / "run.pst")
+    assert summary["not_on_plane"] == 0
+
+
 def test_invalid_seed_is_rejected(tmp_path):
     with pytest.raises(ValueError, match="seed"):
         run.write(RUN, tmp_path / "x.pst", seed=-1)

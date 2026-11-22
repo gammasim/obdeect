@@ -105,7 +105,9 @@ def propagate(
 
     Returns:
         Dict with photons_in, photons_out, dropped (sky-frame photons not reaching the
-        telescope plane) and weight_out (sum of w of the output).
+        telescope plane), dropped_by_reason (dict of the dropped photons by reason: moving_away,
+        horizontal, below_ground, turns_over, not_bendable, misses_level; the values sum to
+        dropped) and weight_out (sum of w of the output). See docs/propagation/propagation.md.
 
     Raises:
         ValueError: invalid settings or input, or an input efficiency status that shows a

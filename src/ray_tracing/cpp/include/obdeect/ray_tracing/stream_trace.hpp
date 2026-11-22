@@ -480,6 +480,34 @@ struct StreamModel {
          kInputPlaneMarginM;
 }
 
+// Every obscurer (any leg) and the primary and secondary mirrors, with the lowest point of each
+// along `normal`: min n.p over the optic, from the support in direction -normal. Photons from
+// below meet all of them.
+[[nodiscard]] inline std::vector<std::pair<std::string, double>>
+optics_bottoms(const StreamModel &model, const Vec &normal) {
+  const Vec flipped = {-normal[0], -normal[1], -normal[2]};
+  std::vector<std::pair<std::string, double>> out;
+  for (const auto &obscurer : items(at(model.optics(), "obscurers")))
+    out.emplace_back(text(at(obscurer, "name")), -obscurer_support(obscurer, flipped));
+  for (const std::string role : {"primary", "secondary"}) {
+    const Value *mirror = model.optics().find(role);
+    if (mirror != nullptr && mirror->kind() != Value::Kind::null)
+      out.emplace_back(role, -mirror_support(*mirror, flipped));
+  }
+  return out;
+}
+
+// Input plane of photons from below, in the input frame (the same coordinate as the upper
+// plane): the plane lies a margin below the lowest optic along `normal`, with the traced origin
+// offset `traced_offset` (offset - axes_offset) as for the upper plane.
+[[nodiscard]] inline double lower_input_plane_m(const StreamModel &model, const Vec &normal,
+                                                const Vec &traced_offset) {
+  std::optional<double> bottom;
+  for (const auto &[name, lowest] : optics_bottoms(model, normal))
+    bottom = bottom ? std::min(*bottom, lowest) : lowest;
+  return bottom.value_or(0.0) - kInputPlaneMarginM - dot(normal, traced_offset);
+}
+
 // The input-plane checks of OpticalModel.trace_bunches (Python): the plane must lie above the
 // incoming obscurers and above the mirrors that photons meet first.
 inline void check_input_plane(const StreamModel &model, const std::array<double, 9> &rotation,
@@ -512,6 +540,24 @@ inline void check_input_plane(const StreamModel &model, const std::array<double,
       throw ModelError("input plane below the " + role + " mirror: the plane is at n.p = " +
                        format_3f(value) + " m but the mirror reaches " + format_3f(mirror_top) +
                        " m along the input normal; raise the input plane above it");
+}
+
+// The check of the plane for photons from below: it must lie below every optic (any leg).
+inline void check_lower_input_plane(const StreamModel &model, const std::array<double, 9> &rotation,
+                                    const Vec &offset, double plane_z) {
+  const Vec traced_offset = minus(offset, model.axes_offset());
+  const Vec normal = column(rotation, 2);
+  const Vec point = {traced_offset[0] + normal[0] * plane_z, traced_offset[1] + normal[1] * plane_z,
+                     traced_offset[2] + normal[2] * plane_z};
+  const double value = dot(normal, point);
+  for (const auto &[name, bottom] : optics_bottoms(model, normal))
+    if (value > bottom)
+      throw ModelError("input plane above the " + name +
+                       " for photons from below: the plane is "
+                       "at n.p = " +
+                       format_3f(value) + " m but the optic reaches down to " + format_3f(bottom) +
+                       " m along the input normal; lower the input plane "
+                       "below it");
 }
 
 // ---- Efficiency status ----
@@ -629,7 +675,8 @@ struct Optics {
   std::shared_ptr<const StreamModel> model;
   TransmissionPart part{TransmissionPart::full};
   double on_axis{};
-  double telescope_plane_m{}; // Input plane of telescope-frame photons.
+  double telescope_plane_m{};       // Input plane of telescope-frame photons.
+  double telescope_lower_plane_m{}; // Input plane of telescope-frame photons from below.
   std::string provenance;
 
   [[nodiscard]] bool normalise() const { return part == TransmissionPart::angular; }
@@ -660,6 +707,7 @@ make_optics(std::shared_ptr<const StreamModel> model, TransmissionPart part,
   if (const auto mirror = model->max_mirror_z())
     top = top ? std::max(*top, *mirror) : *mirror;
   optics->telescope_plane_m = top.value_or(0.0) + kInputPlaneMarginM;
+  optics->telescope_lower_plane_m = lower_input_plane_m(*model, {0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
   optics->provenance = "obdeect " + version + " model " + model->sha256;
   optics->model = std::move(model);
   return optics;
@@ -741,6 +789,14 @@ make_optics(std::shared_ptr<const StreamModel> model, TransmissionPart part,
 struct Config {
   bool roulette{true};
   std::vector<Envelope> envelopes;
+};
+
+// The ground-to-telescope rotation and the input planes (upper: photons from above; lower:
+// photons from below) of a telescope pointing.
+struct InputPlanes {
+  std::array<double, 9> rotation;
+  double upper;
+  double lower;
 };
 
 struct Telescope {
@@ -980,8 +1036,8 @@ private:
     return *telescope.config;
   }
 
-  // Rotation and input plane of ground-frame photons for a telescope (cached per event).
-  const std::pair<std::array<double, 9>, double> &ground_geometry(std::uint32_t telescope_id) {
+  // Rotation and input planes of ground-frame photons for a telescope (cached per event).
+  const stream_trace_detail::InputPlanes &ground_geometry(std::uint32_t telescope_id) {
     using namespace stream_trace_detail;
     auto found = geometry_.find(telescope_id);
     if (found == geometry_.end()) {
@@ -995,11 +1051,15 @@ private:
                          "--pointing-zenith-deg and --pointing-azimuth-deg, or the run keys "
                          "telescope_pointing_zenith_rad and telescope_pointing_azimuth_rad");
       const StreamModel &model = *optics(telescope_id).model;
+      const auto rotation = ground_to_telescope_rotation(pointing.first, pointing.second);
+      // The traced origin is -axes_offset (the ground origin has no offset).
       found = geometry_
                   .emplace(telescope_id,
-                           std::pair{ground_to_telescope_rotation(pointing.first, pointing.second),
-                                     minimum_input_plane_height_m(model, pointing.first,
-                                                                  pointing.second)})
+                           stream_trace_detail::InputPlanes{
+                               rotation,
+                               minimum_input_plane_height_m(model, pointing.first, pointing.second),
+                               lower_input_plane_m(model, column(rotation, 2),
+                                                   minus({0.0, 0.0, 0.0}, model.axes_offset()))})
                   .first;
     }
     return found->second;
@@ -1031,28 +1091,35 @@ private:
     const Optics &optics = this->optics(telescope.id);
     const std::int64_t event_number = int_key(*event_, "event_number", "event");
 
-    // Input bunches on the input plane.
+    // Input bunches on the input plane. Photons moving down start on the upper plane, photons
+    // moving up on the lower plane (below all optics); cz = 0 has no plane to reach.
     const auto &cx_in = chunk[Column::cx];
     const auto &cy_in = chunk[Column::cy];
     std::vector<double> cz(rows);
-    bool cz_mismatch = false, upward = false;
+    bool cz_mismatch = false, bad_direction = false, horizontal = false, upward = false,
+         downward = false;
     for (std::size_t i = 0; i < rows; ++i) {
       const double cx = cx_in[i], cy = cy_in[i];
       const double v = 1.0 - cx * cx - cy * cy;
       cz[i] = -std::sqrt(std::isnan(v) ? v : std::max(0.0, v));
       if (chunk.has(Column::cz)) {
         cz[i] = chunk[Column::cz][i];
-        cz_mismatch = cz_mismatch || !st::cz_matches_direction(chunk[Column::cz][i], cx, cy);
+        cz_mismatch = cz_mismatch || !st::cz_is_consistent(chunk[Column::cz][i], cx, cy);
       }
-      upward = upward || !(cz[i] < 0.0);
+      bad_direction = bad_direction || !std::isfinite(cz[i]) || !st::direction_in_unit_disc(cx, cy);
+      horizontal = horizontal || cz[i] == 0.0;
+      upward = upward || cz[i] > 0.0;
+      downward = downward || cz[i] < 0.0;
     }
+    if (bad_direction)
+      throw ModelError("photon directions must be finite unit vectors (cx, cy in the unit disc)");
     if (cz_mismatch)
       throw ModelError("photon column cz does not match cx and cy");
-    if (upward)
-      throw ModelError("photons must move towards -z (downwards)");
+    if (horizontal)
+      throw ModelError("horizontal photons relative to the telescope axis are not supported yet");
     std::array<double, 9> rotation = {1, 0, 0, 0, 1, 0, 0, 0, 1};
     Vec offset = {0.0, 0.0, 0.0};
-    double plane = 0.0;
+    double plane = 0.0, lower = std::numeric_limits<double>::quiet_NaN();
     const bool ground = chunk.frame == obdeect::stream::Frame::ground;
     if (ground) {
       if (chunk.has(Column::z))
@@ -1060,12 +1127,14 @@ private:
           if (z != 0.0F)
             throw ModelError("ground-frame photons must lie in the plane z = 0");
       const auto &geometry = ground_geometry(telescope.id);
-      rotation = geometry.first;
-      plane = geometry.second;
+      rotation = geometry.rotation;
+      plane = geometry.upper;
+      lower = geometry.lower;
     } else {
       if (!chunk.has(Column::z))
         throw ModelError("telescope-frame photons need the column z");
       plane = optics.telescope_plane_m;
+      lower = optics.telescope_lower_plane_m;
       // The telescope frame is the frame of trace(): cancel the axes offset that the tracer
       // subtracts, so that a photon at p is traced at p.
       offset = optics.model->axes_offset();
@@ -1075,7 +1144,10 @@ private:
     if (event_number < 0 || event_number >= (std::int64_t{1} << 32) ||
         chunk.first_index >= index_limit || rows >= index_limit - chunk.first_index)
       throw ModelError("bunch ids need event numbers and photon indices below 2^32");
-    check_input_plane(*optics.model, rotation, offset, plane);
+    if (downward)
+      check_input_plane(*optics.model, rotation, offset, plane);
+    if (upward)
+      check_lower_input_plane(*optics.model, rotation, offset, lower);
     const auto &x_in = chunk[Column::x];
     const auto &y_in = chunk[Column::y];
     const auto &t_in = chunk[Column::t];
@@ -1083,7 +1155,8 @@ private:
     std::vector<std::uint64_t> bunch_id(rows);
     for (std::size_t i = 0; i < rows; ++i) {
       const double z = ground ? 0.0 : static_cast<double>(chunk[Column::z][i]);
-      const double s = (plane - z) / cz[i];
+      const double row_plane = cz[i] < 0.0 ? plane : lower;
+      const double s = (row_plane - z) / cz[i];
       x[i] = static_cast<float>(static_cast<double>(x_in[i]) + s * static_cast<double>(cx_in[i]));
       y[i] = static_cast<float>(static_cast<double>(y_in[i]) + s * static_cast<double>(cy_in[i]));
       const double norm = std::sqrt(static_cast<double>(cx_in[i]) * cx_in[i] +
@@ -1110,6 +1183,7 @@ private:
     std::copy(offset.begin(), offset.end(), frame.offset_m);
     frame.length_unit_m = 1.0;
     frame.plane_z = plane;
+    frame.lower_plane_z = lower;
     BunchOptions options;
     options.roulette = config.roulette;
     options.normalise_transmission = optics.normalise();
@@ -1197,7 +1271,7 @@ private:
   std::map<std::string, stream_trace_detail::Factor> run_factors_;
   std::optional<InverseSquareLaw> law_;
   std::optional<Metadata> event_;
-  std::map<std::uint32_t, std::pair<std::array<double, 9>, double>> geometry_;
+  std::map<std::uint32_t, stream_trace_detail::InputPlanes> geometry_;
   std::optional<stream_trace_detail::Telescope> telescope_;
   std::map<std::uint32_t, std::uint64_t> next_index_;
   StreamTraceCounts counts_;

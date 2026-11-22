@@ -528,7 +528,8 @@ void test_sky_analytic() {
   if (x.size() != 1 || y.size() != 1 || t.size() != 1 || zem.size() != 1) {
     return;
   }
-  CHECK(cz_column.empty()); // frame G: z and cz are not written
+  // Frame G: z is not written; cz is kept as the input had it (downward, not bent here).
+  CHECK(cz_column.size() == 1 && std::abs(static_cast<double>(cz_column[0]) + cz_magnitude) < 1e-6);
   CHECK_NEAR(x[0], 150.0 + s * cx - 100.0, 1e-3);
   CHECK_NEAR(y[0], -40.0 + s * cy, 1e-3);
   CHECK_NEAR(t[0], 5.0 + s / obdeect::propagation::speed_of_light_m_per_ns, 1e-2);
@@ -1711,6 +1712,127 @@ void test_pathlen_rejects() {
 
 } // namespace
 
+// Vertical upward primaries (cz = +1) 1 m above the observation level, wavelength 355 nm,
+// weights 1 to 3, in chunks of chunk_rows rows, for telescope 1 (block) of the run.
+obdeect::stream::PhotonChunk upward_chunk(std::uint32_t telescope, std::size_t first,
+                                          std::size_t n) {
+  obdeect::stream::PhotonChunk chunk;
+  chunk.telescope_id = telescope;
+  chunk.frame = Frame::sky;
+  chunk.first_index = first;
+  const std::uint32_t mask =
+      obdeect::stream::column_bit(Column::x) | obdeect::stream::column_bit(Column::y) |
+      obdeect::stream::column_bit(Column::z) | obdeect::stream::column_bit(Column::cx) |
+      obdeect::stream::column_bit(Column::cy) | obdeect::stream::column_bit(Column::cz) |
+      obdeect::stream::column_bit(Column::t) | obdeect::stream::column_bit(Column::w) |
+      obdeect::stream::column_bit(Column::wavelength);
+  chunk.resize(n, mask);
+  for (std::size_t r = 0; r < n; ++r) {
+    chunk[Column::x][r] = 0.0F;
+    chunk[Column::y][r] = 0.0F;
+    chunk[Column::z][r] = 1.0F;
+    chunk[Column::cx][r] = 0.0F;
+    chunk[Column::cy][r] = 0.0F;
+    chunk[Column::cz][r] = 1.0F;
+    chunk[Column::t][r] = 0.0F;
+    chunk[Column::w][r] = static_cast<float>(1 + (first + r) % 3);
+    chunk[Column::wavelength][r] = 355.0F;
+  }
+  return chunk;
+}
+
+// Stream of one event: upward primaries in telescope 1's block, telescopes 1 and 2 above the
+// ground (centres at 500.7 m above the observation level).
+std::string upward_stream(std::size_t n, std::size_t chunk_rows) {
+  obdeect::stream::Metadata run = scatter_run_keys();
+  run["telescope_z_m"] = std::vector<double>{500.7, 500.7};
+  return make_stream([&](obdeect::stream::Writer &writer) {
+    writer.write_metadata(RecordType::run, run);
+    writer.write_metadata(RecordType::event, event_keys());
+    writer.write_metadata(RecordType::telescope, telescope_keys(1, Frame::sky));
+    for (std::size_t first = 0; first < n; first += chunk_rows) {
+      writer.write_chunk(upward_chunk(1, first, std::min(chunk_rows, n - first)));
+    }
+    writer.write_metadata(RecordType::telescope_end, telescope_end_keys(1));
+    writer.write_metadata(RecordType::event_end, {});
+    writer.write_metadata(RecordType::run_end, {});
+  });
+}
+
+// Sum of the weights of the photons of one telescope with cz > 0 (upward at the plane).
+double upward_weight(const std::vector<obdeect::stream::Record> &records, std::uint32_t telescope) {
+  const auto w = photon_column(records, telescope, Column::w);
+  const auto cz = photon_column(records, telescope, Column::cz);
+  CHECK(w.size() == cz.size());
+  double total = 0.0;
+  for (std::size_t i = 0; i < w.size() && i < cz.size(); ++i) {
+    if (cz[i] > 0.0F) {
+      total += static_cast<double>(w[i]);
+    }
+  }
+  return total;
+}
+
+// Upward primaries: the scattered photons that go up to a telescope centre above their
+// scattering point reach the plane with cz > 0 kept. Their weight is the kernel result for the
+// rows with nz > 0 below the centre, times the envelope (0.5). The primaries are unchanged, so the
+// upward weight added by scattering is that difference. Output does not depend on the chunk size
+// or the thread count.
+void test_upward_scattering_end_to_end() {
+  const auto table = real_table();
+  const std::size_t n = 400;
+  const std::string input = upward_stream(n, n);
+  auto off = scattering_config(table, true);
+  off.scattering = obdeect::propagation::ScatteringConfig{};
+  off.scattering_table.reset();
+  const auto without = records_of(propagate(input, off).bytes);
+  const auto with = records_of(propagate(input, scattering_config(table, true)).bytes);
+
+  obdeect::propagation::ScatteringConfig config;
+  config.enabled = true;
+  config.points_per_photon = 8;
+  const double telescope_z = 500.7;
+  const std::vector<obdeect::propagation::ScatterTelescope> sphere = {
+      {1, 3000.0, 0.0, telescope_z, 12.0}, {2, 0.0, -2500.0, telescope_z, 12.0}};
+  // Same primaries as the run (vertical upward, z = 1 m above the observation level).
+  std::vector<std::vector<obdeect::stream::PhotonChunk>> lists(sphere.size());
+  obdeect::propagation::scatter_chunk(config, scattering_table(), table, sphere,
+                                      upward_chunk(1, 0, n), scatter_seed, 7, 0, lists);
+  const float h_c = static_cast<float>(site_m + telescope_z);
+  for (std::size_t t = 0; t < sphere.size(); ++t) {
+    double expected = 0.0;
+    std::size_t rows = 0;
+    for (const auto &piece : lists[t]) {
+      for (std::size_t r = 0; r < piece.rows(); ++r) {
+        if (piece[Column::cz][r] > 0.0F && piece[Column::zem][r] < h_c) {
+          expected += static_cast<double>(piece[Column::w][r]);
+          ++rows;
+        }
+      }
+    }
+    const auto telescope = static_cast<std::uint32_t>(t + 1);
+    const double added = upward_weight(with, telescope) - upward_weight(without, telescope);
+    CHECK(rows > 0);
+    CHECK(expected > 0.0);
+    CHECK_NEAR(added, 0.5 * expected, 1e-5 * expected);
+  }
+
+  // Chunk sizes and threads: the same output.
+  for (const std::size_t chunk_rows : {std::size_t{77}, n}) {
+    for (const unsigned threads : {1U, 3U}) {
+      auto config_threads = scattering_config(table, true);
+      config_threads.threads = threads;
+      const auto records =
+          records_of(propagate(upward_stream(n, chunk_rows), config_threads).bytes);
+      for (const std::uint32_t telescope : {1U, 2U}) {
+        for (const Column c : {Column::x, Column::y, Column::t, Column::w, Column::cz}) {
+          CHECK(photon_column(records, telescope, c) == photon_column(with, telescope, c));
+        }
+      }
+    }
+  }
+}
+
 int main() {
   return run_checks([] {
     test_output_index_continues_across_array_reuses();
@@ -1741,6 +1863,7 @@ int main() {
     test_run_observation_level();
     test_rejects_non_finite_input();
     test_scattering_primaries();
+    test_upward_scattering_end_to_end();
     test_scattering_telescope_selection();
     test_scattering_array_index();
     test_scattering_primaries_rejects();

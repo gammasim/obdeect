@@ -12,11 +12,18 @@ Per photon, with telescope position $(X_t, Y_t, Z_t)$ [m], observation level $h_
 $\zeta = \operatorname{atan2}(\sqrt{c_x^2 + c_y^2},\, c_z)$:
 
 $$
-s = \frac{z_\mathrm{em} - h_t}{c_z}, \qquad
+s = \frac{|z_\mathrm{em} - h_t|}{c_z}, \qquad
 x_\mathrm{sky} = X_t + x - s\,c_x, \qquad
 y_\mathrm{sky} = Y_t + y - s\,c_y, \qquad
 z_\mathrm{sky} = z_\mathrm{em} - h_\mathrm{obs}
 $$
+
+A downward photon (cz < 0) starts at or above the plane, $z_\mathrm{em} \ge h_t$. An upward photon
+(cz > 0, the photon came from below the plane) has $z_\mathrm{em} \le h_t$; the straight
+back-projection goes down from the plane to the emission, the same formula with $s = (h_t -
+z_\mathrm{em})/c_z$. A photon with cz = 0 (horizontal) is dropped. The delay of an upward photon is
+`straight_path_air_delay_ns` over $[z_\mathrm{em}, h_t]$ (the same integral as the downward one).
+The time is $t_\mathrm{sky} = t - (s/c + \text{delay})$ in both cases; the cz column is kept.
 
 $$
 t_\mathrm{sky} = t - \left(\frac{s}{c} + \Delta t\right), \qquad
@@ -51,7 +58,7 @@ In Python (the same conversion, returns the counts):
 import obdeect.propagation as propagation
 
 summary = propagation.to_sky("ground.pst", "sky.pst", profile="atmprof.dat")
-# {'photons_in': ..., 'photons_out': ..., 'dropped': 0}
+# {'photons_in': ..., 'photons_out': ..., 'dropped': 0}  # dropped: horizontal photons, NaN rows
 back = propagation.propagate(
     "sky.pst",
     "ground_again.pst",
@@ -71,7 +78,9 @@ back = propagation.propagate(
   refracted path is neglected: the error is of order metres at large zenith angles (see
   [refraction](refraction.md)).
 - Rejected input: `curvature_applied = 1` (CORSIKA CURVED photons have no flat sky geometry),
-  frames other than G, a missing `zem` column, a missing observation level, and a telescope record
-  whose position differs from the run.
+  frames other than G, a missing `zem` column, a missing observation level, a telescope record
+  whose position differs from the run, a cz column that does not match cx and cy (either sign), and
+  an upward photon emitted above the telescope plane ($z_\mathrm{em} > h_t$): it cannot have come
+  from below the plane.
 - Times are float32: the rounding of the converted time is about half the float32 spacing at the
   larger of $t$ and $t_\mathrm{sky}$ (about 0.002 ns near 3e4 ns).

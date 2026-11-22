@@ -17,13 +17,16 @@ namespace obdeect::ray_tracing {
 
 // Photon bunches of an air shower (SoA, n entries). A bunch is `size` photons
 // that share position, direction, time, emission height and wavelength. Lengths
-// are in input units (BunchFrame::length_unit_m); the photons move towards
-// -z in the input frame: cz = -sqrt(max(0, 1 - cx^2 - cy^2)).
+// are in input units (BunchFrame::length_unit_m). Without `cz` the photons move
+// towards -z in the input frame: cz = -sqrt(max(0, 1 - cx^2 - cy^2)). With `cz`
+// (either sign, never 0) a bunch with cz < 0 moves down and starts on
+// BunchFrame::plane_z; one with cz > 0 moves up and starts on
+// BunchFrame::lower_plane_z, below the optics.
 struct BunchBlock {
   const float *x{}, *y{}, *cx{}, *cy{}, *time_ns{}, *zem{}, *size{}, *wavelength_nm{};
   const std::uint64_t *bunch_id{}; // Unique per bunch for one seed.
   std::size_t n{};
-  const float *cz{}; // Optional vertical direction cosine.
+  const float *cz{}; // Optional vertical direction cosine (either sign, nonzero).
 };
 
 // Input frame to telescope frame: p = R (u x, u y, u plane_z) + offset and
@@ -32,7 +35,10 @@ struct BunchFrame {
   double rotation[9]{1, 0, 0, 0, 1, 0, 0, 0, 1};
   double offset_m[3]{};
   double length_unit_m{1.0}; // Metres per input length unit.
-  double plane_z{};          // Input units.
+  double plane_z{};          // Input units: the input plane of bunches moving down.
+  // Input units: the input plane of bunches moving up (below all optics). NaN when unused;
+  // then bunches with cz > 0 are rejected.
+  double lower_plane_z{std::numeric_limits<double>::quiet_NaN()};
 };
 
 // Wavelength of bunches with wavelength 0: density proportional to 1/lambda^2
@@ -76,7 +82,7 @@ inline void validate_frame(const BunchFrame &f) {
     }
   if (!(f.length_unit_m > 0.0) || !std::isfinite(f.length_unit_m) || !std::isfinite(f.plane_z) ||
       !std::isfinite(f.offset_m[0]) || !std::isfinite(f.offset_m[1]) ||
-      !std::isfinite(f.offset_m[2]))
+      !std::isfinite(f.offset_m[2]) || std::isinf(f.lower_plane_z))
     throw std::invalid_argument("bunch frame: invalid length unit, plane or offset");
 }
 
@@ -124,7 +130,8 @@ public:
           !(static_cast<double>(in_.cx[i]) * in_.cx[i] +
                 static_cast<double>(in_.cy[i]) * in_.cy[i] <=
             1.0 + 1e-6) ||
-          (in_.cz && (!(in_.cz[i] < 0.0F) ||
+          (in_.cz && (!std::isfinite(static_cast<double>(in_.cz[i])) || in_.cz[i] == 0.0F ||
+                      (in_.cz[i] > 0.0F && !std::isfinite(frame_.lower_plane_z)) ||
                       std::abs(static_cast<double>(in_.cx[i]) * in_.cx[i] +
                                static_cast<double>(in_.cy[i]) * in_.cy[i] +
                                static_cast<double>(in_.cz[i]) * in_.cz[i] - 1.0) > 1e-5)) ||
@@ -145,11 +152,13 @@ public:
     const double u = frame_.length_unit_m;
     const double *r = frame_.rotation;
     // Position and direction in the telescope frame, computed for the first
-    // photon of a bunch that survives the thinning.
+    // photon of a bunch that survives the thinning. A bunch moving up starts on the
+    // lower plane.
     // The model's axes offset O displaces the optical origin: P is traced at R P - O.
     const auto &axes = model_.axes_offset_m;
     const auto transform = [&](std::size_t i) {
-      const double x = u * in_.x[i], y = u * in_.y[i], z = u * frame_.plane_z;
+      const double plane_z = in_.cz && in_.cz[i] > 0.0F ? frame_.lower_plane_z : frame_.plane_z;
+      const double x = u * in_.x[i], y = u * in_.y[i], z = u * plane_z;
       double cx = in_.cx[i], cy = in_.cy[i];
       double cz = in_.cz ? in_.cz[i] : -std::sqrt(std::max(0.0, 1.0 - cx * cx - cy * cy));
       if (in_.cz) {
@@ -231,8 +240,12 @@ public:
           ray = transform(i);
           placed = true;
         }
+        // The trace branch follows the direction in the traced frame: a photon that moves
+        // towards +z there (also a G photon with cz < 0 at a large zenith angle, which arrives
+        // from behind the dish) takes the first-hit path. The start plane follows cz.
+        const bool from_below = ray.direction.z >= 0.0;
         const auto t = trace_photon(model_, ray, lambda, time, 1.0, id, seed_, true, false, false,
-                                    options_.classify_losses, sub);
+                                    options_.classify_losses, sub, from_below);
         if (t.status != Status::detected)
           continue;
         const double ratio = std::min(1.0, (t.weight / norm) / cached_bound);
@@ -273,10 +286,14 @@ private:
 // the thread count, the chunking or the order of the bunches; bunch ids must be
 // unique per seed.
 //
+// Bunches moving up (cz > 0) start on BunchFrame::lower_plane_z and are traced
+// with trace_photon's from_below path; they are never detected unless their first
+// hit is the reflecting face of the primary (see trace_photon).
+//
 // Invalid input (a non-orthonormal frame, acceptance outside [0, 1], a bunch of
-// wavelength 0 without a density or law, bad sizes) throws std::invalid_argument
-// before any tracing; so does a transmission without a known maximum
-// (ModelError).
+// wavelength 0 without a density or law, bad sizes, cz = 0 or an upward bunch
+// without lower_plane_z) throws std::invalid_argument before any tracing; so does a
+// transmission without a known maximum (ModelError).
 //
 // `allocate(rows)` is called once, after validation, with the number
 // of thinning survivors, and returns the output columns for that many

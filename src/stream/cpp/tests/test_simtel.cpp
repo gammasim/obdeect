@@ -581,10 +581,9 @@ std::vector<Bunch> first_bunches(const std::string &bytes) {
 }
 
 // Telescope frame (dual mirror, Bypass_Optics=1), observation level 2200 m. Emission point
-// (0.1, 0.2, 0.5) m, t = 3 ns, direction (0.6, 0, cz):
-//   cz = -0.8 (towards the plane z = 0): path 0.625 m, crossing x = 0.1 + 0.625 * 0.6 = 0.475 m
-//   cz = +0.8 (away from it):            path -0.625 m, crossing x = 0.1 - 0.375 = -0.275 m
-//   both: y = 0.2 m, t = 3 + 0.625 / 0.299792458 ns, zem = 2200.5 m (bunch values in cm)
+// (0.1, 0.2, 0.5) m, t = 3 ns, direction (0.6, 0, -0.8), towards the plane z = 0: path 0.625 m,
+// crossing x = 0.1 + 0.625 * 0.6 = 0.475 m, y = 0.2 m, t = 3 + 0.625 / 0.299792458 ns,
+// zem = 2200.5 m (bunch values in cm). An upward photon (cz = +0.8) is rejected.
 void test_telescope_frame_through_adapter() {
   const CameraMap camera{{1, CameraTelescope{2, 30.0}}};
   const double t_out = 3.0 + 0.625 / 0.299792458;
@@ -603,19 +602,13 @@ void test_telescope_frame_through_adapter() {
     CHECK_NEAR(down[0].photons, 1.0, 1e-6);
     CHECK_NEAR(down[0].lambda, 400.0, 1e-6);
   }
-  const std::vector<Bunch> up = first_bunches(
-      run_adapter(telescope_frame_records(
-                      1, telescope_chunk(1, {0.1}, {0.2}, {0.5}, {0.6}, {0.0}, {0.8}, {3.0})),
-                  camera));
-  CHECK(up.size() == 1);
-  if (up.size() == 1) {
-    CHECK_NEAR(up[0].x, -27.5, 1e-3);
-    CHECK_NEAR(up[0].y, 20.0, 1e-3);
-    CHECK_NEAR(up[0].cx, 0.6, 1e-6);
-    CHECK_NEAR(up[0].ctime, t_out, 1e-4);
-    CHECK_NEAR(up[0].zem, 220050.0, 0.1);
-  }
-  // Without cz the photon moves towards the plane: same bunch as cz = -0.8.
+  // An upward photon (cz = +0.8) is rejected, see test_non_downward_cz_rejected.
+  CHECK(throws_error([&] {
+    run_adapter(telescope_frame_records(
+                    1, telescope_chunk(1, {0.1}, {0.2}, {0.5}, {0.6}, {0.0}, {0.8}, {3.0})),
+                camera);
+  }));
+  // Without cz the photon moves downwards: same bunch as cz = -0.8.
   const std::vector<Bunch> implied = first_bunches(run_adapter(
       telescope_frame_records(1, telescope_chunk(1, {0.1}, {0.2}, {0.5}, {0.6}, {0.0}, {}, {3.0})),
       camera));
@@ -657,6 +650,60 @@ void test_telescope_frame_report_and_telpos() {
     CHECK_NEAR(other[0].x, rotated[0].x, 1e-6);
     CHECK_NEAR(other[0].cx, rotated[0].cx, 1e-6);
   }
+}
+
+// Message of a std::invalid_argument from run_adapter contains `fragment` (false if none).
+bool rejected_with(const std::vector<Record> &records, const CameraMap &camera,
+                   const std::string &fragment) {
+  try {
+    run_adapter(records, camera);
+  } catch (const std::invalid_argument &error) {
+    return std::string(error.what()).find(fragment) != std::string::npos;
+  } catch (const std::exception &) {
+    return false;
+  }
+  return false;
+}
+
+// Upward (cz > 0), horizontal (cz = 0) and non-finite cz are rejected in every frame, and the
+// rejection names the frame. Downward cz is written as before.
+void test_non_downward_cz_rejected() {
+  const CameraMap dual{{1, CameraTelescope{2, 0.0}}};
+  const CameraMap camera{{2, CameraTelescope{2, 30.0}}};
+  const std::string telescope_msg = "telescope-frame photon must move downwards";
+  const std::string ground_msg = "ground-frame photon must move downwards";
+  // Telescope frame: upward (cx = 0.6, cz = 0.8), horizontal (cx = 1, cz = 0), NaN cz.
+  CHECK(rejected_with(telescope_frame_records(
+                          1, telescope_chunk(1, {0.1}, {0.2}, {0.5}, {0.6}, {0.0}, {0.8}, {3.0})),
+                      dual, telescope_msg));
+  CHECK(rejected_with(telescope_frame_records(
+                          1, telescope_chunk(1, {0.1}, {0.2}, {0.5}, {1.0}, {0.0}, {0.0}, {3.0})),
+                      dual, telescope_msg));
+  CHECK(rejected_with(telescope_frame_records(1, telescope_chunk(1, {0.1}, {0.2}, {0.5}, {0.6},
+                                                                 {0.0}, {std::nanf("")}, {3.0})),
+                      dual, telescope_msg));
+  // A rejected telescope-frame chunk is left unchanged.
+  PhotonChunk upward = telescope_chunk(1, {0.1}, {0.2}, {0.5}, {0.6}, {0.0}, {0.8}, {3.0});
+  CHECK(throws_error([&] { telescope_to_bypass_convention(upward, 2200.0); }));
+  CHECK_NEAR(upward[Column::x][0], 0.1, 1e-6);
+  CHECK_NEAR(upward[Column::t][0], 3.0, 1e-6);
+
+  // Ground frame: upward cz column rejected, downward cz column accepted.
+  PhotonChunk up_ground = chunk_of(1, Frame::ground, {0.5}, {0.2}, {0.1}, {-0.2});
+  up_ground[Column::cz] = {0.9539F};
+  CHECK(rejected_with(telescope_frame_records(1, up_ground), {}, ground_msg));
+  PhotonChunk down_ground = chunk_of(1, Frame::ground, {0.5}, {0.2}, {0.1}, {-0.2});
+  down_ground[Column::cz] = {-0.9539F};
+  CHECK(!throws_error([&] { run_adapter(telescope_frame_records(1, down_ground), {}); }));
+
+  // Camera frame: photons are at the camera entrance; the sign of cz is not checked (ray-traced
+  // photons after a single mirror move +z into the camera).
+  PhotonChunk up_camera = chunk_of(2, Frame::camera, {0.5}, {0.2}, {0.1}, {-0.2});
+  up_camera[Column::cz] = {0.9539F};
+  CHECK(!throws_error([&] { run_adapter(telescope_frame_records(2, up_camera), camera); }));
+  PhotonChunk down_camera = chunk_of(2, Frame::camera, {0.5}, {0.2}, {0.1}, {-0.2});
+  down_camera[Column::cz] = {-0.9539F};
+  CHECK(!throws_error([&] { run_adapter(telescope_frame_records(2, down_camera), camera); }));
 }
 
 // Telescope-frame photons need a dual-mirror camera map entry and a single frame per telescope.
@@ -1380,6 +1427,7 @@ int main() {
     test_telescope_frame_through_adapter();
     test_telescope_frame_report_and_telpos();
     test_telescope_frame_rejected();
+    test_non_downward_cz_rejected();
     test_synthesised_headers();
     test_synthesised_run_end_counts_events();
     test_missing_metadata_rejected();

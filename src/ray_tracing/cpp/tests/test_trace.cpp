@@ -7,7 +7,9 @@
 
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <numeric>
 #include <stdexcept>
@@ -769,6 +771,317 @@ void bunch_option_validation() {
   CHECK(model_error);
 }
 
+// Facets are hit from either side only when asked: the one-sided intersect() rejects back faces,
+// intersect_any_side() reports them, and the normal of a hit points to the reflecting side.
+void two_sided_facets() {
+  const Vec3 up{0, 0, 1}, down{0, 0, -1};
+  Facet flat{7,         {0, 0, 0}, {0, 0, 1}, {1, 0, 0}, {0, 1, 0},
+             {1, 0, 0}, {0, 1, 0}, 0.5,       0.0,       Aperture::circle};
+  const Ray from_below{{0.1, 0.0, -5.0}, up};
+  CHECK(!flat.intersect(from_below, kMinDistanceM));
+  const auto back = flat.intersect_any_side(from_below, kMinDistanceM);
+  CHECK(back && back->id == 7);
+  CHECK(back && std::abs(back->t - 5.0) < 1e-12);
+  CHECK(back && dot(up, back->normal) > 0.0); // Back face: the normal points up, against the ray.
+  const auto front = flat.intersect(Ray{{0.1, 0.0, 5.0}, down}, kMinDistanceM);
+  CHECK(front && dot(down, front->normal) < 0.0);
+  CHECK(flat.intersect_any_side(Ray{{0.1, 0.0, 5.0}, down}, kMinDistanceM)->t == front->t);
+  CHECK(
+      !flat.intersect_any_side(Ray{{0.6, 0.0, -5.0}, up}, kMinDistanceM)); // Outside the aperture.
+  CHECK(!flat.intersect_any_side(Ray{{0.1, 0.0, -5.0}, {1, 0, 0}}, kMinDistanceM)); // Parallel.
+
+  // Curved cap of radius 20 (centre at z = 20): from below, the hit is on the cap's back.
+  const Facet curved{8,         {0, 0, 0}, {0, 0, 1}, {1, 0, 0}, {0, 1, 0},
+                     {1, 0, 0}, {0, 1, 0}, 0.5,       20.0,      Aperture::circle};
+  CHECK(!curved.intersect(from_below, kMinDistanceM));
+  const auto cap = curved.intersect_any_side(from_below, kMinDistanceM);
+  CHECK(cap && std::abs(cap->point.z - (20.0 - std::sqrt(400.0 - 0.01))) < 1e-9);
+  CHECK(cap && std::abs(cap->t - (5.0 + cap->point.z)) < 1e-9);
+  CHECK(cap && dot(up, cap->normal) > 0.0);
+  const auto cap_front = curved.intersect(Ray{{0.1, 0.0, 5.0}, down}, kMinDistanceM);
+  CHECK(cap_front && dot(down, cap_front->normal) < 0.0);
+}
+
+// Photons from below over a dish: the dish's back face blocks the centre; outside it the photons
+// reach the focal plane from below (direct_focal). Nothing is detected, and the blocked fraction is
+// the projected area of the dish over the beam area (pi r^2 / A for a grid over a square).
+void from_below_single_facet() {
+  const auto m = single_facet(10.0, 0.5);
+  constexpr int n = 200;
+  std::size_t blocked = 0, direct = 0, other = 0, detected = 0;
+  for (int i = 0; i < n; ++i)
+    for (int j = 0; j < n; ++j) {
+      const double x = -1.0 + 2.0 * (i + 0.5) / n, y = -1.0 + 2.0 * (j + 0.5) / n;
+      const auto r = trace_photon(m, {{x, y, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, true, false,
+                                  true, true, 0, true);
+      if (r.status == Status::blocked) {
+        ++blocked;
+        CHECK(r.terminal_surface == 1 && x * x + y * y < 0.25);
+        CHECK(r.weight == 0.0);
+        // The cap of radius 20 lies at z = 20 - sqrt(400 - r^2) on the dish.
+        CHECK_NEAR(r.position.z, 20.0 - std::sqrt(400.0 - (x * x + y * y)), 1e-9);
+      } else if (r.status == Status::direct_focal) {
+        ++direct;
+        CHECK(r.terminal_surface == 2 && x * x + y * y > 0.25);
+        CHECK_NEAR(r.position.z, 10.0, 1e-12);
+        CHECK(r.weight == 0.0);
+      } else {
+        ++other;
+      }
+      detected += r.status == Status::detected;
+    }
+  CHECK(detected == 0 && other == 0);
+  CHECK(blocked + direct == static_cast<std::size_t>(n) * n);
+  // Dish of radius 0.5 in a square of side 2: pi (0.5)^2 / 2^2 of the beam.
+  CHECK_NEAR(static_cast<double>(blocked) / (n * n), 3.141592653589793 * 0.25 / 4.0, 2e-3);
+}
+
+// A flat facet tilted 60 degrees with its reflecting side facing down: a photon from below hits
+// that face and continues sequentially (the reflection is upward and reaches the focal plane).
+void from_below_tilted_facet() {
+  OpticalModel m;
+  const double s = std::sqrt(0.75), c = 0.5; // Normal (s, 0, -c), tangent u (c, 0, s).
+  m.primary.facets.push_back({1,
+                              {0, 0, 0},
+                              {s, 0, -c},
+                              {c, 0, s},
+                              {0, 1, 0},
+                              {c, 0, s},
+                              {0, 1, 0},
+                              0.5,
+                              0.0,
+                              Aperture::circle});
+  m.primary.grid = FacetGrid(m.primary.facets);
+  m.focal_surface = {2, 10.0, std::nullopt};
+  const auto r = trace_photon(m, {{0.1, 0.0, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, true, false,
+                              true, true, 0, true);
+  CHECK(r.status == Status::detected);
+  CHECK(r.primary_surface == 1 && r.terminal_surface == 2);
+  // The facet plane s x - c z = 0 crosses the ray at z = s x / c.
+  CHECK_NEAR(r.primary_point.z, s * 0.1 / c, 1e-12);
+  // Reflected direction: d - 2 (d.n) n = (sin 120, 0, -cos 120) = (s, 0, c) for this normal.
+  CHECK_NEAR(r.direction.x, s, 1e-12);
+  CHECK_NEAR(r.direction.z, c, 1e-12);
+  CHECK(r.weight == 1.0);
+}
+
+// Folded dual mirror from below: the secondary is hit on its reflecting face (non_sequential), the
+// focal surface directly on its receiving side (direct_focal), the primary's back (blocked).
+void from_below_dual_mirror() {
+  const auto m = folded_paraboloid();
+  const auto secondary = trace_photon(m, {{0.7, 0.0, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, true,
+                                      false, true, true, 0, true);
+  CHECK(secondary.status == Status::non_sequential && secondary.terminal_surface == 2);
+  CHECK_NEAR(secondary.position.z, 5.0, 1e-12);
+  CHECK(secondary.weight == 0.0);
+  const auto focal = trace_photon(m, {{0.2, 0.0, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, true,
+                                  false, true, true, 0, true);
+  CHECK(focal.status == Status::direct_focal && focal.terminal_surface == 3);
+  CHECK_NEAR(focal.position.z, 0.0, 1e-12);
+  const auto back = trace_photon(m, {{2.0, 0.0, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, true,
+                                 false, true, true, 0, true);
+  CHECK(back.status == Status::blocked && back.terminal_surface == 1);
+  CHECK(back.primary_surface == 1);
+}
+
+// Obscurers of every leg block photons from below, the nearest first.
+void from_below_obscurers() {
+  auto m = single_facet(10.0, 0.5);
+  Obscurer rod;
+  rod.kind = Obscurer::Kind::cylinder;
+  rod.id = 9;
+  rod.a = {-1, 0.2, -2};
+  rod.b = {1, 0.2, -2};
+  rod.radius_a = 0.05;
+  rod.bound_a = rod.a;
+  rod.bound_b = rod.b;
+  rod.bound_radius = rod.radius_a;
+  rod.legs = Leg::after_secondary;
+  m.obscurers = Obscurers({rod}, {});
+  const auto r = trace_photon(m, {{0.0, 0.2, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, true, false,
+                              true, true, 0, true);
+  CHECK(r.status == Status::blocked && r.terminal_surface == 9);
+  CHECK_NEAR(r.position.z, -2.05, 1e-9);
+  // Off the rod: the photon reaches the focal plane from below.
+  CHECK(trace_photon(m, {{0.0, -0.8, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, true, false, true,
+                     true, 0, true)
+            .status == Status::direct_focal);
+  // A ray that meets nothing at all: missed_primary.
+  CHECK(trace_photon(m, {{0.0, 0.0, -5.0}, {1, 0, 0}}, 400.0, 0.0, 1.0, 0, 1, true, false, true,
+                     true, 0, true)
+            .status == Status::missed_primary);
+  CHECK(to_string(Status::non_sequential) == "non_sequential");
+  CHECK(to_string(Status::direct_focal) == "direct_focal");
+  CHECK(kStatusCount == 9);
+}
+
+// Bunches moving up and down in one block: the downward bunches give the same photons as without
+// the upward ones (ids, order and values), splitting the block or reversing its order changes
+// nothing, and upward bunches are never detected here.
+void mixed_direction_bunches() {
+  const auto model = single_facet(10.0, 0.5);
+  constexpr std::size_t n = 6000;
+  std::vector<float> x(n), y(n), cx(n), cy(n), cz(n), zero(n, 0.0F), size(n, 1.0F),
+      wavelength(n, 400.0F);
+  std::vector<std::uint64_t> ids(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    const auto u = uniform4(9, i, Stream::source);
+    x[i] = static_cast<float>(1.5 * (2.0 * u[0] - 1.0));
+    y[i] = static_cast<float>(1.5 * (2.0 * u[1] - 1.0));
+    cx[i] = static_cast<float>(0.05 * (2.0 * u[2] - 1.0));
+    cy[i] = static_cast<float>(0.05 * (2.0 * u[3] - 1.0));
+    const double s = std::sqrt(1.0 - cx[i] * cx[i] - cy[i] * cy[i]);
+    cz[i] = static_cast<float>(i % 2 ? s : -s);
+    ids[i] = i;
+  }
+  BunchBlock in{x.data(),    y.data(),          cx.data(),  cy.data(), zero.data(), zero.data(),
+                size.data(), wavelength.data(), ids.data(), n,         cz.data()};
+  BunchFrame frame;
+  frame.plane_z = 20.0;
+  frame.lower_plane_z = -5.0;
+  ThreadPool pool(4);
+  struct Output {
+    std::vector<double> position, direction, time, weight, lambda;
+    std::vector<std::uint64_t> bunch;
+    std::vector<std::uint32_t> sub;
+    std::size_t rows{};
+  };
+  const auto trace = [&](const BunchBlock &block, ThreadPool &p) {
+    Output out;
+    const auto allocate = [&](std::size_t rows) {
+      out.rows = rows;
+      out.position.resize(3 * rows);
+      out.direction.resize(3 * rows);
+      out.time.resize(rows);
+      out.weight.resize(rows);
+      out.lambda.resize(rows);
+      out.bunch.resize(rows);
+      out.sub.resize(rows);
+      return BunchResult{out.position.data(), out.direction.data(), out.time.data(),
+                         out.weight.data(),   out.lambda.data(),    out.bunch.data(),
+                         out.sub.data()};
+    };
+    const auto written = trace_bunches(model, block, frame, BunchOptions{}, 7, p, allocate);
+    CHECK(written <= out.rows);
+    out.rows = written; // Rows written; the allocation may be larger (thinning survivors).
+    out.position.resize(3 * written);
+    out.direction.resize(3 * written);
+    out.time.resize(written);
+    out.weight.resize(written);
+    out.lambda.resize(written);
+    out.bunch.resize(written);
+    out.sub.resize(written);
+    return out;
+  };
+  const Output all = trace(in, pool);
+  CHECK(all.rows > 0);
+  // Every detected bunch is a downward one: the upward bunches (odd rows) never reach the camera.
+  for (std::size_t r = 0; r < all.rows; ++r)
+    CHECK(all.bunch[r] % 2 == 0);
+
+  // Downward bunches alone: the same rows and values, bit for bit.
+  std::vector<float> down_x, down_y, down_cx, down_cy, down_cz;
+  std::vector<std::uint64_t> down_ids;
+  for (std::size_t i = 0; i < n; i += 2) {
+    down_x.push_back(x[i]);
+    down_y.push_back(y[i]);
+    down_cx.push_back(cx[i]);
+    down_cy.push_back(cy[i]);
+    down_cz.push_back(cz[i]);
+    down_ids.push_back(ids[i]);
+  }
+  const std::vector<float> down_zero(down_ids.size(), 0.0F), down_size(down_ids.size(), 1.0F),
+      down_wavelength(down_ids.size(), 400.0F);
+  BunchBlock down{down_x.data(),    down_y.data(),    down_cx.data(),   down_cy.data(),
+                  down_zero.data(), down_zero.data(), down_size.data(), down_wavelength.data(),
+                  down_ids.data(),  down_ids.size(),  down_cz.data()};
+  const Output only_down = trace(down, pool);
+  CHECK(only_down.rows == all.rows);
+  for (std::size_t r = 0; r < all.rows && r < only_down.rows; ++r) {
+    CHECK(all.bunch[r] == 2 * only_down.bunch[r]);
+    CHECK(all.time[r] == only_down.time[r] && all.weight[r] == only_down.weight[r]);
+    CHECK(all.position[3 * r] == only_down.position[3 * r]);
+    CHECK(all.direction[3 * r + 2] == only_down.direction[3 * r + 2]);
+  }
+
+  // One thread, and the bunches in reverse order: the same photon per bunch id.
+  ThreadPool single(1);
+  const Output again = trace(in, single);
+  CHECK(again.rows == all.rows && again.bunch == all.bunch && again.time == all.time);
+  std::vector<float> rx(x.rbegin(), x.rend()), ry(y.rbegin(), y.rend()),
+      rcx(cx.rbegin(), cx.rend()), rcy(cy.rbegin(), cy.rend()), rcz(cz.rbegin(), cz.rend());
+  std::vector<std::uint64_t> rids(ids.rbegin(), ids.rend());
+  BunchBlock reversed{rx.data(),   ry.data(),   rcx.data(),  rcy.data(),
+                      zero.data(), zero.data(), size.data(), wavelength.data(),
+                      rids.data(), n,           rcz.data()};
+  const Output back = trace(reversed, pool);
+  CHECK(back.rows == all.rows);
+  std::map<std::uint64_t, std::size_t> row_of;
+  for (std::size_t r = 0; r < back.rows; ++r)
+    row_of[back.bunch[r]] = r; // Input row of the reversed block is n - 1 - id.
+  for (std::size_t r = 0; r < all.rows; ++r) {
+    const std::size_t b = row_of.at(n - 1 - all.bunch[r]);
+    CHECK(back.time[b] == all.time[r] && back.weight[b] == all.weight[r]);
+  }
+}
+
+void bunch_direction_validation() {
+  const auto model = single_facet(10.0, 0.5);
+  const float zero = 0.0F, one = 1.0F, nm = 400.0F;
+  const std::uint64_t id = 0;
+  BunchBlock in;
+  in.x = in.y = in.cx = in.cy = in.time_ns = in.zem = &zero;
+  in.size = &one;
+  in.wavelength_nm = &nm;
+  in.bunch_id = &id;
+  in.n = 1;
+  BunchFrame frame;
+  frame.plane_z = 20.0;
+  ThreadPool pool(1);
+  const auto allocate = [](std::size_t) { return BunchResult{}; };
+  const auto run = [&](const BunchBlock &block, const BunchFrame &f) {
+    return throws_invalid_argument(
+        [&] { trace_bunches(model, block, f, BunchOptions{}, 1, pool, allocate); });
+  };
+  // Horizontal bunches have no plane to start on.
+  in.cz = &zero;
+  CHECK(run(in, frame));
+  // Upward bunches need the lower plane.
+  in.cz = &one;
+  CHECK(run(in, frame));
+  frame.lower_plane_z = -5.0;
+  CHECK(!run(in, frame));
+  // A direction that is not a unit vector is rejected: cz must match cx and cy.
+  const float half_minus = -0.5F;
+  in.cz = &half_minus;
+  CHECK(run(in, frame));
+}
+
+// A photon that moves down in the input frame can move up in the telescope frame, arriving from
+// behind the dish (a telescope at a large zenith angle). The trace takes the first-hit path: the
+// back of the dish blocks it. The sequential path does not meet the one-sided facet at all.
+void tilted_telescope_from_behind() {
+  const auto model = single_facet(10.0, 0.5);
+  // Input frame to telescope frame: a rotation by pi about x (z -> -z), so cz = -1 is up in the
+  // telescope frame and the input plane at z = 20 lies at telescope z = -20, below the dish.
+  BunchFrame frame;
+  frame.rotation[4] = -1.0;
+  frame.rotation[8] = -1.0;
+  frame.plane_z = 20.0;
+  const float x = 0.1F, zero = 0.0F, cz = -1.0F, one = 1.0F, nm = 400.0F;
+  const std::uint64_t id = 0;
+  BunchBlock in{&x, &zero, &zero, &zero, &zero, &zero, &one, &nm, &id, 1, &cz};
+  ThreadPool pool(1);
+  const auto allocate = [](std::size_t) { return BunchResult{}; };
+  // Nothing is detected: the photon is blocked by the back of the dish.
+  CHECK(trace_bunches(model, in, frame, BunchOptions{}, 1, pool, allocate) == 0);
+  const auto blocked = trace_photon(model, {{0.1, 0.0, -20.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1,
+                                    true, false, true, true, 0, true);
+  CHECK(blocked.status == Status::blocked && blocked.terminal_surface == 1);
+  CHECK(trace_photon(model, {{0.1, 0.0, -20.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1).status ==
+        Status::missed_primary);
+}
+
 } // namespace
 
 void all_tests() {
@@ -787,6 +1100,14 @@ void all_tests() {
   bunch_option_validation();
   bunch_survivor_allocation();
   grazing_start_invariance();
+  two_sided_facets();
+  from_below_single_facet();
+  from_below_tilted_facet();
+  from_below_dual_mirror();
+  from_below_obscurers();
+  mixed_direction_bunches();
+  bunch_direction_validation();
+  tilted_telescope_from_behind();
 }
 
 int main() { return run_checks(all_tests); }
