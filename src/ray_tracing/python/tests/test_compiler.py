@@ -4,8 +4,9 @@ import math
 
 import numpy as np
 import pytest
-from obdeect.ray_tracing.compiler import compile_model, convex_hull, model_hash, response_grid
+from obdeect.ray_tracing.compiler import compile_model, convex_hull, response_grid
 from obdeect.ray_tracing.formats import ModelError
+from obdeect.ray_tracing.hashing import model_hash
 from telescopes import STRUCTURE, dual, record, segmented
 
 

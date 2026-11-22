@@ -37,6 +37,7 @@ from obdeect.ray_tracing.formats import (
     segmentation_from_record,
     signed_length_m,
 )
+from obdeect.ray_tracing.hashing import model_hash
 from obdeect.ray_tracing.simtel_tables import evaluate
 
 MODEL_FORMAT = "obdeect.optical-model.v2"
@@ -226,13 +227,6 @@ def _sampling(p: _Parameters, optics: dict[str, Any]) -> dict[str, float]:
         "disk_z_m": -overall,
         "start_z_m": max(heights) + 1.0,
     }
-
-
-def model_hash(model: dict[str, Any]) -> str:
-    """SHA-256 of the canonical JSON of the model without its ``sha256`` entry."""
-    content = {key: value for key, value in model.items() if key != "sha256"}
-    text = json.dumps(content, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(text.encode()).hexdigest()
 
 
 def _surface_ids(optics: dict[str, Any]) -> list[int]:

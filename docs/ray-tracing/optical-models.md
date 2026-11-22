@@ -26,8 +26,9 @@ An optical model (`obdeect.optical-model.v2`) is one JSON document:
   acting on the legs `incoming`, `after_primary`, `after_secondary`),
   `telescope_transmission`, `propagation_group_index`, and optional `axes_offset_m`.
 
-The C++ loader accepts only known keys, checks every value and names the JSON path of
-the first error. Surface and obscurer ids are unique.
+The C++ loader accepts either a structured JSON-compatible Python object or JSON text. It accepts
+only known keys, checks every value and reports the path of the first error. Surface and obscurer
+ids are unique.
 
 ## Axes offset
 
