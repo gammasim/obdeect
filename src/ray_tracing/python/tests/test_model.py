@@ -4,6 +4,7 @@ import importlib.util
 import json
 import math
 import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -13,8 +14,7 @@ from obdeect.ray_tracing.hashing import model_hash
 from obdeect.ray_tracing.model import DETECTED, STATUS_NAMES
 from obdeect.ray_tracing.psf import containment, summary
 from obdeect.ray_tracing.repository import read_telescope
-from optical_models import load_model
-from telescopes import segmented, write_simulation_models
+from telescopes import STRUCTURE, dual, record, segmented, write_simulation_models
 
 
 def test_cli_version(capsys):
@@ -55,8 +55,23 @@ def test_repository_compile_command(tmp_path, capsys):
     assert compiled.document["optics"]["primary"]["vertex_z_m"] == 0.5
 
 
+def model_of(records_files, *, seed=1, zenith_deg=None):
+    records, files = records_files
+    return OpticalModel.from_records(
+        records, files.__getitem__, configuration_seed=seed, zenith_deg=zenith_deg
+    )
+
+
+def test_fixed_optical_model_loads():
+    """Load a model compiled from the synthetic segmented telescope records."""
+    path = Path(__file__).parent / "data" / "optical-models" / "segmented.json"
+    model = OpticalModel.load(path)
+    assert model.document["format"] == "obdeect.optical-model.v2"
+    assert model.sampling_area_m2 > 0
+
+
 def test_store_and_reload(tmp_path):
-    model = load_model("segmented")
+    model = model_of(segmented())
     path = tmp_path / "model.json"
     model.save(path)
     assert OpticalModel.load(path).document == model.document
@@ -67,7 +82,7 @@ def test_store_and_reload(tmp_path):
 
 
 def test_native_structured_input_uses_same_validation_as_file_loader(tmp_path):
-    document = load_model("segmented").document
+    document = model_of(segmented()).document
     document["optics"]["axes_offset_m"] = (0.0, 0.0, 0.0)
     document["sha256"] = model_hash(document)
     native = _core
@@ -93,7 +108,7 @@ def test_native_structured_input_uses_same_validation_as_file_loader(tmp_path):
 
 
 def test_model_document_is_isolated_from_mutation(tmp_path):
-    document = load_model("segmented").document
+    document = model_of(segmented()).document
     model = OpticalModel(document)
     original_area = model.sampling_area_m2
     original_hash = model.sha256
@@ -118,7 +133,7 @@ def test_model_document_is_isolated_from_mutation(tmp_path):
 
 
 def test_native_errors_name_the_json_path():
-    document = load_model("segmented").document
+    document = model_of(segmented()).document
     document["optics"]["primary"]["facets"][2]["normal"] = [0.0, 0.0, 2.0]
     document["sha256"] = model_hash(document)
     with pytest.raises(ModelError, match=r"facets\[2\]\.normal: expected a unit vector"):
@@ -126,7 +141,7 @@ def test_native_errors_name_the_json_path():
 
 
 def test_on_axis_star():
-    model = load_model("segmented")
+    model = model_of(segmented())
     photons = model.star_photons(200000, seed=4)
     arrivals = model.trace(photons, seed=4, apply_responses=False)
     result = summary(arrivals, model.sampling_area_m2)
@@ -150,7 +165,13 @@ def test_on_axis_star():
 
 
 def test_results_do_not_depend_on_threads_or_order():
-    model = load_model("segmented-random-reflections")
+    model = model_of(
+        segmented(
+            mirror_reflection_random_angle=record(
+                "mirror_reflection_random_angle", [0.01, 0.2, 0.05], ["deg", "null", "deg"]
+            )
+        )
+    )
     photons = model.star_photons(50000, seed=9, towards_source=(0.01, 0.0, math.sqrt(1 - 1e-4)))
     one = model.trace(photons, seed=2, threads=1)
     many = model.trace(photons, seed=2, threads=8)
@@ -163,7 +184,7 @@ def test_results_do_not_depend_on_threads_or_order():
 
 
 def test_star_photons_depend_only_on_their_ids():
-    model = load_model("segmented")
+    model = model_of(segmented())
     many = model.star_photons(20000, seed=5, distance_m=50.0)
     part = model.star_photons(7000, seed=5, distance_m=50.0, first_id=9000)
     for name, values in part.items():
@@ -171,7 +192,7 @@ def test_star_photons_depend_only_on_their_ids():
 
 
 def test_emitter_photons_cross_the_disk_in_the_expected_number():
-    model = load_model("segmented")
+    model = model_of(segmented())
     sampling = model.document["sampling"]
     height, radius = 500.0, sampling["disk_radius_m"]
     position = (0.0, 0.0, sampling["disk_z_m"] + height)
@@ -191,7 +212,7 @@ def test_emitter_photons_cross_the_disk_in_the_expected_number():
 
 
 def test_flasher_light_goes_straight_to_the_camera():
-    model = load_model("segmented")
+    model = model_of(segmented())
     camera = model.focal_surface_z_m
     photons = model.emitter_photons(
         1e7,
@@ -210,7 +231,7 @@ def test_flasher_light_goes_straight_to_the_camera():
 
 
 def test_traced_emitter_light_does_not_depend_on_blocks():
-    model = load_model("segmented")
+    model = model_of(segmented())
     camera = model.focal_surface_z_m
     emitter = {
         "seed": 3,
@@ -242,7 +263,7 @@ def test_traced_emitter_light_does_not_depend_on_blocks():
 
 
 def test_off_axis_image_moves_by_the_plate_scale():
-    model = load_model("segmented-no-camera-body")
+    model = model_of(segmented(camera_body_diameter=record("camera_body_diameter", 0.0, "cm")))
     theta = math.radians(1.0)
     photons = model.star_photons(
         50000, seed=1, towards_source=(math.sin(theta), 0.0, math.cos(theta))
@@ -252,7 +273,7 @@ def test_off_axis_image_moves_by_the_plate_scale():
 
 
 def test_dual_mirror_focus():
-    model = load_model("dual-zenith20")
+    model = model_of(dual(), zenith_deg=20.0)
     photons = model.star_photons(100000, seed=6, distance_m=1e7)
     arrivals = model.trace(photons, seed=6, apply_responses=False)
     result = summary(arrivals, model.sampling_area_m2)
@@ -271,7 +292,7 @@ def test_containment():
 
 
 def test_trace_commands(tmp_path, capsys):
-    model = load_model("segmented")
+    model = model_of(segmented())
     model_path, arrivals = tmp_path / "model.json", tmp_path / "arrivals.npz"
     model.save(model_path)
     trace_args = f"trace --model {model_path} --seed 1 --photons 2000 --field-deg 0.5 0"
@@ -297,7 +318,7 @@ def test_trace_commands(tmp_path, capsys):
 
 
 def _photons_and_full_trace(count=30_000):
-    model = load_model("segmented")
+    model = model_of(segmented())
     photons = model.star_photons(count, seed=5)
     return model, photons, model.trace(photons, seed=6, threads=1)
 
@@ -358,7 +379,7 @@ def test_pool_trace_equals_threads_trace():
 
 def test_classify_losses_only_renames_photons_missing_the_primary():
     # The mast of the structure sits on the incoming leg, beside the dish.
-    model = load_model("segmented-structure")
+    model = model_of(segmented(telescope_structure=STRUCTURE))
     photons = model.star_photons(60_000, seed=5)
     full = model.trace(photons, seed=6, threads=1)
     default = model.trace(photons, seed=6, threads=1, classify_losses=True)
@@ -379,7 +400,7 @@ def test_classify_losses_only_renames_photons_missing_the_primary():
 
 
 def test_trace_many_equals_one_trace_per_request():
-    models = [load_model("segmented"), load_model("dual"), load_model("segmented-seed2")]
+    models = [model_of(segmented()), model_of(dual()), model_of(segmented(), seed=2)]
     photons = [m.star_photons(count, seed=5) for m, count in zip(models, (30_000, 9_000, 20_001))]
     options = [
         {},
@@ -413,12 +434,12 @@ def _without_obscurer(model, name):
 @pytest.mark.parametrize(
     ("fixture", "removed"),
     [
-        ("segmented-structure", "mast-0"),
-        ("dual", "secondary-baffle"),
+        (segmented(telescope_structure=STRUCTURE), "mast-0"),
+        (dual(), "secondary-baffle"),
     ],
 )
 def test_obscurer_hits_count_what_each_obscurer_takes_away(fixture, removed):
-    model = load_model(fixture)
+    model = model_of(fixture)
     photons = model.star_photons(60_000, seed=5, towards_source=(0.02, 0.01, 1.0))
     hits = model.obscurer_hits(photons, seed=6, threads=2)
     names = [o["name"] for o in model.document["optics"]["obscurers"]]

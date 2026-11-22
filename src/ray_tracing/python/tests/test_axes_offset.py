@@ -4,7 +4,9 @@ import math
 
 import numpy as np
 import pytest
-from optical_models import load_model
+from obdeect.ray_tracing import OpticalModel
+from obdeect.ray_tracing.formats import ModelError
+from telescopes import record, segmented
 
 SEED = 20261029
 THETA_DEG = 20.0
@@ -19,14 +21,25 @@ GROUND_OFFSET_M = np.array([OFFSET_CM / 100.0, 0.0, 0.0])
 EXPECTED_OFFSET_M = ROTATION @ GROUND_OFFSET_M  # (O cos, 0, O sin)
 
 
+def compiled(axes_offsets=None, zenith_deg=THETA_DEG):
+    """Single-mirror telescope without transmission, with an optional axes_offsets record (cm)."""
+    changes = {"telescope_transmission": None}
+    if axes_offsets is not None:
+        changes["axes_offsets"] = record("axes_offsets", axes_offsets, ["cm", "cm"])
+    records, files = segmented(**changes)
+    return OpticalModel.from_records(
+        records, files.__getitem__, configuration_seed=1, zenith_deg=zenith_deg
+    )
+
+
 @pytest.fixture(scope="module")
 def reference():
-    return load_model("segmented-no-transmission")
+    return compiled()
 
 
 @pytest.fixture(scope="module")
 def offset_model():
-    return load_model("segmented-offset-160-0-zenith20")
+    return compiled([OFFSET_CM, 0.0])
 
 
 def ground_bunches(count, *, first_id=0):
@@ -92,13 +105,19 @@ def test_axes_offset_is_zero_without_the_record(reference):
     assert "axes_offset_m" not in reference.document["optics"]
 
 
+def test_zero_axes_offset_gives_the_same_model_as_no_record(reference):
+    model = compiled([0.0, 0.0])
+    assert model.axes_offset_m == (0.0, 0.0, 0.0)
+    assert model.document["optics"] == reference.document["optics"]
+
+
 def test_axes_offset_follows_the_zenith_angle():
-    model = load_model("segmented-offset-160-0-zenith0")
+    model = compiled([OFFSET_CM, 0.0], zenith_deg=0.0)
     assert model.axes_offset_m == pytest.approx((1.6, 0.0, 0.0))
 
 
 def test_second_axes_offset_component_is_transverse_to_the_optical_axis():
-    model = load_model("segmented-offset-160-10-zenith20")
+    model = compiled([OFFSET_CM, 10.0])
     assert model.axes_offset_m == pytest.approx((
         OFFSET_CM / 100 * COS - 0.1,
         0.0,
@@ -107,12 +126,12 @@ def test_second_axes_offset_component_is_transverse_to_the_optical_axis():
 
 
 def test_equal_offsets_align_optical_and_azimuth_axes_at_zenith():
-    model = load_model("segmented-offset-160-160-zenith0")
+    model = compiled([OFFSET_CM, OFFSET_CM], zenith_deg=0.0)
     assert model.axes_offset_m == pytest.approx(ORIGIN)
 
 
 def test_transverse_offset_matches_explicit_frame_transform(reference):
-    model = load_model("segmented-offset-160-10-zenith20")
+    model = compiled([OFFSET_CM, 10.0])
     bunches = ground_bunches(3000)
     # sim_telarray translates by -O before rotation and +T in telescope x.
     frame_offset = -ROTATION @ GROUND_OFFSET_M + np.array([0.1, 0.0, 0.0])
@@ -121,6 +140,16 @@ def test_transverse_offset_matches_explicit_frame_transform(reference):
     assert len(actual["weight"]) > 0
     for name in ("bunch_index", "position_m", "direction", "time_ns", "weight"):
         np.testing.assert_allclose(actual[name], expected[name], atol=1e-9)
+
+
+def test_second_axes_offset_component_needs_the_zenith_angle():
+    with pytest.raises(ModelError, match="zenith"):
+        compiled([0.0, 10.0], zenith_deg=None)
+
+
+def test_axes_offset_needs_the_zenith_angle():
+    with pytest.raises(ModelError, match="zenith"):
+        compiled([OFFSET_CM, 0.0], zenith_deg=None)
 
 
 def test_bunch_at_the_array_origin_is_traced_at_r_of_minus_offset(reference, offset_model):
@@ -174,7 +203,7 @@ def test_offset_plane_at_60_degrees_is_accepted():
     angle = math.radians(60.0)
     cos60, sin60 = math.cos(angle), math.sin(angle)
     rotation = np.array([[cos60, 0.0, -sin60], [0.0, 1.0, 0.0], [sin60, 0.0, cos60]])
-    model = load_model("segmented-offset-160-0-zenith60")
+    model = compiled([OFFSET_CM, 0.0], zenith_deg=60.0)
     top = model.max_incoming_obscurer_z_m()
     bunches = ground_bunches(10)
     assert "weight" in trace_ground(model, bunches, (top + 1.0) / cos60, rotation=rotation)

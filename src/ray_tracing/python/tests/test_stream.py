@@ -10,15 +10,15 @@ import pytest
 from obdeect.ray_tracing import OpticalModel
 from obdeect.ray_tracing import stream as stream_module
 from obdeect.ray_tracing.cli import main
-from obdeect.ray_tracing.errors import ModelError
-from obdeect.ray_tracing.hashing import model_hash
+from obdeect.ray_tracing.compiler import model_hash
+from obdeect.ray_tracing.formats import ModelError
 from obdeect.ray_tracing.stream import (
     CONSTANT_FACTOR,
     ground_to_telescope_rotation,
     minimum_input_plane_height_m,
     trace_stream,
 )
-from optical_models import load_model
+from telescopes import dual, segmented
 
 FOCAL_LENGTH_M = 8.0  # focal length of segmented()
 RUN = {"run_number": 7, "wavelength_min_nm": 300.0, "wavelength_max_nm": 600.0}
@@ -32,7 +32,8 @@ def obdeect_stream():
 
 @pytest.fixture(scope="module")
 def model():
-    return load_model("segmented")
+    records, files = segmented()
+    return OpticalModel.from_records(records, files.__getitem__, configuration_seed=1)
 
 
 def beam(count, direction, *, radius_m=0.5, wavelength_nm=400.0, seed=3):
@@ -744,7 +745,8 @@ def test_angular_efficiency_status_marks_telescope_level_transmission(
 
 
 def test_angular_transmission_needs_a_model_with_transmission(model, tmp_path, obdeect_stream):
-    bare = load_model("segmented-no-transmission")
+    records, files = segmented(telescope_transmission=None)
+    bare = OpticalModel.from_records(records, files.__getitem__, configuration_seed=1)
     with pytest.raises(ModelError, match="has none"):
         focus(
             bare,
@@ -859,7 +861,8 @@ def test_single_wavelength_run_keys_give_that_wavelength():
 
 def dual_without_obscurers():
     """SST-like dual mirror with no obscurers: its dish reaches above the camera at grazing."""
-    model = load_model("dual")
+    records, files = dual()
+    model = OpticalModel.from_records(records, files.__getitem__, configuration_seed=1)
     document = model.document
     document["optics"]["obscurers"] = []
     document["sha256"] = model_hash(document)
@@ -936,7 +939,8 @@ def test_input_plane_clears_the_mirror_at_grazing_pointing():
 
 @pytest.fixture(scope="module")
 def dual_model():
-    return load_model("dual")
+    records, files = dual()
+    return OpticalModel.from_records(records, files.__getitem__, configuration_seed=1)
 
 
 def two_telescope_stream(path):
