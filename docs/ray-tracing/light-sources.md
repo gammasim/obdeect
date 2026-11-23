@@ -116,6 +116,15 @@ For the same photons, the sphere row of each downward photon is the entry point 
 the sphere, and the tracer gives the same detected photons as the plane run (checked in
 [Validation](VALIDATION.md#sphere-runs-ray-tracing-phase-5d)).
 
+Times differ slightly between the two representations. A plane row is moved from the ground
+plane to the input plane at the vacuum speed of light ($t + s\,|d|/c$, $s$ signed) and is then
+traced with the model's `propagation_group_index` $n_g$; a sphere row is traced with $n_g$ from
+its entry point. For the same photon the detected times therefore differ by
+$(n_g - 1)\,\Delta s / c$, with $\Delta s$ the signed distance along the ray between the sphere
+entry point and the plane row's start point on the input plane (about $3 \times 10^{-4}$ of that
+distance at a 2 km site, so at most a few hundredths of a nanosecond). The plane convention is kept
+unchanged for compatibility with existing results.
+
 ## Air-shower photons and custom inputs
 
 `trace_bunches` traces photon bunches from an external air-shower simulation; it does not
