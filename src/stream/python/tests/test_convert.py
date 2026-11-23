@@ -574,3 +574,29 @@ def test_cli_scaled_factor_option(tmp_path):
     assert b"--scaled-factor qe" in failed.stderr
     subprocess.run([*base, "--scaled-factor", "qe", str(stream)], check=True, capture_output=True)
     assert out.stat().st_size > 0
+
+
+PHOTONS3D_FIXTURE = Path(__file__).resolve().parents[2] / "cpp/tests/data/photons3d.iact"
+
+
+def test_photons3d_fixture_converts_to_sphere_run(tmp_path):
+    """CORSIKA 3D bunches (1217, cpp/tests/data/photons3d.iact) become a sphere run."""
+    back = tmp_path / "photons3d.pst"
+    obdeect_stream.corsika_to_stream(PHOTONS3D_FIXTURE, back)
+    records = list(obdeect_stream.Reader(str(back)))
+    runs = [record for record in records if record["type"] == "run"]
+    assert len(runs) == 1
+    assert obdeect_stream.ground_representation(runs[0]["metadata"]) == "sphere"
+    run_ends = [record for record in records if record["type"] == "run_end"]
+    assert run_ends[0]["metadata"]["misses_sphere"] == 2
+
+    by_telescope = _photons_by_telescope(back)
+    assert set(by_telescope) == {1, 2}
+    # Hand-derived rows (test_corsika.cpp, fixture_tel1_rows / fixture_tel2_rows).
+    tel1 = by_telescope[1]
+    tel2 = by_telescope[2]
+    assert _column(tel1, "path") == pytest.approx([30.0, 0.0, 18.0, 8.0, 3.0, 18.0])
+    assert _column(tel1, "z") == pytest.approx([12.0, 4.0, -12.0, 0.0, 9.6, 12.0], abs=1e-5)
+    assert _column(tel2, "zem") == pytest.approx([2248.0, 2211.2, 2223.0], abs=1e-3)
+    assert _column(tel2, "path") == pytest.approx([20.0, 5.0, 0.0])
+    assert _column(tel2, "w") == pytest.approx([1.0, 4.0, 2.0])

@@ -105,6 +105,40 @@ Errors: T photons for a telescope without map entry or with `mirror_class` 1; a 
 and T photons for the same telescope in one run. The efficiency status of such a telescope is
 checked as for camera frame.
 
+## CORSIKA 3D photon bunches (1217)
+
+`obdeect stream from-corsika` converts EventIO 3D photon bunches (block 1217, written by the CORSIKA
+IACT library, `write_tel_photons3d` in `io_simtel.c`) to a sphere run. A bunch gives the arrival
+point A = (x, y, z) relative to the telescope sphere centre (cm), the direction d = (cx, cy, cz)
+and the distance `dist` of the emission point from A. The emission point is E = A - dist d, and the
+bunch becomes its G sphere row (docs/format.md, "Ground frame"), with R the telescope radius from
+TELPOS:
+
+- E on or inside the sphere (|E| <= R): the row is E, path 0.
+- E outside: the row is the entry point E + s d, where s >= 0 is the smallest root of
+  |E + s d| = R, and path = s. The line may enter the sphere after the arrival point A (s > dist).
+- No root with s >= 0 (the line misses the sphere, or points away from it): the bunch is counted in
+  `misses_sphere` in the run end and not written.
+
+Time at the row: `ctime + (s - dist) / c` (vacuum c; `ctime` is the arrival time at A). Emission
+altitude a.s.l.: `zem` = observation level + TELPOS z + E_z (flat geometry). The columns are
+`x y z cx cy cz t zem w path wavelength`; `wavelength` is the bunch's wavelength (0 = not set).
+
+Conventions and errors:
+
+- The run key `ground_representation` is `sphere`. A run may not mix 1205 and 1217 blocks; such a
+  run is an error. A run with 1205 blocks is a plane run and gets no `ground_representation` key (absent means
+  `plane`), so its output is unchanged.
+- 1217 needs RUNH (observation level) and a TELPOS entry for each telescope it names.
+- `cz` must be consistent with `cx` and `cy` (a unit vector within the float32 tolerance).
+  Negative bunch sizes, negative distances and non-finite values are errors, not dropped.
+- Heights are not converted for CURVED runs, as for 1205 blocks; the run key `curvature_applied`
+  tells whether CORSIKA applied the curvature.
+- A top-level 1217 block with indices (999, 999) is kept as a blob, as for 1205.
+
+The bunches of the test fixture `cpp/tests/data/photons3d.iact` (provenance in
+`photons3d_provenance.txt` next to it) give these conversions by hand in `test_corsika.cpp`.
+
 ## Sphere runs (ground frame)
 
 A run with `ground_representation` `sphere` (format 1.2, [](format.md)) has ground-frame rows on

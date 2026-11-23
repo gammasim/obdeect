@@ -25,7 +25,7 @@ Readers skip records of unknown type. A stream starts with one `stream` record a
 | 5 | `photons` | photon chunk (below) |
 | 6 | `telescope_end` | metadata: `telescope_id` (int), `photons` (float, sum of weights; from CORSIKA: the photon sum of its block header) |
 | 7 | `event_end` | metadata (optional keys) |
-| 8 | `run_end` | metadata (optional keys) |
+| 8 | `run_end` | metadata (optional keys): `misses_sphere` (int, sphere runs from CORSIKA 1217: bunches that miss the telescope sphere and are not written) |
 | 9 | `blob` | u32 `eventio_type`, u32 `eventio_id`, then the raw EventIO block (header + body) |
 | 10 | `efficiency_status` | metadata: efficiency status (below) |
 | 15 | `stream_end` | empty |
@@ -78,7 +78,8 @@ option, EVTH word 79 = 1 or 2); sources write 0.
 
 Run key `ground_representation` (string, format 1.2): `plane` or `sphere`. Absent means `plane`;
 any other value is rejected by readers and writers. It sets how the G-frame photons of the run
-are represented (see "Ground frame" below). Producers write `plane` for CORSIKA runs.
+are represented (see "Ground frame" below). `from-corsika` writes `sphere` for runs with 1217 blocks; runs with 1205
+blocks have no key (plane), as before (docs/stream/command-line.md).
 
 Event keys (from CORSIKA EVTH and TELOFF): `event_number`,
 `primary_id` (CORSIKA particle code), `energy_gev`, `zenith_rad`,
