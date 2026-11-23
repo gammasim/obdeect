@@ -1046,6 +1046,12 @@ void bunch_direction_validation() {
   // Horizontal bunches have no plane to start on.
   in.cz = &zero;
   CHECK(run(in, frame));
+  // Without cz the direction is derived: a horizontal one (cx^2 + cy^2 = 1) is rejected too.
+  const float unit_x = 1.0F;
+  in.cz = nullptr;
+  in.cx = &unit_x;
+  CHECK(run(in, frame));
+  in.cx = &zero;
   // Upward bunches need the lower plane.
   in.cz = &one;
   CHECK(run(in, frame));
