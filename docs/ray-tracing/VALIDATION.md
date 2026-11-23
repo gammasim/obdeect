@@ -352,22 +352,62 @@ Checks in `src/ray_tracing` (native tests in `cpp/tests/test_trace.cpp`, Python 
   focal plane, with weight zero.
 - A flat facet tilted 60 degrees with its reflecting side down: the photon from below reflects to
   the analytic direction (sin 120 deg, 0, -cos 120 deg) and is detected (sequential continuation).
-- A folded dual mirror from below: `non_sequential` on the reflecting face of the secondary,
-  `direct_focal` on the focal asphere, `blocked` on the back of the primary.
+- A folded dual mirror from below: a photon at r = 0.2 reflects on the secondary (analytic
+  position on the secondary, reflected direction (0, 0, -1)) and is detected on the focal asphere
+  from above; the photon at r = 0.7 misses the focal extent; the primary's back blocks at r = 2.
 - Obscurers of every leg block photons from below at the analytic height.
 - Mixed bunches: downward bunches give the same photons with or without upward bunches in the
   block (ids, times, weights, positions bit for bit); reversed order and one thread give the same
-  photon per bunch id; upward bunches are never detected in this model.
-- Input validation: horizontal bunches and upward bunches without `lower_plane_z` are rejected.
-- Photon streams (Python and native, compared bit for bit): an upward beam is not detected; a
-  stream with downward photons followed by upward photons gives the camera photons of the
-  downward part exactly; the output does not depend on chunking or threads; horizontal photons are
-  rejected with the same message by both programs.
+  photon per bunch id.
+- Photon streams (Python and native, compared bit for bit): an upward beam gives the camera photons
+  of the downward part exactly; the output does not depend on chunking or threads; horizontal
+  photons are rejected with the same message by both programs.
 - Lower input plane: below every optic, checked in the telescope frame and along the zenith of a
   tilted pointing (the plane is the lowest optic less the 1 m margin); `trace_bunches` rejects a
   plane above an optic.
 - Sources: `star_photons` with `towards_source` below the telescope emits upward photons; a
   horizontal `towards_source` is rejected.
+
+## Non-sequential tracing (ray tracing phase 2)
+
+The loop replaces the first-hit classification: every photon is traced after each reflection until
+it is detected, absorbed or escapes (at most 16 reflections, then `bounce_limit`). Checks:
+
+- Sequential photons are bit-identical to the sequential path they replace. `test_trace` keeps a
+  copy of that path (`cpp/tests/legacy_trace.hpp`) and compares every field (status, surfaces,
+  positions, directions, path, time, weight, incidence angles) bit for bit for 40000 photons per
+  model: a single facet with a rod obscurer, reflectivity at incidence angles, scatter and telescope
+  transmission; a folded paraboloid with the secondary's back blocking (and its scatter), and
+  without; the synthetic segmented fixture (`python/tests/data/optical-models/segmented.json`).
+  Downward photons and flasher (direct) photons are included, with responses, scatter, incidence
+  angles and loss classification switched on and off in turn. Excluded, with the reason in the
+  test: photons that the old path lost after the secondary without reaching the focal surface (the
+  loop traces them on, and a reflection off the primary is possible), photons detected directly on
+  the focal asphere through the hole (sky light the old path never met), and the secondary's back
+  point (not recorded by the old path). Every other photon, detected ones included, is identical.
+- Analytic: a photon through the primary hole from below reflects on the secondary and then on the
+  primary, with the analytic directions and points (flat mirrors, slope 0.1): `missed_secondary`
+  after 4 reflections, path 25 sqrt(1.01).
+- Analytic: two facing flat mirrors 5 m apart, a vertical photon from above: reflection k at path
+  20 + 5 (k - 1); the 17th hit is `bounce_limit` at path 100 with 16 reflections.
+- Analytic: a camera asphere (outer radius 0.5 m, at 10 m) hit from below is detected inside its
+  extent at the analytic path (15 m), outside it is not met; a plane at the same height gives
+  `direct_focal`; from above the camera is passed.
+- Mirror backs block at the analytic point, also on the first leg (from below).
+- Invariance: a block of 20000 photons that bounce on flat mirrors (sky photons and photons from
+  below) gives the same statuses, surfaces, positions, directions, paths and weights for one thread,
+  4 and 8 threads, the persistent pool, and the reversed input order.
+- The asphere prefilter (`Asphere::may_meet`) never rejects a ray that hits, and a ray that starts on
+  the surface and satisfies `single_crossing` meets it nowhere else (native `asphere_prefilter`,
+  40000 random rays, an asphere with a non-zero first coefficient).
+- `obscurer_hits` (Python): `sole <= first <= crossed`, and `detected = unobscured - first` (the
+  mass balance) hold for the dual model with a secondary baffle, where the photons are multiply
+  reflected and direct hits occur.
+- Timing (`-O2`, one thread, median of three runs, per photon): the single-mirror segmented model
+  `bench_trace` 84.8 ns (old path) to 97.9 ns (loop), 1.15x, with responses 107.2 to 119.9 ns (1.12x);
+  the folded dual mirror 131.6 to 139.8 ns (1.06x), and the single facet of `test_trace` 40.2 to
+  42.2 ns (1.05x). `test_kernels` (unoptimised build, as in `ctest`): median of three runs 23.16 s
+  before and 23.00 s after. The timings use the models with `prepare()` called, as the compiler does.
 
 ## Sphere runs (ray tracing phase 5d)
 

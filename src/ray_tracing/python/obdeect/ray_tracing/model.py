@@ -396,7 +396,10 @@ class OpticalModel:
         that it absorbs (``first``: the first obscurer on the path) and that
         only it meets (``sole``: without it they would be detected).
         ``unobscured`` and ``detected`` are the summed weights of the photons
-        reaching the focal surface without and with the obscurers.
+        reaching the focal surface without and with the obscurers. The sequential
+        photons (one reflection on the primary of a single mirror, one on each
+        mirror of a dual one) are followed along their path; any other photon
+        counts its terminal obscurer as crossed.
         """
         free_document = self.document
         obscurers = free_document["optics"]["obscurers"]
@@ -407,46 +410,62 @@ class OpticalModel:
             seed=seed,
             apply_responses=False,
             threads=threads,
-            outputs=["primary_point_m", "secondary_point_m", "position_m", "index"],
+            outputs=["primary_point_m", "secondary_point_m", "position_m", "index", "reflections"],
             detected_only=True,
         )
         full = self.trace(
             photons, seed=seed, apply_responses=False, threads=threads, outputs=["terminal_surface"]
         )
         index = free["index"]
+        n = len(index)
         weight = np.asarray(photons["weight"], dtype=float)[index]
-        start = np.asarray(photons["position_m"], dtype=float)[index]
-        points = [start, free["primary_point_m"]]
+        terminal = full["terminal_surface"][index]
+        id_list = [o["id"] for o in obscurers]
+        position = {obscurer_id: k for k, obscurer_id in enumerate(id_list)}
+        absorbed = np.isin(terminal, id_list)
+        # The path of a sequential photon is the start, the primary point, the secondary point and
+        # the focal point: one reflection on the primary of a single mirror, one on each mirror of
+        # a dual one. The other photons (multiple or direct) count their terminal obscurer only.
+        expected = 2 if free_document["optics"].get("secondary") else 1
+        sequential = np.flatnonzero(np.asarray(free["reflections"]) == expected)
+        start = np.asarray(photons["position_m"], dtype=float)[index[sequential]]
+        points = [start, free["primary_point_m"][sequential]]
         legs = [_LEGS["incoming"], _LEGS["after_primary"]]
         if free_document["optics"].get("secondary"):
-            points.append(free["secondary_point_m"])
+            points.append(free["secondary_point_m"][sequential])
             legs.append(_LEGS["after_secondary"])
-        points.append(free["position_m"])
-        n = len(index)
+        points.append(free["position_m"][sequential])
+        m = len(sequential)
         rows, ids = self._native.obscurer_crossings(
             np.concatenate(points[:-1]),
             np.concatenate(points[1:]),
-            np.repeat(np.array(legs, dtype=np.uint8), n),
+            np.repeat(np.array(legs, dtype=np.uint8), m),
         )
-        photon = (rows % n if n else rows).astype(np.int64)
-
-        id_list = [o["id"] for o in obscurers]
-        position = {obscurer_id: k for k, obscurer_id in enumerate(id_list)}
-        k = np.array([position[i] for i in ids], dtype=np.int64)
+        crossing_photon = sequential[(rows % m if m else rows).astype(np.int64)]
+        crossing_obscurer = np.array([position[i] for i in ids], dtype=np.int64)
+        terminal_photon = np.flatnonzero(absorbed)
+        terminal_obscurer = np.array([position[i] for i in terminal[absorbed]], dtype=np.int64)
         # One entry per photon and obscurer, also if the path meets it twice.
-        pairs = np.unique(np.column_stack([photon, k]), axis=0) if len(k) else np.empty((0, 2), int)
+        pairs = (
+            np.unique(
+                np.column_stack([
+                    np.concatenate([crossing_photon, terminal_photon]).astype(np.int64),
+                    np.concatenate([crossing_obscurer, terminal_obscurer]),
+                ]),
+                axis=0,
+            )
+            if n
+            else np.empty((0, 2), dtype=np.int64)
+        )
         crossings_per_photon = np.bincount(pairs[:, 0], minlength=n)
         sole = pairs[crossings_per_photon[pairs[:, 0]] == 1]
-        terminal = full["terminal_surface"][index]
-        absorbed = np.isin(terminal, id_list)
-        first = np.array([position[i] for i in terminal[absorbed]], dtype=np.int64)
         size = len(obscurers)
         return {
             "id": np.array(id_list, dtype=np.uint32),
             "name": np.array([o["name"] for o in obscurers]),
             "group": np.array([o.get("group", "") for o in obscurers]),
             "crossed": np.bincount(pairs[:, 1], weights=weight[pairs[:, 0]], minlength=size),
-            "first": np.bincount(first, weights=weight[absorbed], minlength=size),
+            "first": np.bincount(terminal_obscurer, weights=weight[absorbed], minlength=size),
             "sole": np.bincount(sole[:, 1], weights=weight[sole[:, 0]], minlength=size),
             "unobscured": float(weight.sum()),
             "detected": float(weight[~absorbed].sum()),

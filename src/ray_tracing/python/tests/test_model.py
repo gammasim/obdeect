@@ -285,6 +285,27 @@ def test_dual_mirror_focus():
     assert 6.0 < result["effective_area_m2"] < 10.0
 
 
+def test_reflections_count_the_bounces_of_each_photon():
+    """A single mirror detects after one reflection; a dual mirror after two (the sequence)."""
+    model = model_of(segmented())
+    photons = model.star_photons(20_000, seed=4, distance_m=10_000.0)
+    arrivals = model.trace(
+        photons, seed=4, apply_responses=False, outputs=["status", "reflections"]
+    )
+    detected = arrivals["status"] == DETECTED
+    assert np.count_nonzero(detected) > 1000
+    assert np.all(arrivals["reflections"][detected] == 1)
+    assert np.all(arrivals["reflections"][~detected] <= 1)
+    dual_model = model_of(dual(), zenith_deg=20.0)
+    photons = dual_model.star_photons(20_000, seed=4, distance_m=1e7)
+    arrivals = dual_model.trace(
+        photons, seed=4, apply_responses=False, outputs=["status", "reflections"]
+    )
+    detected = arrivals["status"] == DETECTED
+    assert np.count_nonzero(detected) > 1000
+    assert np.all(arrivals["reflections"][detected] == 2)
+
+
 def test_containment():
     x = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
     result = containment(x, np.zeros(5), fraction=0.8)

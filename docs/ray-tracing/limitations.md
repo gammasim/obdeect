@@ -59,14 +59,27 @@ before any window refraction is added.
 - **Diffraction and polarisation:** irrelevant at the size of IACT mirrors and for unpolarised
   Cherenkov light.
 
-## Photons from below (ray tracing phase 1)
+## Non-sequential tracing (ray tracing phase 2)
 
-Photons moving up are traced from a plane below the optics, and their first hit is classified.
-Reflections off the secondary and direct hits on the focal surface from below are counted as
-losses (`non_sequential`, `direct_focal`); they are not traced further. Full non-sequential
-tracing is planned (phase 2). Horizontal photons are rejected in plane runs; sphere runs trace
-them from their sphere rows. See [Light sources](light-sources.md#photons-from-below) and
-[Sphere rows](light-sources.md#sphere-rows).
+Every photon is traced until it is detected, absorbed, or escapes, after up to 16 reflections
+(`bounce_limit` beyond). Remaining limits:
+
+- A focal surface is detected only inside its extent: an asphere's outer radius. A plane focal
+  surface has no extent, so light from its receiving side before the last mirror is counted as
+  `direct_focal` (a loss) rather than detected. The camera body obscurers give the lateral shadow.
+- Light from below meets the obscurers of every leg before its first reflection; after a
+  reflection the obscurers of the current leg apply. Structure on the after-primary leg is therefore
+  not met by a photon that has reflected off the secondary and comes back down.
+- The bunch roulette (`trace_bunches`) uses `response_bound` as its scale. A photon is kept with
+  probability min(1, weight / bound). A photon whose weight exceeds the bound (a direct detection
+  without reflection, or a dual-mirror detection after the primary alone) is kept with probability
+  one and output with weight weight / bound, so the expected output weight stays the traced weight;
+  without roulette the output weight is weight / bound (it can exceed one for such photons). The
+  estimator is unbiased (native `bunch_roulette_unbiased`).
+- Multi-bounce photons are traced with the same reflectivity, degradation and scatter as the
+  first reflection, at each reflection's own incidence angle.
+- The first hit of each mirror is recorded in the output (`primary_*`, `secondary_*`); the others
+  are counted in `reflections` only.
 
 ## Sphere runs
 

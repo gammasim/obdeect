@@ -114,6 +114,9 @@ if(OBDEECT_RAY_TRACING_BUILD_TESTING)
     obdeect_ray_tracing_enable_warnings(test_${name})
     add_test(NAME ${name} COMMAND test_${name})
   endforeach()
+  # The synthetic optical-model fixtures of the Python tests (labelled, no real telescope data).
+  target_compile_definitions(test_trace PRIVATE
+    OBDEECT_RAY_TRACING_TEST_MODELS="${CMAKE_CURRENT_SOURCE_DIR}/python/tests/data/optical-models")
   # Newton-step counts need the benchmark counters compiled in.
   add_executable(test_asphere_steps cpp/tests/test_asphere_steps.cpp)
   target_link_libraries(test_asphere_steps PRIVATE obdeect_ray_tracing_core)

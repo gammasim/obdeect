@@ -265,8 +265,11 @@ public:
                                     options_.classify_losses, sub, from_below);
         if (t.status != Status::detected)
           continue;
-        const double ratio = std::min(1.0, (t.weight / norm) / cached_bound);
-        if (options_.roulette && !(roulette_draw < ratio))
+        // ratio = weight / bound may exceed one (see response_bound): such a photon is kept
+        // with probability one and carries the excess in its weight, so the expected weight is
+        // the traced weight (unbiased). Sequential photons have ratio <= 1: unchanged.
+        const double ratio = (t.weight / norm) / cached_bound;
+        if (options_.roulette && !(roulette_draw < std::min(1.0, ratio)))
           continue;
         out.position_m[3 * row] = t.position.x;
         out.position_m[3 * row + 1] = t.position.y;
@@ -275,7 +278,7 @@ public:
         out.direction[3 * row + 1] = t.direction.y;
         out.direction[3 * row + 2] = t.direction.z;
         out.time_ns[row] = t.time_ns;
-        out.weight[row] = options_.roulette ? 1.0 : ratio;
+        out.weight[row] = options_.roulette ? std::max(1.0, ratio) : ratio;
         out.wavelength_nm[row] = lambda;
         out.bunch_index[row] = i;
         out.sub_photon[row] = sub;
@@ -300,8 +303,10 @@ private:
 // Trace photon bunches through the optical model. Each photon of a bunch is
 // kept with probability size-fraction x acceptance x response bound, traced
 // with its own random numbers (seed, bunch_id, sub-photon), and, with
-// `roulette`, kept again with probability weight / bound, so that the expected
-// weight is the weight a full trace would give. The results do not depend on
+// `roulette`, kept again with probability min(1, weight / bound) and output
+// with weight max(1, weight / bound). Without `roulette` the output weight is
+// weight / bound. Either way the expected output weight is the weight a full
+// trace would give, also for a photon whose weight exceeds the bound. The results do not depend on
 // the thread count, the chunking or the order of the bunches; bunch ids must be
 // unique per seed.
 //

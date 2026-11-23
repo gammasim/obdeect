@@ -83,6 +83,10 @@ void check_model(const OpticalModel &m, double radius, std::uint64_t seed) {
                                   lambda, 0.0, 1.0, static_cast<std::uint64_t>(i), seed);
       if (t.status != Status::detected)
         continue;
+      // Bounded: a reflection on the primary and, for a dual mirror, on the secondary (see
+      // response_bound). Other detections (none here) are not bounded.
+      if (t.primary_surface == kNoSurface || (m.secondary && t.secondary_surface == kNoSurface))
+        continue;
       CHECK(t.weight <= bound * 1.0);
       largest = std::max(largest, t.weight);
     }

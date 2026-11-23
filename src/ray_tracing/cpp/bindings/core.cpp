@@ -120,7 +120,8 @@ public:
                                              "secondary_point_m",
                                              "secondary_surface",
                                              "secondary_incidence_deg",
-                                             "focal_incidence_deg"};
+                                             "focal_incidence_deg",
+                                             "reflections"};
 
   // The output columns of one trace: the Python arrays and the block that
   // points into them. Only the requested columns are allocated.
@@ -183,8 +184,9 @@ public:
     const auto m2_angle = make("secondary_incidence_deg", f64);
     const auto focal_angle = make("focal_incidence_deg", f64);
     const auto index = make("index", u64);
-    columns.block = {status, surface, m1_id, m2_id,    pos,      dir,         path, time,
-                     w,      m1,      m2,    m1_angle, m2_angle, focal_angle, index};
+    const auto reflections = make("reflections", u8);
+    columns.block = {status, surface, m1_id, m2_id,    pos,      dir,         path,  time,
+                     w,      m1,      m2,    m1_angle, m2_angle, focal_angle, index, reflections};
     return columns;
   }
 

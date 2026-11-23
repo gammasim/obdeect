@@ -88,7 +88,7 @@ run level.
 | State | Action |
 | --- | --- |
 | absent or `pending` | The factor is applied in full by the trace. |
-| `envelope` | The stream carries the efficiency bound f_env, so the output weight is multiplied by 1 / f_env(λ). The trace then gives f / f_env. Photons are traced with `roulette=False` (weights min(1, w / bound) per survivor), so weights stay unbiased; the table is interpolated at each photon's wavelength. |
+| `envelope` | The stream carries the efficiency bound f_env, so the output weight is multiplied by 1 / f_env(λ). The trace then gives f / f_env. Photons are traced with `roulette=False` (weight w / bound per survivor, unclamped, so the weights stay unbiased); the table is interpolated at each photon's wavelength. |
 | `applied` | An error: the trace would apply the factor again. |
 
 Other factors (for example `qe`) pass on unchanged. After the run record, the stage writes a
