@@ -269,11 +269,16 @@ inline Segment segment(const Node &node) {
 }
 
 inline Mirror mirror(const Node &node, std::vector<std::uint32_t> &ids) {
-  (void)node.object(
-      {"facets", "asphere", "asphere_id", "segments", "reflectivity", "scatter", "degradation"});
+  (void)node.object({"facets", "asphere", "asphere_id", "segments", "reflectivity", "scatter",
+                     "degradation", "vertex_z_m"});
   Mirror m;
   if (node.has("facets") == node.has("asphere"))
     node.fail("expected exactly one of 'facets' and 'asphere'");
+  if (node.has("vertex_z_m")) {
+    if (!node.has("facets"))
+      node["vertex_z_m"].fail("vertex_z_m is for facet mirrors; an asphere has its own vertex_z_m");
+    m.vertex_z_m = node["vertex_z_m"].number();
+  }
   if (node.has("facets")) {
     for (const auto &f : node["facets"].array()) {
       (void)f.object({"id", "centre_m", "normal", "tangent", "map_tangent", "shape", "diameter_m",
@@ -425,15 +430,9 @@ inline Obscurer obscurer(const Node &node, std::vector<Plane> &planes) {
 
 } // namespace detail
 
-// Parse and validate an optical model (format obdeect.optical-model.v2).
-[[nodiscard]] inline OpticalModel load_model(std::string_view text) {
+// Validate an already structured optical model (format obdeect.optical-model.v2).
+[[nodiscard]] inline OpticalModel load_model(json::Value root_value) {
   using detail::Node;
-  json::Value root_value;
-  try {
-    root_value = json::Parser::parse(text);
-  } catch (const std::runtime_error &error) {
-    throw ModelError(error.what());
-  }
   const Node root{root_value, "model"};
   (void)root.object({"format", "sha256", "provenance", "notes", "sampling", "optics"});
   if (root["format"].string() != kModelFormat)
@@ -526,6 +525,17 @@ inline Obscurer obscurer(const Node &node, std::vector<Plane> &planes) {
     if (!unique.insert(id).second)
       throw ModelError("model.optics: surface id " + std::to_string(id) + " is used twice");
   return model;
+}
+
+// Parse an optical-model file using the same validation as structured inputs.
+[[nodiscard]] inline OpticalModel load_model(std::string_view text) {
+  json::Value root_value;
+  try {
+    root_value = json::Parser::parse(text);
+  } catch (const std::runtime_error &error) {
+    throw ModelError(error.what());
+  }
+  return load_model(std::move(root_value));
 }
 
 } // namespace obdeect::ray_tracing

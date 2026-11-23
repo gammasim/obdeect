@@ -22,16 +22,20 @@ def table():
 
 @pytest.fixture(scope="module")
 def transmission():
-    return TransmissionTable(str(TRANSMISSION_PATH), site_altitude_m=OBSERVATION_LEVEL_M)
+    return TransmissionTable(
+        str(TRANSMISSION_PATH),
+        site_altitude_m=OBSERVATION_LEVEL_M,
+        wavelength_interpolation="floor",
+    )
 
 
-def _primaries(n, z_m=48000.0, weight=1.0, cx=None, cy=None, first=0):
-    """Downward photons at height z_m above the observation level."""
+def _primaries(n, z_m=48000.0, weight=1.0, cx=None, cy=None, first=0, cz=None):
+    """Downward photons at height z_m above the observation level (cz: optional signed column)."""
     rng = np.random.default_rng(3)
     if cx is None:
         cx = np.zeros(n)
         cy = np.zeros(n)
-    return {
+    columns = {
         "x": np.zeros(n, dtype=np.float32),
         "y": np.zeros(n, dtype=np.float32),
         "z": np.full(n, z_m, dtype=np.float32),
@@ -41,6 +45,9 @@ def _primaries(n, z_m=48000.0, weight=1.0, cx=None, cy=None, first=0):
         "w": np.full(n, weight, dtype=np.float32),
         "wavelength": np.full(n, LAMBDA_NM, dtype=np.float32),
     }
+    if cz is not None:
+        columns["cz"] = np.asarray(cz, dtype=np.float32)
+    return columns
 
 
 def test_table_profile_at_node(table):
@@ -130,6 +137,80 @@ def test_yield_agrees_with_analytic_integral(table, transmission):
     stderr = totals.std(ddof=1) / math.sqrt(n)
     assert abs(totals.mean() - analytic) <= 4.0 * stderr
     assert analytic > 0.0
+
+
+TELESCOPE_ABOVE_GROUND = (1, 3000.0, 0.0, 500.7, 12.5)  # centre 500.7 m above the observation level
+
+
+def _lidar_integral(table, transmission, telescope, h0, upward, h_lo, h_hi):
+    """Single-scattering integral of a vertical primary (weight 1) into one sphere (numpy).
+
+    Upward primaries: from h0 up to h_hi, attenuated by tau(h0) - tau(h); downward: from h0 down,
+    attenuated by tau(h) - tau(h0). The sphere centre is the aim point. T and Omega as in
+    scattering.hpp.
+    """
+    h_c = OBSERVATION_LEVEL_M + telescope[3]
+    h = np.linspace(h_lo, h_hi, 400001)
+    assert np.all(np.abs(h - h_c) > 0.0)  # the integrand is 0/0 at the centre height
+    dist = np.hypot(telescope[1], h - h_c)
+    mu = (1.0 if upward else -1.0) * (h_c - h) / dist
+    lam = np.full_like(h, LAMBDA_NM)
+    tau_mol, tau_aer, ssa, g = table.profile(lam, h)
+    up = table.profile(lam, h + 0.5)
+    down = table.profile(lam, h - 0.5)
+    beta_mol = down[0] - up[0]
+    beta_aer = down[1] - up[1]
+    rayleigh = 3.0 / (16.0 * np.pi) * (1.0 + mu**2)
+    hg = (1 - g**2) / (4 * np.pi * (1 + g**2 - 2 * g * mu) ** 1.5)
+    phase = beta_mol * rayleigh + ssa * beta_aer * hg
+    ratio = telescope[4] / dist
+    solid = 2 * np.pi * (1 - np.sqrt(1 - ratio**2))
+    od = np.abs(
+        transmission.optical_depth(lam, h) - transmission.optical_depth(lam, np.full_like(h, h_c))
+    )
+    transmitted = np.exp(-od * dist / np.abs(h - h_c))
+    h0_profile = table.profile(np.array([LAMBDA_NM]), np.array([h0]))
+    depth_profile = tau_mol + tau_aer
+    depth_top = h0_profile[0][0] + h0_profile[1][0]
+    attenuation = (
+        np.exp(-(depth_top - depth_profile)) if upward else np.exp(-(depth_profile - depth_top))
+    )
+    return np.trapezoid(phase * solid * transmitted * attenuation, h)
+
+
+def test_upward_primary_yield_agrees_with_lidar_integral(table, transmission):
+    """Upward laser from 1 m above the observation level into a sphere 500.7 m above it.
+
+    The scattered weight per primary against the single-scattering integral over the whole upward
+    path (up to 60 km, the table's top). Some scattering points are below the sphere centre: their
+    scattered photons travel upwards.
+    """
+    h0 = OBSERVATION_LEVEL_M + 1.0
+    analytic = _lidar_integral(table, transmission, TELESCOPE_ABOVE_GROUND, h0, True, h0, 60000.0)
+
+    n = 1000
+    totals = np.zeros(n)
+    below = 0
+    upward_rows = 0
+    for i in range(n):
+        out = scatter(
+            _primaries(1, z_m=1.0, cz=np.ones(1)),
+            table,
+            transmission,
+            [TELESCOPE_ABOVE_GROUND],
+            5,
+            3,
+            i,
+            128,
+        )[TELESCOPE_ABOVE_GROUND[0]]
+        totals[i] = out["w"].sum()
+        below += int(np.sum(out["zem"] < OBSERVATION_LEVEL_M + 500.7))
+        upward_rows += int(np.sum((out["zem"] < OBSERVATION_LEVEL_M + 500.7) & (out["cz"] > 0.0)))
+    stderr = totals.std(ddof=1) / math.sqrt(n)
+    assert below > 0
+    assert upward_rows > 0
+    assert analytic > 0.0
+    assert abs(totals.mean() - analytic) <= 4.0 * stderr
 
 
 def test_time_is_at_scattering_point(table, transmission):

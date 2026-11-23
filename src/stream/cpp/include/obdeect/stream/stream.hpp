@@ -237,8 +237,9 @@ inline void load_floats(const std::uint8_t *src, float *dst, std::size_t n) {
 
 // Validates a photons record. With load_columns false the header and payload size are
 // still checked and the fixed fields are set, but no column is allocated or copied.
+// path_allowed is false for streams of format 1.0 and 1.1, which have no path column.
 inline void decode_chunk(PhotonChunk &chunk, const std::uint8_t *data, std::size_t size,
-                         bool load_columns = true) {
+                         bool load_columns, bool path_allowed) {
   Cursor cursor(data, size);
   chunk.telescope_id = static_cast<std::uint32_t>(cursor.le(4));
   const std::uint64_t frame = cursor.le(4);
@@ -251,6 +252,9 @@ inline void decode_chunk(PhotonChunk &chunk, const std::uint8_t *data, std::size
   chunk.first_index = cursor.le(8);
   if ((mask >> n_columns) != 0) {
     malformed("unknown column bit");
+  }
+  if (!path_allowed && (mask & column_bit(Column::path)) != 0) {
+    malformed("path column in a stream of format 1.0 or 1.1");
   }
   if (rows > max_chunk_rows) {
     malformed("chunk exceeds 2^16 rows");
@@ -274,6 +278,13 @@ inline void decode_chunk(PhotonChunk &chunk, const std::uint8_t *data, std::size
   for (std::uint32_t i = 0; i < n_columns; ++i) {
     if ((mask >> i) & 1U) {
       load_floats(cursor.take(n * sizeof(float)), chunk.columns[i].data(), n);
+    }
+  }
+  if ((mask & column_bit(Column::path)) != 0) {
+    for (const float path : chunk[Column::path]) {
+      if (!std::isfinite(path) || path < 0.0F) {
+        malformed("path column value is not finite and >= 0");
+      }
     }
   }
 }
@@ -320,6 +331,9 @@ public:
   void write_metadata(RecordType type, const Metadata &metadata) {
     if (!is_metadata_record(type)) {
       throw std::invalid_argument("write_metadata: not a metadata record type");
+    }
+    if (type == RecordType::run) {
+      static_cast<void>(ground_representation(metadata));
     }
     begin(type);
     stream_detail::append_metadata(buf_, metadata);
@@ -504,10 +518,28 @@ public:
                                    std::to_string(major) + " (reader supports " +
                                    std::to_string(format_major) + ")");
         }
+        // Minor versions are compatible within a major version: a later minor is read too (its
+        // unknown columns fail the column-mask check). A missing minor is 0 (format 1.0).
+        const std::int64_t minor = record.metadata.contains("format_minor")
+                                       ? int_field(record.metadata, "format_minor")
+                                       : 0;
+        if (minor < 0) {
+          throw std::runtime_error("obdeect stream: negative format minor version " +
+                                   std::to_string(minor));
+        }
+        stream_minor_ = static_cast<int>(minor);
         record.type = RecordType::stream;
         return true;
       }
       case RecordType::run:
+        decode_metadata_into(record.metadata, payload, size);
+        // Rejects unknown representations; sphere runs need format 1.2 (path column, sphere rows).
+        if (ground_representation(record.metadata) == GroundRepresentation::sphere &&
+            stream_minor_ < 2) {
+          malformed("ground_representation sphere in a stream of format 1.0 or 1.1");
+        }
+        record.type = RecordType::run;
+        return true;
       case RecordType::event:
       case RecordType::telescope:
       case RecordType::telescope_end:
@@ -520,7 +552,8 @@ public:
       case RecordType::photons:
         // Payloads shorter than the telescope id fail in decode_chunk.
         decode_chunk(record.chunk, payload, size,
-                     !filter_photons_ || size < 4 || kept(chunk_telescope(payload)));
+                     !filter_photons_ || size < 4 || kept(chunk_telescope(payload)),
+                     stream_minor_ >= 2);
         record.type = RecordType::photons;
         return true;
       case RecordType::blob:
@@ -574,6 +607,7 @@ private:
   std::vector<std::uint8_t> raw_;
   std::vector<std::uint32_t> kept_telescopes_;
   bool filter_photons_{false};
+  int stream_minor_{0}; // format_minor of the stream record read last
   bool header_seen_{false};
   bool ended_{false};
 };

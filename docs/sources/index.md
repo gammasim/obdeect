@@ -2,73 +2,46 @@
 
 Besides air showers, Cherenkov telescopes are calibrated and tested with light that people
 control: flashers on the dish, LEDs in the camera, lasers, stars, point sources and the night-sky
-background. This component simulates such light and writes it as a photon stream, ready for the
-atmosphere, the optics and sim_telarray. It replaces the sim_telarray light-emission package.
+background. This component simulates such light and writes it as a photon stream (`.pst`), ready
+for the atmosphere, the optics and sim_telarray. It replaces the sim_telarray light-emission package.
 
-A source is not a hard-wired device. It is described by a position, a direction and an angular
-profile, a spectrum and a pulse shape, so one model covers all programs. The photons start at the
-sky, telescope-sphere, telescope or camera level; to avoid simulating photons that never reach the
-telescope, a source can generate only photons aimed at a target.
+A source is not a hard-wired device. It is a geometry (point, line, plane wave or sky background)
+with angular, spectral and pulse profiles. A run file lists the sources of each event. To avoid
+simulating photons that never reach the telescope, a source can generate only photons aimed at a
+target.
 
-Start with the [source model](sources.md), or pick a program:
+```sh
+obdeect sources run flasher --help
+obdeect sources check run.toml
+obdeect sources run run.toml -o out.pst
+```
 
-::::{grid} 1 2 2 3
+::::{grid} 1 2 2 2
 :gutter: 3
 
-:::{grid-item-card} {fas}`lightbulb;pst-color-primary` Flasher
-:link: programs/flasher
+:::{grid-item-card} {fas}`lightbulb;pst-color-primary` Source model
+:link: sources
 :link-type: doc
 :class-card: sd-shadow-sm
 
-Flashers on the dish axis or at the camera corners.
+Geometries, profiles, targets, frames and units, with examples.
 :::
 
-:::{grid-item-card} {fas}`microchip;pst-color-primary` LED
-:link: programs/led
+:::{grid-item-card} {fas}`terminal;pst-color-primary` Command line
+:link: cli
 :link-type: doc
 :class-card: sd-shadow-sm
 
-LEDs in front of camera pixels, to test triggers.
+`obdeect sources run` and `check`.
 :::
 
-:::{grid-item-card} {fas}`circle-dot;pst-color-primary` Point source
-:link: programs/point-source
+:::{grid-item-card} {fas}`sliders;pst-color-primary` Presets
+:link: presets
 :link-type: doc
 :class-card: sd-shadow-sm
 
-A point light source above the telescope.
-:::
-
-:::{grid-item-card} {fas}`arrows-left-right;pst-color-primary` Beam scan
-:link: programs/beam-scan
-:link-type: doc
-:class-card: sd-shadow-sm
-
-A parallel beam scanned across the camera area.
-:::
-
-:::{grid-item-card} {fas}`bolt;pst-color-primary` Laser beam
-:link: programs/laser-beam
-:link-type: doc
-:class-card: sd-shadow-sm
-
-A laser crossing the field of view.
-:::
-
-:::{grid-item-card} {fas}`moon;pst-color-primary` Night sky
-:link: programs/night-sky
-:link-type: doc
-:class-card: sd-shadow-sm
-
-Night-sky background on a telescope sphere.
-:::
-
-:::{grid-item-card} {fas}`wind;pst-color-primary` Muon track
-:link: programs/muon-track
-:link-type: doc
-:class-card: sd-shadow-sm
-
-Cherenkov light of one muon.
+Ready-made setups: flashers, LEDs, point sources, laser beams, lidar, night sky,
+muons and simple air showers.
 :::
 
 :::{grid-item-card} {fas}`diagram-project;pst-color-primary` Use with sim_telarray
@@ -84,7 +57,7 @@ Pipelines from each source to sim_telarray.
 :link-type: doc
 :class-card: sd-shadow-sm
 
-Exact definitions, for implementers.
+Exact definitions, for implementers: run file, run records, sampling.
 :::
 
 ::::
@@ -94,20 +67,8 @@ Exact definitions, for implementers.
 :maxdepth: 1
 
 sources
-```
-
-```{toctree}
-:hidden:
-:maxdepth: 1
-:caption: Programs
-
-programs/flasher
-programs/led
-programs/point-source
-programs/beam-scan
-programs/laser-beam
-programs/night-sky
-programs/muon-track
+cli
+presets
 ```
 
 ```{toctree}

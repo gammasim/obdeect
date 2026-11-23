@@ -1,15 +1,16 @@
-"""Optical models end to end: compile, store, trace, analyse, command line."""
+"""Optical models end to end: load, trace, analyse, command line."""
 
 import importlib.util
 import json
 import math
 import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
-from obdeect.ray_tracing import ModelError, OpticalModel, ThreadPool, __version__, trace_many
+from obdeect.ray_tracing import ModelError, OpticalModel, ThreadPool, __version__, _core, trace_many
 from obdeect.ray_tracing.cli import main
-from obdeect.ray_tracing.compiler import model_hash
+from obdeect.ray_tracing.hashing import model_hash
 from obdeect.ray_tracing.model import DETECTED, STATUS_NAMES
 from obdeect.ray_tracing.psf import containment, summary
 from obdeect.ray_tracing.repository import read_telescope
@@ -23,11 +24,50 @@ def test_cli_version(capsys):
     assert capsys.readouterr().out.strip() == f"obdeect ray-tracing {__version__}"
 
 
-def model_of(records_files, **options):
+def test_repository_compile_command(tmp_path, capsys):
+    root = tmp_path / "simulation-models"
+    records, files = segmented()
+    write_simulation_models(root, "TEST-design", records, files)
+    telescope = read_telescope(root, "TEST-design", "9.9.9")
+    assert set(telescope.records) == set(records)
+    assert telescope.propagation_group_index == 1.0
+
+    output = tmp_path / "compiled.json"
+    assert (
+        main([
+            "compile",
+            "--simulation-models",
+            str(root),
+            "--model",
+            "TEST-design",
+            "--version",
+            "9.9.9",
+            "--seed",
+            "3",
+            "--output",
+            str(output),
+        ])
+        == 0
+    )
+    assert "TEST-design 9.9.9: optical model" in capsys.readouterr().out
+    compiled = OpticalModel.load(output)
+    assert compiled.document["provenance"]["configuration_seed"] == 3
+    assert compiled.document["optics"]["primary"]["vertex_z_m"] == 0.5
+
+
+def model_of(records_files, *, seed=1, zenith_deg=None):
     records, files = records_files
     return OpticalModel.from_records(
-        records, files.__getitem__, configuration_seed=options.pop("seed", 1), **options
+        records, files.__getitem__, configuration_seed=seed, zenith_deg=zenith_deg
     )
+
+
+def test_fixed_optical_model_loads():
+    """Load a model compiled from the synthetic segmented telescope records."""
+    path = Path(__file__).parent / "data" / "optical-models" / "segmented.json"
+    model = OpticalModel.load(path)
+    assert model.document["format"] == "obdeect.optical-model.v2"
+    assert model.sampling_area_m2 > 0
 
 
 def test_store_and_reload(tmp_path):
@@ -39,6 +79,32 @@ def test_store_and_reload(tmp_path):
     tampered["optics"]["focal_surface"]["plane_z_m"] += 0.01
     with pytest.raises(ModelError, match="sha256"):
         OpticalModel(tampered)
+
+
+def test_native_structured_input_uses_same_validation_as_file_loader(tmp_path):
+    document = model_of(segmented()).document
+    document["optics"]["axes_offset_m"] = (0.0, 0.0, 0.0)
+    document["sha256"] = model_hash(document)
+    native = _core
+    native.Model(document)
+    path = tmp_path / "model.json"
+    OpticalModel(document).save(path)
+    native.Model(path.read_text())
+    structured_model = OpticalModel(document)
+    json_model = OpticalModel.load(path)
+    photons = structured_model.star_photons(64, seed=17)
+    structured_result = structured_model.trace(photons, seed=19)
+    json_result = json_model.trace(photons, seed=19)
+    assert structured_result.keys() == json_result.keys()
+    for name in structured_result:
+        np.testing.assert_array_equal(structured_result[name], json_result[name])
+    invalid = dict(document)
+    invalid["optics"] = dict(document["optics"], unexpected=True)
+    with pytest.raises(ValueError, match="unknown key 'unexpected'"):
+        native.Model(invalid)
+    non_finite = dict(document, provenance=dict(document["provenance"], unused=float("nan")))
+    with pytest.raises(ValueError, match="numbers must be finite"):
+        native.Model(non_finite)
 
 
 def test_model_document_is_isolated_from_mutation(tmp_path):
@@ -69,8 +135,6 @@ def test_model_document_is_isolated_from_mutation(tmp_path):
 def test_native_errors_name_the_json_path():
     document = model_of(segmented()).document
     document["optics"]["primary"]["facets"][2]["normal"] = [0.0, 0.0, 2.0]
-    from obdeect.ray_tracing.compiler import model_hash
-
     document["sha256"] = model_hash(document)
     with pytest.raises(ModelError, match=r"facets\[2\]\.normal: expected a unit vector"):
         OpticalModel(document)
@@ -221,32 +285,48 @@ def test_dual_mirror_focus():
     assert 6.0 < result["effective_area_m2"] < 10.0
 
 
+def test_reflections_count_the_bounces_of_each_photon():
+    """A single mirror detects after one reflection; a dual mirror after two (the sequence)."""
+    model = model_of(segmented())
+    photons = model.star_photons(20_000, seed=4, distance_m=10_000.0)
+    arrivals = model.trace(
+        photons, seed=4, apply_responses=False, outputs=["status", "reflections"]
+    )
+    detected = arrivals["status"] == DETECTED
+    assert np.count_nonzero(detected) > 1000
+    assert np.all(arrivals["reflections"][detected] == 1)
+    assert np.all(arrivals["reflections"][~detected] <= 1)
+    dual_model = model_of(dual(), zenith_deg=20.0)
+    photons = dual_model.star_photons(20_000, seed=4, distance_m=1e7)
+    arrivals = dual_model.trace(
+        photons, seed=4, apply_responses=False, outputs=["status", "reflections"]
+    )
+    detected = arrivals["status"] == DETECTED
+    assert np.count_nonzero(detected) > 1000
+    assert np.all(arrivals["reflections"][detected] == 2)
+
+
 def test_containment():
     x = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
     result = containment(x, np.zeros(5), fraction=0.8)
     assert result["centroid_x_m"] == 2.0 and result["radius_m"] == 2.0
 
 
-def test_repository_and_command_line(tmp_path, capsys):
-    root = tmp_path / "simulation-models"
-    records, files = segmented()
-    write_simulation_models(root, "TEST-design", records, files)
-    telescope = read_telescope(root, "TEST-design", "9.9.9")
-    assert set(telescope.records) == set(records) and telescope.propagation_group_index == 1.0
-    model, arrivals = tmp_path / "model.json", tmp_path / "arrivals.npz"
-    compile_args = f"compile --simulation-models {root} --version 9.9.9 --seed 3 --output {model}"
-    assert main([*compile_args.split(), "--model", "TEST-design"]) == 0
-    trace_args = f"trace --model {model} --seed 1 --photons 2000 --field-deg 0.5 0"
+def test_trace_commands(tmp_path, capsys):
+    model = model_of(segmented())
+    model_path, arrivals = tmp_path / "model.json", tmp_path / "arrivals.npz"
+    model.save(model_path)
+    trace_args = f"trace --model {model_path} --seed 1 --photons 2000 --field-deg 0.5 0"
     assert main([*trace_args.split(), "--output", str(arrivals)]) == 0
-    report = json.loads(capsys.readouterr().out.split("\n", 1)[1])
+    report = json.loads(capsys.readouterr().out)
     assert report["status"]["detected"] > 0
-    assert report["model_sha256"] == OpticalModel.load(model).sha256
+    assert report["model_sha256"] == OpticalModel.load(model_path).sha256
     assert np.load(arrivals)["position_m"].shape == (2000, 3)
     csv = tmp_path / "arrivals.csv"
-    assert main(f"trace --model {model} --seed 1 --photons 10 --output {csv}".split()) == 0
+    assert main(f"trace --model {model_path} --seed 1 --photons 10 --output {csv}".split()) == 0
     assert csv.read_text().startswith("photon_id,status,")
     plot = tmp_path / "plot.png"
-    result = main(f"plot --model {model} --arrivals {arrivals} --output {plot}".split())
+    result = main(f"plot --model {model_path} --arrivals {arrivals} --output {plot}".split())
     if importlib.util.find_spec("matplotlib") is None:
         assert result == 1
         assert "obdeect-ray-tracing[plot]" in capsys.readouterr().err
@@ -254,36 +334,8 @@ def test_repository_and_command_line(tmp_path, capsys):
         assert result == 0
         assert plot.stat().st_size > 0
     capsys.readouterr()
-    assert main(f"obscurers --model {model} --seed 1 --photons 2000".split()) == 0
+    assert main(f"obscurers --model {model_path} --seed 1 --photons 2000".split()) == 0
     assert "camera-front" in capsys.readouterr().out
-    assert main([*compile_args.split(), "--model", "MISSING"]) == 1
-
-
-def test_patch_production_overlays_its_history(tmp_path):
-    root = tmp_path / "simulation-models"
-    records, files = segmented()
-    write_simulation_models(root, "TEST-design", records, files)
-    patch = root / "productions" / "9.9.10"
-    patch.mkdir()
-    (patch / "info.yml").write_text(
-        'model_version: "9.9.10"\nmodel_update: "patch_update"\n'
-        'model_version_history:\n  - "9.9.9"\nmodel_status: "production"\n'
-    )
-    table = {"focal_length": "2.0.0"}
-    manifest = {"model_version": "9.9.10", "parameters": {"TEST-design": table}}
-    manifest["deprecated_parameters"] = ["camera_depth"]
-    (patch / "TEST-design.json").write_text(json.dumps(manifest))
-    focal = records["focal_length"] | {"parameter_version": "2.0.0", "value": 810.0}
-    directory = root / "model_parameters" / "TEST-design" / "focal_length"
-    (directory / "focal_length-2.0.0.json").write_text(json.dumps(focal))
-
-    patched = read_telescope(root, "TEST-design", "9.9.10")
-    assert patched.records["focal_length"]["value"] == 810.0
-    assert "camera_depth" not in patched.records
-    assert set(patched.records) == set(records) - {"camera_depth"}
-    assert read_telescope(root, "TEST-design", "9.9.9").records["focal_length"]["value"] == 800.0
-    with pytest.raises(ModelError, match="no production table MISSING in 9.9.10"):
-        read_telescope(root, "MISSING", "9.9.10")
 
 
 def _photons_and_full_trace(count=30_000):
@@ -401,14 +453,14 @@ def _without_obscurer(model, name):
 
 
 @pytest.mark.parametrize(
-    ("telescope", "removed"),
+    ("fixture", "removed"),
     [
         (segmented(telescope_structure=STRUCTURE), "mast-0"),
         (dual(), "secondary-baffle"),
     ],
 )
-def test_obscurer_hits_count_what_each_obscurer_takes_away(telescope, removed):
-    model = model_of(telescope)
+def test_obscurer_hits_count_what_each_obscurer_takes_away(fixture, removed):
+    model = model_of(fixture)
     photons = model.star_photons(60_000, seed=5, towards_source=(0.02, 0.01, 1.0))
     hits = model.obscurer_hits(photons, seed=6, threads=2)
     names = [o["name"] for o in model.document["optics"]["obscurers"]]

@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
+        runner: [ubuntu-26.04, ubuntu-26.04-arm, macos-15]
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
@@ -40,10 +40,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {runner: ubuntu-24.04, python-version: '3.14'}
-          - {runner: ubuntu-24.04-arm, python-version: '3.14'}
+          - {runner: ubuntu-26.04, python-version: '3.14'}
+          - {runner: ubuntu-26.04-arm, python-version: '3.14'}
           - {runner: macos-15, python-version: '3.14'}
-          - {runner: ubuntu-24.04, python-version: '3.15'}
+          - {runner: ubuntu-26.04, python-version: '3.15'}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
@@ -88,20 +88,22 @@ jobs:
       fail-fast: false
       matrix:
         component: [stream, propagation, sources, ray_tracing]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 0  # component versions come from the repository tags
       - name: Install a decimal-comma locale
         run: sudo locale-gen de_DE.UTF-8
+      # -O1 keeps the sanitizers effective; at -O0 the propagation table builds alone took
+      # about 15 minutes (test_dispersion, test_curvature_modes).
       - name: Configure, build, and test with sanitizers
         env:
           OBDEECT_RAY_TRACING_REQUIRE_COMMA_LOCALE: "1"
         run: >-
           cmake -S src/${{ matrix.component }} -B build-sanitize -DCMAKE_BUILD_TYPE=Debug
-          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
-          -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          -DCMAKE_CXX_FLAGS="-O1 -fsanitize=address,undefined -fno-omit-frame-pointer"
+          -DCMAKE_C_FLAGS="-O1 -fsanitize=address,undefined -fno-omit-frame-pointer"
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
           -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined"
           && cmake --build build-sanitize --parallel
@@ -109,7 +111,7 @@ jobs:
 
   # Ray tracing only: the only component with an FMA option and with threads.
   fma:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
@@ -121,7 +123,7 @@ jobs:
           && cmake --build build-fma --parallel
           && ctest --test-dir build-fma --output-on-failure
   thread-sanitizer:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
@@ -135,7 +137,7 @@ jobs:
           && cmake --build build-tsan --parallel
           && ctest --test-dir build-tsan --output-on-failure
   clang-tidy:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:

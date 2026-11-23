@@ -53,8 +53,15 @@ $$
 and the slant optical depth from the telescope up to the emission altitude $z_{em}$ is
 
 $$
-\tau_{\text{slant}} = \int_{h_t}^{z_{em}} \frac{1}{\cos\theta(h)}\,\frac{d\tau}{dh}\,dh.
+\tau_{\text{slant}} = \int_{h_t}^{z_{em}} \frac{1}{\cos\theta(h)}\,\frac{d\tau}{dh}\,dh \qquad (z_{em} \ge h_t,\ \text{downward}).
 $$
+
+For a downward photon below the telescope ($z_{em} < h_t$) the slant depth is zero (the transmission is
+$\exp(-\tau_{\text{focus}})$). An upward photon ($z_{em} < h_t$, cz > 0) crosses the slab between its
+emission and the telescope: `slant_optical_depth_upward` integrates $|d\tau/dh|/\cos\theta(h)$ over
+$[z_{em}, h_t]$, with the same $\cos\theta(h)$ (the straight line with the cosine $\cos\theta_t$ of the
+upward direction at the telescope), and `transmission_curved_upward` uses it. The first segment is at
+the lower end of that integral, where $\cos\theta$ is smallest.
 
 The table is piecewise: $\tau$ is linear in $\log_{10} h$ between the table heights (see
 [](extinction.md)), so on segment $i$
@@ -66,8 +73,9 @@ $$
 
 - Each segment, clipped to $[h_t, z_{em}]$, is integrated exactly in the table form above, with
   8-point Gauss-Legendre quadrature per segment.
-- For $\cos\theta_t < 0.2$ the integrand behaves like $(h - h_t)^{-1/2}$ at the telescope. The first
-  segment then uses $h = h_t + u^2$, which removes the singularity.
+- For $\cos\theta_t < 0.2$ the integrand behaves like $(h - h_t)^{-1/2}$ at the telescope (downward
+  photons; for upward photons at the emission level, where $\cos\theta$ is smallest). The first
+  segment at the lower end then uses $h = h_{\text{low}} + u^2$, which removes the singularity.
 - Above the last table height $d\tau/dh = 0$; there is no contribution.
 
 The transmission of a photon is
@@ -83,10 +91,13 @@ The zenith cosine $\cos\theta_t$ is taken in the telescope frame from the photon
 and the telescope's local vertical $\mathbf{n}$:
 
 $$
-\cos\theta_t = -\,\mathbf{d}\cdot\mathbf{n}.
+\cos\theta_t = -\,\mathbf{d}\cdot\mathbf{n} \quad\text{(downward)}, \qquad
+\cos\theta_t = +\,\mathbf{d}\cdot\mathbf{n} \quad\text{(upward, } \mathbf{d} = (c_x, c_y, c_z), c_z > 0\text{)}.
 $$
 
-Photons moving away from the ground ($\cos\theta_t$ clearly negative) have $T = 0$.
+Photons moving away from the ground ($\cos\theta_t$ clearly negative) have $T = 0$; an upward
+photon with $\mathbf{d}\cdot\mathbf{n} < 0$ is moving down against the local vertical and cannot
+arrive from below.
 
 In the plane-parallel limit $R \to \infty$, $\cos\theta(h) \to \cos\theta_t$ and
 $\tau_{\text{slant}} \to |\tau(z_{em}) - \tau(h_t)|/\cos\theta_t$, the plane-parallel result.
@@ -218,6 +229,20 @@ $4 \times 4$ Lagrange stencil, with no allocation.
 - The telescope plane is the Cartesian plane $z$ = telescope $z$. The local vertical tilt of
   laterally displaced telescopes (at most lateral$/R$) is neglected in the direction of the
   displacement.
+
+## Spherical integrator (sphere representation)
+
+With `--curvature spherical` and the sphere representation ([](propagation.md#sphere-representation))
+the ray integrator of [](refraction.md#integrator) uses the spherical geometry: the altitude of a
+point is |X - C_E| - R with the Earth centre C_E = (0, 0, -(R + observation level)) and the
+gradient of n points along the radial unit vector from C_E. The straight-line air delay of rows
+without refraction takes the altitude along the line from |r| (`straight_line_air_delay_sky_ns`).
+A horizontal photon in vacuum (no profile) at the origin passes a telescope at (L, 0, 0), whose
+spherical altitude is obs + sqrt(L^2 + (R + obs)^2) - R - obs = L^2 / (2 (R + obs)) to second order;
+the sphere row of such a photon is the straight entry, with no curvature in the path (the flat
+frame is the Earth-centred frame translated, so straight lines stay straight). Only this vacuum
+case is tested for the spherical geometry (`test_sphere.cpp`); the spherical refraction of the
+integrator is implemented but has no independent reference yet.
 
 ## Efficiency status
 

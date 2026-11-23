@@ -76,10 +76,24 @@ struct Facet {
     sag = radius > 0.0 ? radius - std::sqrt(std::max(0.0, radius * radius - reach * reach)) : 0.0;
   }
 
+  // The hit on the reflecting (front) side only: back-face crossings are not mirror hits.
   [[nodiscard]] std::optional<SurfaceHit> intersect(const Ray &ray, double t_min) const {
+    return intersect_sides<false>(ray, t_min);
+  }
+
+  // The nearest hit on either side (a ray from below meets the back face too). The
+  // normal of the hit is the facet normal (flat) or the normal on the concave cap, which
+  // points to the reflecting side in both cases.
+  [[nodiscard]] std::optional<SurfaceHit> intersect_any_side(const Ray &ray, double t_min) const {
+    return intersect_sides<true>(ray, t_min);
+  }
+
+  template <bool AnySide>
+  [[nodiscard]] std::optional<SurfaceHit> intersect_sides(const Ray &ray, double t_min) const {
     if (radius == 0.0) {
       const double denominator = dot(ray.direction, normal);
-      if (denominator >= 0.0) // Parallel or reaching the back face.
+      // Parallel, or reaching the back face (rejected unless both sides count).
+      if (AnySide ? denominator == 0.0 : denominator >= 0.0)
         return std::nullopt;
       const double t = dot(centre - ray.origin, normal) / denominator;
       if (!(t > t_min))
@@ -120,8 +134,8 @@ struct Facet {
       const Vec3 p = ray.at(t);
       const Vec3 inward = (sphere - p) * (1.0 / radius);
       // Only the concave cap around the vertex reflects, and only from its
-      // front; back-face crossings are not mirror hits.
-      if (dot(inward, normal) <= 0.0 || dot(ray.direction, inward) >= 0.0)
+      // front; back-face crossings are not mirror hits (unless AnySide).
+      if (dot(inward, normal) <= 0.0 || (!AnySide && dot(ray.direction, inward) >= 0.0))
         continue;
       const Vec3 offset = p - centre;
       if (inside_aperture(shape, half_width, dot(offset, u), dot(offset, v)))
@@ -333,6 +347,51 @@ struct Asphere {
   [[nodiscard]] Vec3 normal_from_q(const Vec3 &p, double q) const {
     const double k = slope_over_r_q(q);
     return normalized(Vec3{-k * p.x, -k * p.y, 1.0});
+  }
+
+  // False only if the ray provably meets no point of the annulus at t > t_min: the surface lies
+  // in the height band |z - sag(0)| <= max_slope * outer_radius, and a ray that is inside the
+  // band for an interval of t only reaches radii that are convex in t. Exact rejection, the
+  // cheap first step of intersect() (its result is then "no hit" too).
+  [[nodiscard]] bool may_meet(const Ray &ray, double t_min) const {
+    if (!std::isfinite(max_slope))
+      return true;
+    const double half = max_slope * outer_radius * (1.0 + 1e-9) + 1e-9;
+    // The band is centred on the sag at the axis (vertex_z plus the first coefficient).
+    const double dz = ray.direction.z, z0 = ray.origin.z - sag(0.0);
+    double t_lo = t_min, t_hi = std::numeric_limits<double>::infinity();
+    if (dz == 0.0) {
+      if (std::abs(z0) > half)
+        return false;
+    } else {
+      double ta = (-half - z0) / dz, tb = (half - z0) / dz;
+      if (ta > tb)
+        std::swap(ta, tb);
+      t_lo = std::max(t_lo, ta);
+      t_hi = std::min(t_hi, tb);
+      if (!(t_lo <= t_hi))
+        return false;
+    }
+    if (!std::isfinite(t_hi))
+      return true;
+    const auto radius2 = [&](double t) {
+      const double x = ray.origin.x + ray.direction.x * t, y = ray.origin.y + ray.direction.y * t;
+      return x * x + y * y;
+    };
+    return std::max(radius2(t_lo), radius2(t_hi)) >= inner_radius2_margin();
+  }
+
+  // Squared inner radius, less a relative margin (rejections must be safe).
+  [[nodiscard]] double inner_radius2_margin() const {
+    return (inner_radius * inner_radius) * (1.0 - 1e-9);
+  }
+
+  // True if the surface can be crossed at most once by a line of this direction (the condition
+  // of the single-root shortcut in intersect()). A ray that starts on the surface then meets it
+  // nowhere else, so it need not be tested against the surface again.
+  [[nodiscard]] bool single_crossing(const Vec3 &direction) const {
+    return std::abs(direction.z) >
+           max_slope * std::sqrt(direction.x * direction.x + direction.y * direction.y);
   }
 
   // Nearest intersection beyond t_min inside the annulus for which

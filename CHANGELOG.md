@@ -4,6 +4,34 @@ All components are released together with one version (tags `vX.Y.Z`); the secti
 
 <!-- towncrier release notes start -->
 
+## [v0.10.1] - 2026-11-20
+
+### Fixed
+
+- Accept near-horizontal photon directions whose float32 cosines round to cx^2 + cy^2 slightly above 1 in propagation. (#74)
+- Fix building of documentation in CI for legacy obdeect versions. (#75)
+
+### Maintenance
+
+- Switch CI runners from ubuntu 24.04 to 26.04. (#73)
+
+
+## [v0.10.0] - 2026-11-20
+
+### Added
+
+- `obdeect ray-tracing trace-stream` is a native program, like the other stream stages: no Python or NumPy start-up per call, and the photon loop around the tracer runs in C++. Same options and the same output stream, bit for bit, as the Python `trace_stream` (checked by `test_stream_native.py`). (#67)
+- `obdeect stream to-simtel --keep-telpos-height` keeps the TELPOS height of camera-map telescopes (default: z set to 0), for array runs where sim_telarray needs the real heights. (#69)
+
+### Fixed
+
+- The `cz` column check of photon streams compares `cz` with `-sqrt(1 - cx^2 - cy^2)` in the squared form `cz^2` against `1 - cx^2 - cy^2`. Photons with near-horizontal directions (|cz| below about 1e-3) that a float32 stream stores as a unit vector are no longer rejected by the propagation, sources and ray-tracing stages ("cz column does not match cx, cy"). The check still requires `cz < 0`, and a clearly wrong `cz` is still rejected. (#71)
+
+### Maintenance
+
+- Introduce custom `StdinBuffer` to address performance issues when reading from `std::cin`. (#70)
+
+
 ## [v0.9.2] - 2026-11-16
 
 ### Fixed

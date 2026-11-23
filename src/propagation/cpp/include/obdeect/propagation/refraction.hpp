@@ -23,8 +23,24 @@
 namespace obdeect::propagation {
 
 class RefractionTables;
+
+namespace detail {
+
+// The series limit of bend(): s_e |nu_obs - nu_e| > 0.1 cos^2(theta_e). Single source of truth for
+// bend() and bend_series_limit_exceeded().
+inline bool series_limit_violated(double s_e, double c_e, double nu_e, double nu_obs) noexcept {
+  return s_e * std::fabs(nu_obs - nu_e) > 0.1 * c_e * c_e;
+}
+
+} // namespace detail
 template <class T>
 [[nodiscard]] bool bend(const RefractionTables &tables, T height_m, T &cx, T &cy, T &x, T &y, T &t);
+template <class T>
+[[nodiscard]] bool bend(const RefractionTables &tables, T height_m, T &cx, T &cy, T &x, T &y, T &t,
+                        double k, double k_group);
+template <class T>
+[[nodiscard]] bool bend_series_limit_exceeded(const RefractionTables &tables, T height_m, T cx,
+                                              T cy, double k = 1.);
 
 class RefractionTables {
 public:
@@ -78,6 +94,8 @@ public:
 
 private:
   template <class T> friend bool bend(const RefractionTables &, T, T &, T &, T &, T &, T &);
+  template <class T>
+  friend bool bend(const RefractionTables &, T, T &, T &, T &, T &, T &, double, double);
 
   // Coefficient of nu_e^a * M_b in the expansion of (nu_e - nu)^k (1 + nu)^m, m = -k (position)
   // or 1 - k (time), truncated at total degree `terms`.
@@ -147,14 +165,23 @@ private:
 // is not strictly inside the unit circle, the emission is below the observation level, or the
 // ray is too close to the horizon for the expansion (s_e (nu_obs - nu_e) / cos^2 > 0.1).
 // Arithmetic is done in double.
+//
+// Dispersion: k scales the n-1 profile for the phase index (nu -> k nu), k_group for the group
+// index used in the travel time. The geometry is the series with nu -> k nu (nu_e -> k nu_e,
+// M_b -> k^b M_b). The travel time is the series time with k plus the first-order group term
+// (k_group - k) * straight_path_air_delay_ns(profile, obs, h_e, zenith_e) with the unscaled
+// profile. The group term neglects the change of 1 / cos(theta(h)) along the bent ray; its error
+// is measured in test_dispersion.cpp. k = k_group = 1 gives the same result as the 7-argument
+// bend() bit for bit. Returns false for k or k_group that is not finite and positive.
 template <class T>
-[[nodiscard]] bool bend(const RefractionTables &tables, T height_m, T &cx, T &cy, T &x, T &y,
-                        T &t) {
+[[nodiscard]] bool bend(const RefractionTables &tables, T height_m, T &cx, T &cy, T &x, T &y, T &t,
+                        double k, double k_group) {
   const double h_m = static_cast<double>(height_m);
   const double ux = static_cast<double>(cx), uy = static_cast<double>(cy);
   if (!std::isfinite(h_m) || !std::isfinite(ux) || !std::isfinite(uy) ||
       !std::isfinite(static_cast<double>(x)) || !std::isfinite(static_cast<double>(y)) ||
-      !std::isfinite(static_cast<double>(t))) {
+      !std::isfinite(static_cast<double>(t)) || !std::isfinite(k) || !(k > 0.) ||
+      !std::isfinite(k_group) || !(k_group > 0.)) {
     return false;
   }
   const double h = 100. * h_m;
@@ -164,10 +191,10 @@ template <class T>
   }
   const double s_e = std::sqrt(s2);
   const double c_e = std::sqrt(1. - s2);
-  const double nu_e = tables.profile().index_minus_one_cm(h);
-  const double nu_obs = tables.index_minus_one_at_observation();
+  const double nu_e = k * tables.profile().index_minus_one_cm(h);
+  const double nu_obs = k * tables.index_minus_one_at_observation();
   const double height = h - tables.observation_level_cm(); // cm
-  if (s_e * std::fabs(nu_obs - nu_e) > 0.1 * c_e * c_e) {
+  if (detail::series_limit_violated(s_e, c_e, nu_e, nu_obs)) {
     return false;
   }
   const double s_obs = s_e * (1. + nu_e) / (1. + nu_obs);
@@ -175,11 +202,18 @@ template <class T>
     return false; // total internal reflection
   }
 
-  // Moments M_b = integral of nu^b over [obs, h], b = 0 is the height.
+  // Moments M_b = integral of nu^b over [obs, h] of the unscaled profile, b = 0 is the height;
+  // scaled below by k^b. The group term uses the unscaled M_1.
   std::array<double, AtmosphereProfile::max_moment + 1> m{};
   m[0] = height;
   for (int b = 1; b <= AtmosphereProfile::max_moment; ++b) {
     m[static_cast<std::size_t>(b)] = tables.moment(h, b);
+  }
+  const double moment1_straight = m[1];
+  double k_power = 1.;
+  for (int b = 1; b <= AtmosphereProfile::max_moment; ++b) {
+    k_power *= k;
+    m[static_cast<std::size_t>(b)] *= k_power;
   }
   std::array<double, RefractionTables::terms + 1> nu_power{};
   nu_power[0] = 1.;
@@ -191,34 +225,38 @@ template <class T>
   std::array<double, RefractionTables::terms + 1> g{};
   g[0] = 1. / c_e;
   double previous = 0.;
-  for (int k = 0; k < RefractionTables::terms; ++k) {
-    const double next =
-        (s_e * double(2 * k + 1) * g[static_cast<std::size_t>(k)] + double(k) * previous) /
-        (double(k + 1) * c_e * c_e);
-    previous = g[static_cast<std::size_t>(k)];
-    g[static_cast<std::size_t>(k + 1)] = next;
+  for (int order = 0; order < RefractionTables::terms; ++order) {
+    const double next = (s_e * double(2 * order + 1) * g[static_cast<std::size_t>(order)] +
+                         double(order) * previous) /
+                        (double(order + 1) * c_e * c_e);
+    previous = g[static_cast<std::size_t>(order)];
+    g[static_cast<std::size_t>(order + 1)] = next;
   }
 
   double displacement = 0.;    // integral of (tan(theta) - tan(theta_e)) dh [cm]
   double excess = m[1] * g[0]; // integral of nu g_0 dh [cm]
   double s_power = 1.;
-  for (int k = 1; k <= RefractionTables::terms; ++k) {
+  for (int n = 1; n <= RefractionTables::terms; ++n) {
     s_power *= s_e;
-    const double f_k = s_e * g[static_cast<std::size_t>(k)] + g[static_cast<std::size_t>(k - 1)];
+    const double f_n = s_e * g[static_cast<std::size_t>(n)] + g[static_cast<std::size_t>(n - 1)];
     double position_sum = 0., time_sum = 0.;
-    for (int a = 0; a <= k; ++a) {
+    for (int a = 0; a <= n; ++a) {
       for (int b = 0; a + b <= RefractionTables::terms; ++b) {
         const double mb = m[static_cast<std::size_t>(b)];
         position_sum +=
-            tables.position_coefficient(k, a, b) * nu_power[static_cast<std::size_t>(a)] * mb;
-        time_sum += tables.time_coefficient(k, a, b) * nu_power[static_cast<std::size_t>(a)] * mb;
+            tables.position_coefficient(n, a, b) * nu_power[static_cast<std::size_t>(a)] * mb;
+        time_sum += tables.time_coefficient(n, a, b) * nu_power[static_cast<std::size_t>(a)] * mb;
       }
     }
-    displacement += f_k * s_power * position_sum;
-    excess += g[static_cast<std::size_t>(k)] * s_power * time_sum;
+    displacement += f_n * s_power * position_sum;
+    excess += g[static_cast<std::size_t>(n)] * s_power * time_sum;
   }
 
-  const double travel_ns = (height * g[0] + excess) / (100. * speed_of_light_m_per_ns);
+  double travel_ns = (height * g[0] + excess) / (100. * speed_of_light_m_per_ns);
+  if (k_group != k) {
+    // (k_group - k) * (1/c) integral of nu dh / cos(theta_e), unscaled profile.
+    travel_ns += (k_group - k) * moment1_straight / (100. * speed_of_light_m_per_ns * c_e);
+  }
   if (s_e > 0.) {
     const double shift_m = displacement / 100.;
     x = static_cast<T>(static_cast<double>(x) + shift_m * ux / s_e);
@@ -229,6 +267,39 @@ template <class T>
   }
   t = static_cast<T>(static_cast<double>(t) + travel_ns);
   return true;
+}
+
+// Dispersion-free bend(): k = k_group = 1.
+template <class T>
+[[nodiscard]] bool bend(const RefractionTables &tables, T height_m, T &cx, T &cy, T &x, T &y,
+                        T &t) {
+  return bend(tables, height_m, cx, cy, x, y, t, 1., 1.);
+}
+
+// True if bend() rejects this photon because it is outside the series validity, i.e. the photon is
+// one that bend_quadrature() (refraction_horizon.hpp) bends. Uses the same k as bend(). Returns
+// false for invalid inputs (non-finite, direction not inside the unit circle, emission below the
+// observation level, k not finite and positive), so a caller can write
+//   if (!bend(...) && bend_series_limit_exceeded(...)) bend_quadrature(...);
+template <class T>
+[[nodiscard]] bool bend_series_limit_exceeded(const RefractionTables &tables, T height_m, T cx,
+                                              T cy, double k) {
+  const double h_m = static_cast<double>(height_m);
+  const double ux = static_cast<double>(cx), uy = static_cast<double>(cy);
+  if (!std::isfinite(h_m) || !std::isfinite(ux) || !std::isfinite(uy) || !std::isfinite(k) ||
+      !(k > 0.)) {
+    return false;
+  }
+  const double h = 100. * h_m;
+  const double s2 = ux * ux + uy * uy;
+  if (!std::isfinite(h) || !(s2 < 1.) || h < tables.observation_level_cm()) {
+    return false;
+  }
+  const double s_e = std::sqrt(s2);
+  const double c_e = std::sqrt(1. - s2);
+  const double nu_e = k * tables.profile().index_minus_one_cm(h);
+  const double nu_obs = k * tables.index_minus_one_at_observation();
+  return detail::series_limit_violated(s_e, c_e, nu_e, nu_obs);
 }
 
 } // namespace obdeect::propagation

@@ -1,4 +1,4 @@
-"""The ``obdeect`` command: compile optical models, trace sources, plot."""
+"""The ``obdeect`` command: compile optical models, trace sources and plot results."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 from obdeect.ray_tracing import __version__
-from obdeect.ray_tracing.formats import ModelError
+from obdeect.ray_tracing.errors import ModelError
 from obdeect.ray_tracing.model import STATUS_NAMES, OpticalModel
 from obdeect.ray_tracing.psf import summary
 from obdeect.ray_tracing.stream import TRANSMISSION_PARTS, trace_stream
@@ -18,6 +18,21 @@ from obdeect.stream.cli import Command, Group
 
 # Columns of `obdeect ray-tracing obscurers` (see OpticalModel.obscurer_hits).
 CENSUS = ("crossed", "first", "sole")
+
+
+def _trace(args: argparse.Namespace) -> None:
+    model = OpticalModel.load(args.model)
+    photons = _star(model, args)
+    arrivals = model.trace(
+        photons, seed=args.seed, apply_responses=not args.geometry_only, threads=args.threads
+    )
+    if args.output:
+        _write(args.output, photons, arrivals)
+    print(
+        json.dumps(
+            {"model_sha256": model.sha256, **summary(arrivals, model.sampling_area_m2)}, indent=1
+        )
+    )
 
 
 def _compile(args: argparse.Namespace) -> None:
@@ -34,21 +49,6 @@ def _compile(args: argparse.Namespace) -> None:
     )
     for note in model.document["notes"]:
         print(f"note: {note}")
-
-
-def _trace(args: argparse.Namespace) -> None:
-    model = OpticalModel.load(args.model)
-    photons = _star(model, args)
-    arrivals = model.trace(
-        photons, seed=args.seed, apply_responses=not args.geometry_only, threads=args.threads
-    )
-    if args.output:
-        _write(args.output, photons, arrivals)
-    print(
-        json.dumps(
-            {"model_sha256": model.sha256, **summary(arrivals, model.sampling_area_m2)}, indent=1
-        )
-    )
 
 
 def _star(model: OpticalModel, args: argparse.Namespace) -> dict:
@@ -208,15 +208,11 @@ def main(argv: list[str] | None = None, prog: str = "obdeect ray-tracing") -> in
     commands = parser.add_subparsers(dest="command", required=True)
 
     c = commands.add_parser("compile", help="compile an optical model from simulation-models")
-    c.add_argument(
-        "--simulation-models", type=Path, required=True, help="simulation-models checkout"
-    )
-    c.add_argument("--model", required=True, help="telescope model, e.g. LSTN-design")
-    c.add_argument("--version", required=True, help="production version, e.g. 7.0.0")
+    c.add_argument("--simulation-models", type=Path, required=True)
+    c.add_argument("--model", required=True, help="telescope model name")
+    c.add_argument("--version", required=True, help="simulation-models production version")
     c.add_argument("--seed", type=int, required=True, help="seed of the random mirror errors")
-    c.add_argument(
-        "--zenith-deg", type=float, help="telescope zenith angle for zenith-dependent errors"
-    )
+    c.add_argument("--zenith-deg", type=float)
     c.add_argument("--output", type=Path, required=True)
     c.set_defaults(run=_compile)
 

@@ -37,6 +37,7 @@ from obdeect.ray_tracing.formats import (
     segmentation_from_record,
     signed_length_m,
 )
+from obdeect.ray_tracing.hashing import model_hash
 from obdeect.ray_tracing.simtel_tables import evaluate
 
 MODEL_FORMAT = "obdeect.optical-model.v2"
@@ -241,13 +242,6 @@ def _sampling(p: _Parameters, optics: dict[str, Any]) -> dict[str, float]:
     }
 
 
-def model_hash(model: dict[str, Any]) -> str:
-    """SHA-256 of the canonical JSON of the model without its ``sha256`` entry."""
-    content = {key: value for key, value in model.items() if key != "sha256"}
-    text = json.dumps(content, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(text.encode()).hexdigest()
-
-
 def _surface_ids(optics: dict[str, Any]) -> list[int]:
     ids = [optics["focal_surface"]["id"]]
     if "camera_window" in optics:
@@ -295,7 +289,9 @@ def _segmented_telescope(p: _Parameters, seed: int, zenith_deg: float | None) ->
                 "radius_of_curvature_m": 2.0 * f["focal_length_m"],
             }
             for f in facets
-        ]
+        ],
+        # Dish vertex on the optical axis: z = -mirror_offset (the facet sphere vertex is at 0).
+        "vertex_z_m": -overall_offset + 0.0,  # + 0.0: no -0.0 in the file
     }
     _mirror_response(p, primary, "mirror_reflectivity", "mirror_degraded_reflection")
     _scatter(p, primary, surface_slopes=False)

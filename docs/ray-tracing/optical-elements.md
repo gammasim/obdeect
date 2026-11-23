@@ -79,7 +79,11 @@ The focal surface records arriving photons and ends the optical trace.
 
 - Single-mirror telescopes: focal plane at `focal_length + focus_offset - mirror_offset`.
   The zenith terms of `focus_offset` apply only if both are non-zero.
-- Dual-mirror telescopes: the focal surface polynomial, unbounded in radius.
+- Dual-mirror telescopes: the focal surface polynomial, with `outer_radius_m` as its extent.
+
+A focal surface detects light on its receiving side (see
+[Optical models](optical-models.md#focal-surface)); a plane has no extent, an asphere has its
+outer radius.
 
 ## Optical responses
 

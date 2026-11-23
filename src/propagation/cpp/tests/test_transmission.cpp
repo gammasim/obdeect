@@ -99,7 +99,8 @@ template <class Function> bool throws_invalid(Function function) {
 // Constant optical depth 0.5 above 3 km, zero at the observation level.
 obdeect::propagation::TransmissionTable constant_table() {
   return obdeect::propagation::TransmissionTable(
-      "# H2= 2.000, H1=    3.000     4.000\n400 0.5 0.5\n", 2000.0);
+      "# H2= 2.000, H1=    3.000     4.000\n400 0.5 0.5\n", 2000.0,
+      obdeect::propagation::WavelengthInterpolation::floor);
 }
 
 void test_constant_optical_depth() {
@@ -118,7 +119,8 @@ void test_constant_optical_depth() {
 void test_hand_interpolation() {
   // Optical depth 1 at 3 km and 3 at 5 km; interpolation is linear in log10(height).
   const obdeect::propagation::TransmissionTable table(
-      "# H2= 2.000, H1=    3.000     5.000\n400 1.0 3.0\n", 2000.0);
+      "# H2= 2.000, H1=    3.000     5.000\n400 1.0 3.0\n", 2000.0,
+      obdeect::propagation::WavelengthInterpolation::floor);
   const double fraction = (std::log10(4.0) - std::log10(3.0)) / (std::log10(5.0) - std::log10(3.0));
   const double expected = 1.0 * (1.0 - fraction) + 3.0 * fraction;
   CHECK_NEAR(table.optical_depth<double>(400.0, 4000.0), expected, 1e-13);
@@ -180,21 +182,33 @@ void test_extinction_kernel_constant_tau() {
 
 void test_invalid_tables() {
   CHECK(throws_invalid([] {
-    return obdeect::propagation::TransmissionTable("# H2= 1.835, H1= 3.0\n400 1\n", 2000.0);
-  }));
-  CHECK(throws_invalid([] { return obdeect::propagation::TransmissionTable("400 1\n", 2000.0); }));
-  CHECK(throws_invalid([] {
-    return obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 4.0 3.0\n400 1 1\n", 2000.0);
+    return obdeect::propagation::TransmissionTable(
+        "# H2= 1.835, H1= 3.0\n400 1\n", 2000.0,
+        obdeect::propagation::WavelengthInterpolation::floor);
   }));
   CHECK(throws_invalid([] {
-    return obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.0\n400 1\n402 1\n", 2000.0);
+    return obdeect::propagation::TransmissionTable(
+        "400 1\n", 2000.0, obdeect::propagation::WavelengthInterpolation::floor);
   }));
-  CHECK(throws_invalid(
-      [] { return obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.0\n", 2000.0); }));
+  CHECK(throws_invalid([] {
+    return obdeect::propagation::TransmissionTable(
+        "# H2= 2.000, H1= 4.0 3.0\n400 1 1\n", 2000.0,
+        obdeect::propagation::WavelengthInterpolation::floor);
+  }));
+  CHECK(throws_invalid([] {
+    return obdeect::propagation::TransmissionTable(
+        "# H2= 2.000, H1= 3.0\n400 1\n402 1\n", 2000.0,
+        obdeect::propagation::WavelengthInterpolation::floor);
+  }));
+  CHECK(throws_invalid([] {
+    return obdeect::propagation::TransmissionTable(
+        "# H2= 2.000, H1= 3.0\n", 2000.0, obdeect::propagation::WavelengthInterpolation::floor);
+  }));
 }
 
 void test_reference_table() {
-  const auto table = obdeect::propagation::TransmissionTable::from_file(table_path, 2000.0);
+  const auto table = obdeect::propagation::TransmissionTable::from_file(
+      table_path, 2000.0, obdeect::propagation::WavelengthInterpolation::floor);
   CHECK(table.first_wavelength_nm() == 200);
   // Per-telescope depths and the full lookup, against the reference values.
   const auto depths = table.telescope_depths(2030.0, 28.0);
@@ -217,23 +231,30 @@ void test_reference_table() {
 // A NaN H2 also used to pass the site altitude check (NaN > tolerance is false).
 void test_non_finite_tables_rejected() {
   CHECK(throws_invalid([] {
-    obdeect::propagation::TransmissionTable("# H2= nan, H1= 3.000 4.000\n400 0.5 0.5\n", 2000.0);
+    obdeect::propagation::TransmissionTable("# H2= nan, H1= 3.000 4.000\n400 0.5 0.5\n", 2000.0,
+                                            obdeect::propagation::WavelengthInterpolation::floor);
   }));
   CHECK(throws_invalid([] {
-    obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.000 inf\n400 0.5 0.5\n", 2000.0);
+    obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.000 inf\n400 0.5 0.5\n", 2000.0,
+                                            obdeect::propagation::WavelengthInterpolation::floor);
   }));
   CHECK(throws_invalid([] {
-    obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.000 4.000\n400 nan 0.5\n", 2000.0);
+    obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.000 4.000\n400 nan 0.5\n", 2000.0,
+                                            obdeect::propagation::WavelengthInterpolation::floor);
   }));
   CHECK(throws_invalid([] {
-    obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.000 4.000\n400 -inf 0.5\n", 2000.0);
+    obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.000 4.000\n400 -inf 0.5\n", 2000.0,
+                                            obdeect::propagation::WavelengthInterpolation::floor);
   }));
   // H2 = 0 would give log10(0) = -inf in the height grid.
-  CHECK(throws_invalid(
-      [] { obdeect::propagation::TransmissionTable("# H2= 0.000, H1= 3.000\n400 0 0.5\n", 0.0); }));
+  CHECK(throws_invalid([] {
+    obdeect::propagation::TransmissionTable("# H2= 0.000, H1= 3.000\n400 0 0.5\n", 0.0,
+                                            obdeect::propagation::WavelengthInterpolation::floor);
+  }));
   // A finite table still parses.
   CHECK(!throws_invalid([] {
-    obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.000 4.000\n400 0.5 0.5\n", 2000.0);
+    obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.000 4.000\n400 0.5 0.5\n", 2000.0,
+                                            obdeect::propagation::WavelengthInterpolation::floor);
   }));
 }
 
@@ -264,6 +285,126 @@ void test_transmission2_parameters() {
   CHECK(throws_invalid([&] { (void)table.transmission2<double>(400.0, 3500.0, 1.0, 0.0, -1.0); }));
 }
 
+// Linear mode. Rows 400 and 401 nm, at heights 3 and 5 km (interpolated in log10 h).
+const std::string two_rows = "# H2= 2.000, H1= 3.000 5.000\n400 1.0 3.0\n401 2.0 4.0\n";
+
+void test_linear_mode_selection() {
+  using obdeect::propagation::TransmissionTable;
+  using obdeect::propagation::WavelengthInterpolation;
+  const TransmissionTable floor_table(two_rows, 2000.0,
+                                      obdeect::propagation::WavelengthInterpolation::floor);
+  CHECK(floor_table.wavelength_interpolation() == WavelengthInterpolation::floor);
+  const TransmissionTable linear_table(two_rows, 2000.0, WavelengthInterpolation::linear);
+  CHECK(linear_table.wavelength_interpolation() == WavelengthInterpolation::linear);
+  CHECK(throws_invalid(
+      [] { return TransmissionTable(two_rows, 2000.0, static_cast<WavelengthInterpolation>(7)); }));
+}
+
+// Integer wavelengths give the same values in both modes (fixture table, all depths).
+void test_linear_integer_wavelengths_equal_floor() {
+  using obdeect::propagation::TransmissionTable;
+  using obdeect::propagation::WavelengthInterpolation;
+  const auto floor_table = TransmissionTable::from_file(
+      table_path, 2000.0, obdeect::propagation::WavelengthInterpolation::floor);
+  const auto linear_table =
+      TransmissionTable::from_file(table_path, 2000.0, WavelengthInterpolation::linear);
+  const auto floor_depths = floor_table.telescope_depths(2030.0, 28.0);
+  const auto linear_depths = linear_table.telescope_depths(2030.0, 28.0);
+  for (const int nm : {300, 400, 500, 600, 700}) {
+    const auto wavelength = static_cast<double>(nm);
+    for (const double zem : {2500.0, 8000.0, 20000.0}) {
+      CHECK_NEAR(linear_table.optical_depth<double>(wavelength, zem),
+                 floor_table.optical_depth<double>(wavelength, zem), 1e-15);
+      CHECK_NEAR(linear_table.transmission2<double>(wavelength, zem, 1.7, floor_depths.od_tel[nm],
+                                                    floor_depths.od_focus[nm]),
+                 floor_table.transmission2<double>(wavelength, zem, 1.7, floor_depths.od_tel[nm],
+                                                   floor_depths.od_focus[nm]),
+                 1e-15);
+    }
+    const auto values = linear_table.telescope_depths_at(linear_depths, wavelength);
+    CHECK_NEAR(values.od_tel, floor_depths.od_tel[nm], 1e-15);
+    CHECK_NEAR(values.od_focus, floor_depths.od_focus[nm], 1e-15);
+  }
+}
+
+// Halfway between rows: the mean of the two row depths at a fixed height.
+void test_linear_halfway() {
+  using obdeect::propagation::TransmissionTable;
+  using obdeect::propagation::WavelengthInterpolation;
+  const TransmissionTable floor_table(two_rows, 2000.0,
+                                      obdeect::propagation::WavelengthInterpolation::floor);
+  const TransmissionTable linear_table(two_rows, 2000.0, WavelengthInterpolation::linear);
+  const double height = 4000.0;
+  const double row_400 = floor_table.optical_depth<double>(400.0, height);
+  const double row_401 = floor_table.optical_depth<double>(401.0, height);
+  CHECK(row_400 != row_401);
+  CHECK_NEAR(linear_table.optical_depth<double>(400.5, height), 0.5 * (row_400 + row_401), 1e-13);
+  CHECK_NEAR(linear_table.optical_depth<double>(400.25, height), 0.75 * row_400 + 0.25 * row_401,
+             1e-13);
+  CHECK_NEAR(linear_table.optical_depth<double>(400.0, height), row_400, 1e-15);
+  CHECK_NEAR(linear_table.transmission<double>(400.5, height, 2.0),
+             std::exp(-2.0 * 0.5 * (row_400 + row_401)), 1e-13);
+  // Floor mode truncates 400.5 to the row at 400.
+  CHECK_NEAR(floor_table.optical_depth<double>(400.5, height), row_400, 1e-15);
+}
+
+// Wavelengths below the first and above the last row take the edge row (no extrapolation).
+void test_linear_clamping() {
+  using obdeect::propagation::TransmissionTable;
+  using obdeect::propagation::WavelengthInterpolation;
+  const TransmissionTable floor_table(two_rows, 2000.0,
+                                      obdeect::propagation::WavelengthInterpolation::floor);
+  const TransmissionTable linear_table(two_rows, 2000.0, WavelengthInterpolation::linear);
+  for (const double height : {2500.0, 4000.0, 9000.0}) {
+    CHECK_NEAR(linear_table.optical_depth<double>(350.0, height),
+               floor_table.optical_depth<double>(400.0, height), 1e-15);
+    CHECK_NEAR(linear_table.optical_depth<double>(401.0, height),
+               floor_table.optical_depth<double>(401.0, height), 1e-15);
+    CHECK_NEAR(linear_table.optical_depth<double>(401.7, height),
+               floor_table.optical_depth<double>(401.0, height), 1e-15);
+    CHECK_NEAR(linear_table.optical_depth<double>(450.0, height),
+               floor_table.optical_depth<double>(401.0, height), 1e-15);
+  }
+}
+
+void test_linear_non_finite_rejected() {
+  using obdeect::propagation::TransmissionTable;
+  using obdeect::propagation::WavelengthInterpolation;
+  const double nan = std::nan("");
+  const double inf = std::numeric_limits<double>::infinity();
+  const TransmissionTable linear_table(two_rows, 2000.0, WavelengthInterpolation::linear);
+  const auto depths = linear_table.telescope_depths(4000.0, 1000.0);
+  CHECK(throws_invalid([&] { (void)linear_table.optical_depth<double>(nan, 4000.0); }));
+  CHECK(throws_invalid([&] { (void)linear_table.optical_depth<double>(inf, 4000.0); }));
+  CHECK(throws_invalid([&] { (void)linear_table.telescope_depths_at(depths, nan); }));
+  CHECK(throws_invalid([&] { (void)linear_table.transmission<double>(nan, 4000.0, 1.0); }));
+}
+
+// od_tel = tau(lambda, h_T) and od_focus = tau(lambda, h_T + l) - tau(lambda, h_T) in linear mode.
+void test_linear_telescope_depths() {
+  using obdeect::propagation::TransmissionTable;
+  using obdeect::propagation::WavelengthInterpolation;
+  const TransmissionTable floor_table(two_rows, 2000.0,
+                                      obdeect::propagation::WavelengthInterpolation::floor);
+  const TransmissionTable linear_table(two_rows, 2000.0, WavelengthInterpolation::linear);
+  const auto floor_depths = floor_table.telescope_depths(4000.0, 1000.0);
+  const auto depths = linear_table.telescope_depths(4000.0, 1000.0);
+  CHECK_NEAR(depths.od_tel[400], floor_depths.od_tel[400], 1e-15);
+  CHECK_NEAR(depths.od_tel[401], floor_depths.od_tel[401], 1e-15);
+  const auto mid = linear_table.telescope_depths_at(depths, 400.5);
+  CHECK_NEAR(mid.od_tel, 0.5 * (depths.od_tel[400] + depths.od_tel[401]), 1e-13);
+  CHECK_NEAR(mid.od_focus, 0.5 * (depths.od_focus[400] + depths.od_focus[401]), 1e-13);
+  CHECK_NEAR(mid.od_tel, linear_table.optical_depth<double>(400.5, 4000.0), 1e-13);
+  CHECK_NEAR(mid.od_focus,
+             linear_table.optical_depth<double>(400.5, 5000.0) -
+                 linear_table.optical_depth<double>(400.5, 4000.0),
+             1e-13);
+  // Floor mode: the entry at floor(lambda).
+  const auto truncated = floor_table.telescope_depths_at(floor_depths, 400.5);
+  CHECK_NEAR(truncated.od_tel, floor_depths.od_tel[400], 0.0);
+  CHECK_NEAR(truncated.od_focus, floor_depths.od_focus[400], 0.0);
+}
+
 } // namespace
 
 int main() {
@@ -278,5 +419,11 @@ int main() {
     test_non_finite_tables_rejected();
     test_wavelength_lookup_bounds();
     test_transmission2_parameters();
+    test_linear_mode_selection();
+    test_linear_integer_wavelengths_equal_floor();
+    test_linear_halfway();
+    test_linear_clamping();
+    test_linear_non_finite_rejected();
+    test_linear_telescope_depths();
   });
 }

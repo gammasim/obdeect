@@ -36,7 +36,8 @@ template <class Function> bool throws_invalid(Function function) {
 // other wavelengths are clamped to it).
 obdeect::propagation::TransmissionTable constant_table() {
   return obdeect::propagation::TransmissionTable(
-      "# H2= 2.000, H1=    3.000     4.000\n400 0.5 0.5\n", 2000.0);
+      "# H2= 2.000, H1=    3.000     4.000\n400 0.5 0.5\n", 2000.0,
+      obdeect::propagation::WavelengthInterpolation::floor);
 }
 
 // n photons, straight down (cx = cy = 0, cz = -1), zem 3500 m, weight 1, all at `wavelength`.
@@ -103,6 +104,68 @@ void test_cz_column_must_be_finite() {
   }
 }
 
+// Near-horizontal float32 directions: cz rounds to a unit vector with cx and cy, but an absolute
+// difference of cz from -sqrt(1 - cx^2 - cy^2) exceeds 1e-5 (the error is about 1e-7 / |cz|).
+// Such photons are valid; a clearly wrong cz is still rejected.
+void test_near_horizontal_direction_accepted() {
+  const auto table = constant_table();
+  const auto depths = table.telescope_depths(2030.0, 28.0);
+  const obdeect::propagation::Envelope envelope({200.0, 800.0}, {0.9, 0.3});
+  const auto settings = settings_for(table, depths, envelope, true);
+
+  auto chunk = photons(1, 400.0F);
+  chunk[Column::cx][0] = 0.989117742F;
+  chunk[Column::cy][0] = -0.147124648F;
+  chunk[Column::cz].assign(1, -0.000614837F);
+  CHECK(!throws_invalid(
+      [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
+
+  chunk[Column::cz][0] = -0.05F;
+  CHECK(throws_invalid(
+      [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
+}
+
+// A float32 direction with cx^2 + cy^2 slightly above 1 (rounding of a horizontal photon) is
+// valid; a direction clearly outside the unit disc is rejected.
+void test_direction_rounding_outside_unit_disc_accepted() {
+  const auto table = constant_table();
+  const auto depths = table.telescope_depths(2030.0, 28.0);
+  const obdeect::propagation::Envelope envelope({200.0, 800.0}, {0.9, 0.3});
+  const auto settings = settings_for(table, depths, envelope, true);
+
+  auto chunk = photons(1, 400.0F);
+  chunk[Column::cx][0] = 1.0000001F;
+  chunk[Column::cy][0] = 0.0F;
+  CHECK(!throws_invalid(
+      [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
+
+  chunk[Column::cx][0] = 1.001F;
+  CHECK(throws_invalid(
+      [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
+}
+
+// A rounded over-unit direction takes the magnitude of its validated cz: cx^2 + cy^2 becomes
+// 1 - cz^2, for either sign of cz. Directions inside the unit disc are left unchanged.
+void test_snap_direction_to_cz() {
+  float cx = 1.0000001F;
+  float cy = 0.0F;
+  obdeect::stream::snap_direction_to_cz(cx, cy, -0.0001);
+  CHECK_NEAR(static_cast<double>(cx) * cx + static_cast<double>(cy) * cy, 1.0 - 1e-8, 1e-6);
+  CHECK(cx > 0.0F && cy == 0.0F);
+
+  float cx_in = 0.5F;
+  float cy_in = 0.5F;
+  obdeect::stream::snap_direction_to_cz(cx_in, cy_in, -0.7);
+  CHECK(cx_in == 0.5F && cy_in == 0.5F);
+
+  float cx_up = 1.0000001F;
+  float cy_up = 0.0F;
+  obdeect::stream::snap_direction_to_cz(cx_up, cy_up, 0.0001);
+  CHECK_NEAR(static_cast<double>(cx_up) * cx_up + static_cast<double>(cy_up) * cy_up, 1.0 - 1e-8,
+             1e-6);
+  CHECK(cx_up > 0.0F && cy_up == 0.0F);
+}
+
 // Wavelengths are finite and non-negative (0 means not assigned). NaN, inf and negative values
 // are rejected before any conversion to int.
 void test_wavelength_must_be_finite() {
@@ -123,6 +186,32 @@ void test_wavelength_must_be_finite() {
   valid[Column::wavelength][1] = 0.0F;
   CHECK(!throws_invalid(
       [&] { (void)obdeect::propagation::apply_extinction_chunk(valid, settings, 0); }));
+}
+
+// Thinned mode needs weights <= max_bunch_photons; weighted mode keeps any finite weight >= 0
+// (e.g. a lidar pulse of 1e17 photons in a few rows) and multiplies it by the acceptance.
+void test_large_weights_only_weighted() {
+  const auto table = constant_table();
+  const auto depths = table.telescope_depths(2030.0, 28.0);
+  const obdeect::propagation::Envelope envelope({200.0, 800.0}, {1.0, 1.0});
+  auto chunk = photons(2, 400.0F);
+  chunk[Column::w][0] = 1e13F;
+  const auto thinned = settings_for(table, depths, envelope, false);
+  CHECK(throws_invalid(
+      [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, thinned, 0); }));
+  const auto weighted = settings_for(table, depths, envelope, true);
+  const auto out = obdeect::propagation::apply_extinction_chunk(chunk, weighted, 0);
+  CHECK(total_rows(out) == 2);
+  if (total_rows(out) == 2) {
+    const double ratio = static_cast<double>(out[0][Column::w][0]) / out[0][Column::w][1];
+    CHECK(std::abs(ratio / 1e13 - 1.0) < 1e-6);
+  }
+  for (const float bad : {std::numeric_limits<float>::infinity(), -1.0F}) {
+    auto invalid = photons(1, 400.0F);
+    invalid[Column::w][0] = bad;
+    CHECK(throws_invalid(
+        [&] { (void)obdeect::propagation::apply_extinction_chunk(invalid, weighted, 0); }));
+  }
 }
 
 // Wavelengths at or above max_lambda_nm, including values beyond the int range, are dropped
@@ -228,8 +317,12 @@ int main() {
   return run_checks([] {
     test_threads_do_not_change_output();
     test_cz_column_must_be_finite();
+    test_near_horizontal_direction_accepted();
+    test_direction_rounding_outside_unit_disc_accepted();
+    test_snap_direction_to_cz();
     test_wavelength_must_be_finite();
     test_wavelength_above_max_is_dropped();
     test_atmospheric_acceptance_wavelength();
+    test_large_weights_only_weighted();
   });
 }

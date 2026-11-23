@@ -15,7 +15,14 @@ from obdeect.ray_tracing import OpticalModel
 from obdeect.ray_tracing.formats import ModelError
 from obdeect.ray_tracing.stream import trace_stream
 from telescopes import dual, segmented
-from test_stream import RUN, SEED, beam, parallel_beam_in_both_frames, write_stream
+from test_stream import (
+    RUN,
+    SEED,
+    beam,
+    parallel_beam_in_both_frames,
+    with_direction,
+    write_stream,
+)
 
 PROGRAM = "obdeect-ray-tracing-trace-stream"
 
@@ -169,6 +176,57 @@ def test_ground_frame_on_and_off_axis(native, models, tmp_path, obdeect_stream):
     source = write_stream(tmp_path / "in.pst", {1: photons}, blob=True)
     counts = compare(native, models, tmp_path, obdeect_stream, source)
     assert counts["photons_out"] > 0
+
+
+@pytest.mark.parametrize("cz", [-0.000614837, 0.000614837, -0.05])
+def test_near_horizontal_cz_validation(native, models, tmp_path, obdeect_stream, cz):
+    photons = beam(1, (0.989117742, -0.147124648))
+    photons["cz"] = np.array([cz], dtype=np.float32)
+    source = write_stream(tmp_path / "in.pst", {1: photons})
+    result = compare(native, models, tmp_path, obdeect_stream, source)
+    if 0 < abs(cz) < 0.01:
+        # Nearly horizontal photons, either way up, are traced (upwards ones are not detected).
+        assert result["photons_in"] == 1
+    else:
+        assert "cz" in result
+
+
+def test_mixed_directions_match_python(native, models, tmp_path, obdeect_stream):
+    down = with_direction(beam(3000, (0.0, 0.0), radius_m=0.5), 0.0, 0.0, -1.0)
+    up = with_direction(beam(1500, (0.01, 0.0), radius_m=0.5, seed=8), 0.01, 0.0, +1.0)
+    photons = {name: np.concatenate([down[name], up[name]]) for name in down}
+    source = write_stream(tmp_path / "in.pst", {1: photons})
+    counts = compare(native, models, tmp_path, obdeect_stream, source)
+    assert counts["photons_in"] == 4500
+    assert counts["photons_out"] > 0
+
+
+def test_horizontal_photons_error_matches_python(native, models, tmp_path, obdeect_stream):
+    photons = with_direction(beam(5, (1.0, 0.0)), 1.0, 0.0, 1.0)
+    photons["cz"] = np.zeros(5, np.float32)
+    source = write_stream(tmp_path / "in.pst", {1: photons})
+    error = compare(native, models, tmp_path, obdeect_stream, source)
+    assert isinstance(error, str) and "horizontal photons" in error
+
+
+def test_stdin_matches_file_input(native, models, tmp_path):
+    source = write_stream(tmp_path / "in.pst", {1: beam(4000, (0.0, 0.0), radius_m=6.0)})
+    args = dict(telescopes=None, pointing=(0.0, 0.0), transmission="full", threads=1)
+    model_args = [str(models["segmented"][1])]
+    file_result = subprocess.run(
+        _native_argv(native, model_args, source, "-", **args), capture_output=True, check=False
+    )
+    stdin_result = subprocess.run(
+        _native_argv(native, model_args, "-", "-", **args),
+        input=source.read_bytes(),
+        capture_output=True,
+        check=False,
+    )
+    assert file_result.returncode == 0, file_result.stderr
+    assert stdin_result.returncode == 0, stdin_result.stderr
+    assert b"4000 photons in" in stdin_result.stderr
+    assert stdin_result.stderr == file_result.stderr
+    assert stdin_result.stdout == file_result.stdout
 
 
 @pytest.mark.parametrize("pointing", [(12.0, 73.0), (35.0, 180.0)])

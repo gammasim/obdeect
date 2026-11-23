@@ -7,7 +7,7 @@ namespace obdeect::stream {
 // Photon-stream format constants (docs/format.md).
 inline constexpr std::uint32_t record_magic = 0x52545347U; // "GSTR", little-endian.
 inline constexpr int format_major = 1;
-inline constexpr int format_minor = 0;
+inline constexpr int format_minor = 2;
 inline constexpr std::uint32_t max_chunk_rows = 1U << 16;
 
 enum class RecordType : std::uint16_t {
@@ -37,9 +37,10 @@ enum class Column : std::uint32_t {
   zem = 7,
   w = 8,
   wavelength = 9,
-  p = 10
+  p = 10,
+  path = 11
 };
-inline constexpr std::uint32_t n_columns = 11;
+inline constexpr std::uint32_t n_columns = 12;
 
 [[nodiscard]] constexpr std::uint32_t column_bit(Column c) {
   return 1U << static_cast<std::uint32_t>(c);
@@ -51,7 +52,7 @@ inline constexpr std::uint32_t required_columns = column_bit(Column::x) | column
 
 [[nodiscard]] constexpr const char *column_name(Column c) {
   constexpr const char *names[n_columns] = {"x", "y",   "z", "cx",         "cy", "cz",
-                                            "t", "zem", "w", "wavelength", "p"};
+                                            "t", "zem", "w", "wavelength", "p",  "path"};
   return names[static_cast<std::uint32_t>(c)];
 }
 

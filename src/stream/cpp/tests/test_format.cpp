@@ -3,6 +3,7 @@
 #include "obdeect/stream/photons.hpp"
 #include "obdeect/stream/random.hpp"
 
+#include <cmath>
 #include <stdexcept>
 
 using namespace obdeect::stream;
@@ -99,6 +100,41 @@ void random_fields_disjoint() {
   CHECK(threw);
 }
 
+// Direction helpers: cz_is_consistent accepts either sign of cz; the sign helpers are strict.
+void direction_helpers() {
+  const double nan = std::nan("");
+  CHECK(cz_is_consistent(-0.8, 0.6, 0.0));      // downward
+  CHECK(cz_is_consistent(0.8, 0.6, 0.0));       // upward
+  CHECK(cz_is_consistent(0.0, 1.0, 0.0));       // horizontal, cx^2 + cy^2 = 1
+  CHECK(cz_is_consistent(0.0, 0.0, -1.0));      // horizontal, cy = -1
+  CHECK(!cz_is_consistent(-0.5, 0.6, 0.0));     // magnitude inconsistent
+  CHECK(!cz_is_consistent(0.5, 0.6, 0.0));      // magnitude inconsistent, upward
+  CHECK(!cz_is_consistent(nan, 0.6, 0.0));      // NaN cz
+  CHECK(!cz_is_consistent(-0.8, nan, 0.0));     // NaN cx
+  CHECK(!cz_is_consistent(INFINITY, 0.0, 0.0)); // infinite cz
+
+  CHECK(is_downward(-0.8));
+  CHECK(!is_downward(0.8));
+  CHECK(!is_downward(0.0));
+  CHECK(!is_downward(-0.0));
+  CHECK(!is_downward(nan));
+  CHECK(is_upward(0.8));
+  CHECK(!is_upward(-0.8));
+  CHECK(!is_upward(0.0));
+  CHECK(!is_upward(nan));
+
+  // The snap keeps |cz| for upward photons too; downward and in-disc directions as before.
+  float cx = 1.0000001F;
+  float cy = 0.0F;
+  snap_direction_to_cz(cx, cy, 0.8);
+  CHECK_NEAR(static_cast<double>(cx) * cx + static_cast<double>(cy) * cy, 1.0 - 0.64, 1e-6);
+  CHECK(cx > 0.0F && cy == 0.0F);
+  float cx_in = 0.6F;
+  float cy_in = 0.0F;
+  snap_direction_to_cz(cx_in, cy_in, 0.8);
+  CHECK(cx_in == 0.6F && cy_in == 0.0F);
+}
+
 void random_mean() {
   double sum = 0.0;
   constexpr int n = 100000;
@@ -124,5 +160,6 @@ int main() {
     random_is_keyed();
     random_fields_disjoint();
     random_mean();
+    direction_helpers();
   });
 }

@@ -7,13 +7,11 @@ matplotlib = pytest.importorskip("matplotlib")
 matplotlib.use("Agg")
 
 FLASHER = {
-    "frame": "camera",
+    "kind": "point",
     "photons": 1e5,
-    "emitter": {
-        "position_m": [0.0, 0.0, 1.5],
-        "pointing": [0.0, 0.0, -1.0],
-        "angular": {"kind": "lambertian"},
-    },
+    "position_m": [0.0, 0.0, 1.5],
+    "axis": [0.0, 0.0, -1.0],
+    "angular": {"kind": "lambertian"},
     "spectrum": {"kind": "uniform", "low_nm": 380.0, "high_nm": 420.0},
     "pulse": {"kind": "gauss", "sigma_ns": 1.0},
 }

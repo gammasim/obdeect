@@ -5,6 +5,7 @@
 #include "obdeect/propagation/propagator.hpp"
 #include "obdeect/stream/cli.hpp"
 #include "obdeect/stream/parse.hpp"
+#include "obdeect/stream/stdin_buffer.hpp"
 
 using namespace obdeect::propagation;
 
@@ -28,12 +29,15 @@ void usage() {
   std::fprintf(
       stderr,
       "usage: obdeect propagation run (--transmission FILE | --no-extinction) --site-altitude M\n"
-      "                       [--profile FILE]\n"
+      "                       [--wavelength-interpolation linear|floor]\n"
+      "                       [--profile FILE] [--dispersion-reference-nm NM]\n"
       "                       [--envelope NAME=FILE]... [--wavelength-range LO HI]\n"
       "                       --seed N [--mode thinned|weighted] [--store-p]\n"
       "                       [--scattering FILE] [--scattering-points N]\n"
+      "                       [--scattering-primaries ID[,ID...]]\n"
       "                       [--pathlen M] [--telescope-pathlen ID=M]...\n"
       "                       [--curvature none|corsika|spherical] [--earth-radius-m M]\n"
+      "                       [--ground-representation plane|sphere]\n"
       "                       [--threads N] [--telescopes ID[,ID...]]\n"
       "                       [-i FILE|-] [-o FILE|-]\n");
 }
@@ -96,8 +100,9 @@ unsigned parse_threads(const std::string &text) {
   return static_cast<unsigned>(value);
 }
 
-// --telescopes IDS: comma-separated telescope ids from 1; sorted, repeats removed.
-std::vector<std::uint32_t> parse_telescope_list(const std::string &text) {
+// IDS of --telescopes or --scattering-primaries: comma-separated telescope ids from 1; sorted,
+// repeats removed.
+std::vector<std::uint32_t> parse_telescope_list(const std::string &text, const char *flag) {
   std::vector<std::uint32_t> ids;
   std::size_t start = 0;
   while (true) {
@@ -107,7 +112,8 @@ std::vector<std::uint32_t> parse_telescope_list(const std::string &text) {
     long id = 0;
     if (!obdeect::stream::parse::integer(item, id) || id < 1 ||
         id > static_cast<long>(obdeect::stream::max_telescope)) {
-      throw UsageError("--telescopes needs telescope ids from 1, separated by commas: " + text);
+      throw UsageError(std::string(flag) +
+                       " needs telescope ids from 1, separated by commas: " + text);
     }
     ids.push_back(static_cast<std::uint32_t>(id));
     if (comma == std::string::npos) {
@@ -138,6 +144,9 @@ int main(int argc, char **argv) {
         std::optional<double> site_altitude;
         std::optional<std::uint64_t> seed;
         std::optional<std::string> profile;
+        std::optional<double> dispersion_reference_nm;
+        WavelengthInterpolation interpolation = WavelengthInterpolation::linear;
+        bool interpolation_given = false;
         std::optional<WavelengthRange> wavelengths;
         std::vector<std::pair<std::string, std::string>> envelope_files;
         std::optional<OutputMode> mode;
@@ -145,11 +154,14 @@ int main(int argc, char **argv) {
         bool store_p = false;
         std::optional<std::string> scattering;
         std::optional<std::uint32_t> scattering_points;
+        std::optional<std::vector<std::uint32_t>> scattering_primaries;
         double pathlen = 0.0;
         bool pathlen_given = false;
         std::map<std::uint32_t, double> telescope_pathlen;
         Curvature curvature = Curvature::none;
         std::optional<double> earth_radius;
+        obdeect::stream::GroundRepresentation ground_representation =
+            obdeect::stream::GroundRepresentation::plane;
         unsigned threads = 1;
         std::optional<std::vector<std::uint32_t>> telescopes;
         std::string input = "-";
@@ -168,6 +180,19 @@ int main(int argc, char **argv) {
               site_altitude = parse_double(value("--site-altitude"), "--site-altitude");
             } else if (arg == "--profile") {
               profile = value("--profile");
+            } else if (arg == "--dispersion-reference-nm") {
+              dispersion_reference_nm =
+                  parse_double(value("--dispersion-reference-nm"), "--dispersion-reference-nm");
+            } else if (arg == "--wavelength-interpolation") {
+              const std::string text = value("--wavelength-interpolation");
+              interpolation_given = true;
+              if (text == "linear") {
+                interpolation = WavelengthInterpolation::linear;
+              } else if (text == "floor") {
+                interpolation = WavelengthInterpolation::floor;
+              } else {
+                throw UsageError("--wavelength-interpolation is linear or floor: " + text);
+              }
             } else if (arg == "--envelope") {
               const std::string spec = value("--envelope");
               const auto equals = spec.find('=');
@@ -196,6 +221,9 @@ int main(int argc, char **argv) {
               scattering = value("--scattering");
             } else if (arg == "--scattering-points") {
               scattering_points = parse_points(value("--scattering-points"));
+            } else if (arg == "--scattering-primaries") {
+              scattering_primaries =
+                  parse_telescope_list(value("--scattering-primaries"), "--scattering-primaries");
             } else if (arg == "--pathlen") {
               pathlen = parse_pathlen(value("--pathlen"), "--pathlen");
               pathlen_given = true;
@@ -208,6 +236,15 @@ int main(int argc, char **argv) {
               telescope_pathlen[id] = metres;
             } else if (arg == "--curvature") {
               curvature = parse_curvature_flag(value("--curvature"));
+            } else if (arg == "--ground-representation") {
+              const std::string text = value("--ground-representation");
+              if (text == "plane") {
+                ground_representation = obdeect::stream::GroundRepresentation::plane;
+              } else if (text == "sphere") {
+                ground_representation = obdeect::stream::GroundRepresentation::sphere;
+              } else {
+                throw UsageError("--ground-representation is plane or sphere: " + text);
+              }
             } else if (arg == "--earth-radius-m") {
               earth_radius = parse_double(value("--earth-radius-m"), "--earth-radius-m");
             } else if (arg == "--threads") {
@@ -216,7 +253,7 @@ int main(int argc, char **argv) {
               if (telescopes) {
                 throw UsageError("--telescopes given twice");
               }
-              telescopes = parse_telescope_list(value("--telescopes"));
+              telescopes = parse_telescope_list(value("--telescopes"), "--telescopes");
             } else if (arg == "-i") {
               input = value("-i");
             } else if (arg == "-o") {
@@ -252,25 +289,34 @@ int main(int argc, char **argv) {
             if (store_p) {
               throw UsageError("--no-extinction cannot be combined with --store-p");
             }
+            if (interpolation_given) {
+              throw UsageError(
+                  "--no-extinction cannot be combined with --wavelength-interpolation");
+            }
           }
           if (scattering_points && !scattering) {
             throw UsageError("--scattering-points needs --scattering");
           }
-          if (telescopes && scattering) {
-            throw UsageError("--telescopes cannot be combined with --scattering");
+          if (scattering_primaries && !scattering) {
+            throw UsageError("--scattering-primaries needs --scattering");
+          }
+          if (dispersion_reference_nm && !profile) {
+            throw UsageError("--dispersion-reference-nm needs --profile");
           }
 
           PropagatorConfig config;
           config.geometry_only = no_extinction;
           if (transmission) {
             config.transmission.emplace(
-                TransmissionTable::from_file(*transmission, *site_altitude));
+                TransmissionTable::from_file(*transmission, *site_altitude, interpolation));
             config.transmission_source = *transmission;
           }
           config.site_altitude_m = *site_altitude;
+          config.dispersion_reference_nm = dispersion_reference_nm;
           config.default_pathlen_m = pathlen;
           config.telescope_pathlen_m = telescope_pathlen;
           config.curvature = curvature;
+          config.ground_representation = ground_representation;
           if (earth_radius) {
             config.earth_radius_m = *earth_radius;
           }
@@ -292,6 +338,7 @@ int main(int argc, char **argv) {
             config.scattering.points_per_photon = scattering_points.value_or(8);
             config.scattering_table.emplace(ScatteringTable::from_file(*scattering));
             config.scattering_source = *scattering;
+            config.scattering_primaries = scattering_primaries;
           }
 
           if (input != "-" && output != "-" && obdeect::propagation::same_file(input, output)) {
@@ -311,8 +358,10 @@ int main(int argc, char **argv) {
               throw std::runtime_error("cannot open output stream: " + output);
             }
           }
-          std::istream &in = input == "-" ? static_cast<std::istream &>(std::cin)
-                                          : static_cast<std::istream &>(in_file);
+          // std::cin is read one character at a time by libc++ once sync_with_stdio is off.
+          obdeect::stream::StdinBuffer stdin_buffer;
+          std::istream stdin_stream(&stdin_buffer);
+          std::istream &in = input == "-" ? stdin_stream : static_cast<std::istream &>(in_file);
           std::ostream &out = output == "-" ? static_cast<std::ostream &>(std::cout)
                                             : static_cast<std::ostream &>(out_file);
           const PropagationSummary summary = propagate_stream(in, out, std::move(config));

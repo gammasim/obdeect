@@ -38,7 +38,17 @@ The camera map lists the camera-frame telescopes, one per line:
 
 Telescopes not listed are ground-frame (sim_telarray `Bypass_Optics=0`). Listed telescopes with
 camera-frame photons are converted to the bypass convention and need `Bypass_Optics=1` (class 1)
-or `2` (class 2). `obdeect stream to-simtel` prints the value for each telescope.
+or `2` (class 2). `obdeect stream to-simtel` prints the value for each telescope. Camera-frame
+photons without a `zem` column (e.g. from `obdeect sources run led`) get `zem` = observation level
+plus `z`.
+
+TELPOS z of the listed telescopes is set to 0, because their photons are already at the camera.
+For array runs, sim_telarray needs the real heights for the plane-wavefront delay between
+telescopes; `--keep-telpos-height` writes the TELPOS block unchanged. Default: off.
+
+```console
+$ obdeect stream to-simtel --camera-map cam.txt --keep-telpos-height run.pst > sim.simtel
+```
 
 ## ATMPROF and synthesised headers
 
@@ -69,21 +79,85 @@ photon:  x, y, z = 0.1, 0.2, 0.5 m   c = (0.6, 0, -0.8)   t = 3 ns   observation
 bunch:   x, y = 47.5, 20.0 cm   cx, cy = 0.6, 0   time = 5.085 ns   zem = 220050 cm
 ```
 
-The bunch position is where the photon's line crosses z = 0 (path 0.625 m here, also for a photon
-moving away from the plane). The time is `t` plus that path over the speed of light; `zem` is the
-observation level plus `z`. Without a `cz` column the photon moves towards the plane. The camera
-rotation is not used, and TELPOS z is set to 0 as for camera-frame telescopes.
+The bunch position is where the photon's line crosses z = 0 (path 0.625 m here). The time is `t`
+plus that path over the speed of light; `zem` is the observation level plus `z`. Without a `cz`
+column the photon moves downwards. The camera rotation is not used, and TELPOS z is set to 0 as for
+camera-frame telescopes (unless `--keep-telpos-height` is given).
+
+Ground- and telescope-frame photons must move downwards (`cz` < 0, or no `cz` column):
+sim_telarray does not store the sign of `cz`, and the bunch format has no sign either. An upward
+or horizontal photon in these frames is an error, never written as a downward one. Camera-frame
+photons are already at the camera entrance, where sim_telarray uses only `cx` and `cy`; the sign
+of `cz` depends on the side the camera faces and is not checked.
 
 ```console
 $ cat cam.txt
 1 2 0.0
-$ obdeect sources flasher --type secondary --photons 1e6 | obdeect stream to-simtel --camera-map cam.txt | sim_telarray -c <config> -C Bypass_Optics=1 -
+$ obdeect sources run flasher --type secondary --flasher-offset 0.5 --flasher-depth 0.3 \
+    --flasher-inclination 2 --mirror-camera-distance 16 --fiducial-radius 12.5 \
+    --observation-level 2150 --spectrum fixed:wavelength_nm=400 --photons 1e6 \
+    | obdeect stream to-simtel --camera-map cam.txt | sim_telarray -c <config> -C Bypass_Optics=1 -
 obdeect stream to-simtel: telescope 1: telescope frame, mirror class 2, Bypass_Optics=1
 ```
 
 Errors: T photons for a telescope without map entry or with `mirror_class` 1; a photon with
-cz = 0; camera-frame and T photons for the same telescope in one run. The efficiency status of
-such a telescope is checked as for camera frame.
+`cz` >= 0 (upward or horizontal) or a non-finite `cz` in the ground or telescope frame; camera-frame
+and T photons for the same telescope in one run. The efficiency status of such a telescope is
+checked as for camera frame.
+
+## CORSIKA 3D photon bunches (1217)
+
+`obdeect stream from-corsika` converts EventIO 3D photon bunches (block 1217, written by the CORSIKA
+IACT library, `write_tel_photons3d` in `io_simtel.c`) to a sphere run. A bunch gives the arrival
+point A = (x, y, z) relative to the telescope sphere centre (cm), the direction d = (cx, cy, cz)
+and the distance `dist` of the emission point from A. The emission point is E = A - dist d, and the
+bunch becomes its G sphere row (docs/format.md, "Ground frame"), with R the telescope radius from
+TELPOS:
+
+- E on or inside the sphere (|E| <= R): the row is E, path 0.
+- E outside: the row is the entry point E + s d, where s >= 0 is the smallest root of
+  |E + s d| = R, and path = s. The line may enter the sphere after the arrival point A (s > dist).
+- No root with s >= 0 (the line misses the sphere, or points away from it): the bunch is counted in
+  `misses_sphere` in the run end and not written.
+
+Time at the row: `ctime + (s - dist) / c` (vacuum c; `ctime` is the arrival time at A). Emission
+altitude a.s.l.: `zem` = observation level + TELPOS z + E_z (flat geometry). The columns are
+`x y z cx cy cz t zem w path wavelength`; `wavelength` is the bunch's wavelength (0 = not set).
+
+Conventions and errors:
+
+- The run key `ground_representation` is `sphere`. A run may not mix 1205 and 1217 blocks; such a
+  run is an error. A run with 1205 blocks is a plane run and gets no `ground_representation` key (absent means
+  `plane`), so its output is unchanged.
+- 1217 needs RUNH (observation level) and a TELPOS entry for each telescope it names.
+- `cz` must be consistent with `cx` and `cy` (a unit vector within the float32 tolerance).
+  Negative bunch sizes, negative distances and non-finite values are errors, not dropped.
+- Heights are not converted for CURVED runs, as for 1205 blocks; the run key `curvature_applied`
+  tells whether CORSIKA applied the curvature.
+- A top-level 1217 block with indices (999, 999) is kept as a blob, as for 1205.
+
+The bunches of the test fixture `cpp/tests/data/photons3d.iact` (provenance in
+`photons3d_provenance.txt` next to it) give these conversions by hand in `test_corsika.cpp`.
+
+## Sphere runs (ground frame)
+
+A run with `ground_representation` `sphere` (format 1.2, [](format.md)) has ground-frame rows on
+or inside the telescope sphere instead of at the plane z = 0. `obdeect stream to-simtel` converts
+them to sim_telarray's plane rows, which need a downward `cz`:
+
+- A downward photon that starts on the sphere (emitted outside it) is moved along its line to the
+  plane z = 0: `x`, `y` at the crossing, `t` plus the path over the speed of light (the path can be
+  negative when the entry point is below the plane), `zem` and `cz` unchanged. The `z` and `path`
+  columns are dropped.
+- A photon that starts inside the sphere (emitted inside it) cannot be represented and is rejected:
+  `ground-frame photon emitted inside the telescope sphere: not representable for sim_telarray`.
+- Upward and horizontal photons are rejected as in plane runs.
+
+The sim_telarray output is that of a plane run with the converted rows; the run key is not passed
+on. A sphere run with rows of the plane form (no `z` column) is rejected. `telescope_r_m` must list
+the telescope's sphere radius.
+
+`obdeect stream to-grisu` does not convert sphere runs and rejects them.
 
 ## Efficiency checks
 

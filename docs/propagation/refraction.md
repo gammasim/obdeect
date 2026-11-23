@@ -79,8 +79,9 @@ The new direction is `(cx, cy) sin(theta_obs)/sin(theta_e)`; the position moves 
 `bend` returns `False` and leaves the photon unchanged if an input (height, direction, position,
 time) is not finite, the direction is not inside the unit circle (upward or horizontal), the emission
 is below the observation level, or the ray is too close to the horizon for the series
-(`sin(theta_e) (nu_obs - nu_e) > 0.1 cos^2(theta_e)`, about 87 degrees). Public height lookups, the
-timing helpers and the observation level throw for non-finite values.
+(`sin(theta_e) (nu_obs - nu_e) > 0.1 cos^2(theta_e)`, about 87 degrees; `bend_series_limit_exceeded`
+in `refraction.hpp` is the one definition of this condition). Public height lookups, the timing
+helpers and the observation level throw for non-finite values.
 
 Example (ECMWF table, observation level 2180 m, photon direction purely in x):
 
@@ -106,6 +107,86 @@ the bent ray. The equations, the lookup tables and their accuracy are on the
 [curvature page](curvature.md#refraction-in-the-spherical-mode). The plane-parallel bending above
 is the limit of that mode for an infinite Earth radius.
 
+## Dispersion
+
+The profile's n-1 is given at a reference wavelength `lambda_ref`. Air refracts shorter wavelengths
+more, so the phase index and the group index at wavelength `lambda` differ from the reference
+profile by a factor. The ratios come from the Ciddor (1996) standard dry-air formula, with vacuum
+wavelength in um and `s2 = 1 / lambda^2`:
+
+```text
+(n - 1) 1e8   = k1 / (k0 - s2) + k3 / (k2 - s2)            k0 = 238.0185, k1 = 5792105
+                                                            k2 = 57.362,  k3 = 167917
+(n_g - 1) 1e8 = (n - 1) 1e8 + 2 s2 [k1 / (k0 - s2)^2 + k3 / (k2 - s2)^2]
+```
+
+The group index follows from `n_g = n - lambda dn/dlambda` with `d/dlambda = -2 s2 / lambda d/ds2`.
+Both are valid for 200 nm to 2000 nm; outside that range they throw `ValueError` (`std::invalid_argument`
+in C++).
+
+```text
+k       = (n-1)(lambda) / (n-1)(lambda_ref)      phase factor:  n(lambda) - 1 = k (n - 1)
+k_group = (n_g-1)(lambda) / (n-1)(lambda_ref)    group factor:  n_g(lambda) - 1 = k_group (n - 1)
+```
+
+Example, reference 500 nm: `k` = 1.045147, 1.013578, 0.988639 and `k_group` = 1.197287, 1.090693,
+1.011885 at 300, 400 and 700 nm. At 300 nm the group correction is large (about 15 % of n-1).
+
+Use: `obdeect propagation run --profile atmprof.dat --dispersion-reference-nm 500` (Python
+`dispersion_reference_nm=500.0`). Each sky-frame photon that the stage bends (`refraction_applied = 0`)
+is scaled to its own wavelength, and the wavelength is assigned before the geometry for these runs.
+A run with `refraction_applied = 1` is rejected: the photons are already refracted and the straight
+air delay is not scaled, so that `obdeect propagation to-sky` stays the exact inverse. The profile's
+values are the index at `lambda_ref`; the ratios come from Ciddor (1996).
+
+Plane-parallel bending (`bend` in `refraction.hpp`, overload with `k`, `k_group`): the series of
+the [ray bending](#ray-bending) is evaluated with `nu -> k nu`. Each moment `M_b` is multiplied by
+`k^b`, and `nu_e`, `nu_obs` by `k`. The geometry (position and direction) is exact for the scaled
+profile up to the series truncation. The travel time is the series time with `k` plus the group
+term
+
+```text
+T = T(k) + (k_group - k) straight_path_air_delay_ns(profile, obs, h_e, zenith_e)
+```
+
+The group term is first order: it treats `1 / cos(theta(h))` along the bent ray as `1 / cos(theta_e)`.
+The error is of second order in the bending. The 7-argument `bend` calls the scaled overload with
+`k = k_group = 1`, which gives the same result bit for bit.
+
+Spherical mode uses the following first-order scaling below 75 degrees. With the
+unscaled integrals `shift(1)`, `bent(1)` and `straight(1)` from the table:
+
+```text
+shift          = k shift(1)
+bent           = k bent(1) + (k_group - k) straight(1)
+straight       = k_group straight(1)
+```
+
+Between 75 and 80 degrees the result blends smoothly into a wavelength-dependent table. Above
+80 degrees the table evaluates the ray geometry with the phase index and the travel time with
+the group index. It interpolates on nine refractivity-scale nodes covering all combinations of
+wavelength and reference wavelength from 200 to 2000 nm. The table is built on first use of a
+high-zenith photon and cached per telescope altitude level for the lifetime of the propagator.
+The direct quadrature fallback uses the same transition. Each cached altitude level requires
+additional memory and construction time; telescopes at different levels require separate tables.
+No dispersion tables are built when `--dispersion-reference-nm` is absent.
+
+Measured accuracy (`test_dispersion.cpp`, fixture ECMWF north winter, observation level 2180 m,
+reference numerical integrals with 20 000 Simpson intervals):
+
+| case | error |
+|---|---|
+| plane, `k = k_group`, 10-30 km, 0-75 deg, 126 photons | displacement 1.7e-10 m, time 1.8e-9 ns |
+| plane, `k_group != k` (Ciddor 300/400/700 nm, synthetic 0.97/0.98 and 1.03/1.02) | displacement 2.0e-10 m, time 6.3e-3 ns (worst, 300 nm) |
+| plane, group term alone against `(k_group - k) straight` | 2.5e-11 ns |
+| spherical, table interpolation alone (`k = 1`) | shift 8.4e-7 rel, bent 9.4e-6 rel |
+| spherical, `k = 0.97, 1.03`, 0-85 deg, 10 and 30 km, against direct quadrature of the scaled profile | shift 7.0e-4 rel (1.3 m absolute at 85 deg, 30 km), bent 7.0e-4 rel, straight 1.6e-7 rel |
+| spherical, `(k, k_group) = (0.97, 0.98)`, `(1.03, 1.02)` | bent 7.0e-4 rel, straight 1.6e-7 rel |
+
+For the first-order calculation, the spherical error is second order in the scale: near the horizon the bent delay is not linear in
+k, and the linear extrapolation is off by about 7e-4 of the total. Vertical photons are exact (bent =
+straight = k straight(1)). The plane-parallel error is set by the group approximation alone and grows with `|k_group - k|`.
+
 ## Timing
 
 - `ambient_group_index(profile, obs)`: refractive index `n = 1 + (n-1)` at the observation level.
@@ -116,6 +197,8 @@ is the limit of that mode for an infinite Earth radius.
 - `propagation_time_ns(path, n) = path * n / c`, `c = 0.299792458 m/ns`.
 - `straight_path_air_delay_ns(profile, h1, h2, zenith)`: `(1/c) integral of (n-1) dh / cos(zenith)`
   between two heights, exact for the interpolated profile.
+- `straight_path_air_delay_from_cos_ns(profile, h1, h2, cos_zenith)`: the same from `cos(zenith)`
+  (> 0). The scattering kernel uses it, since `acos` rounds to pi/2 for `|cz|` below about 1e-16.
 
 ## Units
 
@@ -131,3 +214,151 @@ is the limit of that mode for an infinite Earth radius.
 Refraction tables depend on the observation level: build one `RefractionTables` per level.
 `RefractionTables.etadsn` is the Gladstone-Dale ratio `(n-1)/density` (about 0.23 cm³/g) at the
 first level more than 1.5 km above the observation level.
+
+## Near the horizon
+
+`bend_quadrature` (`obdeect/propagation/refraction_horizon.hpp`) evaluates the two integrals above
+directly, from Snell's law, with Gauss-Legendre quadrature (8 nodes). Its outputs, units and
+rejection rules are those of `bend`. The integrand is taken as a difference from the emission
+value (`tan theta(h) - tan theta_e`, `n/cos theta(h) - 1/cos theta_e`), so no cancellation is
+lost. Sub-intervals are at most 250 m, starting at 1 m near the emission. For `cos theta_e < 0.2`
+the first sub-intervals use `x = u^2`, which removes the square-root behaviour of `1/cos theta`
+at the emission level. It returns `False` only if `sin theta` reaches one at some height (total
+internal reflection).
+
+The stage uses it for the photons that `bend` rejects only at the series limit, so no photon is
+dropped near the horizon:
+
+```cpp
+if (!bend(tables, h, cx, cy, x, y, t, k, k_group) &&
+    bend_series_limit_exceeded(tables, h, cx, cy, k)) {
+  bend_quadrature(tables, h, cx, cy, x, y, t, k, k_group); // exact, photon unchanged on failure
+}
+```
+
+`bend_series_limit_exceeded` returns true only for valid inputs that violate the condition in
+`bend`, so other failures (invalid input, emission below the observation level) are not sent to
+the quadrature. The dispersion factors `k` and `k_group` (see [Dispersion](#dispersion)) enter both
+functions with the same phase scaling. Quadrature integrates the group index along the bent ray;
+the series uses the straight-path approximation above. Example (ECMWF table, 88 degrees, 20 km): displacement -27 705 m, air excess
+-92 200 ns; the photon is bent towards the vertical by about 5 %.
+
+Accuracy (measured with `test_horizon`, observation level 2180 m): for zenith 0 to 82 degrees at
+10, 20 and 40 km the quadrature agrees with `bend` to 3e-8 m and 9e-8 ns. For 87 to 89 degrees,
+halving the largest sub-interval (250 to 125 m) changes the displacement by at most 4e-6 m and the
+time by at most 1.4e-5 ns. The cost is 8 profile lookups per sub-interval, about 1300 lookups for
+a 40 km emission.
+
+## Upward photons
+
+A photon emitted at height $h_e$ below the plane at $h_t$ ($h_e \le h_t$) and moving upwards
+(cz > 0) is bent by the same Snell's law, $n(h)\sin\theta(h) = n_e \sin\theta_e$ with
+$n = 1 + k\,\nu(h)$, where $\theta$ is measured from the upward vertical. The index decreases with
+height, so $\sin\theta$ grows: upward photons bend away from the vertical, and a nearly horizontal
+one can turn over before the plane. With $s = \sin\theta$ and $s_t = s_e (1 + k\nu_e)/(1 + k\nu_t)$:
+
+- If $s_t \ge 1$ the photon turns over before the plane and is dropped (`turns_over`).
+- Otherwise the displacement of the straight-line position at the plane is
+  $\Delta x = \int_{h_e}^{h_t} (\tan\theta(h) - \tan\theta_e)\,dh$ along $(c_x, c_y)/s_e$, the travel
+  time is
+  $$
+  \Delta t = \frac{h_t - h_e}{c\,\cos\theta_e} + \frac{1}{c}\int_{h_e}^{h_t}
+  \left(\frac{n_g(h)}{\cos\theta(h)} - \frac{1}{\cos\theta_e}\right) dh,
+  $$
+  with $n_g = 1 + k_g \nu$ as in [Timing](#timing), and the exit direction is $(c_x, c_y)\, s_t/s_e$
+  with $c_z = +\sqrt{1 - s_t^2}$.
+
+`bend_upward` (`obdeect/propagation/refraction_horizon.hpp`) evaluates these integrals with the
+quadrature of [Near the horizon](#near-the-horizon) (same nodes, sub-intervals and near-horizontal
+substitution). By reciprocity it integrates downwards from the plane, where $\cos\theta$ is
+smallest, with the same Snell constant, and converts the reference angle exactly:
+$\int (\tan\theta - \tan\theta_e)\,dh = \int (\tan\theta - \tan\theta_t)\,dh +
+(\tan\theta_t - \tan\theta_e)(h_t - h_e)$, likewise for $1/\cos\theta$.
+
+As for downward photons, $|c_z| = \sqrt{1 - c_x^2 - c_y^2}$ is taken from the stored $c_x, c_y$
+for the straight line and for the bending (the `cz` column gives the sign, and the magnitude only
+where $c_x^2 + c_y^2$ rounds to 1 or above). Near the horizon a float32 rounding of the direction
+changes $|c_z|$ noticeably (about 1e-5 relative at 88 degrees); using one source for both parts
+keeps the straight line and the bent displacement consistent. It returns `false` and leaves its arguments
+unchanged for a turning photon, and `upward_turns_over` tells that case from other failures
+(reported as `not_bendable`). The reciprocity check in `test_upward.cpp` bends the exit ray back
+down with `bend_quadrature` from tables at the emission level: it returns to the start within 1e-6 m
+and 1e-6 ns.
+
+The flat geometry is used for the path below the plane. In the `spherical` mode the emission and
+telescope altitudes are the spherical ones, but the bending is the plane-parallel integral above.
+The neglected curvature changes $s$ by about $L/R$ relative to the refraction over the path length
+$L$ ($R$ the Earth radius, 6.37 x 10^6 m, about 1.6 x 10^-4 per km), so the bending displacement
+is wrong by about $(L/R)\,\Delta x$. For $\Delta x \approx 0.2$ m (1 km path, zenith 80 degrees,
+$\nu \approx 3 \times 10^{-4}$) this is about 3 x 10^-5 m, and below 3 x 10^-4 m at 89 degrees.
+The straight path of the G plane is taken as in the downward case, and its altitudes are the
+spherical ones in the `spherical` mode.
+
+## Integrator
+
+The sphere representation ([](propagation.md#sphere-representation)) needs the ray where the
+plane-parallel tables are not enough: near-horizontal rays, rays that turn over, and rays that do
+not cross the telescope plane. `ray_march.hpp` integrates the ray in three dimensions, in frame
+sky (z above the observation level):
+
+    dX/ds = d,    dd/ds = (g - (g . d) d) / n,    dT/ds = n_group / c,
+
+with n = 1 + k nu(h), n_group = 1 + k_group nu(h), g = grad n = k nu'(h) up. In flat geometry
+up = (0, 0, 1) and h = observation level + z; in spherical geometry up is the radial unit vector
+from the Earth centre and h = |X - centre| - R (see [](curvature.md)). nu'(h) is the exact
+derivative of the tabulated profile (`AtmosphereProfile::index_minus_one_slope_cm`, exponential
+inside each fine cell; tested against finite differences). The state is advanced by classical
+RK4 with a fixed step of 50 m at most; the direction is renormalised after each step. A step whose
+straight segment enters the telescope sphere is not finished on that straight segment: the RK4
+step is shortened to the straight estimate of the crossing, and the remaining distance (a fraction
+of a metre) is taken on the straight line from there (`straight_to_sphere`). A straight line from a
+50 m step leaves a curved ray by about kappa s^2 / 2 (the curvature kappa = |nu'| is about 2.5e-8
+m^-1 near the ground): for a photon of the validation run the entry was 3e-5 m off along the ray, a
+time error of 1e-4 ns. The row is
+the entry point minus C, the path and time include the partial steps.
+
+Termination (`march_to_sphere`): entry into the sphere (`entered`); altitude below the observation
+level (`below_ground`); above the top of the profile while moving up (`escaped`); past the closest
+approach to C and outside the sphere (`closest_passed`); 200 000 steps (`step_limit`). The last
+three are `misses_sphere`. The integrator starts at the emission and costs about 0.2 us per step;
+a horizontal photon from 10 km that enters a sphere 10 km away takes about 200 steps, 45 us.
+Because of that cost the integrator is used only for the rows that the hybrid rule does not take.
+
+Arithmetic is in double, inputs and outputs are converted to the float32 columns by the caller.
+Chunk size, thread count and row order do not change a row: each row is a separate integration.
+
+### Hybrid rule
+
+For a downward or upward ray with |cz| >= 0.1 at the telescope plane, where the emission is farther
+than R from the plane, the plane-mode computation (`bend`, `bend_quadrature`, `bend_upward`) gives
+the crossing Q of the telescope plane, the direction d_t there and the time t_Q. The entry is then
+found with the 3D ray integrator from Q (ray_march.hpp), not with a straight tangent line (a
+tangent from Q is off by up to tens of metres for shallow rays: about 74 m long at |cz| = 0.16, with
+errors of 3e-4 m). The straight line through Q decides the side of the entry: its smaller root s of
+|Q + s d_t - C| = R. If s < 0 (the entry lies before Q) the ray is integrated backwards from Q
+(reverse direction, time decreasing with n_group); otherwise forwards. Each step is RK4 of 50 m; the
+last step is RK4 onto the straight estimate of the crossing and the straight residual, as in the
+integrator from the emission. The
+output is the entry relative to C, the bent direction there, the time there, and the path: the
+straight chord |entry - P| from the emission P (a chord, not the bent path length). With no
+straight root the photon is `misses_sphere`; an integration that reaches the ground is
+`below_ground`.
+
+### Accuracy
+
+Measured with the test suite (`test_sphere.cpp`, ECMWF profile, observation level 2000 m):
+
+| Comparison | Result |
+| --- | --- |
+| hybrid rule vs integrator, |cz| 0.1 to 0.3, impact -6 to 8 m (25 rows) | 4.8e-5 m, 1.1e-5 ns (max) |
+| hybrid rule (integrates from Q) vs integrator, |cz| 0.1 to 0.3 (0.16 included), impact -12 to 12 m (|Q| up to R; 66 rows) | 4.8e-5 m, 1.7e-5 ns (max) |
+| hybrid rule, photon 148 of the validation run (upward, |cz| 0.16, entry 22.6 m before Q) vs scipy integration from the emission | 1.1e-7 m, 3.6e-7 ns |
+| integrator vs `bend_quadrature`, downward, 2.7 km path | 1e-9 m, 1e-9 ns |
+| integrator vs `bend_upward`, upward, 1.3 km path | agrees to the printed precision, 1e-7 m |
+| integrator vs independent Snell reference, turning ray, 318 km path (apex 300 m above the emission) | 3e-4 m, 1e-3 ns |
+| horizontal photon, sagitta L^2 |nu'|/2 at L = 2 km | 3e-4 relative |
+
+The turning ray reference (Snell's law parametrised by v = sqrt(1 - s), no apex singularity) has a
+quadrature noise of about 2e-3 m at this path length, which bounds the comparison; the profile's
+kinks at the levels and cells limit the midpoint rule. Step size changes of the integrator (0.1,
+0.5, 2 m) move the 318 km result by 4e-4 m.

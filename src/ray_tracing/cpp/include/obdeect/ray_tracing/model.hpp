@@ -38,6 +38,10 @@ struct Mirror {
   // Relative reflectivity map, in facet map coordinates (Facet::map_u,
   // map_v) for facets and in telescope x-y for an asphere.
   std::optional<Map2D> degradation;
+  // Facet mirrors only: z of the dish vertex in the telescope frame [m] (the optical axis point of
+  // the dish sphere, at -mirror_offset). Optional; used for the in-telescope path. Not used in
+  // tracing.
+  std::optional<double> vertex_z_m;
 };
 
 // Direction-dependent transmission T = on_axis / (1 + amplitude (sin(theta) /

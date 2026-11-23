@@ -29,7 +29,7 @@ jobs:
       fail-fast: false
       matrix:
         # Pull requests: one platform (the tests cover the others); releases: all.
-        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-24.04"]') || fromJSON('["ubuntu-24.04", "ubuntu-24.04-arm", "macos-15"]') }}
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-26.04"]') || fromJSON('["ubuntu-26.04", "ubuntu-26.04-arm", "macos-15"]') }}
         component: [stream, propagation, sources, ray_tracing]
     runs-on: ${{ matrix.os }}
     steps:
@@ -46,10 +46,9 @@ jobs:
         env:
           CIBW_BUILD: >-
             ${{ github.event_name == 'pull_request' && 'cp314-manylinux_x86_64' || 'cp314-* cp315-*' }}
-          # The components require obdeect-stream of the same version, which is not on
-          # PyPI yet: install it from the same checkout before the tests.
+          # Component tests can import sibling packages; install the local wheels first.
           CIBW_BEFORE_TEST: >-
-            ${{ matrix.component != 'stream' && 'pip install {project}/src/stream' || '' }}
+            ${{ matrix.component == 'propagation' && 'pip install {project}/src/stream {project}/src/ray_tracing' || matrix.component != 'stream' && 'pip install {project}/src/stream' || '' }}
           CIBW_TEST_COMMAND: python -m pytest {package}/python/tests -q
         # Shared settings: [tool.cibuildwheel] in the root pyproject.toml.
         run: >-
@@ -106,7 +105,7 @@ jobs:
       fail-fast: false
       matrix:
         project: [obdeect-stream, obdeect-propagation, obdeect-sources, obdeect-ray-tracing]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     environment: pypi-${{ matrix.project }}
     permissions:
       id-token: write
@@ -128,7 +127,7 @@ jobs:
   # The obdeect package requires all components: publish it after them.
   publish-obdeect:
     needs: publish
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     environment: pypi-obdeect
     permissions:
       id-token: write

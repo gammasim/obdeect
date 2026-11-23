@@ -3,6 +3,7 @@
 #include "obdeect/stream/format.hpp"
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -66,6 +67,19 @@ struct PhotonChunk {
     }
   }
 
+  // Keep the first n rows of every present column (n <= rows()).
+  void truncate(std::size_t n) {
+    if (n > rows_) {
+      throw std::invalid_argument("photon chunk truncate beyond its rows");
+    }
+    rows_ = n;
+    for (auto &column : columns) {
+      if (!column.empty()) {
+        column.resize(n);
+      }
+    }
+  }
+
   // Throw unless all required columns are present with equal length.
   void validate() const {
     if ((mask() & required_columns) != required_columns && rows_ > 0) {
@@ -79,11 +93,129 @@ struct PhotonChunk {
     if (rows_ > max_chunk_rows) {
       throw std::invalid_argument("photon chunk exceeds 2^16 rows");
     }
+    if (has(Column::path)) {
+      for (const float path : (*this)[Column::path]) {
+        if (!std::isfinite(path) || path < 0.0F) {
+          throw std::invalid_argument("photon chunk path must be finite and >= 0");
+        }
+      }
+    }
   }
 
 private:
   std::size_t rows_{};
 };
+
+// Largest allowed |cz^2 - (1 - cx^2 - cy^2)| for a stored direction. Float32 columns hold a unit
+// vector to about 1e-7; the squared form keeps that rounding from failing nearly horizontal
+// photons, for which an error in cz of the same size is amplified by 1 / (2 |cz|).
+inline constexpr double direction_norm_tolerance = 1e-5;
+
+// True if (cx, cy, cz) is a unit vector within the tolerance, for cz of either sign (cz = 0 is
+// horizontal). False for any non-finite cz and for NaN.
+[[nodiscard]] inline bool cz_is_consistent(double cz, double cx, double cy) {
+  return std::isfinite(cz) &&
+         std::abs(cz * cz - (1.0 - cx * cx - cy * cy)) <= direction_norm_tolerance;
+}
+
+// True if the photon moves downwards (cz < 0). False for upwards, horizontal and NaN.
+[[nodiscard]] inline bool is_downward(double cz) { return cz < 0.0; }
+
+// True if the photon moves upwards (cz > 0). False for downwards, horizontal and NaN.
+[[nodiscard]] inline bool is_upward(double cz) { return cz > 0.0; }
+
+// True if (cx, cy) lies in the unit disc within the tolerance. A stored direction can round to
+// cx^2 + cy^2 slightly above 1 when cz is tiny; NaN is rejected. Use max(0, 1 - cx^2 - cy^2)
+// for the magnitude of cz.
+[[nodiscard]] inline bool direction_in_unit_disc(double cx, double cy) {
+  return cx * cx + cy * cy <= 1.0 + direction_norm_tolerance;
+}
+
+// Rescale (cx, cy) of a photon with any finite cz, |cz| <= 1, whose cx^2 + cy^2 rounded above
+// 1, so that cx^2 + cy^2 = 1 - cz^2 and the magnitude of the validated cz is kept (the sign of cz
+// does not matter). Other directions are unchanged.
+inline void snap_direction_to_cz(float &cx, float &cy, double cz) {
+  const double r2 = static_cast<double>(cx) * cx + static_cast<double>(cy) * cy;
+  if (std::isfinite(cz) && cz * cz <= 1.0 && r2 > 1.0) {
+    const double scale = std::sqrt((1.0 - cz * cz) / r2);
+    cx = static_cast<float>(cx * scale);
+    cy = static_cast<float>(cy * scale);
+  }
+}
+
+// Ground representation of a run (docs/format.md, "Run metadata"): `plane` (default) has rows at
+// z = 0 with x, y relative to the telescope sphere centre; `sphere` has 3D rows on or inside the
+// telescope sphere. Throws std::runtime_error for any other value or type.
+enum class GroundRepresentation : std::uint8_t { plane, sphere };
+
+[[nodiscard]] inline GroundRepresentation ground_representation(const Metadata &run) {
+  const auto it = run.find("ground_representation");
+  if (it == run.end()) {
+    return GroundRepresentation::plane;
+  }
+  const auto *name = std::get_if<std::string>(&it->second);
+  if (name == nullptr) {
+    throw std::runtime_error("obdeect stream: ground_representation must be a string");
+  }
+  if (*name == "plane") {
+    return GroundRepresentation::plane;
+  }
+  if (*name == "sphere") {
+    return GroundRepresentation::sphere;
+  }
+  throw std::runtime_error("obdeect stream: ground_representation must be \"plane\" or "
+                           "\"sphere\", not \"" +
+                           *name + "\"");
+}
+
+// Tolerances for |r| against the telescope sphere radius R of sphere rows: a row is on the sphere
+// if |r| >= R (1 - 1e-6) - 1e-4 m (rounding of float32 positions), and no row may lie outside
+// R (1 + 1e-6) + 1e-4 m.
+inline constexpr double sphere_relative_tolerance = 1e-6;
+inline constexpr double sphere_absolute_tolerance_m = 1e-4;
+
+// Throws std::invalid_argument unless the chunk is a valid set of sphere rows (G frame, see
+// docs/format.md) for a telescope sphere of radius radius_m: x y z cx cy cz t zem w present (z and
+// cz included) and finite, cz consistent with (cx, cy), and |r| <= R (1 + 1e-6) + 1e-4 m for every
+// row. Optional columns (path, wavelength) are checked by PhotonChunk::validate().
+inline void validate_sphere_rows(const PhotonChunk &chunk, double radius_m) {
+  if (chunk.frame != Frame::ground) {
+    throw std::invalid_argument("sphere rows must be in the ground frame");
+  }
+  if (!(std::isfinite(radius_m) && radius_m > 0.0)) {
+    throw std::invalid_argument("telescope sphere radius must be finite and positive");
+  }
+  constexpr std::uint32_t sphere_columns =
+      column_bit(Column::x) | column_bit(Column::y) | column_bit(Column::z) |
+      column_bit(Column::cx) | column_bit(Column::cy) | column_bit(Column::cz) |
+      column_bit(Column::t) | column_bit(Column::zem) | column_bit(Column::w);
+  if (chunk.rows() > 0 && (chunk.mask() & sphere_columns) != sphere_columns) {
+    throw std::invalid_argument("sphere rows lack a required column (x y z cx cy cz t zem w)");
+  }
+  chunk.validate();
+  const double limit = radius_m * (1.0 + sphere_relative_tolerance) + sphere_absolute_tolerance_m;
+  for (std::size_t i = 0; i < chunk.rows(); ++i) {
+    const double x = chunk[Column::x][i];
+    const double y = chunk[Column::y][i];
+    const double z = chunk[Column::z][i];
+    const double cx = chunk[Column::cx][i];
+    const double cy = chunk[Column::cy][i];
+    const double cz = chunk[Column::cz][i];
+    const double t = chunk[Column::t][i];
+    const double zem = chunk[Column::zem][i];
+    const double w = chunk[Column::w][i];
+    if (!(std::isfinite(x) && std::isfinite(y) && std::isfinite(z) && std::isfinite(cx) &&
+          std::isfinite(cy) && std::isfinite(t) && std::isfinite(zem) && std::isfinite(w))) {
+      throw std::invalid_argument("sphere row has a non-finite value");
+    }
+    if (!cz_is_consistent(cz, cx, cy)) {
+      throw std::invalid_argument("sphere row direction (cx, cy, cz) is not a unit vector");
+    }
+    if (std::sqrt(x * x + y * y + z * z) > limit) {
+      throw std::invalid_argument("sphere row lies outside the telescope sphere");
+    }
+  }
+}
 
 // One decoded record. `metadata` is used by all metadata records, `chunk` by
 // photons, `blob_*` by blob records.

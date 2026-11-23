@@ -10,12 +10,8 @@ import math
 import re
 from typing import Any
 
+from obdeect.ray_tracing.errors import ModelError
 from obdeect.ray_tracing.simtel_tables import TableImportError, parse_rpol_table
-
-
-class ModelError(ValueError):
-    """Model data cannot be converted without guessing."""
-
 
 _UNIT_TO_M = {"m": 1.0, "cm": 0.01, "mm": 0.001}
 # sim_telarray mirror and camera-body shape codes.

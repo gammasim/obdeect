@@ -52,6 +52,13 @@ inline void validate_bound_support(const OpticalModel &model) {
 // can apply to a photon of this wavelength: reflectivities, degradation maps
 // and the telescope transmission. Throws ModelError for a transmission whose
 // maximum is not known.
+//
+// The bound is the scale of the bunch roulette: a photon is kept with probability
+// weight / bound (at most one). A photon whose weight exceeds the bound (a direct
+// detection without reflection, or a detection that reflects on fewer mirrors than
+// the sequence) is kept with probability one and carries the excess in its weight,
+// so the estimator stays unbiased (trace_bunches). The bound is tight for the
+// sequential photons, which therefore keep their output.
 [[nodiscard]] inline double response_bound(const OpticalModel &model, double wavelength_nm) {
   validate_bound_support(model);
   double bound = detail::response_bound(model.primary, wavelength_nm);

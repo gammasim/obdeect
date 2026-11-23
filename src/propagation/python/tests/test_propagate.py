@@ -226,6 +226,32 @@ def test_executable_matches_api(tmp_path, envelope_files):
     assert cli_out.read_bytes() == api_out.read_bytes()
 
 
+def test_executable_stdin_matches_file_input(tmp_path):
+    source = tmp_path / "in.pst"
+    source.write_bytes(ground_stream(5000, seed=2, chunk_rows=2048))
+    command = [
+        _executable(),
+        "--transmission",
+        str(TABLE_PATH),
+        "--site-altitude",
+        str(SITE_M),
+        "--seed",
+        "7",
+        "-i",
+    ]
+    file_result = subprocess.run(
+        [*command, str(source), "-o", "-"], capture_output=True, check=False
+    )
+    stdin_result = subprocess.run(
+        [*command, "-", "-o", "-"], input=source.read_bytes(), capture_output=True, check=False
+    )
+    assert file_result.returncode == 0, file_result.stderr
+    assert stdin_result.returncode == 0, stdin_result.stderr
+    assert b"photons in 10000" in stdin_result.stderr
+    assert stdin_result.stderr == file_result.stderr
+    assert stdin_result.stdout == file_result.stdout
+
+
 SCATTERING_TABLE = DATA / "scattering_exponential.dat"
 SCATTER_TELESCOPES = [(1, 3000.0, 0.0, 0.0, 12.0), (2, 0.0, -2500.0, 0.0, 12.0)]
 
@@ -312,7 +338,9 @@ def test_scattering_adds_kernel_weight_times_envelope(tmp_path, mirror_file):
     kernel = obdeect_propagation.scatter(
         columns,
         obdeect_propagation.ScatteringTable(str(SCATTERING_TABLE)),
-        obdeect_propagation.TransmissionTable(str(TABLE_PATH), site_altitude_m=SITE_M),
+        obdeect_propagation.TransmissionTable(
+            str(TABLE_PATH), site_altitude_m=SITE_M, wavelength_interpolation="floor"
+        ),
         telescopes=SCATTER_TELESCOPES,
         seed=1,
         event=7,
@@ -320,7 +348,8 @@ def test_scattering_adds_kernel_weight_times_envelope(tmp_path, mirror_file):
         n_points=8,
     )
     expected = 0.8 * sum(
-        float(np.sum(photons["w"], dtype=np.float64)) for photons in kernel.values()
+        float(np.sum(photons["w"][photons["cz"] < 0], dtype=np.float64))
+        for photons in kernel.values()
     )
     assert on["weight_out"] - base["weight_out"] == pytest.approx(expected, rel=1e-5)
     assert on["photons_out"] > base["photons_out"]
@@ -472,13 +501,16 @@ def test_pathlen_default_and_override(tmp_path):
         mode="weighted",
         store_p=True,
         pathlen_m=28.0,
+        wavelength_interpolation="floor",
         telescope_pathlen_m={2: 0.0},
     )
     records = read_records(out.read_bytes())
     assert list(_efficiency_status(records)["atmosphere.pathlen_m"]) == [28.0, 0.0]
 
     # Acceptance of each row with od_focus = tau(h + l) - tau(h).
-    table = obdeect_propagation.TransmissionTable(str(TABLE_PATH), SITE_M)
+    table = obdeect_propagation.TransmissionTable(
+        str(TABLE_PATH), SITE_M, wavelength_interpolation="floor"
+    )
     for telescope, pathlen in ((1, 28.0), (2, 0.0)):
         lam = _photon_block(records, telescope, "wavelength")
         zem = _photon_block(records, telescope, "zem")
@@ -627,10 +659,11 @@ def test_executable_rejects_invalid_pathlen(args):
 PROFILE_PATH = DATA / "atmprof_ecmwf_north_winter_fixed.dat"
 
 
-def sky_stream(n, seed, curvature_applied=None):
+def sky_stream(n, seed, curvature_applied=None, refraction_applied=0):
     """Sky-frame photons with random positions and downward directions, telescope 1 and 2.
 
     curvature_applied: run key (0 or 1) if not None, absent otherwise.
+    refraction_applied: run key (0: photons not refracted, 1: already refracted).
     """
     rng = np.random.default_rng(seed)
     writer = StreamWriter()
@@ -640,7 +673,7 @@ def sky_stream(n, seed, curvature_applied=None):
         "telescope_x_m": [100.0, -50.0],
         "telescope_y_m": [0.0, 300.0],
         "telescope_z_m": [0.0, 0.0],
-        "refraction_applied": 0,
+        "refraction_applied": refraction_applied,
         "wavelength_min_nm": 250.0,
         "wavelength_max_nm": 700.0,
     }
@@ -667,6 +700,68 @@ def sky_stream(n, seed, curvature_applied=None):
     writer.metadata("event_end")
     writer.metadata("run_end")
     return writer.getvalue()
+
+
+# Float32 directions (cx, cy, cz) of photons with |cz| between 6e-4 and 2e-3. Each is a unit
+# vector to float32 precision; an absolute check on cz rejected them. The last one has
+# cx^2 + cy^2 rounded above 1.
+NEAR_HORIZONTAL_DIRECTIONS = (
+    (0.960585952, 0.277977228, -0.001825427),
+    (0.946776211, -0.321888804, -0.001533536),
+    (0.999714673, 0.023859283, -0.001124879),
+    (0.989117742, -0.147124648, -0.000614837),
+    (0.975054383, -0.221962571, -0.001266957),
+    (1.0000001192, 0.0, -0.0001),
+)
+
+
+def near_horizontal_stream():
+    """Sky-frame photons on telescope 1 with the directions of NEAR_HORIZONTAL_DIRECTIONS."""
+    cx, cy, cz = (np.array(column, dtype=np.float32) for column in zip(*NEAR_HORIZONTAL_DIRECTIONS))
+    n = len(cx)
+    rng = np.random.default_rng(11)
+    writer = StreamWriter()
+    writer.metadata(
+        "run",
+        {
+            "run_number": 1,
+            "observation_level_m": SITE_M,
+            "telescope_x_m": [0.0],
+            "telescope_y_m": [0.0],
+            "telescope_z_m": [0.0],
+            "refraction_applied": 0,
+            "wavelength_min_nm": 250.0,
+            "wavelength_max_nm": 700.0,
+        },
+    )
+    writer.metadata("event", {"event_number": 1})
+    writer.metadata("telescope", {"telescope_id": 1, "frame": 0})
+    columns = {
+        "x": rng.uniform(-3000, 3000, n),
+        "y": rng.uniform(-3000, 3000, n),
+        "z": rng.uniform(3000, 15000, n),
+        "cx": cx,
+        "cy": cy,
+        "cz": cz,
+        "t": rng.uniform(0, 10, n),
+        "w": np.ones(n),
+    }
+    writer.photons(1, 0, columns)
+    writer.metadata("telescope_end", {"telescope_id": 1, "photons": 0.0})
+    writer.metadata("event_end")
+    writer.metadata("run_end")
+    return writer.getvalue()
+
+
+def test_near_horizontal_photons_pass_checks_and_reach_ground(tmp_path):
+    # Geometry only: an atmospheric profile or transmission absorbs photons at this grazing angle.
+    source = tmp_path / "in.pst"
+    source.write_bytes(near_horizontal_stream())
+    summary = obdeect_propagation.propagate(
+        source, tmp_path / "out.pst", extinction=False, site_altitude_m=SITE_M, seed=1
+    )
+    assert summary["photons_in"] == len(NEAR_HORIZONTAL_DIRECTIONS)
+    assert summary["photons_out"] == len(NEAR_HORIZONTAL_DIRECTIONS)
 
 
 def _geometry_options(**extra):
@@ -1134,19 +1229,39 @@ def test_telescopes_rejects_invalid_selection(tmp_path, telescopes):
         )
 
 
-def test_telescopes_cannot_combine_with_scattering(tmp_path):
-    source = tmp_path / "in.pst"
-    source.write_bytes(ground_stream(100, seed=8))
-    with pytest.raises(ValueError, match="scattering"):
-        obdeect_propagation.propagate(
-            source,
-            tmp_path / "out.pst",
-            transmission=TABLE_PATH,
-            site_altitude_m=SITE_M,
-            seed=1,
-            scattering=SCATTERING_TABLE,
-            telescopes=[1],
-        )
+def test_telescopes_combine_with_scattering(tmp_path):
+    """A telescope selection with scattering keeps the scattering target and drops the others.
+
+    The beam's primaries are on telescope 1, the scattered photons reach telescope 2. Keeping
+    telescope 2 gives its block of the full run, unchanged.
+    """
+    source = tmp_path / "beam.pst"
+    source.write_bytes(beam_stream(400))
+    options = {
+        "transmission": TABLE_PATH,
+        "site_altitude_m": SITE_M,
+        "seed": 1,
+        "mode": "weighted",
+        "wavelength_interpolation": "floor",
+    }
+    full_out = tmp_path / "full.pst"
+    obdeect_propagation.propagate(source, full_out, scattering=SCATTERING_TABLE, **options)
+    kept_out = tmp_path / "kept.pst"
+    kept = obdeect_propagation.propagate(
+        source, kept_out, scattering=SCATTERING_TABLE, telescopes=[2], **options
+    )
+
+    full = read_records(full_out.read_bytes())
+    kept_records = read_records(kept_out.read_bytes())
+    telescopes = {r["metadata"]["telescope_id"] for r in kept_records if r["type"] == "telescope"}
+    assert telescopes == {2}
+    full_weight_2 = sum(
+        float(np.sum(r["columns"]["w"], dtype=np.float64))
+        for r in full
+        if r["type"] == "photons" and r["telescope_id"] == 2
+    )
+    assert full_weight_2 > 0.0
+    assert kept["weight_out"] == pytest.approx(full_weight_2, rel=1e-6)
 
 
 @pytest.mark.parametrize("selection", ["0", "1,,2", "x", "2,"])
@@ -1191,4 +1306,426 @@ def test_threads_rejects_invalid_count(tmp_path, threads):
             site_altitude_m=SITE_M,
             seed=1,
             threads=threads,
+        )
+
+
+def _ground_wavelength_stream(wavelengths, direction_cx=0.2, zem_m=2300.0):
+    """G-frame photons of telescope 1, one per wavelength (nm), weight 1."""
+    n = len(wavelengths)
+    writer = StreamWriter()
+    writer.metadata("run", {**_geometry_run(), "refraction_applied": 0})
+    writer.metadata("event", {"event_number": 1})
+    writer.metadata("telescope", {"telescope_id": 1, "frame": 1})
+    writer.photons(
+        1,
+        1,
+        {
+            "x": np.zeros(n),
+            "y": np.zeros(n),
+            "cx": np.full(n, direction_cx),
+            "cy": np.zeros(n),
+            "t": np.zeros(n),
+            "zem": np.full(n, zem_m),
+            "w": np.ones(n),
+            "wavelength": np.asarray(wavelengths, dtype=float),
+        },
+    )
+    writer.metadata("telescope_end", {"telescope_id": 1, "photons": 0.0})
+    writer.metadata("event_end")
+    writer.metadata("run_end")
+    return writer.getvalue()
+
+
+def _geometry_run():
+    return {
+        "run_number": 1,
+        "observation_level_m": SITE_M,
+        "telescope_x_m": [0.0],
+        "telescope_y_m": [0.0],
+        "telescope_z_m": [0.0],
+        "wavelength_min_nm": 250.0,
+        "wavelength_max_nm": 700.0,
+    }
+
+
+def test_wavelength_interpolation_default_is_linear_and_is_recorded(tmp_path):
+    source = tmp_path / "in.pst"
+    source.write_bytes(_ground_wavelength_stream([400.25, 400.999, 401.0]))
+    default_out = tmp_path / "default.pst"
+    obdeect_propagation.propagate(
+        source,
+        default_out,
+        transmission=TABLE_PATH,
+        site_altitude_m=SITE_M,
+        seed=1,
+        mode="weighted",
+    )
+    floor_out = tmp_path / "floor.pst"
+    obdeect_propagation.propagate(
+        source,
+        floor_out,
+        transmission=TABLE_PATH,
+        site_altitude_m=SITE_M,
+        seed=1,
+        mode="weighted",
+        wavelength_interpolation="floor",
+    )
+    default_status = _efficiency_status(read_records(default_out.read_bytes()))
+    floor_status = _efficiency_status(read_records(floor_out.read_bytes()))
+    assert default_status["atmosphere.wavelength_interpolation"] == "linear"
+    assert floor_status["atmosphere.wavelength_interpolation"] == "floor"
+
+
+def test_linear_mode_is_continuous_and_interpolates_the_envelope(tmp_path):
+    """Linear mode: w(400.999) is close to w(401.0); floor mode uses the row of 400 nm for both.
+
+    The envelope factor is linear in wavelength between its nodes (390 nm 0.9, 410 nm 0.5), so
+    E(400.25) = 0.9 - 0.4 * 10.25 / 20 in linear mode, E(400) = 0.7 in floor mode.
+    """
+    wavelengths = [400.0, 400.25, 400.999, 401.0]
+    source = tmp_path / "in.pst"
+    source.write_bytes(_ground_wavelength_stream(wavelengths))
+    envelope = tmp_path / "envelope.dat"
+    envelope.write_text("250 0.9\n700 0.5\n", encoding="utf-8")
+    results = {}
+    for mode in ("linear", "floor"):
+        out = tmp_path / f"{mode}.pst"
+        obdeect_propagation.propagate(
+            source,
+            out,
+            transmission=TABLE_PATH,
+            site_altitude_m=SITE_M,
+            seed=1,
+            mode="weighted",
+            envelope={"eff": envelope},
+            pathlen_m=28.0,
+            wavelength_interpolation=mode,
+        )
+        records = read_records(out.read_bytes())
+        results[mode] = _photon_block(records, 1, "w")
+    linear, floor = results["linear"], results["floor"]
+    assert floor[1] == floor[0] and floor[2] == floor[0]
+    assert abs(linear[2] - linear[3]) < 1e-3
+    assert linear[1] != linear[0]
+    assert linear[0] == pytest.approx(floor[0], rel=1e-6)  # integer nm: the modes agree
+
+    # Against the table with the envelope at the linear wavelength (the stage's arithmetic).
+    table = obdeect_propagation.TransmissionTable(
+        str(TABLE_PATH), SITE_M, wavelength_interpolation="linear"
+    )
+    depths = table.telescope_depths(SITE_M, 28.0)
+    lam = np.asarray(wavelengths)
+    od_tel = np.interp(lam, np.arange(len(depths[0])), depths[0])
+    od_focus = np.interp(lam, np.arange(len(depths[1])), depths[1])
+    airmass = np.full(lam.shape, 1.0 / np.sqrt(1.0 - 0.2**2))
+    e = np.interp(lam, [250.0, 700.0], [0.9, 0.5])
+    expected = table.transmission2(lam, np.full(lam.shape, 2300.0), airmass, od_tel, od_focus) * e
+    np.testing.assert_allclose(linear, expected, rtol=1e-5)
+
+
+def test_dispersion_needs_profile_and_unrefracted_input(tmp_path):
+    source = tmp_path / "sky.pst"
+    source.write_bytes(sky_stream(50, seed=2))
+    with pytest.raises(ValueError, match="profile"):
+        obdeect_propagation.propagate(
+            source,
+            tmp_path / "a.pst",
+            transmission=TABLE_PATH,
+            site_altitude_m=SITE_M,
+            seed=1,
+            dispersion_reference_nm=500.0,
+        )
+    refracted = tmp_path / "refracted.pst"
+    refracted.write_bytes(sky_stream(50, seed=2, refraction_applied=1))
+    with pytest.raises(ValueError, match="refract"):
+        obdeect_propagation.propagate(
+            refracted,
+            tmp_path / "b.pst",
+            transmission=TABLE_PATH,
+            site_altitude_m=SITE_M,
+            seed=1,
+            profile=PROFILE_PATH,
+            dispersion_reference_nm=500.0,
+        )
+    with pytest.raises(ValueError):
+        obdeect_propagation.propagate(
+            source,
+            tmp_path / "c.pst",
+            transmission=TABLE_PATH,
+            site_altitude_m=SITE_M,
+            seed=1,
+            profile=PROFILE_PATH,
+            dispersion_reference_nm=150.0,
+        )
+
+
+def test_dispersion_changes_bent_photons_by_a_small_amount(tmp_path):
+    """Dispersion scales the bending by n(lambda)-1 relative to the 500 nm profile.
+
+    Photons at 250 to 700 nm. The position changes by the phase factor k - 1 of the refraction
+    (about 8 % of it at 250 nm); the largest change seen is about 2 cm. The time changes by the
+    group factor k_group - 1 of the air delay, which is larger in the UV (up to about 1.6 ns for
+    the photons of this stream, whose air delay is several ns). The status records the value.
+    """
+    source = tmp_path / "sky.pst"
+    source.write_bytes(sky_stream(200, seed=3))
+    options = dict(
+        transmission=TABLE_PATH,
+        site_altitude_m=SITE_M,
+        seed=4,
+        mode="weighted",
+        profile=PROFILE_PATH,
+    )
+    off_out = tmp_path / "off.pst"
+    obdeect_propagation.propagate(source, off_out, **options)
+    on_out = tmp_path / "on.pst"
+    obdeect_propagation.propagate(source, on_out, dispersion_reference_nm=500.0, **options)
+    off = read_records(off_out.read_bytes())
+    on = read_records(on_out.read_bytes())
+    assert "atmosphere.dispersion_reference_nm" not in _efficiency_status(off)
+    assert _efficiency_status(on)["atmosphere.dispersion_reference_nm"] == 500.0
+    for column, bound in (("x", 0.05), ("y", 0.05), ("t", 2.0)):  # m for x and y, ns for t
+        delta = _photon_block(on, 1, column) - _photon_block(off, 1, column)
+        assert np.any(delta != 0.0)
+        assert np.max(np.abs(delta)) < bound
+
+
+def test_near_horizon_photons_are_bent_not_dropped(tmp_path):
+    """Zenith 88 degrees, beyond the series limit of the bending: bent by quadrature."""
+    writer = StreamWriter()
+    writer.metadata(
+        "run",
+        {**_geometry_run(), "refraction_applied": 0},
+    )
+    writer.metadata("event", {"event_number": 1})
+    writer.metadata("telescope", {"telescope_id": 1, "frame": 0})
+    cx = np.array([np.sin(np.radians(88.0))])
+    cx = cx.astype(np.float32).astype(float)
+    cz = -np.sqrt(1.0 - cx**2)
+    writer.photons(
+        1,
+        0,
+        {
+            "x": np.zeros(1),
+            "y": np.zeros(1),
+            "z": np.full(1, 10000.0),
+            "cx": cx,
+            "cy": np.zeros(1),
+            "cz": cz,
+            "t": np.zeros(1),
+            "w": np.ones(1),
+        },
+    )
+    writer.metadata("telescope_end", {"telescope_id": 1, "photons": 0.0})
+    writer.metadata("event_end")
+    writer.metadata("run_end")
+    source = tmp_path / "horizon.pst"
+    source.write_bytes(writer.getvalue())
+    summary = obdeect_propagation.propagate(
+        source,
+        tmp_path / "out.pst",
+        transmission=TABLE_PATH,
+        site_altitude_m=SITE_M,
+        seed=1,
+        mode="weighted",
+        profile=PROFILE_PATH,
+    )
+    assert summary["dropped"] == 0
+    assert summary["photons_out"] == 1
+
+
+def _refracted_ground_stream(n, seed):
+    """G-frame photons of two telescopes, refraction already applied (run key 1)."""
+    rng = np.random.default_rng(seed)
+    writer = StreamWriter()
+    run = _geometry_run()
+    run.update({
+        "telescope_x_m": [100.0, -50.0],
+        "telescope_y_m": [0.0, 300.0],
+        "telescope_z_m": [0.0, 0.0],
+        "refraction_applied": 1,
+    })
+    writer.metadata("run", run)
+    writer.metadata("event", {"event_number": 5})
+    for telescope in (1, 2):
+        writer.metadata("telescope", {"telescope_id": telescope, "frame": 1})
+        cx = rng.uniform(-0.25, 0.25, n)
+        cy = rng.uniform(-0.25, 0.25, n)
+        writer.photons(
+            telescope,
+            1,
+            {
+                "x": rng.uniform(-3000, 3000, n),
+                "y": rng.uniform(-3000, 3000, n),
+                "cx": cx,
+                "cy": cy,
+                "t": rng.uniform(0, 1000, n),
+                "zem": rng.uniform(2200, 12000, n),
+                "w": rng.integers(1, 5, n).astype(float),
+            },
+        )
+        writer.metadata("telescope_end", {"telescope_id": telescope, "photons": 0.0})
+    writer.metadata("event_end")
+    writer.metadata("run_end")
+    return writer.getvalue()
+
+
+def test_to_sky_round_trip_through_the_stage(tmp_path):
+    """to_sky, then the stage without extinction, gives back the G-frame photons."""
+    n = 300
+    ground = tmp_path / "ground.pst"
+    ground.write_bytes(_refracted_ground_stream(n, seed=6))
+    sky = tmp_path / "sky.pst"
+    converted = obdeect_propagation.to_sky(ground, sky, profile=PROFILE_PATH)
+    assert converted == {"photons_in": 2 * n, "photons_out": 2 * n, "dropped": 0}
+    back = tmp_path / "back.pst"
+    summary = obdeect_propagation.propagate(
+        sky, back, extinction=False, site_altitude_m=SITE_M, seed=1, profile=PROFILE_PATH
+    )
+    assert summary["photons_out"] == 2 * n
+    original = read_records(ground.read_bytes())
+    returned = read_records(back.read_bytes())
+    for telescope in (1, 2):
+        for column in ("x", "y", "cx", "cy", "t", "zem"):
+            want = _photon_block(original, telescope, column)
+            got = _photon_block(returned, telescope, column)
+            np.testing.assert_allclose(got, want, rtol=1e-6, atol=1e-2, err_msg=column)
+
+
+def test_to_sky_rejects_sky_frame_input(tmp_path):
+    source = tmp_path / "sky.pst"
+    source.write_bytes(sky_stream(10, seed=1))
+    with pytest.raises(ValueError, match="frame G"):
+        obdeect_propagation.to_sky(source, tmp_path / "out.pst")
+    with pytest.raises(ValueError):
+        obdeect_propagation.to_sky(source, source)
+
+
+def test_geometry_only_rejects_wavelength_interpolation(tmp_path):
+    source = tmp_path / "sky.pst"
+    source.write_bytes(sky_stream(10, seed=1))
+    with pytest.raises(ValueError, match="wavelength_interpolation"):
+        obdeect_propagation.propagate(
+            source,
+            tmp_path / "out.pst",
+            extinction=False,
+            site_altitude_m=SITE_M,
+            seed=1,
+            wavelength_interpolation="floor",
+        )
+    with pytest.raises(ValueError, match="wavelength_interpolation must be one of"):
+        obdeect_propagation.propagate(
+            source,
+            tmp_path / "out2.pst",
+            transmission=TABLE_PATH,
+            site_altitude_m=SITE_M,
+            seed=1,
+            wavelength_interpolation="nearest",
+        )
+
+
+def test_multiple_envelopes_are_multiplied_at_the_photon_wavelength(tmp_path):
+    source = tmp_path / "input.pst"
+    source.write_bytes(_ground_wavelength_stream([400.5]))
+    a, b = tmp_path / "a.dat", tmp_path / "b.dat"
+    a.write_text("250 0.0\n400 0.0\n401 1.0\n700 1.0\n", encoding="utf-8")
+    b.write_text("250 1.0\n400 1.0\n401 0.0\n700 0.0\n", encoding="utf-8")
+    out = tmp_path / "output.pst"
+    obdeect_propagation.propagate(
+        source,
+        out,
+        transmission=TABLE_PATH,
+        site_altitude_m=SITE_M,
+        seed=1,
+        mode="weighted",
+        envelope={"a": a, "b": b},
+    )
+    weight = _photon_block(read_records(out.read_bytes()), 1, "w")[0]
+    table = obdeect_propagation.TransmissionTable(str(TABLE_PATH), SITE_M)
+    expected = table.transmission2(400.5, 2300.0, 1 / np.sqrt(1 - 0.2**2), 0.0, 0.0) * 0.25
+    assert weight == pytest.approx(expected, rel=1e-6)
+
+
+def test_to_sky_updates_surviving_telescope_weight(tmp_path):
+    writer = StreamWriter()
+    writer.metadata("run", _geometry_run())
+    writer.metadata("event", {"event_number": 1})
+    writer.metadata("telescope", {"telescope_id": 1, "frame": 1})
+    writer.photons(
+        1,
+        1,
+        {
+            "x": [0, 0],
+            "y": [0, 0],
+            "cx": [0, 0],
+            "cy": [0, 0],
+            "t": [0, 0],
+            "zem": [3000, 1000],
+            "w": [2, 3],
+        },
+    )
+    writer.metadata("telescope_end", {"telescope_id": 1, "photons": 5.0})
+    writer.metadata("event_end")
+    writer.metadata("run_end")
+    source, out = tmp_path / "in.pst", tmp_path / "out.pst"
+    source.write_bytes(writer.getvalue())
+    obdeect_propagation.to_sky(source, out)
+    end = next(r for r in read_records(out.read_bytes()) if r["type"] == "telescope_end")
+    assert end["metadata"]["photons"] == pytest.approx(2.0)
+
+
+def test_spherical_dispersion_is_independent_of_chunk_size(tmp_path):
+    """A low-zenith chunk preceding a high-zenith chunk uses the same cached physics."""
+
+    def make_input(split):
+        writer = StreamWriter()
+        run = _geometry_run()
+        run.update({
+            "curvature_applied": 0,
+            "refraction_applied": 0,
+            "wavelength_min_nm": 300.0,
+            "wavelength_max_nm": 300.0,
+        })
+        writer.metadata("run", run)
+        writer.metadata("event", {"event_number": 5})
+        writer.metadata("telescope", {"telescope_id": 1, "frame": 0})
+        columns = {
+            "x": [0.0, -100000.0],
+            "y": [0.0, 0.0],
+            "z": [10000.0, 10000.0],
+            "cx": [0.0, np.sin(np.radians(85.0))],
+            "cy": [0.0, 0.0],
+            "t": [0.0, 0.0],
+            "w": [1.0, 1.0],
+            "wavelength": [300.0, 300.0],
+        }
+        if split:
+            for index in range(2):
+                writer.photons(1, 0, {k: [v[index]] for k, v in columns.items()}, first_index=index)
+        else:
+            writer.photons(1, 0, columns)
+        writer.metadata("telescope_end", {"telescope_id": 1, "photons": 2.0})
+        writer.metadata("event_end")
+        writer.metadata("run_end")
+        return writer.getvalue()
+
+    outputs = []
+    for split in (False, True):
+        source = tmp_path / f"source-{split}.pst"
+        source.write_bytes(make_input(split))
+        target = tmp_path / f"target-{split}.pst"
+        obdeect_propagation.propagate(
+            source,
+            target,
+            extinction=False,
+            site_altitude_m=SITE_M,
+            seed=1,
+            profile=PROFILE_PATH,
+            curvature="spherical",
+            dispersion_reference_nm=500.0,
+        )
+        outputs.append(read_records(target.read_bytes()))
+    for column in ("x", "y", "cx", "cy", "t", "w"):
+        np.testing.assert_array_equal(
+            _photon_block(outputs[0], 1, column), _photon_block(outputs[1], 1, column)
         )

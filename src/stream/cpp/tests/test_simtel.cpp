@@ -338,6 +338,58 @@ void test_camera_frame_through_adapter() {
   CHECK(found);
 }
 
+// Camera-frame chunks without zem (light sources) get zem = observation level + z; a chunk
+// with zem keeps it.
+void test_camera_zem_added() {
+  PhotonChunk chunk = chunk_of(2, Frame::camera, {0.5, 0.1}, {0.2, 0.0}, {0.1, 0.0}, {-0.2, 0.0});
+  chunk[Column::zem].clear();
+  std::vector<float> z = {0.0F, 1.5F};
+  chunk[Column::z] = z;
+  add_camera_zem(chunk, 2200.0);
+  CHECK(chunk.has(Column::zem));
+  CHECK_NEAR(chunk[Column::zem][0], 2200.0, 1e-3);
+  CHECK_NEAR(chunk[Column::zem][1], 2201.5, 1e-3);
+
+  PhotonChunk no_z = chunk_of(2, Frame::camera, {0.5}, {0.2}, {0.1}, {-0.2});
+  no_z[Column::zem].clear();
+  add_camera_zem(no_z, 2200.0);
+  CHECK_NEAR(no_z[Column::zem][0], 2200.0, 1e-3);
+
+  PhotonChunk kept = chunk_of(2, Frame::camera, {0.5}, {0.2}, {0.1}, {-0.2});
+  add_camera_zem(kept, 2200.0);
+  CHECK_NEAR(kept[Column::zem][0], 20000.0, 1e-3);
+
+  // Through the adapter: zem in cm in the bunch.
+  PhotonChunk source = chunk_of(2, Frame::camera, {0.5}, {0.2}, {0.1}, {-0.2});
+  source[Column::zem].clear();
+  const CameraMap camera{{2, CameraTelescope{1, 0.0}}};
+  const std::vector<Record> records = {
+      record_of(RecordType::run, light_source_run()),
+      record_of(RecordType::event, Metadata{{"event_number", std::int64_t{1}}}),
+      record_of(RecordType::telescope,
+                Metadata{{"telescope_id", std::int64_t{2}}, {"array_index", std::int64_t{0}}}),
+      photons_of(source),
+      record_of(RecordType::telescope_end, Metadata{{"telescope_id", std::int64_t{2}}}),
+      record_of(RecordType::event_end),
+      record_of(RecordType::run_end),
+  };
+  bool found = false;
+  for (const EventioBlock &block : read_blocks(run_adapter(records, camera))) {
+    if (block.type != iact::telarray) {
+      continue;
+    }
+    for (const EventioBlock &child : subblocks(block)) {
+      const TelPhotons p = decode_photons(child);
+      CHECK(p.bunches.size() == 1);
+      if (p.bunches.size() == 1) {
+        CHECK_NEAR(p.bunches[0].zem, 220000.0, 1.0);
+      }
+      found = true;
+    }
+  }
+  CHECK(found);
+}
+
 // TELPOS z is zeroed for camera-frame telescopes only (see simtel.hpp).
 void test_telpos_zeroed_for_camera_only() {
   const CameraMap camera{{1, CameraTelescope{1, 0.0}}};
@@ -405,6 +457,75 @@ std::string run_adapter_with(const std::vector<Record> &records, SimtelOptions o
   return out.str();
 }
 
+// keep_telpos_height (--keep-telpos-height): TELPOS written unchanged, the check stays.
+void test_telpos_height_kept_with_option() {
+  const CameraMap camera{{1, CameraTelescope{1, 0.0}}};
+  const std::vector<Record> records = {
+      record_of(RecordType::run, light_source_run()),
+      blob_of(telpos_block({2000.0, 2100.0})),
+      record_of(RecordType::event, Metadata{{"event_number", std::int64_t{1}}}),
+      record_of(RecordType::telescope,
+                Metadata{{"telescope_id", std::int64_t{1}}, {"array_index", std::int64_t{0}}}),
+      photons_of(chunk_of(1, Frame::camera, {0.5}, {0.2}, {0.1}, {-0.2})),
+      record_of(RecordType::telescope_end, Metadata{{"telescope_id", std::int64_t{1}}}),
+      record_of(RecordType::event_end),
+      record_of(RecordType::run_end),
+  };
+  SimtelOptions options;
+  options.camera = camera;
+  options.keep_telpos_height = true;
+  const std::vector<EventioBlock> blocks = read_blocks(run_adapter_with(records, options));
+  bool checked = false;
+  for (const EventioBlock &block : blocks) {
+    if (block.type == iact::telpos) {
+      const TelPos pos = decode_telpos(block);
+      CHECK(pos.z.size() == 2);
+      if (pos.z.size() == 2) {
+        CHECK_NEAR(pos.z[0], 2000.0, 1e-3); // camera-frame telescope 1 keeps its height
+        CHECK_NEAR(pos.z[1], 2100.0, 1e-3);
+      }
+      checked = true;
+      break;
+    }
+  }
+  CHECK(checked);
+
+  // A camera-map telescope missing from the TELPOS block is still an error.
+  SimtelOptions missing_options;
+  missing_options.camera = CameraMap{{3, CameraTelescope{1, 0.0}}};
+  missing_options.keep_telpos_height = true;
+  const std::vector<Record> missing = {
+      record_of(RecordType::run, light_source_run()),
+      blob_of(telpos_block({2000.0, 2100.0})),
+  };
+  CHECK(throws_error([&] { run_adapter_with(missing, missing_options); }));
+}
+
+void test_synthesised_telpos_heights() {
+  Metadata run = light_source_run();
+  run["telescope_z_m"] = std::vector<double>{20.0, 21.0};
+  const std::vector<Record> records{record_of(RecordType::run, run),
+                                    record_of(RecordType::run_end)};
+  for (bool keep : {false, true}) {
+    SimtelOptions options;
+    options.camera = {{1, CameraTelescope{1, 0.0}}};
+    options.keep_telpos_height = keep;
+    bool checked = false;
+    for (const EventioBlock &block : read_blocks(run_adapter_with(records, options))) {
+      if (block.type == iact::telpos) {
+        const TelPos pos = decode_telpos(block);
+        CHECK(pos.z.size() == 2);
+        if (pos.z.size() == 2) {
+          CHECK_NEAR(pos.z[0], keep ? 2000.0 : 0.0, 1e-3);
+          CHECK_NEAR(pos.z[1], 2100.0, 1e-3);
+        }
+        checked = true;
+      }
+    }
+    CHECK(checked);
+  }
+}
+
 // Telescope-frame chunk: emission points x y z [m], direction cx cy (cz below, or none),
 // times t [ns]; w = 1.
 PhotonChunk telescope_chunk(std::uint32_t telescope, const std::vector<double> &x,
@@ -460,10 +581,9 @@ std::vector<Bunch> first_bunches(const std::string &bytes) {
 }
 
 // Telescope frame (dual mirror, Bypass_Optics=1), observation level 2200 m. Emission point
-// (0.1, 0.2, 0.5) m, t = 3 ns, direction (0.6, 0, cz):
-//   cz = -0.8 (towards the plane z = 0): path 0.625 m, crossing x = 0.1 + 0.625 * 0.6 = 0.475 m
-//   cz = +0.8 (away from it):            path -0.625 m, crossing x = 0.1 - 0.375 = -0.275 m
-//   both: y = 0.2 m, t = 3 + 0.625 / 0.299792458 ns, zem = 2200.5 m (bunch values in cm)
+// (0.1, 0.2, 0.5) m, t = 3 ns, direction (0.6, 0, -0.8), towards the plane z = 0: path 0.625 m,
+// crossing x = 0.1 + 0.625 * 0.6 = 0.475 m, y = 0.2 m, t = 3 + 0.625 / 0.299792458 ns,
+// zem = 2200.5 m (bunch values in cm). An upward photon (cz = +0.8) is rejected.
 void test_telescope_frame_through_adapter() {
   const CameraMap camera{{1, CameraTelescope{2, 30.0}}};
   const double t_out = 3.0 + 0.625 / 0.299792458;
@@ -482,19 +602,13 @@ void test_telescope_frame_through_adapter() {
     CHECK_NEAR(down[0].photons, 1.0, 1e-6);
     CHECK_NEAR(down[0].lambda, 400.0, 1e-6);
   }
-  const std::vector<Bunch> up = first_bunches(
-      run_adapter(telescope_frame_records(
-                      1, telescope_chunk(1, {0.1}, {0.2}, {0.5}, {0.6}, {0.0}, {0.8}, {3.0})),
-                  camera));
-  CHECK(up.size() == 1);
-  if (up.size() == 1) {
-    CHECK_NEAR(up[0].x, -27.5, 1e-3);
-    CHECK_NEAR(up[0].y, 20.0, 1e-3);
-    CHECK_NEAR(up[0].cx, 0.6, 1e-6);
-    CHECK_NEAR(up[0].ctime, t_out, 1e-4);
-    CHECK_NEAR(up[0].zem, 220050.0, 0.1);
-  }
-  // Without cz the photon moves towards the plane: same bunch as cz = -0.8.
+  // An upward photon (cz = +0.8) is rejected, see test_non_downward_cz_rejected.
+  CHECK(throws_error([&] {
+    run_adapter(telescope_frame_records(
+                    1, telescope_chunk(1, {0.1}, {0.2}, {0.5}, {0.6}, {0.0}, {0.8}, {3.0})),
+                camera);
+  }));
+  // Without cz the photon moves downwards: same bunch as cz = -0.8.
   const std::vector<Bunch> implied = first_bunches(run_adapter(
       telescope_frame_records(1, telescope_chunk(1, {0.1}, {0.2}, {0.5}, {0.6}, {0.0}, {}, {3.0})),
       camera));
@@ -536,6 +650,60 @@ void test_telescope_frame_report_and_telpos() {
     CHECK_NEAR(other[0].x, rotated[0].x, 1e-6);
     CHECK_NEAR(other[0].cx, rotated[0].cx, 1e-6);
   }
+}
+
+// Message of a std::invalid_argument from run_adapter contains `fragment` (false if none).
+bool rejected_with(const std::vector<Record> &records, const CameraMap &camera,
+                   const std::string &fragment) {
+  try {
+    run_adapter(records, camera);
+  } catch (const std::invalid_argument &error) {
+    return std::string(error.what()).find(fragment) != std::string::npos;
+  } catch (const std::exception &) {
+    return false;
+  }
+  return false;
+}
+
+// Upward (cz > 0), horizontal (cz = 0) and non-finite cz are rejected in every frame, and the
+// rejection names the frame. Downward cz is written as before.
+void test_non_downward_cz_rejected() {
+  const CameraMap dual{{1, CameraTelescope{2, 0.0}}};
+  const CameraMap camera{{2, CameraTelescope{2, 30.0}}};
+  const std::string telescope_msg = "telescope-frame photon must move downwards";
+  const std::string ground_msg = "ground-frame photon must move downwards";
+  // Telescope frame: upward (cx = 0.6, cz = 0.8), horizontal (cx = 1, cz = 0), NaN cz.
+  CHECK(rejected_with(telescope_frame_records(
+                          1, telescope_chunk(1, {0.1}, {0.2}, {0.5}, {0.6}, {0.0}, {0.8}, {3.0})),
+                      dual, telescope_msg));
+  CHECK(rejected_with(telescope_frame_records(
+                          1, telescope_chunk(1, {0.1}, {0.2}, {0.5}, {1.0}, {0.0}, {0.0}, {3.0})),
+                      dual, telescope_msg));
+  CHECK(rejected_with(telescope_frame_records(1, telescope_chunk(1, {0.1}, {0.2}, {0.5}, {0.6},
+                                                                 {0.0}, {std::nanf("")}, {3.0})),
+                      dual, telescope_msg));
+  // A rejected telescope-frame chunk is left unchanged.
+  PhotonChunk upward = telescope_chunk(1, {0.1}, {0.2}, {0.5}, {0.6}, {0.0}, {0.8}, {3.0});
+  CHECK(throws_error([&] { telescope_to_bypass_convention(upward, 2200.0); }));
+  CHECK_NEAR(upward[Column::x][0], 0.1, 1e-6);
+  CHECK_NEAR(upward[Column::t][0], 3.0, 1e-6);
+
+  // Ground frame: upward cz column rejected, downward cz column accepted.
+  PhotonChunk up_ground = chunk_of(1, Frame::ground, {0.5}, {0.2}, {0.1}, {-0.2});
+  up_ground[Column::cz] = {0.9539F};
+  CHECK(rejected_with(telescope_frame_records(1, up_ground), {}, ground_msg));
+  PhotonChunk down_ground = chunk_of(1, Frame::ground, {0.5}, {0.2}, {0.1}, {-0.2});
+  down_ground[Column::cz] = {-0.9539F};
+  CHECK(!throws_error([&] { run_adapter(telescope_frame_records(1, down_ground), {}); }));
+
+  // Camera frame: photons are at the camera entrance; the sign of cz is not checked (ray-traced
+  // photons after a single mirror move +z into the camera).
+  PhotonChunk up_camera = chunk_of(2, Frame::camera, {0.5}, {0.2}, {0.1}, {-0.2});
+  up_camera[Column::cz] = {0.9539F};
+  CHECK(!throws_error([&] { run_adapter(telescope_frame_records(2, up_camera), camera); }));
+  PhotonChunk down_camera = chunk_of(2, Frame::camera, {0.5}, {0.2}, {0.1}, {-0.2});
+  down_camera[Column::cz] = {-0.9539F};
+  CHECK(!throws_error([&] { run_adapter(telescope_frame_records(2, down_camera), camera); }));
 }
 
 // Telescope-frame photons need a dual-mirror camera map entry and a single frame per telescope.
@@ -600,6 +768,141 @@ void test_telescope_frame_rejected() {
     run_adapter(telescope_frame_records(1, chunk_of(1, Frame::ground, {0.5}, {0.2}, {0.1}, {-0.2})),
                 dual);
   }));
+}
+
+// Sphere runs (ground_representation "sphere", docs/format.md). Telescope 1 is at the origin with
+// radius 12 m (light_source_run).
+Metadata sphere_run() {
+  Metadata m = light_source_run();
+  m["ground_representation"] = std::string("sphere");
+  return m;
+}
+
+// Ground-frame sphere rows of telescope 1: x y z cx cy cz t zem w wavelength.
+PhotonChunk sphere_chunk(const std::vector<double> &x, const std::vector<double> &y,
+                         const std::vector<double> &z, const std::vector<double> &cx,
+                         const std::vector<double> &cy, const std::vector<double> &cz,
+                         const std::vector<double> &t) {
+  PhotonChunk chunk;
+  chunk.telescope_id = 1;
+  chunk.frame = Frame::ground;
+  const std::size_t n = x.size();
+  chunk.resize(n, required_columns | column_bit(Column::z) | column_bit(Column::cz) |
+                      column_bit(Column::zem) | column_bit(Column::wavelength));
+  for (std::size_t i = 0; i < n; ++i) {
+    chunk[Column::x][i] = static_cast<float>(x[i]);
+    chunk[Column::y][i] = static_cast<float>(y[i]);
+    chunk[Column::z][i] = static_cast<float>(z[i]);
+    chunk[Column::cx][i] = static_cast<float>(cx[i]);
+    chunk[Column::cy][i] = static_cast<float>(cy[i]);
+    chunk[Column::cz][i] = static_cast<float>(cz[i]);
+    chunk[Column::t][i] = static_cast<float>(t[i]);
+    chunk[Column::w][i] = 1.0F;
+    chunk[Column::zem][i] = 2200.0F;
+    chunk[Column::wavelength][i] = 400.0F;
+  }
+  return chunk;
+}
+
+std::vector<Record> sphere_records(const Metadata &run, const PhotonChunk &chunk) {
+  return {
+      record_of(RecordType::run, run),
+      record_of(RecordType::event, Metadata{{"event_number", std::int64_t{1}}}),
+      record_of(RecordType::telescope,
+                Metadata{{"telescope_id", std::int64_t{1}}, {"array_index", std::int64_t{0}}}),
+      photons_of(chunk),
+      record_of(RecordType::telescope_end, Metadata{{"telescope_id", std::int64_t{1}}}),
+      record_of(RecordType::event_end),
+      record_of(RecordType::run_end),
+  };
+}
+
+// Downward rows on the sphere become the crossing of the plane z = 0 along their line, with the
+// time of the crossing; rows starting inside the sphere, upward and horizontal rows are rejected.
+void test_sphere_to_plane() {
+  const double c = 0.299792458;
+  const double xa = std::sqrt(108.0); // on the sphere (R = 12 m) at z = 6 m
+  // Direction (0.6, 0, -0.8): s = -z / cz = 7.5 m, so the crossing is at x + 4.5 m.
+  // The second row starts at z = -6 m: s = -7.5 m, the crossing lies at x - 4.5 m (behind it).
+  PhotonChunk chunk = sphere_chunk({xa, xa}, {0.0, 0.0}, {6.0, -6.0}, {0.6, 0.6}, {0.0, 0.0},
+                                   {-0.8, -0.8}, {1.0, 2.0});
+  chunk[Column::path] = {0.5F, 0.5F};
+  PhotonChunk converted = chunk;
+  sphere_to_plane_bunches(converted, 12.0);
+  CHECK(!converted.has(Column::z) && !converted.has(Column::path));
+  CHECK(converted.has(Column::cz) && converted.has(Column::zem) && converted.has(Column::w));
+  CHECK_NEAR(converted[Column::x][0], xa + 4.5, 1e-4);
+  CHECK_NEAR(converted[Column::x][1], xa - 4.5, 1e-4);
+  CHECK_NEAR(converted[Column::y][0], 0.0, 1e-6);
+  CHECK_NEAR(converted[Column::cz][0], -0.8, 1e-6);
+  CHECK_NEAR(converted[Column::t][0], 1.0 + 7.5 / c, 1e-3);
+  CHECK_NEAR(converted[Column::t][1], 2.0 - 7.5 / c, 1e-3);
+  CHECK_NEAR(converted[Column::zem][0], 2200.0, 1e-3);
+  CHECK_NEAR(converted[Column::wavelength][1], 400.0, 1e-6);
+
+  // The run is written as a plane run: the EventIO equals that of the converted plane rows
+  // under a run without ground_representation.
+  const std::string sphere_out = run_adapter(sphere_records(sphere_run(), chunk), {});
+  const std::string plane_out = run_adapter(sphere_records(light_source_run(), converted), {});
+  CHECK(!sphere_out.empty());
+  CHECK(sphere_out == plane_out);
+
+  // Rows starting inside the sphere (|r| = 3 m and |r| = 11.5 m) are rejected, chunk unchanged.
+  for (const PhotonChunk &inside :
+       {sphere_chunk({3.0}, {0.0}, {0.0}, {0.6}, {0.0}, {-0.8}, {1.0}),
+        sphere_chunk({xa}, {0.0}, {-5.0}, {0.6}, {0.0}, {-0.8}, {1.0})}) {
+    PhotonChunk unchanged = inside;
+    CHECK(throws_error([&] { sphere_to_plane_bunches(unchanged, 12.0); }));
+    CHECK(unchanged.columns == inside.columns);
+    try {
+      run_adapter(sphere_records(sphere_run(), inside), {});
+      CHECK(false);
+    } catch (const std::invalid_argument &error) {
+      CHECK(std::string(error.what())
+                .find("inside the telescope sphere: not representable for "
+                      "sim_telarray") != std::string::npos);
+    }
+  }
+
+  // Upward and horizontal rows on the sphere are rejected.
+  const std::string downward_msg = "ground-frame photon must move downwards";
+  CHECK(throws_error([&] {
+    run_adapter(
+        sphere_records(sphere_run(), sphere_chunk({xa}, {0.0}, {6.0}, {0.6}, {0.0}, {0.8}, {1.0})),
+        {});
+  }));
+  CHECK(rejected_with(
+      sphere_records(sphere_run(), sphere_chunk({12.0}, {0.0}, {0.0}, {1.0}, {0.0}, {0.0}, {1.0})),
+      {}, downward_msg));
+
+  // Rows outside the sphere, rows without z, and telescopes without a radius are rejected.
+  CHECK(throws_error([&] {
+    run_adapter(sphere_records(sphere_run(),
+                               sphere_chunk({0.0}, {0.0}, {13.0}, {0.0}, {0.0}, {-1.0}, {1.0})),
+                {});
+  }));
+  PhotonChunk no_z = sphere_chunk({xa}, {0.0}, {6.0}, {0.6}, {0.0}, {-0.8}, {1.0});
+  no_z[Column::z].clear();
+  CHECK(throws_error([&] { run_adapter(sphere_records(sphere_run(), no_z), {}); }));
+  PhotonChunk no_radius = sphere_chunk({xa}, {0.0}, {6.0}, {0.6}, {0.0}, {-0.8}, {1.0});
+  no_radius.telescope_id = 3; // the light-source run has two telescopes
+  CHECK(throws_error([&] { run_adapter(sphere_records(sphere_run(), no_radius), {}); }));
+
+  // Plane rows (no z column) in a sphere run are rejected: sphere rows need z and cz.
+  CHECK(throws_error([&] {
+    run_adapter(
+        sphere_records(sphere_run(), chunk_of(1, Frame::ground, {0.5}, {0.2}, {0.1}, {-0.2})), {});
+  }));
+}
+
+// A plane run is unchanged: downward ground rows with a z column are written as before.
+void test_plane_run_unchanged() {
+  const PhotonChunk plane = chunk_of(1, Frame::ground, {0.5}, {0.2}, {0.1}, {-0.2});
+  CHECK(!throws_error([&] { run_adapter(sphere_records(light_source_run(), plane), {}); }));
+  // An invalid run representation is rejected.
+  Metadata flat = light_source_run();
+  flat["ground_representation"] = std::string("flat");
+  CHECK(throws_error([&] { run_adapter(sphere_records(flat, plane), {}); }));
 }
 
 // Atmospheric table of three levels (a stand-in for a CORSIKA atmprof file).
@@ -1252,10 +1555,14 @@ int main() {
     test_invalid_camera_map();
     test_camera_conversion();
     test_camera_frame_through_adapter();
+    test_camera_zem_added();
     test_telpos_zeroed_for_camera_only();
+    test_telpos_height_kept_with_option();
+    test_synthesised_telpos_heights();
     test_telescope_frame_through_adapter();
     test_telescope_frame_report_and_telpos();
     test_telescope_frame_rejected();
+    test_non_downward_cz_rejected();
     test_synthesised_headers();
     test_synthesised_run_end_counts_events();
     test_missing_metadata_rejected();
@@ -1271,5 +1578,7 @@ int main() {
     test_run_without_events();
     test_atmprof_option_conflicts_with_stream();
     test_no_warnings_with_corsika_headers();
+    test_sphere_to_plane();
+    test_plane_run_unchanged();
   });
 }

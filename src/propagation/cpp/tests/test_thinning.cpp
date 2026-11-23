@@ -54,7 +54,7 @@ void test_envelope() {
   CHECK(throws_invalid([] { obdeect::propagation::Envelope bad({300.0, 400.0}, {0.1, 1.5}); }));
 }
 
-// The wavelength range must be finite, with 1 <= lo < hi <= 2^24.
+// The wavelength range must be finite, with 1 <= lo <= hi <= 2^24.
 void test_wavelength_range_validation() {
   obdeect::propagation::WavelengthRange{250.0, 700.0}.validate();
   obdeect::propagation::WavelengthRange{1.0, obdeect::propagation::max_exact_wavelength_nm}
@@ -67,7 +67,17 @@ void test_wavelength_range_validation() {
       throws_invalid([] { (void)obdeect::propagation::WavelengthRange{-inf, 700.0}.validate(); }));
   CHECK(throws_invalid([] { (void)obdeect::propagation::WavelengthRange{0.5, 700.0}.validate(); }));
   CHECK(
-      throws_invalid([] { (void)obdeect::propagation::WavelengthRange{700.0, 700.0}.validate(); }));
+      throws_invalid([] { (void)obdeect::propagation::WavelengthRange{700.0, 699.0}.validate(); }));
+  // lo == hi: a fixed wavelength (monochromatic light source), assigned as lo.
+  obdeect::propagation::WavelengthRange{355.0, 355.0}.validate();
+  {
+    obdeect::stream::PhotonChunk fixed;
+    fixed.resize(16, mask_of({Column::x, Column::y, Column::cx, Column::cy, Column::t, Column::w,
+                              Column::wavelength}));
+    obdeect::propagation::assign_wavelengths(fixed, {355.0, 355.0}, seed, 0, 0);
+    for (const float lambda : fixed[Column::wavelength])
+      CHECK(lambda == 355.0F);
+  }
   CHECK(
       throws_invalid([] { (void)obdeect::propagation::WavelengthRange{250.0, 1e10}.validate(); }));
   // The largest allowed range draws wavelengths in [1, 2^24).
@@ -256,7 +266,8 @@ void test_thinning_statistics() {
 // The output does not depend on how the input is split into chunks.
 void test_chunk_size_determinism() {
   const auto table = obdeect::propagation::TransmissionTable::from_file(
-      std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/atm_trans_2000_1_10_0_0_2000.dat", 2000.0);
+      std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/atm_trans_2000_1_10_0_0_2000.dat", 2000.0,
+      obdeect::propagation::WavelengthInterpolation::floor);
   const auto depths = table.telescope_depths(2030.0, 28.0);
   const obdeect::propagation::Envelope envelope({200.0, 800.0}, {0.9, 0.3});
   obdeect::propagation::ExtinctionSettings settings;

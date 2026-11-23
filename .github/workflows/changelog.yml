@@ -28,4 +28,4 @@ jobs:
           PR_NUMBER: ${{ github.event.number }}
         run: |
           find docs/changes -type f | \
-          grep -E "^docs/changes/${PR_NUMBER}\.(feature|bugfix|maintenance)\.md$"
+          grep -E "^docs/changes/${PR_NUMBER}\.(feature|bugfix|maintenance)(\.[0-9]+)?\.md$"

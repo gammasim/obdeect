@@ -1,12 +1,14 @@
 #pragma once
 
 // CORSIKA IACT output (EventIO 1200-1217) to photon-stream records, and back to
-// sim_telarray input. Uses only eventio.hpp and the stream types; the stream
-// Writer is not needed.
+// sim_telarray input. Uses only eventio.hpp, telpos.hpp, constants.hpp and the stream types; the
+// stream Writer is not needed.
 
+#include "obdeect/stream/constants.hpp"
 #include "obdeect/stream/eventio.hpp"
 #include "obdeect/stream/format.hpp"
 #include "obdeect/stream/photons.hpp"
+#include "obdeect/stream/telpos.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -89,6 +91,79 @@ inline std::int64_t metadata_int(const Metadata &metadata, const std::string &ke
   return *value;
 }
 
+// Geometry of one 3D photon bunch (1217) of a sphere run, in m and ns. The bunch gives the arrival
+// point A (x, y, z, relative to the telescope sphere centre) and the direction d = (cx, cy, cz);
+// the emission point is E = A - dist d. The G sphere row (docs/format.md) is E itself if |E| <= R
+// (path 0), else the entry point E + s d with the smallest s >= 0 where |E + s d| = R (path s). A
+// bunch without such s misses the sphere. The time at the row is ctime + (s - dist) / c, with the
+// vacuum speed of light: ctime refers to the arrival point, at s = dist.
+struct SphereBunch {
+  bool hits{};
+  double x{}, y{}, z{}; // row [m], relative to the sphere centre
+  double path{};        // distance from the emission point to the row [m]
+  double time_ns{};     // arrival time at the row [ns]
+  double zem_m{};       // emission altitude a.s.l. [m]
+};
+
+// `radius_m` is the sphere radius of the telescope, `altitude_of_centre_m` the altitude a.s.l. of
+// its centre (observation level + TELPOS z), so that zem = altitude + E_z (flat geometry). Throws
+// std::runtime_error for non-finite values, a negative distance or photons, and a direction that is
+// not a unit vector (cz_is_consistent).
+inline SphereBunch sphere_bunch(const Bunch3d &b, double radius_m, double altitude_of_centre_m) {
+  const double finite_values[] = {b.x,  b.y,     b.z,    b.cx,      b.cy,
+                                  b.cz, b.ctime, b.dist, b.photons, b.lambda};
+  for (const double value : finite_values) {
+    if (!std::isfinite(value)) {
+      throw std::runtime_error("3D photon bunch with a non-finite value");
+    }
+  }
+  if (!cz_is_consistent(b.cz, b.cx, b.cy)) {
+    throw std::runtime_error("3D photon bunch direction (cx, cy, cz) is not a unit vector");
+  }
+  if (b.dist < 0.0F) {
+    throw std::runtime_error("3D photon bunch with a negative distance");
+  }
+  if (b.photons < 0.0F) {
+    throw std::runtime_error("3D photon bunch with negative photons (not supported)");
+  }
+
+  const double d[3] = {static_cast<double>(b.cx), static_cast<double>(b.cy),
+                       static_cast<double>(b.cz)};
+  const double dist_m = cm_to_m(static_cast<double>(b.dist));
+  const double a[3] = {cm_to_m(static_cast<double>(b.x)), cm_to_m(static_cast<double>(b.y)),
+                       cm_to_m(static_cast<double>(b.z))};
+  const double e[3] = {a[0] - dist_m * d[0], a[1] - dist_m * d[1], a[2] - dist_m * d[2]};
+  const double e2 = e[0] * e[0] + e[1] * e[1] + e[2] * e[2];
+  const double r2 = radius_m * radius_m;
+
+  SphereBunch out;
+  double s = 0.0;
+  out.hits = true;
+  if (e2 > r2) {
+    // |E + s d|^2 = R^2 with |d| = 1 (within the direction tolerance): s^2 + 2 (E.d) s + (|E|^2 -
+    // R^2) = 0. Both roots have the same sign (product > 0), positive iff E.d < 0.
+    const double edotd = e[0] * d[0] + e[1] * d[1] + e[2] * d[2];
+    const double disc = edotd * edotd - (e2 - r2);
+    if (edotd >= 0.0 || disc < 0.0) {
+      out.hits = false;
+      return out;
+    }
+    s = -edotd - std::sqrt(disc);
+  }
+  out.x = e[0] + s * d[0];
+  out.y = e[1] + s * d[1];
+  out.z = e[2] + s * d[2];
+  out.path = s;
+  out.time_ns = static_cast<double>(b.ctime) + (s - dist_m) / speed_of_light_m_per_ns;
+  out.zem_m = altitude_of_centre_m + e[2];
+  return out;
+}
+
+// One G sphere row of a 1217 bunch as stored in a photon chunk (m, ns, float32).
+struct SphereRowValues {
+  float x, y, z, cx, cy, cz, t, zem, w, path, wavelength;
+};
+
 // Converts one CORSIKA IACT run (blocks in file order) into stream records.
 // Order of records follows docs/format.md: run, then per event: event, blobs
 // and telescopes in file order, event_end; then run_end. The run record is
@@ -131,14 +206,29 @@ public:
       case iact::telarray:
         require_event("array container");
         for (const EventioBlock &child : subblocks(*block)) {
-          if (child.type != iact::photons) {
+          if (child.type == iact::photons) {
+            emit_photons(decode_photons(child));
+          } else if (child.type == iact::photons3d) {
+            const TelPhotons3d photons = decode_photons3d(child);
+            if (photons.array == 999 && photons.tel == 999) {
+              throw std::runtime_error("particle block (999, 999) inside an array container");
+            }
+            emit_photons3d(photons);
+          } else {
             throw std::runtime_error("unexpected block inside an array container");
           }
-          emit_photons(decode_photons(child));
         }
         break;
-      case iact::photons3d:
-        throw std::runtime_error("3D photon bunches (1217) are not converted; use the 1205 format");
+      case iact::photons3d: {
+        TelPhotons3d photons = decode_photons3d(*block);
+        if (photons.array == 999 && photons.tel == 999) {
+          blob(std::move(*block)); // particle block: not photons of a telescope
+        } else {
+          require_event("3D photon block");
+          emit_photons3d(photons);
+        }
+        break;
+      }
       case iact::telarray_head: // split-mode markers: kept as blobs, in input order
       case iact::telarray_end:
         blob(std::move(*block));
@@ -178,11 +268,21 @@ private:
     return block;
   }
 
+  // Records of a run are held back until its ground representation is known (the first photon
+  // block, or the end of the run). Only the header blocks of the first event are held.
+  void out(Record &&record) {
+    if (representation_) {
+      sink_(record);
+    } else {
+      held_.push_back(std::move(record));
+    }
+  }
+
   void emit(RecordType type, Metadata metadata = {}) {
     Record record;
     record.type = type;
     record.metadata = std::move(metadata);
-    sink_(record);
+    out(std::move(record));
   }
 
   void emit_blob(const EventioBlock &block) {
@@ -191,7 +291,32 @@ private:
     record.blob_eventio_type = block.type;
     record.blob_eventio_id = block.ident;
     record.blob = block.raw();
-    sink_(record);
+    out(std::move(record));
+  }
+
+  // The first photon block of the run fixes its representation; a block of the other kind
+  // afterwards is an error (one representation per run).
+  void claim(GroundRepresentation representation) {
+    if (!representation_) {
+      decide(representation);
+    } else if (*representation_ != representation) {
+      throw std::runtime_error("CORSIKA run mixes 1205 and 1217 photon blocks; a run has one "
+                               "ground representation");
+    }
+  }
+
+  // Sets the run key and writes the held records of the run.
+  void decide(GroundRepresentation representation) {
+    representation_ = representation;
+    // Plane runs keep their records as before (an absent key means plane).
+    if (representation == GroundRepresentation::sphere && !held_.empty() &&
+        held_.front().type == RecordType::run) {
+      held_.front().metadata["ground_representation"] = std::string("sphere");
+    }
+    for (const Record &record : held_) {
+      sink_(record);
+    }
+    held_.clear();
   }
 
   // Blocks outside an event (run header and friends) wait for the run record.
@@ -347,6 +472,8 @@ private:
 
   // Writes the run record and the blocks held back for it.
   void open_run(const std::vector<float> *evth) {
+    representation_.reset();
+    misses_sphere_ = 0;
     emit(RecordType::run, run_metadata(evth));
     run_open_ = true;
     for (const EventioBlock &block : pending_) {
@@ -355,6 +482,8 @@ private:
     pending_.clear();
   }
 
+  // A run without photon blocks is a plane run. Sphere runs count the bunches that miss the
+  // telescope sphere (misses_sphere in the run end).
   void close_run() {
     close_event();
     if (!run_open_ && pending_.empty()) {
@@ -365,38 +494,57 @@ private:
     if (!run_open_) {
       open_run(nullptr);
     }
-    emit(RecordType::run_end);
+    if (!representation_) {
+      decide(GroundRepresentation::plane);
+    }
+    Metadata end_metadata;
+    if (*representation_ == GroundRepresentation::sphere) {
+      end_metadata["misses_sphere"] = static_cast<std::int64_t>(misses_sphere_);
+    }
+    emit(RecordType::run_end, std::move(end_metadata));
     run_open_ = false;
     runh_.reset();
     telpos_.reset();
   }
 
-  // One telescope of the current event: telescope record, photon chunks, end.
-  void emit_photons(const TelPhotons &p) {
-    if (p.array < 0 || p.tel < 0) {
+  void check_telescope_indices(int array, int tel) const {
+    if (array < 0 || tel < 0) {
       throw std::runtime_error("photon block with a negative array or telescope index");
     }
-    const auto telescope_id = static_cast<std::int64_t>(p.tel) + 1;
+  }
+
+  // Telescope record of the current event; returns the telescope id (1-based).
+  std::int64_t begin_telescope(int array, int tel) {
+    const auto telescope_id = static_cast<std::int64_t>(tel) + 1;
     Metadata tel_meta;
     tel_meta["telescope_id"] = telescope_id;
     tel_meta["frame"] = static_cast<std::int64_t>(Frame::ground);
-    tel_meta["array_index"] = static_cast<std::int64_t>(p.array);
-    if (telpos_ && p.tel >= 0 && static_cast<std::size_t>(p.tel) < telpos_->x.size()) {
-      const auto i = static_cast<std::size_t>(p.tel);
+    tel_meta["array_index"] = static_cast<std::int64_t>(array);
+    if (telpos_ && tel >= 0 && static_cast<std::size_t>(tel) < telpos_->x.size()) {
+      const auto i = static_cast<std::size_t>(tel);
       tel_meta["x_m"] = cm_to_m(telpos_->x[i]);
       tel_meta["y_m"] = cm_to_m(telpos_->y[i]);
       tel_meta["z_m"] = cm_to_m(telpos_->z[i]);
       tel_meta["r_m"] = cm_to_m(telpos_->r[i]);
     }
     emit(RecordType::telescope, std::move(tel_meta));
+    return telescope_id;
+  }
 
-    const std::size_t total = p.bunches.size();
-    // Index among all photons of this telescope and event: continues across array reuses.
-    std::uint64_t &first_index = next_photon_index_[p.tel];
-    constexpr std::uint32_t mask = column_bit(Column::x) | column_bit(Column::y) |
-                                   column_bit(Column::cx) | column_bit(Column::cy) |
-                                   column_bit(Column::t) | column_bit(Column::zem) |
-                                   column_bit(Column::w) | column_bit(Column::wavelength);
+  void end_telescope(std::int64_t telescope_id, float header_photons) {
+    Metadata end_meta;
+    end_meta["telescope_id"] = telescope_id;
+    // Photon sum from the block header (float, as CORSIKA wrote it).
+    end_meta["photons"] = static_cast<double>(header_photons);
+    emit(RecordType::telescope_end, std::move(end_meta));
+  }
+
+  // Photon chunks of one telescope: `total` rows in index order, row src of the input goes to
+  // row dst of the chunk through fill(chunk, dst, src). Indices continue across array reuses.
+  template <class Fill>
+  void emit_rows(std::int64_t telescope_id, int tel, std::size_t total, std::uint32_t mask,
+                 Fill fill) {
+    std::uint64_t &first_index = next_photon_index_[tel];
     for (std::size_t start = 0; start < total; start += max_chunk_rows) {
       const std::size_t rows = std::min<std::size_t>(max_chunk_rows, total - start);
       Record record;
@@ -406,25 +554,91 @@ private:
       record.chunk.first_index = first_index;
       record.chunk.resize(rows, mask);
       for (std::size_t i = 0; i < rows; ++i) {
-        const Bunch &b = p.bunches[start + i];
-        record.chunk[Column::x][i] = corsika_cm_to_m(b.x);
-        record.chunk[Column::y][i] = corsika_cm_to_m(b.y);
-        record.chunk[Column::cx][i] = b.cx;
-        record.chunk[Column::cy][i] = b.cy;
-        record.chunk[Column::t][i] = b.ctime;
-        record.chunk[Column::zem][i] = corsika_cm_to_m(b.zem);
-        record.chunk[Column::w][i] = b.photons;
-        record.chunk[Column::wavelength][i] = b.lambda;
+        fill(record.chunk, i, start + i);
       }
-      sink_(record);
+      out(std::move(record));
       first_index += rows;
     }
+  }
 
-    Metadata end_meta;
-    end_meta["telescope_id"] = telescope_id;
-    // Photon sum from the block header (float, as CORSIKA wrote it).
-    end_meta["photons"] = static_cast<double>(p.photons);
-    emit(RecordType::telescope_end, std::move(end_meta));
+  // One telescope of the current event (1205): telescope record, photon chunks, end.
+  void emit_photons(const TelPhotons &p) {
+    check_telescope_indices(p.array, p.tel);
+    claim(GroundRepresentation::plane);
+    const std::int64_t telescope_id = begin_telescope(p.array, p.tel);
+    constexpr std::uint32_t mask = column_bit(Column::x) | column_bit(Column::y) |
+                                   column_bit(Column::cx) | column_bit(Column::cy) |
+                                   column_bit(Column::t) | column_bit(Column::zem) |
+                                   column_bit(Column::w) | column_bit(Column::wavelength);
+    emit_rows(telescope_id, p.tel, p.bunches.size(), mask,
+              [&p](PhotonChunk &chunk, std::size_t dst, std::size_t src) {
+                const Bunch &b = p.bunches[src];
+                chunk[Column::x][dst] = corsika_cm_to_m(b.x);
+                chunk[Column::y][dst] = corsika_cm_to_m(b.y);
+                chunk[Column::cx][dst] = b.cx;
+                chunk[Column::cy][dst] = b.cy;
+                chunk[Column::t][dst] = b.ctime;
+                chunk[Column::zem][dst] = corsika_cm_to_m(b.zem);
+                chunk[Column::w][dst] = b.photons;
+                chunk[Column::wavelength][dst] = b.lambda;
+              });
+    end_telescope(telescope_id, p.photons);
+  }
+
+  // One telescope of the current event (1217) in a sphere run: each bunch becomes its G sphere row
+  // (sphere_bunch) or counts as a miss. The telescope's radius and altitude come from TELPOS and
+  // RUNH; the zem column is the flat-geometry emission altitude.
+  void emit_photons3d(const TelPhotons3d &p) {
+    check_telescope_indices(p.array, p.tel);
+    const auto i = static_cast<std::size_t>(p.tel);
+    if (!telpos_ || i >= telpos_->r.size()) {
+      throw std::runtime_error("3D photon bunches of telescope " + std::to_string(p.tel + 1) +
+                               " have no TELPOS entry (sphere radius)");
+    }
+    if (!runh_) {
+      throw std::runtime_error("3D photon bunches need the RUNH block (observation level)");
+    }
+    claim(GroundRepresentation::sphere);
+    const double radius_m = cm_to_m(telpos_->r[i]);
+    const double altitude_m =
+        cm_to_m(static_cast<double>(header_word(*runh_, corsika_word::runh_level_1, "RUNH"))) +
+        cm_to_m(telpos_->z[i]);
+
+    std::vector<detail::SphereRowValues> rows;
+    rows.reserve(p.bunches.size());
+    for (const Bunch3d &b : p.bunches) {
+      const SphereBunch s = sphere_bunch(b, radius_m, altitude_m);
+      if (!s.hits) {
+        ++misses_sphere_;
+        continue;
+      }
+      rows.push_back({static_cast<float>(s.x), static_cast<float>(s.y), static_cast<float>(s.z),
+                      b.cx, b.cy, b.cz, static_cast<float>(s.time_ns), static_cast<float>(s.zem_m),
+                      b.photons, static_cast<float>(s.path), b.lambda});
+    }
+
+    constexpr std::uint32_t mask =
+        column_bit(Column::x) | column_bit(Column::y) | column_bit(Column::z) |
+        column_bit(Column::cx) | column_bit(Column::cy) | column_bit(Column::cz) |
+        column_bit(Column::t) | column_bit(Column::zem) | column_bit(Column::w) |
+        column_bit(Column::path) | column_bit(Column::wavelength);
+    const std::int64_t telescope_id = begin_telescope(p.array, p.tel);
+    emit_rows(telescope_id, p.tel, rows.size(), mask,
+              [&rows](PhotonChunk &chunk, std::size_t dst, std::size_t src) {
+                const detail::SphereRowValues &r = rows[src];
+                chunk[Column::x][dst] = r.x;
+                chunk[Column::y][dst] = r.y;
+                chunk[Column::z][dst] = r.z;
+                chunk[Column::cx][dst] = r.cx;
+                chunk[Column::cy][dst] = r.cy;
+                chunk[Column::cz][dst] = r.cz;
+                chunk[Column::t][dst] = r.t;
+                chunk[Column::zem][dst] = r.zem;
+                chunk[Column::w][dst] = r.w;
+                chunk[Column::path][dst] = r.path;
+                chunk[Column::wavelength][dst] = r.wavelength;
+              });
+    end_telescope(telescope_id, p.photons);
   }
 
   EventioReader reader_;
@@ -435,16 +649,26 @@ private:
   std::optional<TelPos> telpos_;
   bool run_open_{};
   bool event_open_{};
-  std::map<int, std::uint64_t> next_photon_index_; // per telescope, reset at each event
-  bool rune_seen_{};                               // a RUNE block was read since the last RUNH
+  std::map<int, std::uint64_t> next_photon_index_;     // per telescope, reset at each event
+  bool rune_seen_{};                                   // a RUNE block was read since the last RUNH
+  std::optional<GroundRepresentation> representation_; // of the open run, once known
+  std::vector<Record> held_;                           // run records waiting for representation_
+  std::uint64_t misses_sphere_{}; // 1217 bunches of the open run that miss their sphere
 };
 
 } // namespace detail
 
-// Convert a CORSIKA IACT EventIO stream (long, compact or split photon blocks)
-// to photon-stream records. The stream and end records are not emitted; the
-// caller writes them around this. Every non-photon top-level block becomes a
-// blob record with its raw bytes. Throws std::runtime_error on malformed input.
+// Convert a CORSIKA IACT EventIO stream (long, compact or split photon blocks, or 3D photon
+// bunches 1217) to photon-stream records. The stream and end records are not emitted; the
+// caller writes them around this. Every non-photon top-level block becomes a blob record with its
+// raw bytes. Throws std::runtime_error on malformed input.
+//
+// Representation: a run with 1205 blocks is a plane run (no ground_representation key, as before);
+// a run with 1217 blocks is a sphere run ("sphere", G rows on or inside the telescope sphere, with
+// columns x y z cx cy cz t zem w path wavelength; see SphereBunch). A run may not mix the two.
+// Sphere runs count the bunches missing their sphere in the run end (misses_sphere). Heights: zem
+// is observation level + TELPOS z + E_z, flat geometry, as for all CORSIKA heights here (no
+// curvature conversion; the run key curvature_applied tells whether CORSIKA applied it).
 inline void corsika_to_records(std::istream &in, const std::function<void(const Record &)> &sink) {
   detail::CorsikaToRecords converter{in, sink};
   converter.run();

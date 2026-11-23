@@ -329,6 +329,11 @@ def test_invalid_input_is_rejected_before_tracing():
             trace_bunches(model, broken, plane_z)
     with pytest.raises(ValueError, match="same length"):
         trace_bunches(model, {**bunches, "y": bunches["y"][:-1]}, plane_z)
+    # Without cz the direction is derived: a horizontal bunch (cx^2 + cy^2 = 1) is rejected.
+    horizontal = {key: values.copy() for key, values in bunches.items()}
+    horizontal["cx"][50], horizontal["cy"][50] = 1.0, 0.0
+    with pytest.raises(ValueError):
+        trace_bunches(model, horizontal, plane_z)
 
 
 def test_sampled_wavelengths_follow_the_density():

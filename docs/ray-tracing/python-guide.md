@@ -3,16 +3,15 @@
 ```python
 from obdeect.ray_tracing import DETECTED, OpticalModel
 
-model = OpticalModel.from_simulation_models(
-    "../simulation-models", "LSTN-01", "7.0.0", configuration_seed=1, zenith_deg=20.0
-)
+model = OpticalModel.load("lst.json")
 photons = model.star_photons(100_000, seed=2, towards_source=(0.0087, 0.0, 0.99996))
 arrivals = model.trace(photons, seed=2)
 image = arrivals["position_m"][arrivals["status"] == DETECTED]
 ```
 
-`OpticalModel.from_records(records, read_file, ...)` compiles parameter records
-held in memory. `save` and `load` store the model as JSON.
+Use `OpticalModel.from_records` to compile structured simulation-model records, or
+`OpticalModel.from_simulation_models` to read them from a checkout. `save` and `load`
+store the compiled optical model as JSON.
 
 `trace` takes photons as arrays: `position_m` (n, 3), `direction` (n, 3, unit
 vectors), `wavelength_nm`, `time_ns`, `weight` and `photon_id` (uint64; a photon's
@@ -20,7 +19,7 @@ random numbers depend only on the seed and its id). It returns, per photon:
 
 | Array | Meaning |
 | --- | --- |
-| `status` | index into `STATUS_NAMES`: detected, missed_primary, missed_secondary, missed_focal_surface, blocked, invalid_input, numerical_failure |
+| `status` | index into `STATUS_NAMES`: detected, missed_primary, missed_secondary, missed_focal_surface, blocked, invalid_input, numerical_failure, non_sequential (no longer produced), direct_focal (a plane focal surface from its receiving side before the last mirror), bounce_limit (16 reflections), blocked_camera_window (lost at the camera window rim), camera_window_total_reflection (total internal reflection at the camera window); see [Optical models](optical-models.md#reflecting-sides-and-photons-from-below) |
 | `terminal_surface` | id of the surface the photon ended on (focal surface, obscurer, mirror) |
 | `position_m`, `direction` | at the focal surface, or where the photon was lost |
 | `path_length_m`, `time_ns` | geometric path; time with the model's group index |
@@ -28,6 +27,7 @@ random numbers depend only on the seed and its id). It returns, per photon:
 | `primary_point_m`, `primary_surface`, `primary_incidence_deg` | reflection on the primary |
 | `secondary_point_m`, `secondary_surface`, `secondary_incidence_deg` | reflection on the secondary (NaN for single-mirror telescopes) |
 | `focal_incidence_deg` | angle to the focal-surface normal |
+| `reflections` | number of reflections of the photon (on either mirror) |
 
 `trace` returns all 14 arrays by default. Request only what you use:
 

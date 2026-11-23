@@ -1,20 +1,21 @@
 #pragma once
 
-// Light sources: emitters and stars with angular, spectral and pulse profiles, optional
-// targets, photon counts and per-photon emission (docs/spec/source-core.md).
+// Light sources: a geometry (point, line, plane wave, sky background) with angular, spectral and
+// pulse profiles, an optional sampling target, photon counts and validation
+// (docs/spec/source-core.md). Per-photon sampling is in emit.hpp.
 
 #include "obdeect/sources/density.hpp"
 #include "obdeect/sources/streams.hpp"
 #include "obdeect/sources/vec3.hpp"
 
 #include "obdeect/stream/format.hpp"
-#include "obdeect/stream/photons.hpp"
 #include "obdeect/stream/random.hpp"
 
+#include <algorithm>
 #include <cmath>
-#include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -26,7 +27,7 @@ inline constexpr double max_magnitude = 1e30;
 inline constexpr double max_photon_count = 9007199254740992.0; // 2^53
 inline constexpr double min_positive = 1e-30;
 
-// Columns written for the photons of a source (no zem; the stream writer adds it).
+// Columns written for the photons of a source (no zem; the run writer adds it in the sky frame).
 inline constexpr std::uint32_t source_columns =
     obdeect::stream::column_bit(obdeect::stream::Column::x) |
     obdeect::stream::column_bit(obdeect::stream::Column::y) |
@@ -46,20 +47,58 @@ struct Photon {
   double wavelength_nm{};
 };
 
-struct Emitter {
+// Emission from one point; the angular profile is about `axis`.
+struct Point {
   Vec3 position{};
-  Vec3 pointing{0.0, 0.0, 1.0};
+  Vec3 axis{0.0, 0.0, 1.0};
   Angular angular{Isotropic{}};
 };
 
-// Parallel beam (infinite distance) or point source at a finite distance, seen through a disc.
-struct Star {
+// Emission along a segment from `start` in `direction`; the angular profile is about the
+// direction (a fixed angle is a Cherenkov cone). Points along the line follow `profile`
+// (relative photons per metre against the distance from the start, empty = uniform). The
+// emission time grows by s / (beta c) along the line (beta = 0: all at the pulse time).
+struct Line {
+  Vec3 start{};
+  Vec3 direction{0.0, 0.0, -1.0};
+  double length_m{};
+  double beta{1.0};
+  Angular angular{FixedAngle{0.0}};
+  LinearDensity profile{};
+};
+
+// Parallel beam (infinite distance) or point source at a finite distance, through a disc of radius
+// disc_radius_m centred at (0, 0, disc_z_m). Photons travel along -towards_source: towards_source.z
+// > 0 is a beam from above (downward photons), z < 0 from below (upward photons), z = 0 horizontal.
+// The start is one of (at most one of the two may be given):
+// - start_z_m (default 0 when neither is given): photons start on the plane z = start_z_m, on the
+//   source side of the disc. Not for horizontal directions (they have no such plane);
+// - start_distance_m: photons start on the plane perpendicular to towards_source at this distance
+//   from the disc centre, on the source side (any direction; for a vertical beam it is the plane
+//   z = disc_z + start_distance for a beam from above, and the same photons as start_z_m).
+// A horizontal direction (z = 0) needs start_distance_m.
+struct PlaneWave {
   Vec3 towards_source{0.0, 0.0, 1.0};
   double distance_m{std::numeric_limits<double>::infinity()};
-  double disk_radius_m{};
-  double disk_z_m{};
-  double start_z_m{};
+  double disc_radius_m{};
+  double disc_z_m{};
+  std::optional<double> start_z_m{};
+  std::optional<double> start_distance_m{};
 };
+
+// Diffuse light: photons start on a sphere and travel inwards, directions uniform in solid angle
+// within viewcone_deg of `axis`.
+struct SkyBackground {
+  Vec3 centre{};
+  double radius_m{};
+  Vec3 axis{0.0, 0.0, -1.0};
+  double viewcone_deg{90.0};
+};
+
+// Start height of a plane wave without start_distance_m (start_z_m, default 0).
+inline double plane_wave_start_z(const PlaneWave &w) { return w.start_z_m.value_or(0.0); }
+
+using Geometry = std::variant<Point, Line, PlaneWave, SkyBackground>;
 
 struct DiscTarget {
   Vec3 centre{};
@@ -72,14 +111,16 @@ struct SphereTarget {
   double radius_m{};
 };
 
-using Target = std::variant<std::monostate, DiscTarget, SphereTarget>;
+// Resolved by the run writer from the telescopes (resolve_auto_target in run.hpp).
+struct AutoTarget {};
+
+using Target = std::variant<std::monostate, DiscTarget, SphereTarget, AutoTarget>;
 
 struct Source {
-  obdeect::stream::Frame frame{obdeect::stream::Frame::sky};
-  std::variant<Emitter, Star> geometry{Emitter{}};
+  Geometry geometry{Point{}};
   Spectrum spectrum{Fixed{400.0}};
   Pulse pulse{Fixed{0.0}};
-  double photons{};
+  double photons{}; // mean photons: into 4 pi (point), along the line, on the disc, on the sphere
   Target target{};
 };
 
@@ -88,6 +129,14 @@ inline Uniforms philox_draw(std::uint64_t seed, std::uint32_t event, std::uint32
                             std::uint64_t index, Stream stream) {
   return obdeect::stream::uniform4(
       {seed, stage_sources, event, telescope, index, static_cast<std::uint32_t>(stream)});
+}
+
+// Seed of emission i of a run seed (splitmix64 of base + golden * (i + 1)).
+inline std::uint64_t source_seed(std::uint64_t base, std::uint64_t i) {
+  std::uint64_t z = base + 0x9E3779B97F4A7C15ULL * (i + 1);
+  z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+  z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+  return z ^ (z >> 31);
 }
 
 // Magnitude limits (finite, |x| <= 1e30; positive values also >= 1e-30).
@@ -123,7 +172,6 @@ inline std::pair<double, double> spectrum_range(const Spectrum &spectrum) {
   return {t.density.lower(), t.density.upper()};
 }
 
-// Rules for the spectrum of a source.
 inline void validate_spectrum(const Spectrum &spectrum) {
   using detail::require;
   if (const auto *f = std::get_if<Fixed>(&spectrum)) {
@@ -166,73 +214,224 @@ inline void validate_pulse(const Pulse &pulse) {
   }
 }
 
-// Throws std::invalid_argument for any invalid source.
+inline void validate_angular(const Angular &angular, const char *what) {
+  using detail::require;
+  if (const auto *a = std::get_if<FixedAngle>(&angular)) {
+    require(a->u0 >= 0.0 && a->u0 <= 2.0, what);
+  } else if (const auto *c = std::get_if<FilledCone>(&angular)) {
+    require(c->u0 > 0.0 && c->u0 <= 2.0, what);
+  } else if (const auto *t = std::get_if<TabulatedAngular>(&angular)) {
+    require(!t->density.empty() && t->density.lower() >= 0.0 && t->density.upper() <= 2.0 + 1e-12,
+            what);
+  }
+}
+
+namespace detail {
+
+inline void validate_point(const Point &p, const Target &target) {
+  require(within_limits(p.position), "point: position out of range");
+  require(is_unit(p.axis), "point: axis must be a unit vector");
+  validate_angular(p.angular, "point: angular profile must lie in u = 1 - cos(theta) in [0, 2]");
+  if (const auto *disc = std::get_if<DiscTarget>(&target)) {
+    require(within_limits(disc->centre) && is_unit(disc->normal) &&
+                positive_within_limits(disc->radius_m),
+            "disc target: centre, normal or radius out of range");
+    require(!std::holds_alternative<FixedAngle>(p.angular),
+            "a disc target needs a density: fixed-angle emission is not supported");
+    require(std::abs(dot(disc->centre - p.position, disc->normal)) > 0.0,
+            "disc target: the point lies in the plane of the disc");
+  } else if (const auto *sphere = std::get_if<SphereTarget>(&target)) {
+    require(within_limits(sphere->centre) && positive_within_limits(sphere->radius_m),
+            "sphere target: centre or radius out of range");
+    require(std::holds_alternative<Isotropic>(p.angular),
+            "a sphere target needs an isotropic point");
+    require(norm(sphere->centre - p.position) > sphere->radius_m,
+            "sphere target: the point lies inside the sphere");
+  }
+}
+
+inline void validate_line(const Line &l, const Target &target) {
+  require(within_limits(l.start), "line: start out of range");
+  require(is_unit(l.direction), "line: direction must be a unit vector");
+  require(within_limits(l.length_m) && l.length_m >= 0.0, "line: length out of range");
+  require(l.beta >= 0.0 && l.beta <= 1.0, "line: beta must lie in [0, 1]");
+  validate_angular(l.angular, "line: angular profile must lie in u = 1 - cos(theta) in [0, 2]");
+  if (!l.profile.empty())
+    require(l.profile.lower() >= 0.0 && l.profile.upper() <= l.length_m * (1.0 + 1e-12),
+            "line: profile must lie within [0, length]");
+  require(!std::holds_alternative<DiscTarget>(target), "a line takes no disc target");
+  if (const auto *sphere = std::get_if<SphereTarget>(&target)) {
+    require(within_limits(sphere->centre) && positive_within_limits(sphere->radius_m),
+            "sphere target: centre or radius out of range");
+    require(std::holds_alternative<FixedAngle>(l.angular) ||
+                std::holds_alternative<Isotropic>(l.angular),
+            "a line with a sphere target needs a fixed angle or isotropic emission");
+  }
+}
+
+inline void validate_plane_wave(const PlaneWave &w, const Target &target) {
+  require(std::holds_alternative<std::monostate>(target), "a plane wave takes no target");
+  require(is_unit(w.towards_source), "plane wave: towards_source must be a unit vector");
+  require(w.distance_m == std::numeric_limits<double>::infinity() ||
+              positive_within_limits(w.distance_m),
+          "plane wave: distance must be infinite or positive within limits");
+  require(positive_within_limits(w.disc_radius_m), "plane wave: disc radius out of range");
+  require(within_limits(w.disc_z_m), "plane wave: disc height out of range");
+  require(!(w.start_z_m && w.start_distance_m),
+          "plane wave: give start_z_m or start_distance_m, not both");
+  if (!w.start_distance_m) {
+    require(w.towards_source.z != 0.0,
+            "plane wave: a horizontal towards_source (z = 0) has no start plane z = const: give "
+            "start_distance_m");
+    const double start_z = plane_wave_start_z(w);
+    require(within_limits(start_z), "plane wave: start height out of range");
+    // The photons move from the start plane to the disc: the plane must be on the source side.
+    require((start_z - w.disc_z_m) * w.towards_source.z >= 0.0,
+            "plane wave: the start plane z = start_z must lie on the source side of the disc "
+            "(above it for towards_source.z > 0, below it for towards_source.z < 0)");
+  } else {
+    const double distance = *w.start_distance_m;
+    require(std::isfinite(distance) && distance >= 0.0 && within_limits(distance),
+            "plane wave: start_distance_m must be finite and >= 0");
+    // Every ray from the disc must reach the start plane on the source side of the disc: the plane
+    // lies at least the disc's largest extent along towards_source from its centre.
+    const double extent =
+        w.disc_radius_m * std::sqrt(std::max(0.0, 1.0 - w.towards_source.z * w.towards_source.z));
+    require(distance >= extent,
+            "plane wave: start_distance_m must be at least disc_radius_m * sqrt(1 - "
+            "towards_source.z^2), so that the start plane lies on the source side of the disc");
+  }
+}
+
+inline void validate_sky_background(const SkyBackground &b, const Target &target) {
+  require(std::holds_alternative<std::monostate>(target), "a sky background takes no target");
+  require(within_limits(b.centre), "sky background: centre out of range");
+  require(positive_within_limits(b.radius_m), "sky background: radius out of range");
+  require(is_unit(b.axis), "sky background: axis must be a unit vector");
+  require(b.viewcone_deg > 0.0 && b.viewcone_deg <= 180.0,
+          "sky background: viewcone must lie in (0, 180] deg");
+}
+
+} // namespace detail
+
+// Throws std::invalid_argument for any invalid source. An AutoTarget must be resolved first.
 inline void validate(const Source &s) {
   using detail::require;
   require(std::isfinite(s.photons) && s.photons >= 0.0 && s.photons <= max_photon_count,
           "photons must be finite, >= 0 and at most 2^53");
-  require(s.frame == obdeect::stream::Frame::sky || s.frame == obdeect::stream::Frame::telescope ||
-              s.frame == obdeect::stream::Frame::camera,
-          "a source frame must be sky, telescope or camera");
+  require(!std::holds_alternative<AutoTarget>(s.target),
+          "an automatic target must be resolved from the telescopes before emission");
   validate_spectrum(s.spectrum);
   validate_pulse(s.pulse);
-
-  if (const auto *star = std::get_if<Star>(&s.geometry)) {
-    require(std::holds_alternative<std::monostate>(s.target), "a star takes no target");
-    require(is_unit(star->towards_source) && star->towards_source.z > 0.0,
-            "star: towards_source must be a unit vector with z > 0");
-    require(star->distance_m == std::numeric_limits<double>::infinity() ||
-                positive_within_limits(star->distance_m),
-            "star: distance must be infinite or positive within limits");
-    require(positive_within_limits(star->disk_radius_m), "star: disk radius out of range");
-    require(within_limits(star->disk_z_m) && within_limits(star->start_z_m),
-            "star: disk or start height out of range");
-    return;
-  }
-
-  const auto &e = std::get<Emitter>(s.geometry);
-  require(within_limits(e.position), "emitter: position out of range");
-  require(is_unit(e.pointing), "emitter: pointing must be a unit vector");
-  if (const auto *a = std::get_if<FixedAngle>(&e.angular)) {
-    require(a->u0 >= 0.0 && a->u0 <= 2.0, "emitter: fixed angle u0 must lie in [0, 2]");
-  } else if (const auto *c = std::get_if<FilledCone>(&e.angular)) {
-    require(c->u0 > 0.0 && c->u0 <= 2.0, "emitter: filled cone u0 must lie in (0, 2]");
-  } else if (const auto *t = std::get_if<TabulatedAngular>(&e.angular)) {
-    require(!t->density.empty() && t->density.lower() >= 0.0 && t->density.upper() <= 2.0 + 1e-12,
-            "emitter: angular table must be non-empty and lie in u = [0, 2]");
-  }
-  if (const auto *disc = std::get_if<DiscTarget>(&s.target)) {
-    require(within_limits(disc->centre) && is_unit(disc->normal) &&
-                positive_within_limits(disc->radius_m),
-            "disc target: centre, normal or radius out of range");
-    require(!std::holds_alternative<FixedAngle>(e.angular),
-            "a disc target needs a density: fixed-angle emission is not supported");
-    require(std::abs(dot(disc->centre - e.position, disc->normal)) > 0.0,
-            "disc target: the emitter lies in the plane of the disc");
-  } else if (const auto *sphere = std::get_if<SphereTarget>(&s.target)) {
-    require(within_limits(sphere->centre) && positive_within_limits(sphere->radius_m),
-            "sphere target: centre or radius out of range");
-    require(std::holds_alternative<Isotropic>(e.angular),
-            "a sphere target needs an isotropic emitter");
-    require(norm(sphere->centre - e.position) > sphere->radius_m,
-            "sphere target: the emitter lies inside the sphere");
-  }
+  std::visit(
+      [&](const auto &g) {
+        using G = std::decay_t<decltype(g)>;
+        if constexpr (std::is_same_v<G, Point>)
+          detail::validate_point(g, s.target);
+        else if constexpr (std::is_same_v<G, Line>)
+          detail::validate_line(g, s.target);
+        else if constexpr (std::is_same_v<G, PlaneWave>)
+          detail::validate_plane_wave(g, s.target);
+        else
+          detail::validate_sky_background(g, s.target);
+      },
+      s.geometry);
 }
 
-// Mean number of generated photons (candidates for a disc target).
+// Fraction of 4 pi that a sphere covers from a point (1 inside the sphere).
+inline double sphere_fraction(const Vec3 &point, const SphereTarget &sphere) {
+  const double d = norm(sphere.centre - point);
+  if (d <= sphere.radius_m)
+    return 1.0;
+  const double ratio = sphere.radius_m / d;
+  return 0.5 * (1.0 - std::sqrt(1.0 - ratio * ratio));
+}
+
+// Largest sphere fraction along a line (at the point closest to the centre).
+inline double line_sphere_fraction_max(const Line &l, const SphereTarget &sphere) {
+  const double s = std::clamp(dot(sphere.centre - l.start, l.direction), 0.0, l.length_m);
+  return sphere_fraction(l.start + l.direction * s, sphere);
+}
+
+// Azimuths (relative to the basis of the line direction) that reach a sphere: centre +- half;
+// fraction half / pi.
+struct Arc {
+  bool hit{};
+  double centre{};
+  double half{};
+};
+
+namespace detail {
+
+// Arc of a cone of cos_theta about `direction` from `point` towards a sphere.
+inline Arc arc_towards(const Vec3 &point, const Vec3 &direction, double cos_theta,
+                       const SphereTarget &sphere) {
+  const Vec3 to_centre = sphere.centre - point;
+  const double distance = norm(to_centre);
+  if (distance <= sphere.radius_m)
+    return {true, 0.0, pi};
+  const double ratio = sphere.radius_m / distance;
+  const double cos_alpha = std::sqrt(1.0 - ratio * ratio);
+  const Vec3 unit = to_centre * (1.0 / distance);
+  const double cos_b = dot(direction, unit);
+  const Vec3 perp = unit - direction * cos_b;
+  const double sin_b = norm(perp);
+  const Basis basis = orthonormal_basis(direction);
+  const double phi0 = std::atan2(dot(perp, basis.e2), dot(perp, basis.e1));
+  const double sin_theta = std::sqrt(std::max(0.0, 1.0 - cos_theta * cos_theta));
+  const double a = cos_alpha - cos_theta * cos_b;
+  const double b = sin_theta * sin_b;
+  if (b <= 0.0)
+    return a < 0.0 ? Arc{true, 0.0, pi} : Arc{};
+  const double x = a / b;
+  if (x >= 1.0)
+    return {};
+  if (x <= -1.0)
+    return {true, 0.0, pi};
+  return {true, phi0, std::acos(x)};
+}
+
+} // namespace detail
+
+// Number of points of the scan for the reference arc fraction of a fixed-angle line.
+inline constexpr int line_reference_points = 1025;
+
+// Reference fraction of a line with a sphere target: candidates = photons x reference, weight =
+// fraction at the point / reference. Isotropic: the largest fraction of 4 pi (closed form).
+// Fixed angle: the largest arc fraction (half / pi) of a uniform scan along the line, so weights
+// stay near or below 1; any positive reference gives the same expected weights.
+inline double line_reference_fraction(const Line &l, const SphereTarget &sphere) {
+  if (std::holds_alternative<Isotropic>(l.angular))
+    return line_sphere_fraction_max(l, sphere);
+  const double cos_theta = 1.0 - std::get<FixedAngle>(l.angular).u0;
+  double best = 0.0;
+  for (int j = 0; j < line_reference_points; ++j) {
+    const double s = l.length_m * j / (line_reference_points - 1);
+    best = std::max(
+        best,
+        detail::arc_towards(l.start + l.direction * s, l.direction, cos_theta, sphere).half / pi);
+  }
+  return best;
+}
+
+// Mean number of candidate photons (sampled rows before line misses are dropped).
 inline double expected_count(const Source &s) {
   validate(s);
   double mean = s.photons;
-  if (const auto *e = std::get_if<Emitter>(&s.geometry)) {
+  if (const auto *p = std::get_if<Point>(&s.geometry)) {
     if (const auto *disc = std::get_if<DiscTarget>(&s.target)) {
-      const double h = std::abs(dot(disc->centre - e->position, disc->normal));
-      const double per_photon = intensity_maximum(e->angular) / (two_pi * integral(e->angular)) *
+      const double h = std::abs(dot(disc->centre - p->position, disc->normal));
+      const double per_photon = intensity_maximum(p->angular) / (two_pi * integral(p->angular)) *
                                 pi * (disc->radius_m / h) * (disc->radius_m / h);
       mean = s.photons * per_photon;
     } else if (const auto *sphere = std::get_if<SphereTarget>(&s.target)) {
-      const double ratio = sphere->radius_m / norm(sphere->centre - e->position);
+      const double ratio = sphere->radius_m / norm(sphere->centre - p->position);
       mean = s.photons * (1.0 - std::sqrt(1.0 - ratio * ratio)) / 2.0;
     }
+  } else if (const auto *l = std::get_if<Line>(&s.geometry)) {
+    const auto *sphere = std::get_if<SphereTarget>(&s.target);
+    if (sphere)
+      mean = s.photons * line_reference_fraction(*l, *sphere);
   }
   if (!std::isfinite(mean) || mean > max_photon_count)
     throw std::invalid_argument("the expected photon count is not finite or exceeds 2^53");
@@ -250,114 +449,6 @@ inline std::uint64_t round_count(double mean, std::uint64_t seed, std::uint32_t 
 inline std::uint64_t photon_count(const Source &s, std::uint64_t seed, std::uint32_t event,
                                   std::uint32_t telescope) {
   return round_count(expected_count(s), seed, event, telescope);
-}
-
-namespace detail {
-
-inline Vec3 cone_direction(const Vec3 &axis, double cos_theta, double azimuth) {
-  const Basis basis = orthonormal_basis(axis);
-  const double sin_theta = std::sqrt(std::max(0.0, (1.0 - cos_theta) * (1.0 + cos_theta)));
-  return direction_about(axis, basis, cos_theta, sin_theta, azimuth);
-}
-
-} // namespace detail
-
-// Photon `index` of a source (no validation: use emit() or validate() first).
-inline Photon sample_photon(const Source &s, std::uint64_t seed, std::uint32_t event,
-                            std::uint32_t telescope, std::uint64_t index) {
-  Photon p;
-  // Draws that a profile ignores are not computed (same result, fewer Philox calls).
-  const Uniforms none{};
-  const double pulse_time = sample(
-      s.pulse,
-      ignores_draw(s.pulse) ? none : philox_draw(seed, event, telescope, index, Stream::pulse));
-  p.wavelength_nm =
-      sample(s.spectrum, ignores_draw(s.spectrum)
-                             ? none
-                             : philox_draw(seed, event, telescope, index, Stream::wavelength));
-  p.time_ns = pulse_time;
-  p.weight = 1.0;
-
-  if (const auto *star = std::get_if<Star>(&s.geometry)) {
-    const Uniforms ut = philox_draw(seed, event, telescope, index, Stream::target);
-    const double r = star->disk_radius_m * std::sqrt(ut[0]);
-    const double phi = two_pi * ut[1];
-    const Vec3 target{r * std::cos(phi), r * std::sin(phi), star->disk_z_m};
-    const Vec3 centre{0.0, 0.0, star->disk_z_m};
-    p.direction = -star->towards_source;
-    if (std::isinf(star->distance_m)) {
-      const double along = (star->start_z_m - target.z) / p.direction.z;
-      p.position = target + p.direction * along;
-      p.time_ns += dot(p.position - centre, p.direction) / speed_of_light_m_per_ns;
-    } else {
-      const Vec3 source = centre + star->towards_source * star->distance_m;
-      p.direction = normalised(target - source);
-      if (source.z <= star->start_z_m) {
-        p.position = source;
-      } else {
-        const double along = (star->start_z_m - target.z) / p.direction.z;
-        p.position = target + p.direction * along;
-      }
-      p.time_ns += (norm(p.position - source) - star->distance_m) / speed_of_light_m_per_ns;
-    }
-    return p;
-  }
-
-  const auto &e = std::get<Emitter>(s.geometry);
-  p.position = e.position;
-  const Uniforms ud = philox_draw(seed, event, telescope, index, Stream::direction);
-  if (const auto *disc = std::get_if<DiscTarget>(&s.target)) {
-    const Uniforms ut = philox_draw(seed, event, telescope, index, Stream::target);
-    const Basis basis = orthonormal_basis(disc->normal);
-    const double r = disc->radius_m * std::sqrt(ut[0]);
-    const double phi = two_pi * ut[1];
-    const Vec3 point =
-        disc->centre + basis.e1 * (r * std::cos(phi)) + basis.e2 * (r * std::sin(phi));
-    const Vec3 to_point = point - e.position;
-    const double distance = norm(to_point);
-    p.direction = to_point * (1.0 / distance);
-    const double h = std::abs(dot(disc->centre - e.position, disc->normal));
-    const double cosine = std::clamp(dot(p.direction, e.pointing), -1.0, 1.0);
-    const double ratio = h / distance;
-    p.weight = std::visit([&](const auto &a) { return a.intensity(1.0 - cosine); }, e.angular) /
-               intensity_maximum(e.angular) * ratio * ratio * ratio;
-  } else if (const auto *sphere = std::get_if<SphereTarget>(&s.target)) {
-    const Vec3 to_centre = sphere->centre - e.position;
-    const double d = norm(to_centre);
-    const Vec3 axis = to_centre * (1.0 / d);
-    const double ratio = sphere->radius_m / d;
-    const double cos_max = std::sqrt(1.0 - ratio * ratio);
-    p.direction = detail::cone_direction(axis, 1.0 - ud[0] * (1.0 - cos_max), two_pi * ud[1]);
-  } else {
-    const double u = angle_quantile(e.angular, ud[0]);
-    p.direction = detail::cone_direction(e.pointing, 1.0 - u, two_pi * ud[1]);
-  }
-  return p;
-}
-
-// Photons first_index .. first_index + rows - 1 as float32 columns (source_columns).
-inline void emit(const Source &s, std::uint64_t seed, std::uint32_t event, std::uint32_t telescope,
-                 std::uint64_t first_index, std::size_t rows, obdeect::stream::PhotonChunk &chunk) {
-  validate(s);
-  if (rows > obdeect::stream::max_chunk_rows)
-    throw std::invalid_argument("a chunk holds at most 65536 rows");
-  chunk.resize(rows, source_columns);
-  chunk.telescope_id = telescope;
-  chunk.frame = s.frame;
-  chunk.first_index = first_index;
-  using obdeect::stream::Column;
-  for (std::size_t i = 0; i < rows; ++i) {
-    const Photon p = sample_photon(s, seed, event, telescope, first_index + i);
-    chunk[Column::x][i] = static_cast<float>(p.position.x);
-    chunk[Column::y][i] = static_cast<float>(p.position.y);
-    chunk[Column::z][i] = static_cast<float>(p.position.z);
-    chunk[Column::cx][i] = static_cast<float>(p.direction.x);
-    chunk[Column::cy][i] = static_cast<float>(p.direction.y);
-    chunk[Column::cz][i] = static_cast<float>(p.direction.z);
-    chunk[Column::t][i] = static_cast<float>(p.time_ns);
-    chunk[Column::w][i] = static_cast<float>(p.weight);
-    chunk[Column::wavelength][i] = static_cast<float>(p.wavelength_nm);
-  }
 }
 
 } // namespace obdeect::sources

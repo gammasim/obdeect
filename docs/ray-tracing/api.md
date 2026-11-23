@@ -6,13 +6,18 @@ internal. Units are metres, nanoseconds and nanometres. For frames, see
 
 ## Optical models
 
+Create an optical model with `OpticalModel.from_records` from validated parameter records, or
+`OpticalModel.from_simulation_models` from a simulation-models checkout. The C++ core validates
+the resulting structured Python object directly. `load` reads an optical-model JSON file; the
+native loader also accepts JSON text for interoperability.
+
 ```{eval-rst}
 .. autoclass:: obdeect.ray_tracing.model.OpticalModel
    :members:
 
 .. autofunction:: obdeect.ray_tracing.model.trace_many
 
-.. autoexception:: obdeect.ray_tracing.formats.ModelError
+.. autoexception:: obdeect.ray_tracing.errors.ModelError
 ```
 
 ## Photon streams
@@ -31,12 +36,4 @@ internal. Units are metres, nanoseconds and nanometres. For frames, see
 .. autofunction:: obdeect.ray_tracing.psf.containment
 
 .. autofunction:: obdeect.ray_tracing.psf.summary
-```
-
-## Compilation
-
-```{eval-rst}
-.. autofunction:: obdeect.ray_tracing.compiler.compile_model
-
-.. autofunction:: obdeect.ray_tracing.repository.read_telescope
 ```

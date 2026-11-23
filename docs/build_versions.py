@@ -145,8 +145,21 @@ def package_paths(checkout):
     return [str(path) for path in components] or [str(checkout)]
 
 
+def prepare_legacy_binding(checkout):
+    """Include Python before C++ headers in exported pre-v0.7.2 bindings."""
+    binding = Path(checkout) / "cpp/bindings/core.cpp"
+    if not binding.exists():
+        return
+    text = binding.read_text()
+    header = "#include <nanobind/nanobind.h>"
+    if header in text and text.index(header) > text.index("#include"):
+        text = text.replace(header + "\n", "", 1)
+        binding.write_text(header + "\n" + text)
+
+
 def install_package(checkout, destination, version=None):
     # --target keeps historical APIs separate from the development installation.
+    prepare_legacy_binding(checkout)
     env = dict(os.environ)
     if version is not None:
         env["SETUPTOOLS_SCM_PRETEND_VERSION"] = version

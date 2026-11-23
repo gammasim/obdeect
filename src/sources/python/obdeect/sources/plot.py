@@ -10,27 +10,36 @@ from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
-from obdeect.sources.source import CHUNK_ROWS, build_source, emit_chunk
+from obdeect.sources.source import CHUNK_ROWS, emit_chunk, normalize_emission, photon_count
 
 
 def _sample(spec: Mapping[str, Any], seed: int, photons: int) -> tuple[dict, np.ndarray]:
     """Up to `photons` emitted photons and their weights; the first chunk only."""
-    count = build_source(spec).photon_count(seed, 0, 0)
+    emission = normalize_emission(spec)
+    count = photon_count(emission, seed=seed)
     rows = min(photons, count, CHUNK_ROWS)
     if rows == 0:
         raise ValueError("the source emits no photons")
-    chunk = emit_chunk(spec, seed=seed, rows=rows)
+    chunk = emit_chunk(emission, seed=seed, rows=rows)
     return chunk, chunk["w"]
 
 
-def _angle_from_axis_deg(chunk: dict, spec: Mapping[str, Any]) -> np.ndarray:
-    """Angle [deg] between each emitted direction and the emitter axis (or the star's source)."""
-    if "emitter" in spec:
-        axis = np.asarray(spec["emitter"]["pointing"], dtype=float)
-        axis = axis / np.linalg.norm(axis)
+def _reference_axis(emission: Mapping[str, Any]) -> np.ndarray:
+    """Unit vector the angles are measured from: the point axis, the line direction, or the
+    direction away from the source of a plane wave."""
+    kind = emission["kind"]
+    if kind == "plane_wave":
+        vector = -np.asarray(emission["towards_source"], dtype=float)
+    elif kind == "line":
+        vector = np.asarray(emission["direction"], dtype=float)
     else:
-        towards = np.asarray(spec["star"]["towards_source"], dtype=float)
-        axis = -towards / np.linalg.norm(towards)
+        vector = np.asarray(emission["axis"], dtype=float)
+    return vector / np.linalg.norm(vector)
+
+
+def _angle_from_axis_deg(chunk: dict, emission: Mapping[str, Any]) -> np.ndarray:
+    """Angle [deg] between each emitted direction and the reference axis of the emission."""
+    axis = _reference_axis(emission)
     cosine = chunk["cx"] * axis[0] + chunk["cy"] * axis[1] + chunk["cz"] * axis[2]
     return np.degrees(np.arccos(np.clip(cosine.astype(float), -1.0, 1.0)))
 
@@ -43,9 +52,12 @@ def profile_figure(spec: Mapping[str, Any], *, seed: int = 1, photons: int = 200
     """
     import matplotlib.pyplot as plt
 
-    chunk, weights = _sample(spec, seed, photons)
+    emission = normalize_emission(spec)
+    chunk, weights = _sample(emission, seed, photons)
     figure, (angle_axis, wavelength_axis, time_axis) = plt.subplots(1, 3, figsize=(12, 3.6))
-    angle_axis.hist(_angle_from_axis_deg(chunk, spec), bins=60, weights=weights, color="#4C78A8")
+    angle_axis.hist(
+        _angle_from_axis_deg(chunk, emission), bins=60, weights=weights, color="#4C78A8"
+    )
     angle_axis.set_xlabel("angle to axis [deg]")
     wavelength_axis.hist(chunk["wavelength"], bins=60, weights=weights, color="#F58518")
     wavelength_axis.set_xlabel("wavelength [nm]")

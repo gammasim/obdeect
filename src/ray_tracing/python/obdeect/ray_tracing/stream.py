@@ -19,10 +19,16 @@ from typing import Any
 import numpy as np
 import obdeect.stream as obdeect_stream
 from obdeect.ray_tracing import __version__
-from obdeect.ray_tracing.formats import ModelError
-from obdeect.ray_tracing.model import OpticalModel, ThreadPool, _obscurer_support
+from obdeect.ray_tracing.errors import ModelError
+from obdeect.ray_tracing.model import (
+    OpticalModel,
+    ThreadPool,
+    _asphere_support,
+    _mirror_support,
+    _obscurer_support,
+)
 from obdeect.stream.stage import EFFICIENCY_STATUS_STATES
-from obdeect.stream.stream import FRAMES, reject_same_file
+from obdeect.stream.stream import FRAMES, ground_representation, reject_same_file
 
 FRAME_GROUND = FRAMES["ground"]
 FRAME_TELESCOPE = FRAMES["telescope"]
@@ -32,7 +38,8 @@ MAX_CHUNK_ROWS = obdeect_stream.max_chunk_rows
 SPEED_OF_LIGHT_M_PER_NS = 0.299792458
 # Margin above the highest incoming obscurer for the input plane [m] (as simtools).
 INPUT_PLANE_MARGIN_M = 1.0
-# Largest allowed difference between a cz column and -sqrt(1 - cx^2 - cy^2).
+# Largest allowed |cz^2 - (1 - cx^2 - cy^2)| for a cz column (float32 directions; the same
+# tolerance as direction_norm_tolerance in the C++ stream photon header).
 CZ_TOLERANCE = 1e-5
 # Efficiency status factors that the optical model applies, in full, in its trace.
 OWN_FACTORS = ("mirror_reflectivity", "telescope_transmission")
@@ -44,6 +51,9 @@ CONSTANT_FACTOR = "telescope_transmission_constant"
 RUN_POINTING_KEYS = ("telescope_pointing_zenith_rad", "telescope_pointing_azimuth_rad")
 # Telescope ids (sim_telarray numbering from 1); the random-number key holds 16 bits.
 TELESCOPE_IDS = range(1, 2**16)
+# Sphere rows (docs/stream/format.md): |r| <= R (1 + 1e-6) + 1e-4 m, as validate_sphere_rows.
+SPHERE_RELATIVE_TOLERANCE = 1e-6
+SPHERE_ABSOLUTE_TOLERANCE_M = 1e-4
 
 
 def _rotation(alpha: float, beta: float) -> np.ndarray:
@@ -94,6 +104,22 @@ def minimum_input_plane_height_m(
     return max(0.0, support + float(np.dot(normal, model.axes_offset_m))) + INPUT_PLANE_MARGIN_M
 
 
+def lower_input_plane_height_m(
+    model: OpticalModel, theta_deg: float, phi_deg: float = 0.0
+) -> float:
+    """Height [m] of the ground-frame input plane for photons from below.
+
+    The plane lies a margin below the lowest optic (any obscurer, the primary and the
+    secondary) along the zenith of the pointing, with the axes offset included. Photons
+    from below start on it and move up; it may lie below the ground.
+    """
+    if not 0.0 <= theta_deg < 90.0:
+        raise ModelError(f"telescope zenith angle {theta_deg} deg must lie in [0, 90)")
+    normal = ground_to_telescope_rotation(theta_deg, phi_deg)[:, 2]
+    bottom = min((b for _, b in model.optics_bottoms(normal)), default=0.0)
+    return bottom - INPUT_PLANE_MARGIN_M + float(np.dot(normal, model.axes_offset_m))
+
+
 def _run_pointing(metadata: Mapping[str, Any]) -> tuple[float, float] | None:
     """Telescope (zenith, azimuth) [deg] from the run keys (radians), or None if absent."""
     present = [key in metadata for key in RUN_POINTING_KEYS]
@@ -103,6 +129,80 @@ def _run_pointing(metadata: Mapping[str, Any]) -> tuple[float, float] | None:
         raise ModelError(f"run record: give both {' and '.join(RUN_POINTING_KEYS)} or neither")
     zenith, azimuth = (float(metadata[key]) for key in RUN_POINTING_KEYS)
     return (math.degrees(zenith), math.degrees(azimuth))
+
+
+def _cz_matches(cz_column: np.ndarray, cx: np.ndarray, cy: np.ndarray) -> bool:
+    """Return True if every cz is finite and (cx, cy, cz) is a unit vector within CZ_TOLERANCE.
+
+    cz may point either way; zero is accepted here and rejected by the caller (horizontal).
+    """
+    cz = cz_column.astype(np.float64)
+    norm_error = np.abs(cz * cz - (1.0 - cx * cx - cy * cy))
+    return bool(np.all(np.isfinite(cz)) and np.max(norm_error, initial=0.0) <= CZ_TOLERANCE)
+
+
+def _support_box_distance(support, centre: np.ndarray) -> float:
+    """Largest distance from centre to a body, bounded through its support function.
+
+    The body lies in the box of its supports along the three axes (as in the native tracer).
+    """
+    total = 0.0
+    for i, axis in enumerate(np.eye(3)):
+        reach = max(support(axis) - centre[i], support(-axis) + centre[i])
+        total += reach * reach
+    return math.sqrt(total)
+
+
+def enclosure_distances(model: OpticalModel) -> tuple[tuple[str, float], ...]:
+    """Name and distance [m] from the sphere centre of each optical element.
+
+    The sphere centre is at -axes_offset in the traced frame. Mirrors and obscurers get an
+    upper bound (support box); the focal plane has no lateral extent in the model, so its
+    entry is its height above the centre (the plane must reach the sphere).
+    """
+    optics = model.document["optics"]
+    centre = -np.asarray(model.axes_offset_m, dtype=float)
+    out = []
+    for role in ("primary", "secondary"):
+        mirror = optics.get(role)
+        if mirror is not None:
+            out.append((
+                role,
+                _support_box_distance(lambda d, m=mirror: _mirror_support(m, d), centre),
+            ))
+    for obscurer in optics["obscurers"]:
+        out.append((
+            obscurer["name"],
+            _support_box_distance(lambda d, o=obscurer: _obscurer_support(o, d), centre),
+        ))
+    focal = optics["focal_surface"]
+    if focal.get("asphere") is not None:
+        out.append((
+            "focal surface",
+            _support_box_distance(lambda d, a=focal["asphere"]: _asphere_support(a, d), centre),
+        ))
+    else:
+        out.append(("focal surface (plane)", abs(float(focal["plane_z_m"]) - centre[2])))
+    return tuple(out)
+
+
+def _validate_sphere_rows(columns: Mapping[str, np.ndarray], radius_m: float) -> None:
+    """Check G rows of a sphere run (the native validate_sphere_rows, same tolerances)."""
+    required = ("x", "y", "z", "cx", "cy", "cz", "t", "zem", "w")
+    if any(name not in columns for name in required):
+        raise ModelError(f"sphere rows lack a required column ({' '.join(required)})")
+    if not (math.isfinite(radius_m) and radius_m > 0.0):
+        raise ModelError("telescope sphere radius must be finite and positive")
+    values = {name: columns[name].astype(np.float64) for name in required}
+    if not all(np.all(np.isfinite(values[name])) for name in required):
+        raise ModelError("sphere row has a non-finite value")
+    if not _cz_matches(
+        columns["cz"], columns["cx"].astype(np.float64), columns["cy"].astype(np.float64)
+    ):
+        raise ModelError("sphere row direction (cx, cy, cz) is not a unit vector")
+    limit = radius_m * (1.0 + SPHERE_RELATIVE_TOLERANCE) + SPHERE_ABSOLUTE_TOLERANCE_M
+    if np.any(np.sqrt(values["x"] ** 2 + values["y"] ** 2 + values["z"] ** 2) > limit):
+        raise ModelError("sphere row lies outside the telescope sphere")
 
 
 def _names(text: Any) -> list[str]:
@@ -262,13 +362,24 @@ class _Optics:
     # Input plane of telescope-frame photons (telescope frame, no tilt): above the incoming
     # obscurers and the mirrors, so that every photon starts upstream of them.
     telescope_plane_m: float
+    # Input plane of telescope-frame photons from below: under every optic.
+    telescope_lower_plane_m: float
+    # Sphere runs: name and distance [m] from the sphere centre of each optical element.
+    enclosure: tuple[tuple[str, float], ...] = ()
 
     @classmethod
     def of(cls, model: OpticalModel, part: str) -> _Optics:
         tops = [
             z for z in (model.max_incoming_obscurer_z_m(), model.max_mirror_z_m()) if z is not None
         ]
-        return cls(model, _transmission(model, part), max(tops, default=0.0) + INPUT_PLANE_MARGIN_M)
+        bottom = min((b for _, b in model.optics_bottoms(np.array([0.0, 0.0, 1.0]))), default=0.0)
+        return cls(
+            model,
+            _transmission(model, part),
+            max(tops, default=0.0) + INPUT_PLANE_MARGIN_M,
+            bottom - INPUT_PLANE_MARGIN_M,
+            enclosure_distances(model),
+        )
 
 
 @dataclass(frozen=True)
@@ -336,6 +447,8 @@ def _camera_columns(
     }
     if "zem" in input_columns:
         columns["zem"] = input_columns["zem"][traced["bunch_index"]]
+    if "path_m" in traced:
+        columns["path"] = traced["path_m"]
     return {
         name: np.ascontiguousarray(values, dtype=np.float32) for name, values in columns.items()
     }
@@ -360,9 +473,12 @@ class _Tracer:
         self.run_pointing: tuple[float, float] | None = None
         self.run_factors: dict[str, _Factor] = {}
         self.law: tuple[float, float] | None = None
+        # Sphere runs: G rows are 3D start points; telescope_r_m gives each telescope's radius.
+        self.sphere = False
+        self.radii: list[float] = []
         self.event: dict[str, Any] | None = None
         # Ground-frame rotation and input plane of the event, by telescope id.
-        self.geometry: dict[int, tuple[np.ndarray, float]] = {}
+        self.geometry: dict[int, tuple[np.ndarray, float, float]] = {}
         self.telescope: _Telescope | None = None
         # Row indices continue across repeated blocks of one telescope in an event.
         self.next_index: dict[int, int] = {}
@@ -411,6 +527,11 @@ class _Tracer:
         self.run_factors = {}
         self.law = _wavelength_law(metadata)
         self.run_pointing = _run_pointing(metadata)
+        try:
+            self.sphere = ground_representation(metadata) == "sphere"
+        except ValueError as error:
+            raise ModelError(str(error)) from error
+        self.radii = [float(r) for r in metadata.get("telescope_r_m", [])] if self.sphere else []
         self.event = None
         self.writer.write("run", metadata)
         self.run_status_pending = not self.per_telescope
@@ -461,6 +582,15 @@ class _Tracer:
         kept = self.telescopes is None or telescope_id in self.telescopes
         start = self.next_index.get(telescope_id, 0)
         self.telescope = _Telescope(telescope_id, kept, out_index=start)
+        if kept and self.sphere:
+            radius = self._sphere_radius(telescope_id)
+            for name, distance in self._optics(telescope_id).enclosure:
+                if distance > radius:
+                    raise ModelError(
+                        f"telescope {telescope_id}: the sphere (telescope_r_m = {radius:.3f} m) "
+                        f"must enclose the optical model, but {name!r} lies {distance:.3f} m "
+                        "from the sphere centre; raise telescope_r_m"
+                    )
         if kept:
             self.writer.write("telescope", {**metadata, "frame": FRAME_CAMERA})
 
@@ -513,13 +643,24 @@ class _Tracer:
             telescope.config = _Config(roulette=not tables, envelopes=_Envelopes(tuple(tables)))
         return telescope.config
 
-    def _ground_geometry(self, telescope_id: int) -> tuple[np.ndarray, float]:
+    def _sphere_radius(self, telescope_id: int) -> float:
+        """Sphere radius [m] of a telescope (id 1 is the first entry, as sim_telarray)."""
+        if not 0 < telescope_id <= len(self.radii):
+            raise ModelError(
+                f"sphere run: telescope {telescope_id} has no radius in the run record "
+                "(telescope_r_m)"
+            )
+        return self.radii[telescope_id - 1]
+
+    def _ground_geometry(self, telescope_id: int) -> tuple[np.ndarray, float, float]:
+        """Rotation and the input planes (from above, from below) of a ground-frame telescope."""
         if telescope_id not in self.geometry:
             zenith_deg, azimuth_deg = self._pointing()
             model = self._optics(telescope_id).model
             self.geometry[telescope_id] = (
                 ground_to_telescope_rotation(zenith_deg, azimuth_deg),
                 minimum_input_plane_height_m(model, zenith_deg, azimuth_deg),
+                lower_input_plane_height_m(model, zenith_deg, azimuth_deg),
             )
         return self.geometry[telescope_id]
 
@@ -557,6 +698,7 @@ class _Tracer:
             "w",
             "wavelength",
             "zem",
+            "path",
         }
         if unsupported:
             raise ModelError(f"unsupported photon columns: {', '.join(sorted(unsupported))}")
@@ -568,11 +710,14 @@ class _Tracer:
                 f"photon frame {record['frame']} is not supported: trace-stream takes ground "
                 "(1) or telescope (2) photons"
             )
+        sphere_rows = self.sphere and record["frame"] == FRAME_GROUND
+        if sphere_rows:
+            _validate_sphere_rows(columns, self._sphere_radius(telescope.telescope_id))
         self._ensure_status(telescope)
         config = self._config(telescope)
         optics = self._optics(telescope.telescope_id)
         event_number = _int_key(self.event, "event_number", "event")
-        bunches, placement = self._input_bunches(record, event_number, optics)
+        bunches, placement = self._input_bunches(record, event_number, optics, sphere_rows)
         traced = optics.model.trace_bunches(
             bunches,
             seed=self.seed,
@@ -590,29 +735,49 @@ class _Tracer:
         self._write(telescope, columns)
 
     def _input_bunches(
-        self, record: dict[str, Any], event_number: int, optics: _Optics
+        self, record: dict[str, Any], event_number: int, optics: _Optics, sphere_rows: bool
     ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
-        """Bunches on the input plane and the frame that places it (see trace_bunches)."""
+        """Bunches on the input plane and the frame that places it (see trace_bunches).
+
+        Photons moving down start on the upper input plane, photons moving up on the lower one.
+        Sphere rows (G frame of a sphere run) start at their own points, horizontal ones included.
+        """
         columns = record["columns"]
         rows = len(columns["w"])
         cx = columns["cx"].astype(np.float64)
         cy = columns["cy"].astype(np.float64)
+        cz_column = columns.get("cz")
         cz = -np.sqrt(np.maximum(0.0, 1.0 - cx * cx - cy * cy))
-        if (
-            "cz" in columns
-            and np.max(np.abs(columns["cz"].astype(np.float64) - cz), initial=0.0) > CZ_TOLERANCE
-        ):
+        if cz_column is not None:
+            cz = cz_column.astype(np.float64)
+        in_disc = cx * cx + cy * cy <= 1.0 + CZ_TOLERANCE
+        if not (np.all(np.isfinite(cz)) and np.all(in_disc)):
+            raise ModelError(
+                "photon directions must be finite unit vectors (cx, cy in the unit disc)"
+            )
+        if cz_column is not None and not _cz_matches(cz_column, cx, cy):
             raise ModelError("photon column cz does not match cx and cy")
-        if not np.all(cz < 0.0):
-            raise ModelError("photons must move towards -z (downwards)")
+        if np.any(cz == 0.0) and not sphere_rows:
+            raise ModelError(
+                "horizontal photons relative to the telescope axis are not supported yet"
+            )
         x = columns["x"].astype(np.float64)
         y = columns["y"].astype(np.float64)
         t = columns["t"].astype(np.float64)
+        if sphere_rows:
+            # The row is the start point: no move to an input plane; its time is the time there.
+            rotation, _, _ = self._ground_geometry(record["telescope_id"])
+            return self._sphere_bunches(record, event_number, columns), {
+                "frame_rotation": rotation,
+                "frame_offset_m": np.zeros(3),
+                "plane_z": 0.0,
+                "lower_plane_z": None,
+            }
         if record["frame"] == FRAME_GROUND:
             if "z" in columns and np.any(columns["z"] != 0):
                 raise ModelError("ground-frame photons must lie in the plane z = 0")
             z = np.zeros(rows)
-            rotation, plane = self._ground_geometry(record["telescope_id"])
+            rotation, plane, lower = self._ground_geometry(record["telescope_id"])
             offset = np.zeros(3)
         else:
             if "z" not in columns:
@@ -620,11 +785,13 @@ class _Tracer:
             z = columns["z"].astype(np.float64)
             rotation = np.eye(3)
             plane = optics.telescope_plane_m
+            lower = optics.telescope_lower_plane_m
             # The telescope frame is the frame of trace(): cancel the axes offset that
             # trace_bunches subtracts, so that a photon at p is traced at p.
             offset = np.asarray(optics.model.axes_offset_m, dtype=np.float64)
-        # Move each photon along its direction to the input plane; the time follows the path.
-        s = (plane - z) / cz
+        # Move each photon along its direction to its input plane; the time follows the path.
+        row_plane = np.where(cz < 0.0, plane, lower)
+        s = (row_plane - z) / cz
         first_index = int(record["first_index"])
         if event_number >= 2**32 or first_index + rows >= 2**32:
             raise ModelError("bunch ids need event numbers and photon indices below 2^32")
@@ -642,8 +809,50 @@ class _Tracer:
             "wavelength_nm": np.asarray(columns.get("wavelength", np.zeros(rows)), dtype=float32),
             "bunch_id": bunch_id,
         }
-        placement = {"frame_rotation": rotation, "frame_offset_m": offset, "plane_z": plane}
+        if cz_column is not None:
+            bunches["cz"] = np.asarray(cz_column, dtype=float32)
+        if "path" in columns:
+            # The path to the start point: the input path moved by the signed distance s * |d|.
+            path_start = columns["path"].astype(np.float64) + s * np.sqrt(
+                cx * cx + cy * cy + cz * cz
+            )
+            if np.any(path_start < 0.0):
+                raise ModelError("photon path is shorter than its move to the start point")
+            bunches["path"] = path_start
+        placement = {
+            "frame_rotation": rotation,
+            "frame_offset_m": offset,
+            "plane_z": plane,
+            "lower_plane_z": lower,
+        }
         return bunches, placement
+
+    def _sphere_bunches(
+        self, record: dict[str, Any], event_number: int, columns: Mapping[str, np.ndarray]
+    ) -> dict[str, np.ndarray]:
+        """Bunches of sphere rows: each starts at (x, y, z) with its direction and time."""
+        rows = len(columns["w"])
+        first_index = int(record["first_index"])
+        if event_number >= 2**32 or first_index + rows >= 2**32:
+            raise ModelError("bunch ids need event numbers and photon indices below 2^32")
+        index = np.arange(first_index, first_index + rows, dtype=np.uint64)
+        float32 = np.float32
+        bunches = {
+            "x": np.asarray(columns["x"], dtype=float32),
+            "y": np.asarray(columns["y"], dtype=float32),
+            "z": np.asarray(columns["z"], dtype=float32),
+            "cx": np.asarray(columns["cx"], dtype=float32),
+            "cy": np.asarray(columns["cy"], dtype=float32),
+            "cz": np.asarray(columns["cz"], dtype=float32),
+            "time_ns": np.asarray(columns["t"], dtype=float32),
+            "zem": np.asarray(columns["zem"], dtype=float32),
+            "size": np.asarray(columns["w"], dtype=float32),
+            "wavelength_nm": np.asarray(columns.get("wavelength", np.zeros(rows)), dtype=float32),
+            "bunch_id": (np.uint64(event_number) << np.uint64(32)) | index,
+        }
+        if "path" in columns:
+            bunches["path"] = columns["path"].astype(np.float64)
+        return bunches
 
     def _write(self, telescope: _Telescope, columns: dict[str, np.ndarray]) -> None:
         rows = len(columns["x"])

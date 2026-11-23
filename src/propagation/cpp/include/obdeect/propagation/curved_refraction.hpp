@@ -29,6 +29,8 @@
 // and interpolates them cubically (4 x 4 Lagrange). Heights above the profile top (or above 120 km,
 // whichever is lower) take the values at that height.
 
+#include "obdeect/propagation/dispersion.hpp"
+#include "obdeect/propagation/parallel.hpp"
 #include "obdeect/propagation/profile.hpp"
 #include "obdeect/propagation/timing.hpp"
 #include "obdeect/stream/constants.hpp"
@@ -49,6 +51,19 @@ struct CurvedRayIntegrals {
   double excess_straight_ns{};
 };
 
+// Integrals of the profile with n-1 scaled by k (phase) and the group index by k_group
+// (dispersion), from the integrals of the unscaled profile, first order in the scale:
+//   shift_m            = k shift_m
+//   excess_bent_ns     = k excess_bent_ns + (k_group - k) excess_straight_ns
+//   excess_straight_ns = k_group excess_straight_ns
+// Exact at k = k_group = 1. See CurvedRefractionTables::lookup_scaled.
+inline void scale_ray_integrals(CurvedRayIntegrals &v, double k, double k_group) noexcept {
+  const double straight = v.excess_straight_ns;
+  v.shift_m = k * v.shift_m;
+  v.excess_bent_ns = k * v.excess_bent_ns + (k_group - k) * straight;
+  v.excess_straight_ns = k_group * straight;
+}
+
 namespace detail {
 
 // 8-point Gauss-Legendre nodes and weights on [-1, 1].
@@ -68,33 +83,38 @@ inline constexpr double curved_cos_ratio = 1.02;    // geometric step in cos the
 
 // Integrands of the three integrals at offset x = r - r_t [m] from the telescope level.
 struct CurvedIntegrands {
-  double shift;    // [m]
-  double bent;     // dimensionless, times dr
-  double straight; // dimensionless, times dr
+  double shift;       // [m]
+  double bent;        // dimensionless, times dr
+  double straight;    // dimensionless, times dr
+  double group_delta; // dimensionless, d(bent)/d(k_group) times dr
 };
 
-// Common data of one ray family: telescope level, impact parameter, K = n_e b, cos theta_s.
+// Common data of one ray family: telescope level, impact parameter, K = n_e b, cos theta_s and
+// the phase and group refractivity scales.
 struct CurvedRayFamily {
   double r_t;
   double h_t;
   double b;
   double cos_s;
   double K;
+  double k;
+  double k_group;
 };
 
 inline CurvedIntegrands curved_integrands(const AtmosphereProfile &profile,
                                           const CurvedRayFamily &family, double x) {
   const double r = family.r_t + x;
   const double nu = profile.index_minus_one_cm(100. * (family.h_t + x));
-  const double n = 1. + nu;
+  const double n = 1. + family.k * nu;
   // cos theta_vac, in the stable form (r - r_t)(r + r_t) + r_t^2 cos^2 theta_s over r^2.
   const double cos_vac = std::sqrt(
       (x * (r + family.r_t) + family.r_t * family.r_t * family.cos_s * family.cos_s) / (r * r));
   const double s_vac = family.b / r;
   const double s_ref = family.K / (n * r);
   const double cos_ref = std::sqrt((1. - s_ref) * (1. + s_ref));
-  return {family.r_t * (s_ref / cos_ref - s_vac / cos_vac) / r, n / cos_ref - 1. / cos_vac,
-          nu / cos_vac};
+  const double n_group = 1. + family.k_group * nu;
+  return {family.r_t * (s_ref / cos_ref - s_vac / cos_vac) / r, n_group / cos_ref - 1. / cos_vac,
+          family.k_group * nu / cos_vac, nu / cos_ref};
 }
 
 } // namespace detail
@@ -106,7 +126,8 @@ inline CurvedIntegrands curved_integrands(const AtmosphereProfile &profile,
 // telescope.
 [[nodiscard]] inline CurvedRayIntegrals
 curved_ray_integrals(const AtmosphereProfile &profile, double earth_radius_m,
-                     double telescope_altitude_m, double theta_s_rad, double emission_altitude_m) {
+                     double telescope_altitude_m, double theta_s_rad, double emission_altitude_m,
+                     double k = 1., double k_group = 1., double *bent_group_delta_ns = nullptr) {
   if (!std::isfinite(earth_radius_m) || !(earth_radius_m > 0.)) {
     throw std::invalid_argument("earth radius must be finite and positive");
   }
@@ -125,6 +146,9 @@ curved_ray_integrals(const AtmosphereProfile &profile, double earth_radius_m,
   if (emission_altitude_m < h_t) {
     throw std::invalid_argument("emission altitude must not lie below the telescope");
   }
+  if (!std::isfinite(k) || !(k > 0.) || !std::isfinite(k_group) || !(k_group > 0.)) {
+    throw std::invalid_argument("phase and group refractivity scales must be finite and positive");
+  }
 
   const double theta = std::clamp(theta_s_rad, 0., half_pi);
   const double h_e = std::min(emission_altitude_m, profile.top_m());
@@ -132,17 +156,18 @@ curved_ray_integrals(const AtmosphereProfile &profile, double earth_radius_m,
   const double sin_s = std::sin(theta);
   const double cos_s = std::cos(theta);
   const double b = r_t * sin_s;
-  const double n_e = 1. + profile.index_minus_one_cm(100. * h_e);
-  const detail::CurvedRayFamily family{r_t, h_t, b, cos_s, n_e * b};
+  const double n_e = 1. + k * profile.index_minus_one_cm(100. * h_e);
+  const detail::CurvedRayFamily family{r_t, h_t, b, cos_s, n_e * b, k, k_group};
   const double length = h_e - h_t; // [m], the integration range in x = r - r_t
 
   const bool near_telescope = cos_s < detail::curved_singular_cos;
-  double shift = 0., bent = 0., straight = 0.;
+  double shift = 0., bent = 0., straight = 0., group_delta = 0.;
   auto accumulate = [&](double weight, double x) {
     const detail::CurvedIntegrands f = detail::curved_integrands(profile, family, x);
     shift += weight * f.shift;
     bent += weight * f.bent;
     straight += weight * f.straight;
+    group_delta += weight * f.group_delta;
   };
 
   double x0 = 0.;
@@ -169,15 +194,20 @@ curved_ray_integrals(const AtmosphereProfile &profile, double earth_radius_m,
   }
 
   const double c = speed_of_light_m_per_ns;
+  if (bent_group_delta_ns != nullptr) {
+    *bent_group_delta_ns = group_delta / c;
+  }
   return {shift, bent / c, straight / c};
 }
 
 // Grid of the integrals for one telescope altitude and Earth radius, built once with
 // curved_ray_integrals at every node and interpolated cubically (4 x 4 Lagrange) in (theta_s, h_e).
+// The build runs on `threads` threads (1: in place); the tables do not depend on the count.
 class CurvedRefractionTables {
 public:
   CurvedRefractionTables(AtmosphereProfile profile, double earth_radius_m,
-                         double telescope_altitude_m)
+                         double telescope_altitude_m, bool enable_accurate_dispersion = false,
+                         unsigned threads = 1)
       : profile_(std::move(profile)), earth_radius_m_(earth_radius_m),
         telescope_altitude_m_(telescope_altitude_m) {
     // Validates the arguments (the same checks as curved_ray_integrals at the telescope level).
@@ -189,15 +219,20 @@ public:
     shift_.resize(count);
     bent_.resize(count);
     straight_.resize(count);
-    for (std::size_t i = 0; i < theta_.size(); ++i) {
-      for (std::size_t j = 0; j < heights_.size(); ++j) {
+    // Every node is independent and writes its own slot: the thread count does not change the
+    // result.
+    const std::size_t nh = heights_.size();
+    for_row_blocks(count, threads, [&](std::size_t begin, std::size_t end) {
+      for (std::size_t k = begin; k < end; ++k) {
         const CurvedRayIntegrals v = curved_ray_integrals(
-            profile_, earth_radius_m_, telescope_altitude_m_, theta_[i], heights_[j]);
-        const std::size_t k = i * heights_.size() + j;
+            profile_, earth_radius_m_, telescope_altitude_m_, theta_[k / nh], heights_[k % nh]);
         shift_[k] = v.shift_m;
         bent_[k] = v.excess_bent_ns;
         straight_[k] = v.excess_straight_ns;
       }
+    });
+    if (enable_accurate_dispersion) {
+      build_accurate_dispersion_tables(threads);
     }
   }
 
@@ -243,14 +278,175 @@ public:
     return true;
   }
 
+  // Integrals for the profile with n-1 scaled by k (phase) and the group index by k_group. The
+  // default table uses a first-order scale; tables constructed with accurate dispersion enabled
+  // use wavelength-dependent integrals above 75 degrees, blending to the accurate result by 80:
+  //   shift_m          = k shift_m(1)
+  //   excess_bent_ns   = k excess_bent_ns(1) + (k_group - k) excess_straight_ns(1)
+  //   excess_straight_ns = k_group excess_straight_ns(1)
+  // (geometry with k, time with k_group: k G + k_group S = k (G + S) + (k_group - k) S). Exact at
+  // k = k_group = 1. The error against direct quadrature is measured in test_dispersion.cpp.
+  // False (out unchanged) for non-finite or non-positive k or k_group, or when lookup() fails.
+  [[nodiscard]] bool lookup_scaled(double theta_s_rad, double emission_altitude_m, double k,
+                                   double k_group, CurvedRayIntegrals &out) const noexcept {
+    const double half_pi = obdeect::stream::pi / 2.;
+    if (!std::isfinite(k) || !(k > 0.) || !std::isfinite(k_group) || !(k_group > 0.) ||
+        !std::isfinite(theta_s_rad) || theta_s_rad < -detail::curved_angle_slack ||
+        theta_s_rad > half_pi + detail::curved_angle_slack || !std::isfinite(emission_altitude_m) ||
+        emission_altitude_m < telescope_altitude_m_) {
+      return false;
+    }
+    const double theta = std::clamp(theta_s_rad, 0., half_pi);
+    if (!dispersion_k_.empty() && theta >= accurate_dispersion_blend_start_rad()) {
+      CurvedRayIntegrals accurate{};
+      if (!lookup_accurate(theta, emission_altitude_m, k, k_group, accurate)) {
+        return false;
+      }
+      if (theta >= accurate_dispersion_blend_end_rad()) {
+        out = accurate;
+        return true;
+      }
+      CurvedRayIntegrals base{};
+      if (!lookup(theta, emission_altitude_m, base)) {
+        return false;
+      }
+      scale_ray_integrals(base, k, k_group);
+      const double u =
+          (theta - accurate_dispersion_blend_start_rad()) /
+          (accurate_dispersion_blend_end_rad() - accurate_dispersion_blend_start_rad());
+      const double weight = u * u * (3. - 2. * u);
+      out = {base.shift_m + weight * (accurate.shift_m - base.shift_m),
+             base.excess_bent_ns + weight * (accurate.excess_bent_ns - base.excess_bent_ns),
+             base.excess_straight_ns +
+                 weight * (accurate.excess_straight_ns - base.excess_straight_ns)};
+      return true;
+    }
+    CurvedRayIntegrals base{};
+    if (!lookup(theta_s_rad, emission_altitude_m, base)) {
+      return false;
+    }
+    scale_ray_integrals(base, k, k_group);
+    out = base;
+    return true;
+  }
+
   [[nodiscard]] double earth_radius_m() const noexcept { return earth_radius_m_; }
   [[nodiscard]] double telescope_altitude_m() const noexcept { return telescope_altitude_m_; }
   [[nodiscard]] const AtmosphereProfile &profile() const noexcept { return profile_; }
   // Grid sizes: zenith-angle nodes and emission-height nodes.
   [[nodiscard]] std::size_t theta_nodes() const noexcept { return theta_.size(); }
   [[nodiscard]] std::size_t height_nodes() const noexcept { return heights_.size(); }
+  [[nodiscard]] static double accurate_dispersion_blend_start_rad() noexcept {
+    return 75. * obdeect::stream::pi / 180.;
+  }
+  [[nodiscard]] static double accurate_dispersion_blend_end_rad() noexcept {
+    return 80. * obdeect::stream::pi / 180.;
+  }
 
 private:
+  static constexpr std::size_t accurate_k_node_count = 9;
+  static constexpr std::size_t accurate_theta_start = 296; // 74 degrees; includes 75-degree stencil
+
+  void build_accurate_dispersion_tables(unsigned threads) {
+    const double low = refractivity_e8(2000.) / refractivity_e8(200.);
+    const double high = 1. / low;
+    dispersion_k_.resize(accurate_k_node_count);
+    const std::size_t nt = theta_.size() - accurate_theta_start;
+    const std::size_t nh = heights_.size();
+    const std::size_t plane_size = nt * nh;
+    dispersion_shift_.resize(accurate_k_node_count * plane_size);
+    dispersion_bent_.resize(accurate_k_node_count * plane_size);
+    dispersion_bent_delta_.resize(accurate_k_node_count * plane_size);
+    dispersion_straight_.resize(accurate_k_node_count * plane_size);
+    for (std::size_t q = 0; q < accurate_k_node_count; ++q) {
+      dispersion_k_[q] = low + (high - low) * static_cast<double>(q) /
+                                   static_cast<double>(accurate_k_node_count - 1);
+    }
+    // Flat index f = q * plane_size + (i - accurate_theta_start) * nh + j; each node is
+    // independent.
+    for_row_blocks(accurate_k_node_count * plane_size, threads,
+                   [&](std::size_t begin, std::size_t end) {
+                     for (std::size_t index = begin; index < end; ++index) {
+                       const std::size_t q = index / plane_size;
+                       const std::size_t rest = index % plane_size;
+                       const std::size_t i = accurate_theta_start + rest / nh;
+                       const std::size_t j = rest % nh;
+                       const double k = dispersion_k_[q];
+                       double bent_group_delta = 0.;
+                       const CurvedRayIntegrals equal =
+                           curved_ray_integrals(profile_, earth_radius_m_, telescope_altitude_m_,
+                                                theta_[i], heights_[j], k, k, &bent_group_delta);
+                       dispersion_shift_[index] = equal.shift_m;
+                       dispersion_bent_[index] = equal.excess_bent_ns;
+                       dispersion_bent_delta_[index] = bent_group_delta;
+                       dispersion_straight_[index] = equal.excess_straight_ns / k;
+                     }
+                   });
+  }
+
+  [[nodiscard]] bool lookup_accurate(double theta, double emission_altitude_m, double k,
+                                     double k_group, CurvedRayIntegrals &out) const noexcept {
+    if (k < dispersion_k_.front() || k > dispersion_k_.back()) {
+      return false;
+    }
+    const double h = std::min(emission_altitude_m, heights_.back());
+    const double g = zenith_coordinate(theta);
+    const std::size_t i1 =
+        std::clamp(static_cast<std::size_t>(std::upper_bound(theta_.begin(), theta_.end(), theta) -
+                                            theta_.begin()),
+                   std::size_t{1}, theta_.size() - 1);
+    const std::size_t j1 =
+        std::clamp(static_cast<std::size_t>(std::upper_bound(heights_.begin(), heights_.end(), h) -
+                                            heights_.begin()),
+                   std::size_t{1}, heights_.size() - 1);
+    const std::size_t i_start = std::min(i1 - 1, theta_.size() - 4);
+    const std::size_t j_start = std::min(j1 - 1, heights_.size() - 4);
+    if (i_start < accurate_theta_start) {
+      return false;
+    }
+    std::array<double, 4> zenith_nodes{}, height_nodes{};
+    for (std::size_t q = 0; q < 4; ++q) {
+      zenith_nodes[q] = zenith_coordinate_[i_start + q];
+      height_nodes[q] = heights_[j_start + q];
+    }
+    const auto wi = lagrange_weights(zenith_nodes, g);
+    const auto wj = lagrange_weights(height_nodes, h);
+    const auto ki = static_cast<std::size_t>(
+        std::upper_bound(dispersion_k_.begin(), dispersion_k_.end(), k) - dispersion_k_.begin());
+    const std::size_t k0 =
+        std::clamp(ki == 0 ? 0 : ki - 1, std::size_t{0}, dispersion_k_.size() - 4);
+    std::array<double, 4> kn{};
+    for (std::size_t q = 0; q < 4; ++q) {
+      kn[q] = dispersion_k_[k0 + q];
+    }
+    const auto wk = lagrange_weights(kn, k);
+    const std::size_t plane_size = (theta_.size() - accurate_theta_start) * heights_.size();
+    auto interp = [&](const std::vector<double> &values) {
+      double value = 0.;
+      for (std::size_t q = 0; q < 4; ++q) {
+        const std::size_t base = (k0 + q) * plane_size;
+        double spatial = 0.;
+        for (std::size_t a = 0; a < 4; ++a) {
+          double row = 0.;
+          for (std::size_t b = 0; b < 4; ++b) {
+            const std::size_t index =
+                base + (i_start + a - accurate_theta_start) * heights_.size() + j_start + b;
+            row += wj[b] * values[index];
+          }
+          spatial += wi[a] * row;
+        }
+        value += wk[q] * spatial;
+      }
+      return value;
+    };
+    const double shift = interp(dispersion_shift_);
+    const double bent_equal = interp(dispersion_bent_);
+    const double bent_delta = interp(dispersion_bent_delta_);
+    const double straight_unit = interp(dispersion_straight_);
+    out = {shift, bent_equal + (k_group - k) * bent_delta, k_group * straight_unit};
+    return true;
+  }
+
   // Lagrange weights of the four nodes p at x: exact (1 at its node, 0 at the others) at the nodes.
   static std::array<double, 4> lagrange_weights(const std::array<double, 4> &p, double x) noexcept {
     std::array<double, 4> w{};
@@ -349,6 +545,9 @@ private:
   std::vector<double> heights_;           // emission altitudes [m a.s.l.], ascending
   // Row-major [theta][height] arrays.
   std::vector<double> shift_, bent_, straight_;
+  std::vector<double> dispersion_k_;
+  std::vector<double> dispersion_shift_, dispersion_bent_, dispersion_bent_delta_,
+      dispersion_straight_;
 };
 
 } // namespace obdeect::propagation

@@ -33,12 +33,27 @@ Python loader, it rejects a model file whose content does not match its `sha256`
 Other frames are rejected. The input columns `x y cx cy t w` are required. `wavelength` is
 used when present, and `zem` is copied to the output. A wavelength of 0 is drawn from the run
 keys `wavelength_min_nm` and `wavelength_max_nm`, as in CORSIKA. A `cz` column must agree with
-`cx` and `cy`. Column `p` (acceptance already applied) is rejected, because the stage does not
-reweight by it.
+`cx` and `cy`; it may be negative (down) or positive (up). In a plane run (the default) it may
+not be zero: a horizontal photon has no input plane and is rejected with an error. Column `p`
+(acceptance already applied) is rejected: the stage does not reweight by it. Column `path` (format
+1.2) is carried through: the output `path` is the input path, moved to the start point, plus the
+traced path inside the telescope (the camera-frame output keeps the column, valid in any frame).
 
-Each photon moves along its direction to an input plane above the incoming obscurers and the
-mirrors it meets first (the primary, and the secondary if it blocks incoming light). The plane
-follows the pointing: at grazing pointing the dish top lies well above the obscurers. Its time
+Sphere runs (run key `ground_representation` = `sphere`, format 1.2): each G row is the point where
+the photon's path enters the telescope sphere (or its emission point, if emitted inside), with its
+direction and its time there. The row is the start point: the tracer does not move it to an input
+plane. Its radius is `telescope_r_m` of the run, indexed by telescope id (id 1 is the first entry,
+as in sim_telarray); the rows are checked with `validate_sphere_rows` (columns `x y z cx cy cz t zem w`
+required, |r| <= R). Horizontal rows (cz = 0) are allowed; each row takes the branch of its traced
+direction (see [Light sources](light-sources.md#sphere-rows)). Before the first sphere row of a
+telescope, the tracer checks that the sphere encloses the optical model (see
+[Limitations](limitations.md#sphere-runs)); a sphere that is too small is an error.
+
+Each photon moving down moves along its direction to an input plane above the incoming obscurers
+and the mirrors it meets first (the primary, and the secondary if it blocks incoming light). The
+plane follows the pointing: at grazing pointing the dish top lies well above the obscurers. A
+photon moving up moves to a plane below every optic (see
+[Light sources](light-sources.md#photons-from-below)). Its time
 advances by the path length over the speed of light. The G rotation is the ground-to-telescope rotation of simtools, so a shower from the
 optical axis maps to direction (0, 0, -1). For a telescope at zenith 20° and array azimuth 0°:
 
@@ -73,7 +88,7 @@ run level.
 | State | Action |
 | --- | --- |
 | absent or `pending` | The factor is applied in full by the trace. |
-| `envelope` | The stream carries the efficiency bound f_env, so the output weight is multiplied by 1 / f_env(λ). The trace then gives f / f_env. Photons are traced with `roulette=False` (weights min(1, w / bound) per survivor), so weights stay unbiased; the table is interpolated at each photon's wavelength. |
+| `envelope` | The stream carries the efficiency bound f_env, so the output weight is multiplied by 1 / f_env(λ). The trace then gives f / f_env. Photons are traced with `roulette=False` (weight w / bound per survivor, unclamped, so the weights stay unbiased); the table is interpolated at each photon's wavelength. |
 | `applied` | An error: the trace would apply the factor again. |
 
 Other factors (for example `qe`) pass on unchanged. After the run record, the stage writes a

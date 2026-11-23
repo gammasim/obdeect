@@ -12,9 +12,9 @@ Which steps you need depends on the **frame** in which the source writes its pho
 
 | Frame | Written by | Steps before `obdeect stream to-simtel` |
 | --- | --- | --- |
-| sky | CORSIKA (`obdeect stream from-corsika`), `obdeect sources point-source`, `beam-scan`, `laser-beam`, `night-sky`, `muon-track`, and `flasher --type dish` by default | atmosphere (`obdeect propagation run`), then optics (`obdeect ray-tracing trace-stream`) unless sim_telarray traces the optics |
-| telescope (T) | `obdeect sources flasher --type secondary` | none |
-| camera (C) | `obdeect sources led`, `obdeect sources flasher --type dish --frame camera` | none |
+| sky | CORSIKA (`obdeect stream from-corsika`), `obdeect sources run` with the presets `point-source`, `beam-scan`, `laser-beam`, `lidar`, `night-sky`, `muon`, `shower` | atmosphere (`obdeect propagation run`), then optics (`obdeect ray-tracing trace-stream`) unless sim_telarray traces the optics |
+| telescope (T) | `obdeect sources run flasher --type secondary` | none |
+| camera (C) | `obdeect sources run flasher --type dish`, `obdeect sources run led` | none |
 
 `obdeect stream to-simtel` prints the sim_telarray option (`Bypass_Optics`) that each telescope
 needs. Replace `<config>` below with your sim_telarray configuration.
@@ -34,20 +34,14 @@ $ zstd -dc run.corsika.zst \
 - `cam.txt` is the **camera map**: it lists the telescopes whose photons are in the camera
   frame. See [Command line](../stream/command-line.md#camera-map-and-telescope-frames).
 
-## Flasher on the dish
+## Dish flasher in front of the camera
+
+The dish flasher writes camera-frame photons (`--position` in the camera frame, pointing at the
+camera plane):
 
 ```console
-$ obdeect sources flasher --type dish --photons 1e6 \
-    | obdeect propagation run --transmission atm.dat --site-altitude 2156 --seed 1 \
-    | obdeect ray-tracing trace-stream --model telescope.json --seed 7 \
-    | obdeect stream to-simtel --camera-map cam.txt > sim.simtel
-```
-
-With `--frame camera`, the flasher sends photons in a straight line to the camera plane
-(no atmosphere, arrival time = emission time + path / c) and sim_telarray takes over from there:
-
-```console
-$ obdeect sources flasher --type dish --frame camera --distance 1600 --photons 2.5e6 \
+$ obdeect sources run flasher --type dish --position 0,0,1.6 --camera-radius 0.9 \
+    --observation-level 2150 --spectrum fixed:wavelength_nm=400 --photons 1e6 \
     | obdeect stream to-simtel --camera-map cam.txt \
     | sim_telarray -c <config> -C Bypass_Optics=3 -
 ```
@@ -56,10 +50,14 @@ $ obdeect sources flasher --type dish --frame camera --distance 1600 --photons 2
 
 The four flashers fire onto the secondary mirror. The photons are in the telescope frame, and
 `obdeect stream to-simtel` needs a camera map that marks the telescope as dual-mirror
-([details](../stream/command-line.md#telescope-frame-photons-dual-mirror-telescopes)):
+([details](../stream/command-line.md#telescope-frame-photons-dual-mirror-telescopes)).
+`cam.txt` then contains the line `1 2 0.0`:
 
 ```console
-$ obdeect sources flasher --type secondary --fire all --delays 0,0,0,0 \
+$ obdeect sources run flasher --type secondary --flasher-offset 0.5 --flasher-depth 0.3 \
+    --flasher-inclination 2 --mirror-camera-distance 16 --fiducial-radius 12.5 \
+    --observation-level 2150 --spectrum fixed:wavelength_nm=400 --photons 1e6 \
+    --delays 0 0 0 0 --fire all \
     | obdeect stream to-simtel --camera-map cam.txt \
     | sim_telarray -c <config> -C Bypass_Optics=1 -
 ```
@@ -68,26 +66,29 @@ $ obdeect sources flasher --type secondary --fire all --delays 0,0,0,0 \
 
 The LED source needs the pixel positions and trigger groups, so it reads the sim_telarray
 **camera definition** (`--camera-file cam.dat`). `obdeect stream to-simtel` does not read that
-file. It needs only the **camera map** (`--camera-map cam.txt`), a three-column list of the
-telescopes with camera-frame photons:
+file. It needs only the **camera map** (`--camera-map cam.txt`), a list of the telescopes with
+camera-frame photons:
 
 ```console
-$ obdeect sources led --camera-file cam.dat --use-trg-all --photons 500 \
+$ obdeect sources run led --camera-file cam.dat --use-trg-all --photons 500 \
+    --camera-radius 0.9 --observation-level 2150 --spectrum fixed:wavelength_nm=400 \
     | obdeect stream to-simtel --camera-map cam.txt \
     | sim_telarray -c <config> -C Bypass_Optics=3 -
 ```
 
-## Point source, beam, laser, night sky and muon
+## Point source, beam, laser, lidar, night sky, muon and shower
 
 These sources write sky-frame photons. If sim_telarray applies the extinction itself, run the
 atmosphere step with `--no-extinction`, which moves the photons to the telescope and nothing
 more:
 
 ```console
-$ obdeect sources point-source -z 10000000 -n 1e7 \
+$ obdeect sources run point-source --observation-level 2150 --spectrum fixed:wavelength_nm=400 \
+    --position 0,0,10000 --photons 1e8 --telescope-radius 12.5 \
     | obdeect propagation run --no-extinction --site-altitude 2150 --seed 1 \
     | obdeect stream to-simtel \
     | sim_telarray -c <config> -
 ```
 
-The same pipeline works for `beam-scan`, `laser-beam`, `night-sky` and `muon-track`.
+The same pipeline works for the other sky-frame presets (`beam-scan`, `laser-beam`, `lidar`,
+`night-sky`, `muon`, `shower`). Their options are in [presets](../sources/presets.md).

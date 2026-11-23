@@ -19,7 +19,7 @@
 
 namespace obdeect::propagation {
 
-// Tables are indexed by integer nm in [0, max_lambda); a wavelength looks up its floor.
+// Tables are indexed by integer nm in [0, max_lambda). See WavelengthInterpolation.
 inline constexpr int max_lambda = 1000;
 inline constexpr double unlimited_airmass = 1e10;
 inline constexpr double altitude_tolerance_m = 25.0;
@@ -34,7 +34,28 @@ inline void check_wavelength(double wavelength_nm) {
   }
 }
 
+// How a wavelength selects the table rows.
+//   linear (default): optical depths linear in lambda between the rows at floor(lambda) and
+//             floor(lambda)+1; the telescope depths and the efficiency bound are interpolated the
+//             same way, so every lookup is continuous in lambda.
+//   floor:  the row at floor(lambda), as sim_telarray does (for comparisons with sim_telarray).
+// Both clamp to the first and last row.
+enum class WavelengthInterpolation { floor, linear };
+
+// "linear" or "floor"; throws std::invalid_argument for any other text.
+inline WavelengthInterpolation parse_wavelength_interpolation(std::string_view text) {
+  if (text == "linear") {
+    return WavelengthInterpolation::linear;
+  }
+  if (text == "floor") {
+    return WavelengthInterpolation::floor;
+  }
+  throw std::invalid_argument("wavelength interpolation must be linear or floor: '" +
+                              std::string(text) + "'");
+}
+
 // Floor of the wavelength for table lookups, or -1 at or above max_lambda (no transmission).
+// Used by the floor mode; linear-mode lookups go through TransmissionTable.
 [[nodiscard]] inline int table_wavelength(double wavelength_nm) {
   check_wavelength(wavelength_nm);
   if (wavelength_nm >= max_lambda) {
@@ -115,7 +136,13 @@ struct TelescopeDepths {
 
 class TransmissionTable {
 public:
-  TransmissionTable(const std::string &text, double site_altitude_m) {
+  // Default mode: linear (see WavelengthInterpolation).
+  TransmissionTable(const std::string &text, double site_altitude_m,
+                    WavelengthInterpolation mode = WavelengthInterpolation::linear)
+      : mode_(mode) {
+    if (mode != WavelengthInterpolation::floor && mode != WavelengthInterpolation::linear) {
+      throw std::invalid_argument("unknown wavelength interpolation mode");
+    }
     if (!std::isfinite(site_altitude_m)) {
       throw std::invalid_argument("site altitude must be finite");
     }
@@ -125,35 +152,60 @@ public:
     }
   }
 
-  [[nodiscard]] static TransmissionTable from_file(const std::string &path,
-                                                   double site_altitude_m) {
+  [[nodiscard]] static TransmissionTable
+  from_file(const std::string &path, double site_altitude_m,
+            WavelengthInterpolation mode = WavelengthInterpolation::linear) {
     std::ifstream file(path);
     if (!file) {
       throw std::invalid_argument("cannot open transmission table " + path);
     }
     std::ostringstream text;
     text << file.rdbuf();
-    return TransmissionTable(text.str(), site_altitude_m);
+    return TransmissionTable(text.str(), site_altitude_m, mode);
   }
 
   [[nodiscard]] double observation_level_m() const noexcept { return 1000.0 * h2_km_; }
   [[nodiscard]] int first_wavelength_nm() const noexcept { return first_; }
   [[nodiscard]] int last_wavelength_nm() const noexcept { return first_ + rows_ - 1; }
+  [[nodiscard]] WavelengthInterpolation wavelength_interpolation() const noexcept { return mode_; }
+  // Table heights [m a.s.l.]: the observation level and the heights H1 (ascending). The extinction
+  // coefficient has a kink at each of them (chord integrals split there).
+  [[nodiscard]] const std::vector<double> &node_heights_m() const noexcept { return height_m_; }
 
   // Vertical optical depth from the observation level to height_m; linear in log10(height)
   // between the table heights, zero at and below the observation level, constant above the
-  // last table height. Wavelengths are truncated to integer nm and clamped to the table.
+  // last table height. The wavelength selects the rows as set by wavelength_interpolation()
+  // (floor: truncated to integer nm; linear: interpolated) and is clamped to the table.
   template <class T> [[nodiscard]] T optical_depth(T wavelength_nm, T height_m) const {
-    const std::size_t row = row_of(static_cast<double>(wavelength_nm));
+    const Lookup at = lookup_of(static_cast<double>(wavelength_nm));
     const double h = static_cast<double>(height_m);
     if (!std::isfinite(h)) {
       throw std::invalid_argument("height must be finite");
     }
-    const double *tau = &tau_[row * grid_.size()];
     if (h <= 1000.0 * h2_km_) {
       return T(0);
     }
-    return static_cast<T>(detail::rpol(grid_, tau, std::log10(h)));
+    return static_cast<T>(tau_at(at, std::log10(h)));
+  }
+
+  // Extinction coefficient |d tau / dh| [1/m] at height_m: the exact derivative of optical_depth
+  // (its log10-linear interpolation, per table interval; the linear blend in wavelength blends the
+  // derivatives too). Zero at and below the observation level and above the last table height,
+  // where tau is constant. Used by the chord integrals of near-horizontal paths (chord.hpp).
+  template <class T> [[nodiscard]] T extinction_coefficient(T wavelength_nm, T height_m) const {
+    const Lookup at = lookup_of(static_cast<double>(wavelength_nm));
+    const double h = static_cast<double>(height_m);
+    if (!std::isfinite(h)) {
+      throw std::invalid_argument("height must be finite");
+    }
+    if (h <= 1000.0 * h2_km_) {
+      return T(0);
+    }
+    const double log_h = std::log10(h);
+    if (log_h >= grid_.back()) {
+      return T(0);
+    }
+    return static_cast<T>(std::fabs(slope_at(at, log_h)) / (h * std::log(10.0)));
   }
 
   // Transmission exp(-|tau(zem) - od_tel| * airmass - od_focus). Zero below the observation
@@ -170,7 +222,7 @@ public:
     }
     if (static_cast<double>(zem_m) < 1000.0 * h2_km_ ||
         static_cast<double>(od_tel) > max_telescope_depth) {
-      (void)row_of(static_cast<double>(wavelength_nm)); // validates the wavelength
+      (void)lookup_of(static_cast<double>(wavelength_nm)); // validates the wavelength
       return T(0);
     }
     const T depth = std::fabs(optical_depth<T>(wavelength_nm, zem_m) - od_tel) * airmass + od_focus;
@@ -198,6 +250,21 @@ public:
         static_cast<double>(emission_altitude_m), static_cast<double>(cos_zenith), earth_radius_m));
   }
 
+  // Slant optical depth of an upward photon (emission below the telescope, zem < h_t): the same
+  // integral over the heights between zem and h_t, with cos_zenith the cosine of the photon's
+  // upward direction to the local vertical at the telescope. Zero if zem >= h_t. Only for upward
+  // photons: slant_optical_depth keeps its zero below the telescope for downward photons. The
+  // plane-parallel limit R -> infinity is |tau(h_t) - tau(zem)| / cos_zenith.
+  template <class T>
+  [[nodiscard]] T slant_optical_depth_upward(T wavelength_nm, T telescope_altitude_m,
+                                             T emission_altitude_m, T cos_zenith,
+                                             double earth_radius_m) const {
+    return static_cast<T>(slant_depth(static_cast<double>(wavelength_nm),
+                                      static_cast<double>(telescope_altitude_m),
+                                      static_cast<double>(emission_altitude_m),
+                                      static_cast<double>(cos_zenith), earth_radius_m, true));
+  }
+
   // Transmission exp(-(slant optical depth + od_focus)) in a spherical atmosphere (see
   // slant_optical_depth). The telescope depth od_tel is tau(h_t). Zero below the observation
   // level, for od_tel above max_telescope_depth and for a total depth above max_total_depth.
@@ -205,11 +272,30 @@ public:
   [[nodiscard]] T transmission_curved(T wavelength_nm, T zem_m, T cos_zenith,
                                       T telescope_altitude_m, T od_focus,
                                       double earth_radius_m) const {
+    return transmission_curved_impl<T>(wavelength_nm, zem_m, cos_zenith, telescope_altitude_m,
+                                       od_focus, earth_radius_m, false);
+  }
+
+  // transmission_curved for an upward photon (zem < h_t): the slant depth is the integral over
+  // [zem, h_t] (slant_optical_depth_upward). Same zero rules as transmission_curved.
+  template <class T>
+  [[nodiscard]] T transmission_curved_upward(T wavelength_nm, T zem_m, T cos_zenith,
+                                             T telescope_altitude_m, T od_focus,
+                                             double earth_radius_m) const {
+    return transmission_curved_impl<T>(wavelength_nm, zem_m, cos_zenith, telescope_altitude_m,
+                                       od_focus, earth_radius_m, true);
+  }
+
+  // Body of transmission_curved and transmission_curved_upward (upward selects the slant depth).
+  template <class T>
+  [[nodiscard]] T transmission_curved_impl(T wavelength_nm, T zem_m, T cos_zenith,
+                                           T telescope_altitude_m, T od_focus,
+                                           double earth_radius_m, bool upward) const {
     const double lambda = static_cast<double>(wavelength_nm);
     const double zem = static_cast<double>(zem_m);
     const double h_t = static_cast<double>(telescope_altitude_m);
     const double focus = static_cast<double>(od_focus);
-    const std::size_t row =
+    const Lookup at =
         validate_curved(lambda, h_t, zem, static_cast<double>(cos_zenith), earth_radius_m);
     if (!std::isfinite(focus) || focus < 0.0) {
       throw std::invalid_argument("od_focus must be finite and non-negative");
@@ -221,7 +307,9 @@ public:
       return T(0);
     }
     const double cos_t = std::min(static_cast<double>(cos_zenith), 1.0);
-    const double depth = slant_depth_row(row, h_t, zem, cos_t, earth_radius_m) + focus;
+    const double slant = upward ? slant_depth_upward_row(at, h_t, zem, cos_t, earth_radius_m)
+                                : slant_depth_row(at, h_t, zem, cos_t, earth_radius_m);
+    const double depth = slant + focus;
     if (depth > max_total_depth) {
       return T(0);
     }
@@ -250,12 +338,85 @@ public:
     return depths;
   }
 
+  struct TelescopeDepthValues {
+    double od_tel{};
+    double od_focus{};
+  };
+
+  // Telescope depths at a wavelength [nm] from the per-integer-nm arrays of telescope_depths():
+  // the array entry in floor mode, the linear blend of the entries at floor(lambda) and
+  // floor(lambda)+1 in linear mode (clamped to the table). The same mode as optical_depth, so
+  // od_tel equals optical_depth(lambda, h_T) and od_focus the in-telescope part, in both modes.
+  // Floor mode returns the array entries exactly.
+  [[nodiscard]] TelescopeDepthValues telescope_depths_at(const TelescopeDepths &depths,
+                                                         double wavelength_nm) const {
+    const Lookup at = lookup_of(wavelength_nm);
+    const auto lower = static_cast<std::size_t>(at.lower);
+    const auto upper = static_cast<std::size_t>(at.upper);
+    if (upper == lower) {
+      return {depths.od_tel[lower], depths.od_focus[lower]};
+    }
+    return {(1.0 - at.frac) * depths.od_tel[lower] + at.frac * depths.od_tel[upper],
+            (1.0 - at.frac) * depths.od_focus[lower] + at.frac * depths.od_focus[upper]};
+  }
+
 private:
-  // Validates the arguments of the curved-atmosphere lookups and returns the table row.
-  [[nodiscard]] std::size_t validate_curved(double wavelength_nm, double telescope_altitude_m,
-                                            double emission_altitude_m, double cos_zenith,
-                                            double earth_radius_m) const {
-    const std::size_t row = row_of(wavelength_nm);
+  // Table rows used by a wavelength: weight (1 - frac) on the row of lower [nm] and frac on the
+  // row of upper. upper == lower (frac 0) in floor mode and at the last row.
+  struct Lookup {
+    int lower;
+    int upper;
+    double frac;
+  };
+
+  // Validates the wavelength and selects its rows (absolute nm, clamped to the table).
+  [[nodiscard]] Lookup lookup_of(double wavelength_nm) const {
+    if (!std::isfinite(wavelength_nm)) {
+      throw std::invalid_argument("wavelength must be finite");
+    }
+    const double clamped = std::clamp(wavelength_nm, static_cast<double>(first_),
+                                      static_cast<double>(last_wavelength_nm()));
+    const int lower = static_cast<int>(clamped);
+    if (mode_ == WavelengthInterpolation::floor || lower >= last_wavelength_nm()) {
+      return {lower, lower, 0.0};
+    }
+    return {lower, lower + 1, clamped - static_cast<double>(lower)};
+  }
+
+  // Optical depth at log10(height) [m] of the rows of `at`, blended by frac.
+  [[nodiscard]] double tau_at(const Lookup &at, double log_height) const {
+    const std::size_t n = grid_.size();
+    const double *lower = &tau_[static_cast<std::size_t>(at.lower - first_) * n];
+    const double a = detail::rpol(grid_, lower, log_height);
+    if (at.upper == at.lower) {
+      return a;
+    }
+    const double b = detail::rpol(grid_, lower + n, log_height);
+    return (1.0 - at.frac) * a + at.frac * b;
+  }
+
+  // d tau / d log10(h) of the rows of `at` at log_height (the slope of the interval containing it,
+  // blended as tau_at). Requires grid_[0] <= log_height < grid_.back().
+  [[nodiscard]] double slope_at(const Lookup &at, double log_height) const {
+    const std::size_t n = grid_.size();
+    const auto upper = std::upper_bound(grid_.begin(), grid_.end(), log_height);
+    const auto i = static_cast<std::size_t>(upper - grid_.begin()); // grid_[i-1] <= x < grid_[i]
+    const double *lower = &tau_[static_cast<std::size_t>(at.lower - first_) * n];
+    const auto slope = [&](const double *y) {
+      return (y[i] - y[i - 1]) / (grid_[i] - grid_[i - 1]);
+    };
+    double value = slope(lower);
+    if (at.upper != at.lower) {
+      value = (1.0 - at.frac) * value + at.frac * slope(lower + n);
+    }
+    return value;
+  }
+
+  // Validates the arguments of the curved-atmosphere lookups and returns the table rows.
+  [[nodiscard]] Lookup validate_curved(double wavelength_nm, double telescope_altitude_m,
+                                       double emission_altitude_m, double cos_zenith,
+                                       double earth_radius_m) const {
+    const Lookup at = lookup_of(wavelength_nm);
     if (!std::isfinite(telescope_altitude_m) || !std::isfinite(emission_altitude_m)) {
       throw std::invalid_argument("altitudes must be finite");
     }
@@ -266,43 +427,78 @@ private:
     if (!std::isfinite(earth_radius_m) || !(earth_radius_m > 0.0)) {
       throw std::invalid_argument("earth radius must be finite and positive");
     }
-    return row;
+    return at;
   }
 
   [[nodiscard]] double slant_depth(double wavelength_nm, double telescope_altitude_m,
                                    double emission_altitude_m, double cos_zenith,
-                                   double earth_radius_m) const {
-    const std::size_t row = validate_curved(wavelength_nm, telescope_altitude_m,
-                                            emission_altitude_m, cos_zenith, earth_radius_m);
-    return slant_depth_row(row, telescope_altitude_m, emission_altitude_m,
-                           std::min(cos_zenith, 1.0), earth_radius_m);
+                                   double earth_radius_m, bool upward = false) const {
+    const Lookup at = validate_curved(wavelength_nm, telescope_altitude_m, emission_altitude_m,
+                                      cos_zenith, earth_radius_m);
+    const double cos_t = std::min(cos_zenith, 1.0);
+    return upward ? slant_depth_upward_row(at, telescope_altitude_m, emission_altitude_m, cos_t,
+                                           earth_radius_m)
+                  : slant_depth_row(at, telescope_altitude_m, emission_altitude_m, cos_t,
+                                    earth_radius_m);
   }
 
-  // Slant optical depth of a validated row, cos_zenith in [0, 1]. Segments are the table
+  // Slant optical depth of validated rows, cos_zenith in [0, 1]. Segments are the table
   // intervals between consecutive heights (tau linear in log10 h), clipped to [h_t, zem]; d tau/dh
-  // = a / (h ln 10) with a the slope in log10 h. Each segment is integrated with 8-point
-  // Gauss-Legendre; the first segment at h_t uses h = h_t + u^2 when cos_zenith is small.
+  // = a / (h ln 10) with a the slope in log10 h. The slope of a linear-mode lookup is the blend of
+  // the slopes of the two rows (tau is linear in lambda, so this is the depth of the blended tau).
+  // Each segment is integrated with 8-point Gauss-Legendre; the first segment at h_t uses
+  // h = h_t + u^2 when cos_zenith is small.
   // cos theta(h)^2 = [d (R + h + R + h_t) + (R + h_t)^2 cos_t^2] / (R + h)^2 with d = h - h_t,
   // which has no cancellation at small angles.
-  [[nodiscard]] double slant_depth_row(std::size_t row, double telescope_altitude_m,
+  [[nodiscard]] double slant_depth_row(const Lookup &at, double telescope_altitude_m,
                                        double emission_altitude_m, double cos_zenith,
                                        double earth_radius_m) const {
     if (!(emission_altitude_m > telescope_altitude_m)) {
       return 0.0;
     }
-    const double *tau = &tau_[row * grid_.size()];
+    return slant_integral(at, telescope_altitude_m, emission_altitude_m, telescope_altitude_m,
+                          cos_zenith, earth_radius_m);
+  }
+
+  // Upward photon: the integral over [emission, h_t] (zero unless emission < h_t).
+  [[nodiscard]] double slant_depth_upward_row(const Lookup &at, double telescope_altitude_m,
+                                              double emission_altitude_m, double cos_zenith,
+                                              double earth_radius_m) const {
+    if (!(emission_altitude_m < telescope_altitude_m)) {
+      return 0.0;
+    }
+    return slant_integral(at, emission_altitude_m, telescope_altitude_m, telescope_altitude_m,
+                          cos_zenith, earth_radius_m);
+  }
+
+  // Integral over the heights [lo_altitude, hi_altitude] (lo < hi) of the slant depth for the ray
+  // of the telescope altitude telescope_altitude_m (d = h - h_t in the expressions below).
+  [[nodiscard]] double slant_integral(const Lookup &at, double lo_altitude, double hi_altitude,
+                                      double telescope_altitude_m, double cos_zenith,
+                                      double earth_radius_m) const {
+    if (!(hi_altitude > lo_altitude)) {
+      return 0.0;
+    }
+    const std::size_t n = grid_.size();
+    const double *tau = &tau_[static_cast<std::size_t>(at.lower - first_) * n];
+    const bool blend = at.upper != at.lower;
+    const double *tau_up = tau + n;
     const double q = earth_radius_m + telescope_altitude_m;
     const double q2c2 = q * q * cos_zenith * cos_zenith;
     const bool substitute = cos_zenith < detail::curved_substitution_cos;
     const double ln10 = std::log(10.0);
     double sum = 0.0;
     for (std::size_t i = 0; i + 1 < grid_.size(); ++i) {
-      const double seg_lo = std::max(height_m_[i], telescope_altitude_m);
-      const double seg_hi = std::min(height_m_[i + 1], emission_altitude_m);
+      const double seg_lo = std::max(height_m_[i], lo_altitude);
+      const double seg_hi = std::min(height_m_[i + 1], hi_altitude);
       if (!(seg_hi > seg_lo)) {
         continue;
       }
-      const double slope = (tau[i + 1] - tau[i]) / ((grid_[i + 1] - grid_[i]) * ln10);
+      const double width = (grid_[i + 1] - grid_[i]) * ln10;
+      double slope = (tau[i + 1] - tau[i]) / width;
+      if (blend) {
+        slope += at.frac * ((tau_up[i + 1] - tau_up[i]) / width - slope);
+      }
       if (slope == 0.0) {
         continue;
       }
@@ -313,12 +509,14 @@ private:
         return slope / ((telescope_altitude_m + d) * std::sqrt(std::max(cos2, 0.0)));
       };
       double part = 0.0;
-      if (substitute && height_m_[i] <= telescope_altitude_m) {
-        // Segment starting at h_t: h = h_t + u^2, dh = 2 u du, u in [0, sqrt(seg_hi - h_t)].
-        const double top = std::sqrt(seg_hi - telescope_altitude_m);
+      if (substitute && height_m_[i] <= lo_altitude) {
+        // Segment starting at lo: h = lo + u^2, dh = 2 u du, u in [0, sqrt(seg_hi - lo)]. For a
+        // downward photon lo = h_t, so seg_lo - h_t = 0 and the integrand is that of h = h_t + u^2.
+        const double top = std::sqrt(seg_hi - seg_lo);
+        const double d0 = seg_lo - telescope_altitude_m;
         for (std::size_t j = 0; j < detail::gauss_points; ++j) {
           const double u = 0.5 * top * (1.0 + detail::gauss_nodes[j]);
-          part += detail::gauss_weights[j] * 2.0 * u * integrand(u * u);
+          part += detail::gauss_weights[j] * 2.0 * u * integrand(d0 + u * u);
         }
         sum += 0.5 * top * part;
       } else {
@@ -332,15 +530,6 @@ private:
       }
     }
     return sum;
-  }
-
-  [[nodiscard]] std::size_t row_of(double wavelength_nm) const {
-    if (!std::isfinite(wavelength_nm)) {
-      throw std::invalid_argument("wavelength must be finite");
-    }
-    const double clamped = std::clamp(wavelength_nm, static_cast<double>(first_),
-                                      static_cast<double>(last_wavelength_nm()));
-    return static_cast<std::size_t>(static_cast<int>(clamped) - first_);
   }
 
   static double number(const std::string &token, std::size_t line, const char *what) {
@@ -451,6 +640,7 @@ private:
     }
   }
 
+  WavelengthInterpolation mode_{WavelengthInterpolation::floor};
   double h2_km_{};
   int first_{};
   int rows_{};
