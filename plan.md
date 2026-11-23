@@ -9,11 +9,11 @@ moving in any direction: downward, upward and horizontal.
   `sphere` (below); `plane` stays the default. The run header records which
   one a run uses, so columns never depend on photon content.
 - D2: sources with `to_plane_z0 = true`: photons that never reach z = 0 are
-  dropped and counted in the efficiency status (no error).
+  dropped and counted (`not_on_plane`, run summary; no error).
 - D3: sim_telarray cannot take upward or horizontal photons. `to-simtel`
   rejects them with an explicit error; it never writes them as downward.
-- D4: ray tracing phase 1 now, phase 2 (non-sequential) later. Phase 2 is
-  required, not optional.
+- D4: ray tracing phase 1, then phase 2 (non-sequential); both done.
+- Status: phases 1-4 in PR 80, phases 5-7 in PR 81 (validation PRs 17, 18).
 
 ## Conventions
 
@@ -35,9 +35,9 @@ moving in any direction: downward, upward and horizontal.
 - Run key `ground_representation` = `plane` (default) or `sphere`; format 1.2
   adds column `path` (distance from emission to the row point, m).
 - Bending: if the ray crosses the plane with |cz| >= 0.1, plane-mode bending
-  and the tangent line to the sphere; else a 3D ray integrator (RK4 on
-  d(n d)/ds = grad n, flat and spherical; turning points included).
-- Extinction: tau = L * mean dtau/dh along the chord (stable for dh -> 0).
+  and the integrator from the crossing to the sphere; else a 3D ray integrator
+  (RK4 on d(n d)/ds = grad n, flat and spherical; turning points included).
+- Extinction: plane formulas for |u| >= 0.1, else the chord integral of k.
 - Plane mode unchanged (CORSIKA, sim_telarray); `to-simtel` converts sphere
   to plane for downward photons emitted outside the sphere only.
 
@@ -54,14 +54,14 @@ moving in any direction: downward, upward and horizontal.
 3. Sources: `to_plane_z0` (D2), `plane_wave` any non-horizontal direction,
    presets (laser, lidar, beam scan) any beam direction.
 4. Ray tracing phase 1 (see below).
-5. All directions, sphere mode (status: phases 1-4 done, PR 80):
+5. All directions, sphere mode:
    - 5a stream (format 1.2, run key, sphere rows, `to-simtel` conversion);
      5b propagation (sphere rows, integrator, extinction, scattering);
      5c sources (G sphere rows, horizontal plane waves and beams);
      5d ray tracer starts at the sphere row; the sphere must enclose all
      optics and structure (checked when the optical model is compiled).
-6. CORSIKA 3D bunches (1217): import with `cz`, after checking the layout
-   against CORSIKA `iact.c`; fixture with provenance.
+6. CORSIKA 3D bunches (1217) imported as sphere runs; fixture written with
+   the bernlohr library (provenance file).
 7. Ray tracing phase 2 (required).
 
 ## Ray tracing phase 1
