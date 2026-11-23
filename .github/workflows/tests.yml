@@ -95,13 +95,15 @@ jobs:
           fetch-depth: 0  # component versions come from the repository tags
       - name: Install a decimal-comma locale
         run: sudo locale-gen de_DE.UTF-8
+      # -O1 keeps the sanitizers effective; at -O0 the propagation table builds alone took
+      # about 15 minutes (test_dispersion, test_curvature_modes).
       - name: Configure, build, and test with sanitizers
         env:
           OBDEECT_RAY_TRACING_REQUIRE_COMMA_LOCALE: "1"
         run: >-
           cmake -S src/${{ matrix.component }} -B build-sanitize -DCMAKE_BUILD_TYPE=Debug
-          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
-          -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          -DCMAKE_CXX_FLAGS="-O1 -fsanitize=address,undefined -fno-omit-frame-pointer"
+          -DCMAKE_C_FLAGS="-O1 -fsanitize=address,undefined -fno-omit-frame-pointer"
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
           -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined"
           && cmake --build build-sanitize --parallel
