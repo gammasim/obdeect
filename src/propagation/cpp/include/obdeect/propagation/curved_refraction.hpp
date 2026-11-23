@@ -40,7 +40,6 @@
 #include <cmath>
 #include <cstddef>
 #include <stdexcept>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -203,10 +202,12 @@ curved_ray_integrals(const AtmosphereProfile &profile, double earth_radius_m,
 
 // Grid of the integrals for one telescope altitude and Earth radius, built once with
 // curved_ray_integrals at every node and interpolated cubically (4 x 4 Lagrange) in (theta_s, h_e).
+// The build runs on `threads` threads (1: in place); the tables do not depend on the count.
 class CurvedRefractionTables {
 public:
   CurvedRefractionTables(AtmosphereProfile profile, double earth_radius_m,
-                         double telescope_altitude_m, bool enable_accurate_dispersion = false)
+                         double telescope_altitude_m, bool enable_accurate_dispersion = false,
+                         unsigned threads = 1)
       : profile_(std::move(profile)), earth_radius_m_(earth_radius_m),
         telescope_altitude_m_(telescope_altitude_m) {
     // Validates the arguments (the same checks as curved_ray_integrals at the telescope level).
@@ -221,7 +222,7 @@ public:
     // Every node is independent and writes its own slot: the thread count does not change the
     // result.
     const std::size_t nh = heights_.size();
-    for_row_blocks(count, build_threads(), [&](std::size_t begin, std::size_t end) {
+    for_row_blocks(count, threads, [&](std::size_t begin, std::size_t end) {
       for (std::size_t k = begin; k < end; ++k) {
         const CurvedRayIntegrals v = curved_ray_integrals(
             profile_, earth_radius_m_, telescope_altitude_m_, theta_[k / nh], heights_[k % nh]);
@@ -231,7 +232,7 @@ public:
       }
     });
     if (enable_accurate_dispersion) {
-      build_accurate_dispersion_tables();
+      build_accurate_dispersion_tables(threads);
     }
   }
 
@@ -346,7 +347,7 @@ private:
   static constexpr std::size_t accurate_k_node_count = 9;
   static constexpr std::size_t accurate_theta_start = 296; // 74 degrees; includes 75-degree stencil
 
-  void build_accurate_dispersion_tables() {
+  void build_accurate_dispersion_tables(unsigned threads) {
     const double low = refractivity_e8(2000.) / refractivity_e8(200.);
     const double high = 1. / low;
     dispersion_k_.resize(accurate_k_node_count);
@@ -363,7 +364,7 @@ private:
     }
     // Flat index f = q * plane_size + (i - accurate_theta_start) * nh + j; each node is
     // independent.
-    for_row_blocks(accurate_k_node_count * plane_size, build_threads(),
+    for_row_blocks(accurate_k_node_count * plane_size, threads,
                    [&](std::size_t begin, std::size_t end) {
                      for (std::size_t index = begin; index < end; ++index) {
                        const std::size_t q = index / plane_size;
@@ -381,11 +382,6 @@ private:
                        dispersion_straight_[index] = equal.excess_straight_ns / k;
                      }
                    });
-  }
-
-  // Threads for the table build: the hardware count (at least one).
-  static unsigned build_threads() noexcept {
-    return std::max(1U, std::thread::hardware_concurrency());
   }
 
   [[nodiscard]] bool lookup_accurate(double theta, double emission_altitude_m, double k,

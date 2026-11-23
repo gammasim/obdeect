@@ -221,7 +221,7 @@ void test_physics(const AtmosphereProfile &profile) {
 }
 
 void test_tables_against_direct(const AtmosphereProfile &profile) {
-  const CurvedRefractionTables tables(profile, kEarthRadius, kTelescope);
+  const CurvedRefractionTables tables(profile, kEarthRadius, kTelescope, false, 2);
   CHECK(tables.earth_radius_m() == kEarthRadius);
   CHECK(tables.telescope_altitude_m() == kTelescope);
   CHECK(tables.profile().levels() == profile.levels());

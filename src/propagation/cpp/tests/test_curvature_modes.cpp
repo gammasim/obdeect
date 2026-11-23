@@ -1006,8 +1006,8 @@ void test_sky_plane_validation() {
   const double R = kEarthRadius;
   const auto profile = ecmwf_profile();
   const obdeect::propagation::RefractionTables flat(profile, site_m);
-  const obdeect::propagation::CurvedRefractionTables lower(profile, R, site_m);
-  const obdeect::propagation::CurvedRefractionTables upper(profile, R, site_m + 10.0);
+  const obdeect::propagation::CurvedRefractionTables lower(profile, R, site_m, false, 2);
+  const obdeect::propagation::CurvedRefractionTables upper(profile, R, site_m + 10.0, false, 2);
   const auto sky_one = [] {
     return sky_chunk(1, 0, {SkyPhoton{0.0, 0.0, 5000.0, 0.0, 0.0, 1.0, false, 0.0}}, 1);
   };
