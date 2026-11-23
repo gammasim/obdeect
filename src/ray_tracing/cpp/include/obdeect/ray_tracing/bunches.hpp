@@ -148,6 +148,10 @@ public:
             std::abs(static_cast<double>(in_.cx[i]) * in_.cx[i] +
                      static_cast<double>(in_.cy[i]) * in_.cy[i] +
                      static_cast<double>(in_.cz[i]) * in_.cz[i] - 1.0) > 1e-5)) ||
+          // Without cz the derived cz is -sqrt(1 - cx^2 - cy^2): zero for a horizontal bunch.
+          (!in_.cz && !(static_cast<double>(in_.cx[i]) * in_.cx[i] +
+                            static_cast<double>(in_.cy[i]) * in_.cy[i] <
+                        1.0)) ||
           (in_.z && !std::isfinite(static_cast<double>(in_.z[i]))) ||
           !std::isfinite(in_.time_ns[i]) || !std::isfinite(in_.zem[i]))
         bad = true;
