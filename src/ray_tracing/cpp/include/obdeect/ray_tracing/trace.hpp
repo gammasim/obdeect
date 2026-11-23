@@ -26,16 +26,18 @@ enum class Status : std::uint8_t {
   missed_primary,       // Never met the primary mirror.
   missed_secondary,     // Left the primary without meeting the secondary.
   missed_focal_surface, // Never met the focal surface.
-  blocked,              // Absorbed by an obscurer (terminal_surface names it).
+  blocked,              // Absorbed by an obscurer or a back face (terminal_surface names it).
   invalid_input,        // Non-finite input, wavelength <= 0 or non-unit direction.
   numerical_failure,    // An intersection did not converge.
+  non_sequential,       // From below: the reflecting face of the secondary, out of sequence.
+  direct_focal,         // From below: the focal surface directly, on its receiving side.
 };
-inline constexpr std::size_t kStatusCount = 7;
+inline constexpr std::size_t kStatusCount = 9;
 
 [[nodiscard]] constexpr std::string_view to_string(Status status) {
   constexpr std::string_view names[kStatusCount] = {
-      "detected", "missed_primary", "missed_secondary", "missed_focal_surface",
-      "blocked",  "invalid_input",  "numerical_failure"};
+      "detected",      "missed_primary",    "missed_secondary", "missed_focal_surface", "blocked",
+      "invalid_input", "numerical_failure", "non_sequential",   "direct_focal"};
   return names[static_cast<std::size_t>(status)];
 }
 
@@ -70,8 +72,9 @@ struct MirrorHit {
 
 // Nearest hit on a mirror (lowest id on exact ties). `failed` reports a
 // non-converged aspheric intersection.
-inline std::optional<MirrorHit> intersect_mirror(const Mirror &mirror, const Ray &ray,
-                                                 bool &failed) {
+// With `any_side` a flat or curved facet is hit from its back too (photons from below).
+inline std::optional<MirrorHit> intersect_mirror(const Mirror &mirror, const Ray &ray, bool &failed,
+                                                 bool any_side = false) {
   failed = false;
   if (mirror.asphere) {
     const auto &a = *mirror.asphere;
@@ -95,7 +98,9 @@ inline std::optional<MirrorHit> intersect_mirror(const Mirror &mirror, const Ray
   std::optional<MirrorHit> nearest;
   mirror.grid.candidates(ray, mirror.facets.size(), [&](std::size_t i) {
     const auto &f = mirror.facets[i];
-    if (const auto hit = f.intersect(ray, kMinDistanceM))
+    const auto hit =
+        any_side ? f.intersect_any_side(ray, kMinDistanceM) : f.intersect(ray, kMinDistanceM);
+    if (hit)
       if (!nearest || hit->t < nearest->hit.t ||
           (hit->t == nearest->hit.t && hit->id < nearest->hit.id))
         nearest = MirrorHit{*hit, static_cast<std::uint32_t>(i)};
@@ -183,11 +188,19 @@ inline double mirror_response(const Mirror &mirror, const MirrorHit &mh, double 
 // photons are the same either way. The default keeps the full classification.
 // `sub_photon` numbers the photons that share one `photon_id` (the random
 // counter's block); 0 gives the random numbers of a single photon.
+//
+// `from_below` traces a photon that moves up from a start below the optics
+// (the caller decides, e.g. by the sign of cz). Its first hit among the primary,
+// the secondary, the focal surface and every obscurer decides: an obscurer or a
+// back face is blocked; the reflecting face of the primary continues as in the
+// sequential path; a reflecting secondary is non_sequential; the focal surface
+// is direct_focal on its receiving side. Nothing hit: missed_primary. The
+// downward path (from_below false) is unchanged.
 [[nodiscard]] inline TraceResult
 trace_photon(const OpticalModel &model, Ray ray, double wavelength_nm, double time_ns,
              double weight, std::uint64_t photon_id, const RandomKey &seed,
              bool apply_responses = true, bool direct = false, bool incidence_angles = true,
-             bool classify_losses = true, std::uint32_t sub_photon = 0) {
+             bool classify_losses = true, std::uint32_t sub_photon = 0, bool from_below = false) {
   using namespace detail;
   TraceResult out;
   out.position = ray.origin;
@@ -219,46 +232,22 @@ trace_photon(const OpticalModel &model, Ray ray, double wavelength_nm, double ti
     }
     return std::nullopt;
   };
-
   bool failed = false;
-  if (!direct) {
-    if (apply_responses && model.telescope_transmission)
-      out.weight *= model.telescope_transmission->at(ray.direction);
-
-    // Source to primary mirror.
-    const auto m1 = intersect_mirror(model.primary, ray, failed);
-    if (failed)
-      return finish(Status::numerical_failure, ray.origin, kNoSurface);
-    double t_m1 = m1 ? m1->hit.t : std::numeric_limits<double>::infinity();
-    if (!classify_losses && !m1)
-      return finish(Status::missed_primary, ray.origin, kNoSurface);
-    if (model.secondary_blocks_incoming) {
-      const auto back = intersect_mirror(*model.secondary, ray, failed);
-      if (failed)
-        return finish(Status::numerical_failure, ray.origin, kNoSurface);
-      if (back && back->hit.t < t_m1) {
-        if (auto b = blocked_on(Leg::incoming, back->hit.t))
-          return *b;
-        path += back->hit.t;
-        return finish(Status::blocked, back->hit.point, back->hit.id);
-      }
-    }
-    if (auto b = blocked_on(Leg::incoming, t_m1))
-      return *b;
-    if (!m1)
-      return finish(Status::missed_primary, ray.origin, kNoSurface);
-
-    path += m1->hit.t;
-    out.primary_point = m1->hit.point;
-    out.primary_surface = m1->hit.id;
+  // The ray from the primary hit m1 on: the primary's response and reflection, then the
+  // secondary. Returns the terminal result, or nothing when the ray goes on to the focal
+  // surface (ray then leaves the last mirror).
+  const auto continue_from_primary = [&](const MirrorHit &m1) -> std::optional<TraceResult> {
+    path += m1.hit.t;
+    out.primary_point = m1.hit.point;
+    out.primary_surface = m1.hit.id;
     if (incidence_angles || angle_matters(model.primary))
-      out.primary_incidence_deg = incidence_deg(ray.direction, m1->hit.normal);
+      out.primary_incidence_deg = incidence_deg(ray.direction, m1.hit.normal);
     if (apply_responses)
       out.weight *=
-          mirror_response(model.primary, *m1, wavelength_nm,
+          mirror_response(model.primary, m1, wavelength_nm,
                           std::isnan(out.primary_incidence_deg) ? 0.0 : out.primary_incidence_deg);
-    ray = {m1->hit.point, reflect_at(model.primary, *m1, ray.direction, photon_id, seed,
-                                     Stream::primary_scatter, sub_photon)};
+    ray = {m1.hit.point, reflect_at(model.primary, m1, ray.direction, photon_id, seed,
+                                    Stream::primary_scatter, sub_photon)};
 
     if (model.secondary) {
       const auto m2 = intersect_mirror(*model.secondary, ray, failed);
@@ -266,7 +255,7 @@ trace_photon(const OpticalModel &model, Ray ray, double wavelength_nm, double ti
         return finish(Status::numerical_failure, ray.origin, kNoSurface);
       if (auto b = blocked_on(Leg::after_primary,
                               m2 ? m2->hit.t : std::numeric_limits<double>::infinity()))
-        return *b;
+        return b;
       if (!m2)
         return finish(Status::missed_secondary, ray.origin, kNoSurface);
       path += m2->hit.t;
@@ -281,21 +270,129 @@ trace_photon(const OpticalModel &model, Ray ray, double wavelength_nm, double ti
       ray = {m2->hit.point, reflect_at(*model.secondary, *m2, ray.direction, photon_id, seed,
                                        Stream::secondary_scatter, sub_photon)};
     }
+    return std::nullopt;
+  };
+  // The first intersection with the focal surface along the ray (sets `failed`).
+  const auto focal_hit = [&]() -> std::optional<SurfaceHit> {
+    const auto &fs = model.focal_surface;
+    std::optional<SurfaceHit> focal;
+    if (fs.asphere) {
+      focal = fs.asphere->intersect(ray, kMinDistanceM, [](const Vec3 &) { return true; }, failed);
+    } else if (ray.direction.z != 0.0) {
+      const double t = (fs.plane_z - ray.origin.z) / ray.direction.z;
+      if (t > kMinDistanceM)
+        focal = SurfaceHit{t, ray.at(t), Vec3{0.0, 0.0, 1.0}, fs.id};
+    }
+    return focal;
+  };
+
+  if (!direct) {
+    if (apply_responses && model.telescope_transmission)
+      out.weight *= model.telescope_transmission->at(ray.direction);
+
+    if (from_below) {
+      // The nearest of the primary, the secondary, the focal surface and the obscurers of
+      // every leg. Ties: surfaces before obscurers, the primary first.
+      const auto m1 = intersect_mirror(model.primary, ray, failed, true);
+      if (failed)
+        return finish(Status::numerical_failure, ray.origin, kNoSurface);
+      std::optional<MirrorHit> m2;
+      if (model.secondary) {
+        m2 = intersect_mirror(*model.secondary, ray, failed, true);
+        if (failed)
+          return finish(Status::numerical_failure, ray.origin, kNoSurface);
+      }
+      const auto focal = focal_hit();
+      if (failed)
+        return finish(Status::numerical_failure, ray.origin, kNoSurface);
+      enum class First { none, primary, secondary, focal, obscurer };
+      First first = First::none;
+      double t_best = std::numeric_limits<double>::infinity();
+      std::uint32_t obscurer_id = kNoSurface;
+      if (m1 && m1->hit.t < t_best) {
+        t_best = m1->hit.t;
+        first = First::primary;
+      }
+      if (m2 && m2->hit.t < t_best) {
+        t_best = m2->hit.t;
+        first = First::secondary;
+      }
+      if (focal && focal->t < t_best) {
+        t_best = focal->t;
+        first = First::focal;
+      }
+      for (const Leg leg : {Leg::incoming, Leg::after_primary, Leg::after_secondary})
+        if (const auto b = model.obscurers.nearest(ray, leg, t_best)) {
+          t_best = b->t;
+          obscurer_id = b->id;
+          first = First::obscurer;
+        }
+      switch (first) {
+      case First::none:
+        return finish(Status::missed_primary, ray.origin, kNoSurface);
+      case First::obscurer:
+        path += t_best;
+        return finish(Status::blocked, ray.at(t_best), obscurer_id);
+      case First::primary:
+        // The reflecting face of the primary faces down: dot(direction, normal) < 0.
+        if (dot(ray.direction, m1->hit.normal) >= 0.0) {
+          path += m1->hit.t;
+          out.primary_point = m1->hit.point;
+          out.primary_surface = m1->hit.id;
+          return finish(Status::blocked, m1->hit.point, m1->hit.id);
+        }
+        if (auto r = continue_from_primary(*m1))
+          return *r;
+        break;
+      case First::secondary:
+        // The secondary is a graph surface (normal +z) whose reflecting face faces down.
+        path += m2->hit.t;
+        out.secondary_point = m2->hit.point;
+        out.secondary_surface = m2->hit.id;
+        if (dot(ray.direction, m2->hit.normal) > 0.0)
+          return finish(Status::non_sequential, m2->hit.point, m2->hit.id);
+        return finish(Status::blocked, m2->hit.point, m2->hit.id);
+      case First::focal:
+        // The focal surface receives light from below: the normal (+z) points against it.
+        path += focal->t;
+        if (dot(ray.direction, focal->normal) > 0.0)
+          return finish(Status::direct_focal, focal->point, model.focal_surface.id);
+        return finish(Status::blocked, focal->point, model.focal_surface.id);
+      }
+    } else {
+      // Source to primary mirror.
+      const auto m1 = intersect_mirror(model.primary, ray, failed);
+      if (failed)
+        return finish(Status::numerical_failure, ray.origin, kNoSurface);
+      double t_m1 = m1 ? m1->hit.t : std::numeric_limits<double>::infinity();
+      if (!classify_losses && !m1)
+        return finish(Status::missed_primary, ray.origin, kNoSurface);
+      if (model.secondary_blocks_incoming) {
+        const auto back = intersect_mirror(*model.secondary, ray, failed);
+        if (failed)
+          return finish(Status::numerical_failure, ray.origin, kNoSurface);
+        if (back && back->hit.t < t_m1) {
+          if (auto b = blocked_on(Leg::incoming, back->hit.t))
+            return *b;
+          path += back->hit.t;
+          return finish(Status::blocked, back->hit.point, back->hit.id);
+        }
+      }
+      if (auto b = blocked_on(Leg::incoming, t_m1))
+        return *b;
+      if (!m1)
+        return finish(Status::missed_primary, ray.origin, kNoSurface);
+      if (auto r = continue_from_primary(*m1))
+        return *r;
+    }
   }
   const Leg leg = model.secondary ? Leg::after_secondary : Leg::after_primary;
 
   // To the focal surface.
-  std::optional<SurfaceHit> focal;
   const auto &fs = model.focal_surface;
-  if (fs.asphere) {
-    focal = fs.asphere->intersect(ray, kMinDistanceM, [](const Vec3 &) { return true; }, failed);
-    if (failed)
-      return finish(Status::numerical_failure, ray.origin, kNoSurface);
-  } else if (ray.direction.z != 0.0) {
-    const double t = (fs.plane_z - ray.origin.z) / ray.direction.z;
-    if (t > kMinDistanceM)
-      focal = SurfaceHit{t, ray.at(t), Vec3{0.0, 0.0, 1.0}, fs.id};
-  }
+  const auto focal = focal_hit();
+  if (failed)
+    return finish(Status::numerical_failure, ray.origin, kNoSurface);
   if (auto b = blocked_on(leg, focal ? focal->t : std::numeric_limits<double>::infinity()))
     return *b;
   if (!focal)
@@ -598,7 +695,7 @@ private:
                   {in_.direction[3 * i], in_.direction[3 * i + 1], in_.direction[3 * i + 2]}};
     return trace_photon(model_, ray, in_.wavelength_nm[i], in_.time_ns[i], in_.weight[i],
                         in_.photon_id[i], seed_, apply_responses_, direct_, wants_angles_,
-                        classify_losses_);
+                        classify_losses_, 0, ray.direction.z > 0.0);
   }
 
   void write_row(std::size_t row, std::size_t input, const TraceResult &r) const {

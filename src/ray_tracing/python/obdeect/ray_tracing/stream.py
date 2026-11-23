@@ -95,6 +95,22 @@ def minimum_input_plane_height_m(
     return max(0.0, support + float(np.dot(normal, model.axes_offset_m))) + INPUT_PLANE_MARGIN_M
 
 
+def lower_input_plane_height_m(
+    model: OpticalModel, theta_deg: float, phi_deg: float = 0.0
+) -> float:
+    """Height [m] of the ground-frame input plane for photons from below.
+
+    The plane lies a margin below the lowest optic (any obscurer, the primary and the
+    secondary) along the zenith of the pointing, with the axes offset included. Photons
+    from below start on it and move up; it may lie below the ground.
+    """
+    if not 0.0 <= theta_deg < 90.0:
+        raise ModelError(f"telescope zenith angle {theta_deg} deg must lie in [0, 90)")
+    normal = ground_to_telescope_rotation(theta_deg, phi_deg)[:, 2]
+    bottom = min((b for _, b in model.optics_bottoms(normal)), default=0.0)
+    return bottom - INPUT_PLANE_MARGIN_M + float(np.dot(normal, model.axes_offset_m))
+
+
 def _run_pointing(metadata: Mapping[str, Any]) -> tuple[float, float] | None:
     """Telescope (zenith, azimuth) [deg] from the run keys (radians), or None if absent."""
     present = [key in metadata for key in RUN_POINTING_KEYS]
@@ -107,10 +123,13 @@ def _run_pointing(metadata: Mapping[str, Any]) -> tuple[float, float] | None:
 
 
 def _cz_matches(cz_column: np.ndarray, cx: np.ndarray, cy: np.ndarray) -> bool:
-    """Return True if cz points downwards and (cx, cy, cz) is a unit vector within CZ_TOLERANCE."""
+    """Return True if every cz is finite and (cx, cy, cz) is a unit vector within CZ_TOLERANCE.
+
+    cz may point either way; zero is accepted here and rejected by the caller (horizontal).
+    """
     cz = cz_column.astype(np.float64)
     norm_error = np.abs(cz * cz - (1.0 - cx * cx - cy * cy))
-    return bool(np.all(cz < 0.0) and np.max(norm_error, initial=0.0) <= CZ_TOLERANCE)
+    return bool(np.all(np.isfinite(cz)) and np.max(norm_error, initial=0.0) <= CZ_TOLERANCE)
 
 
 def _names(text: Any) -> list[str]:
@@ -270,13 +289,21 @@ class _Optics:
     # Input plane of telescope-frame photons (telescope frame, no tilt): above the incoming
     # obscurers and the mirrors, so that every photon starts upstream of them.
     telescope_plane_m: float
+    # Input plane of telescope-frame photons from below: under every optic.
+    telescope_lower_plane_m: float
 
     @classmethod
     def of(cls, model: OpticalModel, part: str) -> _Optics:
         tops = [
             z for z in (model.max_incoming_obscurer_z_m(), model.max_mirror_z_m()) if z is not None
         ]
-        return cls(model, _transmission(model, part), max(tops, default=0.0) + INPUT_PLANE_MARGIN_M)
+        bottom = min((b for _, b in model.optics_bottoms(np.array([0.0, 0.0, 1.0]))), default=0.0)
+        return cls(
+            model,
+            _transmission(model, part),
+            max(tops, default=0.0) + INPUT_PLANE_MARGIN_M,
+            bottom - INPUT_PLANE_MARGIN_M,
+        )
 
 
 @dataclass(frozen=True)
@@ -370,7 +397,7 @@ class _Tracer:
         self.law: tuple[float, float] | None = None
         self.event: dict[str, Any] | None = None
         # Ground-frame rotation and input plane of the event, by telescope id.
-        self.geometry: dict[int, tuple[np.ndarray, float]] = {}
+        self.geometry: dict[int, tuple[np.ndarray, float, float]] = {}
         self.telescope: _Telescope | None = None
         # Row indices continue across repeated blocks of one telescope in an event.
         self.next_index: dict[int, int] = {}
@@ -521,13 +548,15 @@ class _Tracer:
             telescope.config = _Config(roulette=not tables, envelopes=_Envelopes(tuple(tables)))
         return telescope.config
 
-    def _ground_geometry(self, telescope_id: int) -> tuple[np.ndarray, float]:
+    def _ground_geometry(self, telescope_id: int) -> tuple[np.ndarray, float, float]:
+        """Rotation and the input planes (from above, from below) of a ground-frame telescope."""
         if telescope_id not in self.geometry:
             zenith_deg, azimuth_deg = self._pointing()
             model = self._optics(telescope_id).model
             self.geometry[telescope_id] = (
                 ground_to_telescope_rotation(zenith_deg, azimuth_deg),
                 minimum_input_plane_height_m(model, zenith_deg, azimuth_deg),
+                lower_input_plane_height_m(model, zenith_deg, azimuth_deg),
             )
         return self.geometry[telescope_id]
 
@@ -600,16 +629,29 @@ class _Tracer:
     def _input_bunches(
         self, record: dict[str, Any], event_number: int, optics: _Optics
     ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
-        """Bunches on the input plane and the frame that places it (see trace_bunches)."""
+        """Bunches on the input plane and the frame that places it (see trace_bunches).
+
+        Photons moving down start on the upper input plane, photons moving up on the lower one.
+        """
         columns = record["columns"]
         rows = len(columns["w"])
         cx = columns["cx"].astype(np.float64)
         cy = columns["cy"].astype(np.float64)
+        cz_column = columns.get("cz")
         cz = -np.sqrt(np.maximum(0.0, 1.0 - cx * cx - cy * cy))
-        if "cz" in columns and not _cz_matches(columns["cz"], cx, cy):
+        if cz_column is not None:
+            cz = cz_column.astype(np.float64)
+        in_disc = cx * cx + cy * cy <= 1.0 + CZ_TOLERANCE
+        if not (np.all(np.isfinite(cz)) and np.all(in_disc)):
+            raise ModelError(
+                "photon directions must be finite unit vectors (cx, cy in the unit disc)"
+            )
+        if cz_column is not None and not _cz_matches(cz_column, cx, cy):
             raise ModelError("photon column cz does not match cx and cy")
-        if not np.all(cz < 0.0):
-            raise ModelError("photons must move towards -z (downwards)")
+        if np.any(cz == 0.0):
+            raise ModelError(
+                "horizontal photons relative to the telescope axis are not supported yet"
+            )
         x = columns["x"].astype(np.float64)
         y = columns["y"].astype(np.float64)
         t = columns["t"].astype(np.float64)
@@ -617,7 +659,7 @@ class _Tracer:
             if "z" in columns and np.any(columns["z"] != 0):
                 raise ModelError("ground-frame photons must lie in the plane z = 0")
             z = np.zeros(rows)
-            rotation, plane = self._ground_geometry(record["telescope_id"])
+            rotation, plane, lower = self._ground_geometry(record["telescope_id"])
             offset = np.zeros(3)
         else:
             if "z" not in columns:
@@ -625,11 +667,13 @@ class _Tracer:
             z = columns["z"].astype(np.float64)
             rotation = np.eye(3)
             plane = optics.telescope_plane_m
+            lower = optics.telescope_lower_plane_m
             # The telescope frame is the frame of trace(): cancel the axes offset that
             # trace_bunches subtracts, so that a photon at p is traced at p.
             offset = np.asarray(optics.model.axes_offset_m, dtype=np.float64)
-        # Move each photon along its direction to the input plane; the time follows the path.
-        s = (plane - z) / cz
+        # Move each photon along its direction to its input plane; the time follows the path.
+        row_plane = np.where(cz < 0.0, plane, lower)
+        s = (row_plane - z) / cz
         first_index = int(record["first_index"])
         if event_number >= 2**32 or first_index + rows >= 2**32:
             raise ModelError("bunch ids need event numbers and photon indices below 2^32")
@@ -647,7 +691,14 @@ class _Tracer:
             "wavelength_nm": np.asarray(columns.get("wavelength", np.zeros(rows)), dtype=float32),
             "bunch_id": bunch_id,
         }
-        placement = {"frame_rotation": rotation, "frame_offset_m": offset, "plane_z": plane}
+        if cz_column is not None:
+            bunches["cz"] = np.asarray(cz_column, dtype=float32)
+        placement = {
+            "frame_rotation": rotation,
+            "frame_offset_m": offset,
+            "plane_z": plane,
+            "lower_plane_z": lower,
+        }
         return bunches, placement
 
     def _write(self, telescope: _Telescope, columns: dict[str, np.ndarray]) -> None:

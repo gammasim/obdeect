@@ -295,13 +295,72 @@ void validation() {
   CHECK(rejects(bad)); // A plane wave takes no target.
   bad = star_source(inf);
   bad.geometry = PlaneWave{{0.0, 0.0, -1.0}, inf, 5.0, 0.0, 30.0};
-  CHECK(rejects(bad));
+  CHECK(rejects(bad)); // Upward rays from a start plane above the disc: the wrong side.
+  bad = star_source(inf);
+  bad.geometry = PlaneWave{{1.0, 0.0, 0.0}, inf, 5.0, 0.0, 30.0};
+  CHECK(rejects(bad)); // Horizontal: not supported yet (no horizontal start plane).
+  bad = star_source(inf);
+  bad.geometry = PlaneWave{{0.0, 0.0, 1.0}, inf, 5.0, 0.0, -30.0};
+  CHECK(rejects(bad)); // Downward rays must start above the disc.
+  bad = star_source(inf);
+  bad.geometry = PlaneWave{{0.0, 0.0, -1.0}, 20.0, 5.0, 0.0, 30.0};
+  CHECK(rejects(bad)); // Finite distance: the same side rule.
   bad = s;
   bad.spectrum = InverseSquare{600.0, 300.0};
   CHECK(rejects(bad));
   bad = s;
   bad.pulse = Exponential{0.0, -1.0};
   CHECK(rejects(bad));
+}
+
+void upward_plane_waves() {
+  // Beam from below: towards_source = (0.01, 0, -1), disc at z = 0, start plane at z = -30 m.
+  // Photons travel up along (-0.01, 0, 1) normalised, start on the plane, times relative to the
+  // wavefront through the disc centre.
+  Source up;
+  up.photons = 20000.0;
+  up.geometry = PlaneWave{normalised({0.01, 0.0, -1.0}), inf, 5.0, 0.0, -30.0};
+  CHECK(!throws_invalid([&] { validate(up); }));
+  const auto c = emit_all(up, 7, 20000);
+  CHECK(c.rows() == 20000);
+  const Vec3 towards = normalised({0.01, 0.0, -1.0});
+  double inside = 0.0;
+  for (std::size_t i = 0; i < c.rows(); ++i) {
+    CHECK_NEAR(c[Column::z][i], -30.0, 1e-4);
+    CHECK(c[Column::cz][i] > 0.0);
+    CHECK_NEAR(c[Column::cz][i], normalised({-0.01, 0.0, 1.0}).z, 1e-6);
+    const Vec3 target = at_plane(c, i, 0.0);
+    CHECK(std::hypot(target.x, target.y) <= 5.0 + 1e-3);
+    inside += std::hypot(target.x, target.y) < 2.5;
+    const Vec3 start{c[Column::x][i], c[Column::y][i], c[Column::z][i]};
+    const Vec3 dir{c[Column::cx][i], c[Column::cy][i], c[Column::cz][i]};
+    CHECK_NEAR(dot(dir, towards), -1.0, 1e-6);
+    CHECK_NEAR(c[Column::t][i], dot(start, dir) / speed_of_light_m_per_ns, 1e-3);
+  }
+  CHECK_NEAR(inside / 20000.0, 0.25, 0.01);
+
+  // Point source below the disc at a finite distance: source at (0, 0, 1.5) - 20 * (0.6, 0, 0.8)
+  // = (-12, 0, -14.5). A start plane above the source (z = -5) is crossed by the photons: they
+  // start there. A start plane below the source (z = -30): they start at the source itself.
+  Source lamp;
+  lamp.photons = 50.0;
+  lamp.geometry = PlaneWave{normalised({-0.6, 0.0, -0.8}), 20.0, 1.0, 1.5, -5.0};
+  const auto p = emit_all(lamp, 3, 50);
+  CHECK(p.rows() == 50);
+  for (std::size_t i = 0; i < p.rows(); ++i) {
+    CHECK_NEAR(p[Column::z][i], -5.0, 1e-4);
+    CHECK(p[Column::cz][i] > 0.0);
+    CHECK(p[Column::x][i] > -12.0); // on the way from the source (x = -12) to the disc
+  }
+  lamp.geometry = PlaneWave{normalised({-0.6, 0.0, -0.8}), 20.0, 1.0, 1.5, -30.0};
+  const auto q = emit_all(lamp, 3, 50);
+  for (std::size_t i = 0; i < q.rows(); ++i) {
+    CHECK_NEAR(q[Column::x][i], -12.0, 1e-4);
+    CHECK_NEAR(q[Column::y][i], 0.0, 1e-4);
+    CHECK_NEAR(q[Column::z][i], -14.5, 1e-4);
+    // Start at the source, 20 m before the disc-centre wavefront: t = -d / c.
+    CHECK_NEAR(q[Column::t][i], -20.0 / speed_of_light_m_per_ns, 1e-3);
+  }
 }
 
 void validation_bounds() {
@@ -358,6 +417,7 @@ void validation_bounds() {
 int main() {
   return run_checks([] {
     stars();
+    upward_plane_waves();
     emitters_isotropic_disc();
     disc_target_angular_profile();
     chunks_and_determinism();

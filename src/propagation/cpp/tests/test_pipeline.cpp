@@ -145,7 +145,7 @@ void test_direction_rounding_outside_unit_disc_accepted() {
 }
 
 // A rounded over-unit direction takes the magnitude of its validated cz: cx^2 + cy^2 becomes
-// 1 - cz^2. Directions inside the unit disc, and upwards ones, are left unchanged.
+// 1 - cz^2, for either sign of cz. Directions inside the unit disc are left unchanged.
 void test_snap_direction_to_cz() {
   float cx = 1.0000001F;
   float cy = 0.0F;
@@ -161,7 +161,9 @@ void test_snap_direction_to_cz() {
   float cx_up = 1.0000001F;
   float cy_up = 0.0F;
   obdeect::stream::snap_direction_to_cz(cx_up, cy_up, 0.0001);
-  CHECK(cx_up == 1.0000001F && cy_up == 0.0F);
+  CHECK_NEAR(static_cast<double>(cx_up) * cx_up + static_cast<double>(cy_up) * cy_up, 1.0 - 1e-8,
+             1e-6);
+  CHECK(cx_up > 0.0F && cy_up == 0.0F);
 }
 
 // Wavelengths are finite and non-negative (0 means not assigned). NaN, inf and negative values

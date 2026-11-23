@@ -19,6 +19,10 @@
 // rejection rules, including the dispersion factors k and k_group (see bend()). The series limit
 // bend_series_limit_exceeded() is defined in refraction.hpp; a photon that bend() rejects for that
 // reason is bent by bend_quadrature() instead of being dropped.
+//
+// Upward photons (bend_upward, docs/propagation/refraction.md, "Upward photons") leave an emission
+// level h_e below the plane h_t and travel up. Snell's law gives sin theta increasing with height
+// (n decreases), so they bend away from the vertical and can turn over before the plane.
 
 #include "obdeect/propagation/profile.hpp"
 #include "obdeect/propagation/refraction.hpp"
@@ -67,13 +71,14 @@ inline bool horizon_integrands(const AtmosphereProfile &profile, double phase_sc
   return true;
 }
 
-// Integrals over a path of length_cm below the emission level h_e_cm [cm]. Outputs: dx_cm and the
-// air excess [cm] (time integral times c, without the vacuum part). Returns false if the ray
-// cannot reach the lower end of the path.
+// Integrals over a path of length_cm from the emission level h_e_cm [cm]: downwards for
+// direction = -1 (heights h_e - p), upwards for direction = +1 (heights h_e + p), p the distance
+// travelled. Outputs: dx_cm and the air excess [cm] (time integral times c, without the vacuum
+// part). Returns false if the ray cannot reach a height of the path (sin theta >= 1).
 inline bool horizon_path_integrals(const AtmosphereProfile &profile, double phase_scale,
                                    double group_scale, double h_e_cm, double length_cm, double s_e,
-                                   double c_e, double nu_e, double piece_cm, double &dx_cm,
-                                   double &excess_cm) {
+                                   double c_e, double nu_e, double piece_cm, double direction,
+                                   double &dx_cm, double &excess_cm) {
   dx_cm = 0.;
   excess_cm = 0.;
   const bool near_horizontal = c_e < horizon_singular_cos;
@@ -95,8 +100,8 @@ inline bool horizon_path_integrals(const AtmosphereProfile &profile, double phas
         weight = 0.5 * (p1 - p0) * horizon_gauss_weights[k];
       }
       double f_tan = 0., f_time = 0.;
-      if (!horizon_integrands(profile, phase_scale, h_e_cm - p, group_scale, s_e, c_e, nu_e, f_tan,
-                              f_time)) {
+      if (!horizon_integrands(profile, phase_scale, h_e_cm + direction * p, group_scale, s_e, c_e,
+                              nu_e, f_tan, f_time)) {
         return false;
       }
       dx_cm += weight * f_tan;
@@ -139,7 +144,7 @@ template <class T>
 
   double dx_cm = 0., excess_cm = 0.;
   if (!horizon_path_integrals(tables.profile(), k, k_group, h, h - obs, s_e, c_e, nu_e,
-                              100. * piece_m, dx_cm, excess_cm)) {
+                              100. * piece_m, -1., dx_cm, excess_cm)) {
     return false;
   }
 
@@ -189,6 +194,103 @@ template <class T>
 [[nodiscard]] bool bend_quadrature(const RefractionTables &tables, T height_m, T &cx, T &cy, T &x,
                                    T &y, T &t) {
   return bend_quadrature(tables, height_m, cx, cy, x, y, t, 1., 1.);
+}
+
+// Upward photons: bending from the emission level h_e (m a.s.l.) up to the plane h_t (m a.s.l.),
+// h_e <= h_t, with the same conventions as bend_quadrature(). The arguments are the straight-line
+// position at the plane (x, y), the direction (cx, cy) at emission (cz = +sqrt(1 - cx^2 - cy^2)
+// is the upward component) and the time at emission t. On output the position is displaced by the
+// bending, (cx, cy) is the direction at the plane (cz = +sqrt(1 - cx^2 - cy^2) at the caller) and t
+// has the travel time added: (h_t - h_e) / (c cos theta_e) + (1/c) integral of
+// (n_group / cos theta - 1 / cos theta_e) dh, the vacuum path along the emission direction plus the
+// air excess. Snell's law n sin theta = n_e sin theta_e with n = 1 + k nu(h).
+//
+// Returns false and leaves every argument unchanged if an input is not finite, the direction is not
+// strictly inside the unit circle, h_e > h_t, k or k_group is not finite and positive, the profile
+// does not cover the levels, or the ray turns over (sin theta reaches 1) at or below the plane. The
+// rejection by turning over is decided by upward_turns_over(). Allocates nothing; about 8 profile
+// lookups per 250 m of path.
+template <class T>
+[[nodiscard]] bool bend_upward(const AtmosphereProfile &profile, T emission_m, T plane_m, T &cx,
+                               T &cy, T &x, T &y, T &t, double k, double k_group) {
+  const double he_m = static_cast<double>(emission_m);
+  const double ht_m = static_cast<double>(plane_m);
+  const double ux = static_cast<double>(cx), uy = static_cast<double>(cy);
+  if (!std::isfinite(he_m) || !std::isfinite(ht_m) || !(ht_m >= he_m) || !std::isfinite(ux) ||
+      !std::isfinite(uy) || !std::isfinite(static_cast<double>(x)) ||
+      !std::isfinite(static_cast<double>(y)) || !std::isfinite(static_cast<double>(t)) ||
+      !std::isfinite(k) || !(k > 0.) || !std::isfinite(k_group) || !(k_group > 0.)) {
+    return false;
+  }
+  const double h_e = 100. * he_m;
+  const double h_t = 100. * ht_m;
+  const double s2 = ux * ux + uy * uy;
+  if (!(s2 < 1.)) {
+    return false;
+  }
+  const double s_e = std::sqrt(s2);
+  const double c_e = std::sqrt(1. - s2);
+  const double nu_e = k * profile.index_minus_one_cm(h_e);
+  const double nu_t = k * profile.index_minus_one_cm(h_t);
+  const double s_t = s_e * (1. + nu_e) / (1. + nu_t);
+  if (!(s_t < 1.)) {
+    return false; // turns over before the plane
+  }
+
+  // The integrands are steepest at the plane, where cos theta is smallest. By reciprocity the path
+  // is integrated downwards from the plane (same Snell constant n_t s_t = n_e s_e) with the
+  // downward quadrature, whose sub-intervals and near-horizon substitution start at its first
+  // level. Its integrals use theta_t as reference; the exact constant terms convert them to the
+  // reference theta_e: integral (tan theta - tan theta_e) dh = A + (tan theta_t - tan theta_e) dh
+  // and likewise for 1 / cos theta.
+  const double c_t = std::sqrt((1. - s_t) * (1. + s_t));
+  const double height_cm = h_t - h_e;
+  double down_dx_cm = 0., down_excess_cm = 0.;
+  if (!detail::horizon_path_integrals(profile, k, k_group, h_t, height_cm, s_t, c_t, nu_t,
+                                      100. * detail::horizon_piece_m, -1., down_dx_cm,
+                                      down_excess_cm)) {
+    return false;
+  }
+  const double dx_cm = down_dx_cm + (s_t / c_t - s_e / c_e) * height_cm;
+  const double excess_cm = down_excess_cm + (1. / c_t - 1. / c_e) * height_cm;
+
+  // Travel time: vacuum path along the emission direction plus the group-index excess.
+  const double travel_cm = (h_t - h_e) / c_e + excess_cm;
+  const double travel_ns = travel_cm / (100. * speed_of_light_m_per_ns);
+  if (s_e > 0.) {
+    const double shift_m = dx_cm / 100.;
+    x = static_cast<T>(static_cast<double>(x) + shift_m * ux / s_e);
+    y = static_cast<T>(static_cast<double>(y) + shift_m * uy / s_e);
+    const double scale = s_t / s_e;
+    cx = static_cast<T>(ux * scale);
+    cy = static_cast<T>(uy * scale);
+  }
+  t = static_cast<T>(static_cast<double>(t) + travel_ns);
+  return true;
+}
+
+// True if the upward photon of bend_upward() (same arguments, direction cx, cy at emission) turns
+// over before the plane: s_t = s_e (1 + k nu_e) / (1 + k nu_t) >= 1. The profile index is
+// monotonic in the plane-parallel atmosphere, so the turning point is then at or below the plane.
+// False for invalid inputs (those are rejected by bend_upward() as not bendable).
+template <class T>
+[[nodiscard]] bool upward_turns_over(const AtmosphereProfile &profile, T emission_m, T plane_m,
+                                     T cx, T cy, double k) {
+  const double he_m = static_cast<double>(emission_m);
+  const double ht_m = static_cast<double>(plane_m);
+  const double ux = static_cast<double>(cx), uy = static_cast<double>(cy);
+  if (!std::isfinite(he_m) || !std::isfinite(ht_m) || !(ht_m >= he_m) || !std::isfinite(ux) ||
+      !std::isfinite(uy) || !std::isfinite(k) || !(k > 0.)) {
+    return false;
+  }
+  const double s2 = ux * ux + uy * uy;
+  if (!(s2 < 1.)) {
+    return false;
+  }
+  const double s_e = std::sqrt(s2);
+  const double nu_e = k * profile.index_minus_one_cm(100. * he_m);
+  const double nu_t = k * profile.index_minus_one_cm(100. * ht_m);
+  return !(s_e * (1. + nu_e) / (1. + nu_t) < 1.);
 }
 
 } // namespace obdeect::propagation

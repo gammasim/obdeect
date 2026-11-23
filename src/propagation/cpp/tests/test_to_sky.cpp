@@ -298,7 +298,9 @@ void dropped_rows() {
       row.x = std::nan("");
     }
     if (r == 4) {
-      row.cz = 0.5; // upwards, cz column present
+      // Upwards, below the plane (it came from below): converted, not dropped.
+      row.cz = std::sqrt(1.0 - row.cx * row.cx - row.cy * row.cy);
+      row.zem = site_m - 200.0;
     }
     if (r == 6) {
       row.cx = 1.0; // horizontal
@@ -311,12 +313,14 @@ void dropped_rows() {
   std::uint64_t dropped = 0;
   const auto pieces =
       ground_to_sky(input, GroundPlane{-50.0, 300.0, 0.0, site_m, nullptr}, dropped);
-  CHECK(dropped == 4);
+  // Rows 1 (downward, at the observation level), 3 (NaN) and 6 (horizontal) are dropped; row 4 is
+  // an upward row below the plane and is converted.
+  CHECK(dropped == 3);
   CHECK(pieces.size() == 3);
   if (pieces.size() == 3) {
     CHECK(pieces[0].first_index == first && pieces[0].rows() == 1);
     CHECK(pieces[1].first_index == first + 2 && pieces[1].rows() == 1);
-    CHECK(pieces[2].first_index == first + 5 && pieces[2].rows() == 1);
+    CHECK(pieces[2].first_index == first + 4 && pieces[2].rows() == 2);
   }
   for (const auto &piece : pieces) {
     CHECK(piece.frame == Frame::sky);

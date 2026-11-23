@@ -23,7 +23,7 @@ With `--scattering`, one more step runs per event, before the steps above:
 
 | # | Step | Frame | Reference |
 |---|---|---|---|
-| 0 | Single scattering of the primary photons (downwards; all blocks, or `--scattering-primaries`): wavelengths first, then scattered photons towards every telescope sphere, in their telescope's block (kept telescopes only with `--telescopes`) | sky | [](scattering.md) |
+| 0 | Single scattering of the primary photons (downwards and upwards, not horizontal; all blocks, or `--scattering-primaries`): wavelengths first, then scattered photons towards every telescope sphere, in any direction (upwards from points below the telescope), in their telescope's block (kept telescopes only with `--telescopes`) | sky | [](scattering.md) |
 | 1–4 | Primaries: as above (p = p_atm E) | sky → G | |
 | 1s | Scattered photons: sky → G, same run geometry (refraction, air delay) | sky → G | |
 | 4s | Scattered photons: p = E exp(-od_focus), thinning or weighting (own random stream, see [](../stream/random-numbers.md)) | G | |
@@ -42,17 +42,38 @@ and an entry in the list of efficiency factors built there.
 
 ## Frames and positions
 
-- Sky: x (north), y (west), z above the observation level; direction cosines (cx, cy, cz), cz < 0
-  downwards. An optional cz column decides whether a photon moves upwards.
+- Sky: x (north), y (west), z above the observation level; direction cosines (cx, cy, cz). Without
+  a cz column a photon moves downwards (cz = -sqrt(1 - cx^2 - cy^2)). With a cz column, cz < 0 is
+  downwards, cz > 0 upwards and cz = 0 horizontal; the column must match cx, cy (either sign).
 - Telescope i (1-based `telescope_id`) is at the i-th entry of `telescope_x_m`, `telescope_y_m`,
   `telescope_z_m` (z above the observation level).
-- G: x, y relative to the telescope centre; z and cz are removed.
+- G: x, y relative to the telescope centre; z is removed. A cz column of the input is kept (its sign
+  follows the direction of the output photon); a stream without cz has none in G.
 - Emission altitude a.s.l. = `observation_level_m` + z. Telescope altitude a.s.l. = the same plus
   the telescope z.
 
-A photon in the sky frame reaches the plane if it moves downwards and starts above it. Other photons (upwards,
-horizontal, emitted below the plane, or not bendable) are dropped and counted. Their rows stay in
-the chunk with w = 0, so the random draws of the other photons do not change.
+A downward photon reaches the plane if it starts at or above it. An upward photon reaches it if it
+starts between the observation level and the plane (emitted below the plane, it travels up to it;
+see [](refraction.md#upward-photons)). Horizontal photons (cz = 0) never reach the plane. The other
+photons are dropped and counted by reason (see [Dropped photons](#dropped-photons)). Their rows stay
+in the chunk with w = 0, so the random draws of the other photons do not change.
+
+## Dropped photons
+
+The stage counts the dropped photons by reason. Each dropped photon has exactly one reason:
+
+| Reason | Photons |
+| --- | --- |
+| `moving_away` | downward photons starting below the plane; upward photons starting above it |
+| `horizontal` | cz = 0 (cx^2 + cy^2 = 1) |
+| `below_ground` | starting below the observation level (z < 0), either direction |
+| `turns_over` | upward photons turned back by refraction (sin theta reaches 1) before the plane |
+| `not_bendable` | bending by quadrature failed otherwise (not expected for valid input) |
+| `misses_level` | `spherical` mode: the straight line does not reach the telescope level |
+
+The summary of a run has `dropped` (the total) and `dropped_by_reason`, a dict with these six keys.
+The sum of the values equals `dropped`. The efficiency status does not record the dropped count; it
+is in the summary only (and in the output of the executable as its `dropped` total).
 
 Time: without a profile, t + s/c. With a profile and no refraction in the stream, the air delay
 `straight_path_air_delay_ns` is added. With refraction (`refraction_applied` = 0 and a profile),
@@ -213,8 +234,8 @@ summary = obdeect.propagation.propagate(
 )
 ```
 
-`summary` is a dict with `photons_in`, `photons_out`, `dropped`, `weight_out`. Files are paths only
-(no `-`).
+`summary` is a dict with `photons_in`, `photons_out`, `dropped`, `dropped_by_reason` (a dict of the
+reasons of [Dropped photons](#dropped-photons)) and `weight_out`. Files are paths only (no `-`).
 
 ## Geometry only
 
@@ -265,6 +286,7 @@ $ obdeect propagation run ... --pathlen "$(obdeect propagation pathlen telescope
 
 - Scattering needs one `array_index` per event (CORSIKA without array reuse, `CSCAT 1`); an event
   with several is rejected.
+- Upward photons are bent by quadrature over their path below the plane (refraction, [](refraction.md#upward-photons)) and their extinction is the same integral as for downward photons, over the heights between the emission and the telescope. In `spherical` mode the path below the plane is treated as straight (the G plane is Cartesian); the bending uses the profile and the flat layers. Upward primaries are scattered up to the top of the scattering table, and scattered photons go up to a telescope centre above them ([](scattering.md)).
 - Plane-parallel airmass, straight-line geometry and refraction by default (mode `none`). With
   `--curvature spherical` the airmass, bending and air delay are spherical ([](curvature.md)); with
   `corsika` CORSIKA has applied them.

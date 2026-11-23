@@ -4,12 +4,14 @@
 // stream, used by `obdeect propagation to-sky` (docs/propagation/ground-to-sky.md).
 //
 // Per row, with the telescope position (X_t, Y_t, Z_t) [m], the observation level h_obs [m a.s.l.],
-// h_t = h_obs + Z_t, cz_m = sqrt(1 - cx^2 - cy^2) (photons move downwards, cz = -cz_m) and
-// zenith = atan2(sqrt(cx^2 + cy^2), cz_m):
-//   s     = (zem - h_t) / cz_m                         straight path from the emission to the plane
+// h_t = h_obs + Z_t, cz_m = sqrt(1 - cx^2 - cy^2) and zenith = atan2(sqrt(cx^2 + cy^2), cz_m).
+// A downward photon (cz = -cz_m, emitted at zem >= h_t) and an upward photon (cz = +cz_m, emitted
+// at zem <= h_t: it came from below the plane) have the same straight back-projection:
+//   s     = |zem - h_t| / cz_m                         straight path from the emission to the plane
 //   x_sky = X_t + x - s cx,  y_sky = Y_t + y - s cy,  z_sky = zem - h_obs
 //   t_sky = t - (s / c + delay),
 //           delay = straight_path_air_delay_ns(profile, h_t, zem, zenith) with a profile, else 0
+//           (the altitudes ordered low to high for an upward photon)
 // The stage (sky_to_ground with refraction_applied = 1) adds exactly these terms to the arrival
 // time, so `to-sky` followed by `run --no-extinction` (same profile option) reproduces x, y, cx,
 // cy, t and zem to float32 rounding. Bending of the photons is not inverted: a run with
@@ -46,13 +48,15 @@ struct GroundPlane {
   const AtmosphereProfile *profile{}; // straight-path air delay; null: vacuum
 };
 
-// Converts one row. Input: G position x, y, direction cx, cy, emission altitude zem [m a.s.l.] and
-// time t [ns]. Output: sky x, y, z (above the observation level) and t. Returns false if the row
-// cannot be converted: a non-finite input, zem <= h_t, or a horizontal photon (cx^2 + cy^2 = 1).
+// Converts one row. Input: G position x, y, direction cx, cy, emission altitude zem [m a.s.l.],
+// time t [ns] and upward (cz > 0; false: downward). Output: sky x, y, z (above the observation
+// level) and t. Returns false if the row cannot be converted: a non-finite input, a downward
+// photon with zem <= h_t, or a horizontal photon (cx^2 + cy^2 = 1). An upward photon must have
+// come from below the plane: zem <= h_t, else std::invalid_argument is thrown (inconsistent input).
 // Throws std::invalid_argument if cx^2 + cy^2 > 1. No allocation.
 inline bool ground_to_sky_row(const GroundPlane &plane, double x, double y, double cx, double cy,
                               double zem, double t, double &x_out, double &y_out, double &z_out,
-                              double &t_out) {
+                              double &t_out, bool upward = false) {
   if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(cx) || !std::isfinite(cy) ||
       !std::isfinite(zem) || !std::isfinite(t)) {
     return false;
@@ -63,17 +67,26 @@ inline bool ground_to_sky_row(const GroundPlane &plane, double x, double y, doub
   const double r2 = cx * cx + cy * cy;
   const double cz_magnitude = std::sqrt(std::max(0.0, 1.0 - r2));
   const double h_t = plane.observation_m + plane.telescope_z_m;
-  if (!(cz_magnitude > 0.0) || !(zem > h_t)) {
+  if (!(cz_magnitude > 0.0)) {
     return false;
   }
-  const double path = (zem - h_t) / cz_magnitude;
+  if (upward) {
+    if (zem > h_t) {
+      throw std::invalid_argument("upward photon in frame G emitted above the telescope plane "
+                                  "(zem > telescope altitude): it cannot come from below");
+    }
+  } else if (!(zem > h_t)) {
+    return false;
+  }
+  const double path = (upward ? h_t - zem : zem - h_t) / cz_magnitude;
   x_out = plane.telescope_x_m + x - path * cx;
   y_out = plane.telescope_y_m + y - path * cy;
   z_out = zem - plane.observation_m;
   double delay_ns = path / obdeect::stream::speed_of_light_m_per_ns;
   if (plane.profile != nullptr) {
     const double zenith = std::atan2(std::sqrt(r2), cz_magnitude);
-    delay_ns += straight_path_air_delay_ns(*plane.profile, h_t, zem, zenith);
+    delay_ns += upward ? straight_path_air_delay_ns(*plane.profile, zem, h_t, zenith)
+                       : straight_path_air_delay_ns(*plane.profile, h_t, zem, zenith);
   }
   t_out = t - delay_ns;
   return true;
@@ -99,13 +112,14 @@ inline obdeect::stream::PhotonChunk ground_slice(const obdeect::stream::PhotonCh
 }
 
 // Converts the rows of a frame G chunk to frame sky. Rows that cannot be converted (see
-// ground_to_sky_row, or cz present and not downwards, or non-finite cz) are removed and added to
-// dropped. The result is one sky chunk per run of consecutive converted rows, each with the
-// first_index of its first row, so that the row indices of the photons (and thus the random draws
-// of the later stages) do not change. Columns: x, y, t converted; z added; zem, w, wavelength, p
-// and cz are kept when present. Input: x y cx cy t zem w (cz optional). Throws
-// std::invalid_argument for frames other than G, a missing zem column, an invalid plane or an
-// inconsistent cz column.
+// ground_to_sky_row, horizontal photons with cz = 0, or non-finite cz) are removed and added to
+// dropped. Upward rows (cz > 0) are converted as upward photons (ground_to_sky_row). The result is
+// one sky chunk per run of consecutive converted rows, each with the first_index of its first row,
+// so that the row indices of the photons (and thus the random draws of the later stages) do not
+// change. Columns: x, y, t converted; z added; zem, w, wavelength, p and cz are kept when present.
+// Input: x y cx cy t zem w (cz optional). Throws std::invalid_argument for frames other than G, a
+// missing zem column, an invalid plane, an inconsistent cz column, or an upward row emitted above
+// the telescope plane.
 inline std::vector<obdeect::stream::PhotonChunk>
 ground_to_sky(const obdeect::stream::PhotonChunk &input, const GroundPlane &plane,
               std::uint64_t &dropped) {
@@ -145,15 +159,17 @@ ground_to_sky(const obdeect::stream::PhotonChunk &input, const GroundPlane &plan
 
   for (std::size_t row = 0; row < rows; ++row) {
     bool ok = true;
+    bool upward = false;
     if (has_cz) {
       const double cz = cz_in[row];
-      if (!std::isfinite(cz) || cz >= 0.0) {
-        ok = false; // moving upwards or horizontally, or not finite
+      if (!std::isfinite(cz) || cz == 0.0) {
+        ok = false; // horizontal, or not finite
       } else if (std::isfinite(cx_in[row]) && std::isfinite(cy_in[row]) &&
                  obdeect::stream::direction_in_unit_disc(cx_in[row], cy_in[row]) &&
-                 !obdeect::stream::cz_matches_direction(cz, cx_in[row], cy_in[row])) {
-        throw std::invalid_argument("cz column does not match cx, cy (cz = -sqrt(1-cx^2-cy^2))");
+                 !obdeect::stream::cz_is_consistent(cz, cx_in[row], cy_in[row])) {
+        throw std::invalid_argument("cz column does not match cx, cy (cz = +/-sqrt(1-cx^2-cy^2))");
       }
+      upward = cz > 0.0;
     }
     if (!ok) {
       continue;
@@ -163,7 +179,7 @@ ground_to_sky(const obdeect::stream::PhotonChunk &input, const GroundPlane &plan
     double z_sky = 0.0;
     double t_sky = 0.0;
     if (ground_to_sky_row(plane, x_in[row], y_in[row], cx_in[row], cy_in[row], zem_in[row],
-                          t_in[row], x_sky, y_sky, z_sky, t_sky)) {
+                          t_in[row], x_sky, y_sky, z_sky, t_sky, upward)) {
       keep[row] = 1;
       x_out[row] = static_cast<float>(x_sky);
       y_out[row] = static_cast<float>(y_sky);

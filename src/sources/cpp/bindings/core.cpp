@@ -429,6 +429,7 @@ nb::dict write_run_py(nb::handle run_description, const std::string &path) {
   out["rows"] = summary.rows;
   out["weight"] = summary.weight;
   out["expected"] = summary.expected;
+  out["not_on_plane"] = summary.not_on_plane;
   return out;
 }
 
@@ -469,10 +470,12 @@ nb::dict emit_chunk_py(nb::handle emission, std::uint64_t seed, std::uint32_t ev
   const Emission e = single_emission(emission);
   obdeect::stream::PhotonChunk chunk;
   emit(e.source, seed, event, telescope, first_index, rows, chunk);
-  // The run's per-emission rows (bunch weight, time offset, move to z = 0); no zem column.
+  // The run's per-emission rows (bunch weight, time offset, move to z = 0); no zem column. Rows
+  // that do not reach the plane are dropped (their count is not returned here).
   Run camera_run;
   camera_run.frame = obdeect::stream::Frame::camera;
-  detail::finish_rows(e, camera_run, chunk);
+  std::uint64_t not_on_plane = 0;
+  detail::finish_rows(e, camera_run, chunk, not_on_plane);
   nb::dict out;
   for (std::uint32_t c = 0; c < obdeect::stream::n_columns; ++c)
     if ((source_columns >> c) & 1U) {

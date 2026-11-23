@@ -319,6 +319,19 @@ void wrong_format_major() {
   CHECK(throws([&] { read_all(bytes, nullptr); }));
 }
 
+// Readers accept every format_minor of their major version: 1.0 streams (no upward photons)
+// and the current 1.1.
+void format_minor_accepted() {
+  for (const std::int64_t minor : {std::int64_t{0}, std::int64_t{format_minor}}) {
+    const Metadata header{{"format_major", std::int64_t{format_major}},
+                          {"format_minor", minor},
+                          {"producer", std::string("test")}};
+    const std::string bytes =
+        raw_record(1, as_string(encode_metadata(header))) + raw_record(15, "");
+    CHECK(!throws([&] { read_all(bytes, nullptr); }));
+  }
+}
+
 void header_required_once() {
   // Records before the stream header, and a second header, are malformed.
   CHECK(throws([&] { read_all(raw_record(15, ""), nullptr); }));
@@ -368,6 +381,7 @@ int main() {
     bad_magic();
     truncated_record();
     wrong_format_major();
+    format_minor_accepted();
     header_required_once();
     clean_end_required();
   });

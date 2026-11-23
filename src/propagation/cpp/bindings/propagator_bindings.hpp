@@ -25,6 +25,22 @@
 
 namespace nb = nanobind;
 
+namespace obdeect::propagation {
+
+// The dropped photons of a summary by reason (keys as DropCounts; the sum is "dropped").
+inline nb::dict dropped_by_reason_dict(const DropCounts &counts) {
+  nb::dict out;
+  out["moving_away"] = counts.moving_away;
+  out["horizontal"] = counts.horizontal;
+  out["below_ground"] = counts.below_ground;
+  out["turns_over"] = counts.turns_over;
+  out["not_bendable"] = counts.not_bendable;
+  out["misses_level"] = counts.misses_level;
+  return out;
+}
+
+} // namespace obdeect::propagation
+
 inline void bind_propagator(nb::module_ &module) {
   module.def(
       "propagate",
@@ -127,6 +143,7 @@ inline void bind_propagator(nb::module_ &module) {
         result["photons_in"] = summary.photons_in;
         result["photons_out"] = summary.photons_out;
         result["dropped"] = summary.dropped;
+        result["dropped_by_reason"] = dropped_by_reason_dict(summary.dropped_by_reason);
         result["weight_out"] = summary.weight_out;
         return result;
       },

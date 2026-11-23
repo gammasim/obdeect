@@ -46,3 +46,29 @@ Only `trace_bunches` applies the offset (see [Air-shower photons](air-shower-pho
 
 For mirrors, obscurers and the telescope-structure table, see
 [Optical elements](optical-elements.md).
+
+## Reflecting sides and photons from below
+
+Photons from above (downward, the usual case) meet the primary on its reflecting face. Photons
+from below (upward, `cz > 0` in the input frame) meet the back of the primary, and the other
+faces of the optics from their own sides. Phase 1 of the ray tracer decides the side of each
+first hit from the surface normal (`trace_photon`, see [Light sources](light-sources.md#photons-from-below)):
+
+| Surface | Normal returned by the tracer | Reflecting side | Photon from below |
+| --- | --- | --- | --- |
+| Primary facets | towards the reflecting side | the normal side: `n . d < 0` | back face (blocked) |
+| Primary asphere | `+z` | above (`n . d < 0`) | back face (blocked) |
+| Secondary asphere | `+z` (a graph surface) | below, facing the primary (`n . d > 0`) | reflecting face (non-sequential) |
+| Focal surface | `+z` | receives light from below (`n . d > 0`) | receiving side (direct focal) |
+
+The secondary is an asphere whose sag is reversed: its reflecting face looks down, against
+the normal. A facet is hit on its reflecting side only if its normal points to it, so the back
+of a facet is not a mirror hit for downward photons; the two-sided search is used for photons
+from below only.
+
+Status values (`STATUS_NAMES`, in this order): `detected`, `missed_primary`, `missed_secondary`,
+`missed_focal_surface`, `blocked`, `invalid_input`, `numerical_failure`, and, for photons from
+below, `non_sequential` (the reflecting face of the secondary, out of sequence) and `direct_focal`
+(the focal surface, on its receiving side, before any mirror). Every status but `detected` has
+weight zero. Full non-sequential tracing (bounces off all surfaces until detection or escape) is
+planned as phase 2; until then these statuses are counted losses.

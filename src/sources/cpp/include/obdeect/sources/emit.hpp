@@ -109,7 +109,10 @@ inline void sample_plane_wave(const PlaneWave &w, std::uint64_t seed, std::uint3
   }
   const Vec3 source = centre + w.towards_source * w.distance_m;
   p.direction = normalised(target - source);
-  p.position = source.z <= w.start_z_m
+  // The photons start at the source when it is already on the disc side of the start plane,
+  // otherwise where the ray crosses the plane.
+  const bool source_is_on_path = p.direction.z * (source.z - w.start_z_m) >= 0.0;
+  p.position = source_is_on_path
                    ? source
                    : target + p.direction * ((w.start_z_m - target.z) / p.direction.z);
   p.time_ns += (norm(p.position - source) - w.distance_m) / speed_of_light_m_per_ns;

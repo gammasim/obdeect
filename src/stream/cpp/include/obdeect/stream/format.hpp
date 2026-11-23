@@ -7,7 +7,7 @@ namespace obdeect::stream {
 // Photon-stream format constants (docs/format.md).
 inline constexpr std::uint32_t record_magic = 0x52545347U; // "GSTR", little-endian.
 inline constexpr int format_major = 1;
-inline constexpr int format_minor = 0;
+inline constexpr int format_minor = 1;
 inline constexpr std::uint32_t max_chunk_rows = 1U << 16;
 
 enum class RecordType : std::uint16_t {

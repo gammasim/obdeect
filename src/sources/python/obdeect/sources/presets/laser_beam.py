@@ -1,4 +1,4 @@
-"""laser-beam: a pulsed laser pointing down at a position above the observation level.
+"""laser-beam: a pulsed laser pointing up or down at a position above the observation level.
 
 Model: one point emission of the laser pulse, ``E lambda / (h c)`` primary photons with pulse
 energy ``E`` (``--pulse-energy``) and wavelength ``--wavelength-nm``. It starts at
@@ -11,8 +11,9 @@ Chain::
     obdeect propagation run --transmission T --site-altitude H --seed N --mode weighted \\
         --scattering S --scattering-points 64 -i primaries.pst -o scattered.pst
 
-t = 0 is the laser firing. Limits: the beam points downwards (zenith > 90 deg, tilt from nadir
-<= ``--max-tilt``), the atmosphere is plane-parallel and only single scattering is computed.
+t = 0 is the laser firing. Limits: the beam is not horizontal and its tilt from the vertical
+(nadir for a downward beam, the zenith for an upward one) is at most ``--max-tilt``; the
+atmosphere is plane-parallel and only single scattering is computed.
 Direction convention and the direct-beam check: see ``_pulsed_beam``.
 """
 
@@ -23,7 +24,7 @@ import argparse
 from obdeect.sources.presets import _common, _pulsed_beam
 
 NAME = "laser-beam"
-HELP = "pulsed laser pointing down: primary photons of one pulse (point emission)"
+HELP = "pulsed laser (up or down): primary photons of one pulse (point emission)"
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:

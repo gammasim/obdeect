@@ -9,7 +9,7 @@ A source emits photons from a geometry. A run file lists the sources (emissions)
 | --- | --- | --- |
 | `point` | at a point, into a cone or 4 pi | flashers, LEDs, point sources, beam scans, laser pulses |
 | `line` | along a segment | muon tracks, air showers |
-| `plane_wave` | on a plane, parallel or from a finite distance | stars, parallel beams |
+| `plane_wave` | on a plane, parallel or from a finite distance, from above or below | stars, parallel beams |
 | `sky_background` | on a sphere, travelling inwards | night-sky background |
 
 Each emission also has a spectrum, a pulse shape, a photon count and a target (see below).
@@ -90,8 +90,12 @@ Each kind and its keys: [run file](spec/run-file.md).
   telescope on the observation level and z up. Photons in the sky frame also get `zem`, the
   height above sea level.
 - Lengths in metres, times in ns, wavelengths in nm, angles in degrees.
-- Directions are unit vectors of the propagation direction; `cz < 0` is downward
-  (see [ray tracing](../ray-tracing/light-sources.md) and the [stream format](../stream/format.md)).
+- Directions are unit vectors of the propagation direction, and sources always write `cz`:
+  `cz < 0` is downward, `cz > 0` upward and `cz = 0` horizontal (see
+  [ray tracing](../ray-tracing/light-sources.md) and the [stream format](../stream/format.md)).
+  Emission produces all directions. Horizontal photons are written, but the plane-mode consumers
+  (propagation, `obdeect stream to-simtel`) cannot take them yet; the sphere representation is
+  planned.
 
 ## Photon count and weights
 
@@ -125,6 +129,10 @@ x = 0 and x = 100 m with radius 12.5 m give `C` = (50, 0, 0) and `R` = 62.5 m.
 - `line` with a fixed angle or isotropic profile: sphere `(C, R)`; other lines: none.
 - `plane_wave` and `sky_background`: none.
 
+Targets do not assume a direction. A point below a sphere that emits upward into it gets the same
+rule (the cone about the sphere seen from the point); a point above a disc target gets the disc
+in the same way. The weights are the solid-angle fractions in both cases.
+
 ### Line photons with a sphere target
 
 A line with a sphere target gets `photons` x `r` candidates. `r` is the largest fraction of the
@@ -139,7 +147,19 @@ than candidates; in the run example above the 1e5-photon line has an expected we
   per-point delay.
 - A line adds `s / (beta c)` at distance `s` from its start; `beta = 0` puts all points at the pulse time.
 - `time_offset_ns` is added to every row.
-- `to_plane_z0 = true` moves every row straight down to z = 0 (error if a photon does not travel down).
+- `to_plane_z0 = true` moves every row along its direction to the plane z = 0. A row reaches the
+  plane when `z = 0` (no move) or `z * cz < 0` (the plane lies ahead, from above or from below):
+  the path is `-z / cz`, `x` and `y` move along it, and the time grows by path / c. Rows that move
+  away from the plane (`z * cz >= 0` with `z != 0`, horizontal rows included) are dropped and
+  counted as `not_on_plane`; this is not an error. Isotropic light from above a plane therefore
+  keeps about half of its photons. The kept rows are numbered consecutively in emission order, and
+  the random draws of the kept photons are the same as without the move.
+- `not_on_plane` counts the dropped photons of the whole run (all events, counted once for all
+  telescopes). It is reported by `obdeect sources run` (summary line), by the Python `run.write`
+  summary and in the `run_end` record. It is not an efficiency factor: no efficiency status
+  record is written, since the record is written before the photons exist. `expected` still counts
+  all emitted candidates, so `expected - weight` is the weight of the dropped photons plus the
+  weight lost to targets.
 
 ## Random numbers
 
@@ -147,10 +167,10 @@ Each emission has its own seed, derived from the run seed (see [run](spec/run.md
 counter-based (Philox), so the output does not depend on chunking or threads
 ([random numbers](../stream/random-numbers.md)).
 
-## Downward laser pulses
+## Laser pulses
 
-The `lidar` and `laser-beam` presets emit a point pulse with a filled-cone divergence.
-The pulse contains E lambda / (h c) photons; `--rows` controls sampling. Propagation
-models scattering and transmission. Use `--help` for the required geometry and options.
-The presets reject a direct beam intersecting a telescope sphere and limit the tilt for
-the plane-parallel atmosphere.
+The `lidar` and `laser-beam` presets emit a point pulse with a filled-cone divergence. The beam
+may point down or up; a horizontal beam is rejected for now. The pulse contains E lambda / (h c)
+photons; `--rows` controls sampling. Propagation models scattering and transmission. Use
+`--help` for the required geometry and options. The presets reject a direct beam intersecting a
+telescope sphere and limit the tilt from the vertical (see [presets](presets.md#laser-beam)).

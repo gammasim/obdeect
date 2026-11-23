@@ -168,6 +168,20 @@ class OpticalModel:
             if optics.get(role) is not None
         ]
 
+    def optics_bottoms(self, normal: np.ndarray) -> list[tuple[str, float]]:
+        """Lowest point along `normal` of each obscurer (any leg) and of the mirrors [m].
+
+        The mirrors are the primary and the secondary (photons from below meet both). The
+        lowest point of an optic is min n.p, i.e. minus its support in direction -n.
+        """
+        optics = self._document["optics"]
+        flipped = -np.asarray(normal, dtype=float)
+        bottoms = [(o["name"], -_obscurer_support(o, flipped)) for o in optics["obscurers"]]
+        for role in ("primary", "secondary"):
+            if optics.get(role) is not None:
+                bottoms.append((role, -_mirror_support(optics[role], flipped)))
+        return bottoms
+
     def _incoming_top(self) -> tuple[float, str] | None:
         """Highest incoming obscurer top [m] and its name, or None without incoming obscurers."""
         tops = [
@@ -290,18 +304,26 @@ class OpticalModel:
         """Sample photons from a star or a point source.
 
         `towards_source` is the unit vector to the source in the telescope frame
-        (+z along the optical axis, towards the sky); `distance_m` is the
-        source distance from the dish vertex, the centre of the sampled disk.
+        (+z along the optical axis, towards the sky; a negative z gives a source below
+        the telescope and photons moving up, see docs/ray-tracing/light-sources.md);
+        `distance_m` is the source distance from the dish vertex, the centre of the
+        sampled disk.
         Times are zero for the wavefront at that point.
         """
         sampling = self._document["sampling"]
         direction = np.asarray(towards_source, dtype=float)
+        direction = direction / np.linalg.norm(direction)
+        start_z_m = sampling["start_z_m"]
+        if direction[2] < 0.0:
+            # Photons moving up start on a plane below every optic, not on the plane above them.
+            bottom = min((b for _, b in self.optics_bottoms(_UP)), default=0.0)
+            start_z_m = bottom - _LOWER_START_MARGIN_M
         return _core.sample_source(
-            direction / np.linalg.norm(direction),
+            direction,
             distance_m,
             sampling["disk_radius_m"],
             sampling["disk_z_m"],
-            sampling["start_z_m"],
+            start_z_m,
             wavelength_nm,
             first_id,
             count,
@@ -441,6 +463,7 @@ class OpticalModel:
         frame_offset_m: Sequence[float],
         length_unit_m: float,
         plane_z: float,
+        lower_plane_z: float | None = None,
         acceptance: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
         wavelength_density: tuple[np.ndarray, np.ndarray] | None = None,
         wavelength_law: tuple[float, float] | None = None,
@@ -455,10 +478,15 @@ class OpticalModel:
         `bunches` holds x, y, cx, cy, time_ns, zem, size, wavelength_nm (all
         float32; wavelength 0 means "sample one from `wavelength_density` or
         `wavelength_law`") and bunch_id (uint64, unique per bunch for one
-        `seed`). The random draws are keyed on (`seed`, `event`, `telescope`, bunch,
-        sub-photon), as in the other components. `frame_rotation` (3 x 3, input to telescope frame),
-        `frame_offset_m`, `length_unit_m` (metres per input length unit) and
-        `plane_z` (input units) place the input plane in the telescope frame. The
+        `seed`). The optional column cz (float32, either sign, never 0) gives the
+        direction; without it the bunches move towards -z. The random draws are keyed
+        on (`seed`, `event`, `telescope`, bunch, sub-photon), as in the other components.
+        `frame_rotation` (3 x 3, input to telescope frame), `frame_offset_m`,
+        `length_unit_m` (metres per input length unit) and `plane_z` (input units) place
+        the input plane in the telescope frame; bunches moving up (cz > 0) start on
+        `lower_plane_z` (input units), which must lie below every optic. The trace of a
+        bunch whose direction in the telescope frame has z >= 0 uses the first-hit path
+        (photons from behind the dish). The
         native tracer applies the model's `axes_offset_m` O_t (telescope frame): with zero
         `frame_offset_m`, a ground-frame point P is traced at R P - O_t = R (P - O_g),
         where O_g = R.T O_t is in the ground frame. This assumes
@@ -496,6 +524,10 @@ class OpticalModel:
         arrays = {
             name: np.ascontiguousarray(bunches[name], dtype=dtype) for name, dtype in dtypes.items()
         }
+        if "cz" in bunches:
+            arrays["cz"] = np.ascontiguousarray(bunches["cz"], dtype=np.float32)
+            if arrays["cz"].shape != arrays["x"].shape:
+                raise ValueError("bunch arrays must have the same length")
         rotation = np.ascontiguousarray(frame_rotation, dtype=np.float64)
         if rotation.shape != (3, 3):
             raise ValueError("frame_rotation must be a 3 x 3 matrix")
@@ -530,6 +562,18 @@ class OpticalModel:
                             f"{plane_height_m:.3f} m along the telescope axis, "
                             "but the obscurer reaches "
                             f"{obscurer_top:.3f} m; raise the input plane above it"
+                        )
+            # Photons from below start on the lower plane: it must lie below every optic.
+            if lower_plane_z is not None and "cz" in arrays and bool(np.any(arrays["cz"] > 0)):
+                lower_point = traced_offset + normal * float(lower_plane_z) * float(length_unit_m)
+                lower_value = float(np.dot(normal, lower_point))
+                for name, bottom in self.optics_bottoms(normal):
+                    if lower_value > bottom:
+                        raise ValueError(
+                            f"input plane above the {name} for photons from below: the plane "
+                            f"is at n.p = {lower_value:.3f} m but the optic reaches down to "
+                            f"{bottom:.3f} m along the input normal; lower the input plane "
+                            "below it"
                         )
             # Photons start on the plane and move on: a mirror point above it is never reached.
             for role, mirror_top in self.mirrors_support(normal):
@@ -569,6 +613,8 @@ class OpticalModel:
             offset,
             float(length_unit_m),
             float(plane_z),
+            cz=arrays.get("cz"),
+            lower_plane_z=None if lower_plane_z is None else float(lower_plane_z),
             seed=seed,
             event=event,
             telescope=telescope,
@@ -624,6 +670,8 @@ def _obscurer_top_z_m(obscurer: Mapping[str, Any]) -> float:
 
 
 _UP = np.array([0.0, 0.0, 1.0])
+# Margin below the lowest optic for the start of photons moving up [m] (as the input plane).
+_LOWER_START_MARGIN_M = 1.0
 # Radial samples of an asphere mirror's aperture for its support.
 _ASPHERE_SAMPLES = 2049
 

@@ -67,7 +67,10 @@ struct Line {
 };
 
 // Parallel beam (infinite distance) or point source at a finite distance, through a disc at
-// height disc_z_m; rays start on the plane z = start_z_m.
+// height disc_z_m; rays start on the plane z = start_z_m. Photons travel along -towards_source:
+// towards_source.z > 0 is a beam from above (downward photons), z < 0 a beam from below (upward
+// photons). The start plane lies on the source side of the disc. Horizontal beams (z = 0) need
+// the sphere representation (not yet supported).
 struct PlaneWave {
   Vec3 towards_source{0.0, 0.0, 1.0};
   double distance_m{std::numeric_limits<double>::infinity()};
@@ -258,14 +261,20 @@ inline void validate_line(const Line &l, const Target &target) {
 
 inline void validate_plane_wave(const PlaneWave &w, const Target &target) {
   require(std::holds_alternative<std::monostate>(target), "a plane wave takes no target");
-  require(is_unit(w.towards_source) && w.towards_source.z > 0.0,
-          "plane wave: towards_source must be a unit vector with z > 0");
+  require(is_unit(w.towards_source), "plane wave: towards_source must be a unit vector");
+  require(w.towards_source.z != 0.0,
+          "plane wave: a horizontal towards_source (z = 0) is not supported yet: horizontal plane "
+          "waves need the sphere representation (planned)");
   require(w.distance_m == std::numeric_limits<double>::infinity() ||
               positive_within_limits(w.distance_m),
           "plane wave: distance must be infinite or positive within limits");
   require(positive_within_limits(w.disc_radius_m), "plane wave: disc radius out of range");
   require(within_limits(w.disc_z_m) && within_limits(w.start_z_m),
           "plane wave: disc or start height out of range");
+  // The photons move from the start plane to the disc: the plane must be on the source side.
+  require((w.start_z_m - w.disc_z_m) * w.towards_source.z >= 0.0,
+          "plane wave: the start plane z = start_z must lie on the source side of the disc (above "
+          "it for towards_source.z > 0, below it for towards_source.z < 0)");
 }
 
 inline void validate_sky_background(const SkyBackground &b, const Target &target) {

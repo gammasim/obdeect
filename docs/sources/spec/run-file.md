@@ -50,7 +50,7 @@ At least one per event. Keys for every kind:
 | `photons` | number >= 0 | required | mean physical photons |
 | `bunch_size` | number >= 1 | 1 | photons per row |
 | `time_offset_ns` | number | 0 | |
-| `to_plane_z0` | bool | false | move rows to z = 0 |
+| `to_plane_z0` | bool | false | move rows with `z * cz < 0` (or `z = 0`) to z = 0; drop and count the others (`not_on_plane`) |
 | `spectrum` | spectrum table | required | |
 | `pulse` | pulse table | `{ kind = "fixed", time_ns = 0 }` | |
 | `target` | `"none"`, `"auto"`, or disc or sphere table | `"none"` | |
@@ -68,11 +68,11 @@ Keys per kind:
 | | `beta` | number in [0, 1] | 1 |
 | | `angular` | angular table | `{ kind = "cone", angle_deg = 0 }` |
 | | `profile` | `{ distance_m = [...], density = [...] }` | absent (uniform) |
-| `plane_wave` | `towards_source` | 3 numbers (unit, z > 0) | required |
+| `plane_wave` | `towards_source` | 3 numbers (unit, z != 0; photons travel along -towards_source) | required |
 | | `distance_m` | number > 0 | absent (infinite) |
 | | `disc_radius_m` | number > 0 | required |
 | | `disc_z_m` | number | 0 |
-| | `start_z_m` | number | 0 |
+| | `start_z_m` | number | 0 (on the source side of `disc_z_m`: above for z > 0, below for z < 0) |
 | `sky_background` | `radius_m` | number > 0 | required |
 | | `centre_m` | 3 numbers | `[0, 0, 0]` |
 | | `axis` | 3 numbers | `[0, 0, -1]` |

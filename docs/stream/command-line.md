@@ -79,11 +79,16 @@ photon:  x, y, z = 0.1, 0.2, 0.5 m   c = (0.6, 0, -0.8)   t = 3 ns   observation
 bunch:   x, y = 47.5, 20.0 cm   cx, cy = 0.6, 0   time = 5.085 ns   zem = 220050 cm
 ```
 
-The bunch position is where the photon's line crosses z = 0 (path 0.625 m here, also for a photon
-moving away from the plane). The time is `t` plus that path over the speed of light; `zem` is the
-observation level plus `z`. Without a `cz` column the photon moves towards the plane. The camera
-rotation is not used, and TELPOS z is set to 0 as for camera-frame telescopes (unless
-`--keep-telpos-height` is given).
+The bunch position is where the photon's line crosses z = 0 (path 0.625 m here). The time is `t`
+plus that path over the speed of light; `zem` is the observation level plus `z`. Without a `cz`
+column the photon moves downwards. The camera rotation is not used, and TELPOS z is set to 0 as for
+camera-frame telescopes (unless `--keep-telpos-height` is given).
+
+Ground- and telescope-frame photons must move downwards (`cz` < 0, or no `cz` column):
+sim_telarray does not store the sign of `cz`, and the bunch format has no sign either. An upward
+or horizontal photon in these frames is an error, never written as a downward one. Camera-frame
+photons are already at the camera entrance, where sim_telarray uses only `cx` and `cy`; the sign
+of `cz` depends on the side the camera faces and is not checked.
 
 ```console
 $ cat cam.txt
@@ -96,7 +101,8 @@ obdeect stream to-simtel: telescope 1: telescope frame, mirror class 2, Bypass_O
 ```
 
 Errors: T photons for a telescope without map entry or with `mirror_class` 1; a photon with
-cz = 0; camera-frame and T photons for the same telescope in one run. The efficiency status of
+`cz` >= 0 (upward or horizontal) or a non-finite `cz` in the ground or telescope frame; camera-frame and T photons for
+the same telescope in one run. The efficiency status of
 such a telescope is checked as for camera frame.
 
 ## Efficiency checks

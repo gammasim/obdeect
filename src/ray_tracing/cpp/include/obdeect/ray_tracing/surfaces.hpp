@@ -76,10 +76,24 @@ struct Facet {
     sag = radius > 0.0 ? radius - std::sqrt(std::max(0.0, radius * radius - reach * reach)) : 0.0;
   }
 
+  // The hit on the reflecting (front) side only: back-face crossings are not mirror hits.
   [[nodiscard]] std::optional<SurfaceHit> intersect(const Ray &ray, double t_min) const {
+    return intersect_sides<false>(ray, t_min);
+  }
+
+  // The nearest hit on either side (a ray from below meets the back face too). The
+  // normal of the hit is the facet normal (flat) or the normal on the concave cap, which
+  // points to the reflecting side in both cases.
+  [[nodiscard]] std::optional<SurfaceHit> intersect_any_side(const Ray &ray, double t_min) const {
+    return intersect_sides<true>(ray, t_min);
+  }
+
+  template <bool AnySide>
+  [[nodiscard]] std::optional<SurfaceHit> intersect_sides(const Ray &ray, double t_min) const {
     if (radius == 0.0) {
       const double denominator = dot(ray.direction, normal);
-      if (denominator >= 0.0) // Parallel or reaching the back face.
+      // Parallel, or reaching the back face (rejected unless both sides count).
+      if (AnySide ? denominator == 0.0 : denominator >= 0.0)
         return std::nullopt;
       const double t = dot(centre - ray.origin, normal) / denominator;
       if (!(t > t_min))
@@ -120,8 +134,8 @@ struct Facet {
       const Vec3 p = ray.at(t);
       const Vec3 inward = (sphere - p) * (1.0 / radius);
       // Only the concave cap around the vertex reflects, and only from its
-      // front; back-face crossings are not mirror hits.
-      if (dot(inward, normal) <= 0.0 || dot(ray.direction, inward) >= 0.0)
+      // front; back-face crossings are not mirror hits (unless AnySide).
+      if (dot(inward, normal) <= 0.0 || (!AnySide && dot(ray.direction, inward) >= 0.0))
         continue;
       const Vec3 offset = p - centre;
       if (inside_aperture(shape, half_width, dot(offset, u), dot(offset, v)))

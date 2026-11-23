@@ -337,3 +337,38 @@ validation of SSTS-01 and MSTS-01 and the cumulative PSF of LSTN-01, once with t
 once with the final build. Largest relative difference of D80, effective area and centroid per offset:
 SSTS-01 3.7e-9 (centroid), MSTS-01 0, LSTN-01 0. The gate of 1e-4 passes. The effective focal length is
 not deterministic in simtools and is not gated (SSTS-01: 7.9e-11).
+
+## Photons from below (ray tracing phase 1)
+
+Checks in `src/ray_tracing` (native tests in `cpp/tests/test_trace.cpp`, Python tests in
+`python/tests`), each analytic or against an independent computation:
+
+- Two-sided facets: a flat facet and a curved cap are hit from behind at the analytic distance
+  and point (`intersect_any_side`), the one-sided `intersect` of downward photons is unchanged,
+  and the normal of a hit on the reflecting side is opposite to the ray.
+- Uniform beam from below on one dish with an infinite focal plane (200 x 200 grid over a square
+  of side 2): no photon is detected; the blocked fraction equals the projected dish area over the
+  beam area (pi 0.5^2 / 2^2 = 0.19635, tolerance 2e-3); every other photon is `direct_focal` at the
+  focal plane, with weight zero.
+- A flat facet tilted 60 degrees with its reflecting side down: the photon from below reflects to
+  the analytic direction (sin 120 deg, 0, -cos 120 deg) and is detected (sequential continuation).
+- A folded dual mirror from below: `non_sequential` on the reflecting face of the secondary,
+  `direct_focal` on the focal asphere, `blocked` on the back of the primary.
+- Obscurers of every leg block photons from below at the analytic height.
+- Mixed bunches: downward bunches give the same photons with or without upward bunches in the
+  block (ids, times, weights, positions bit for bit); reversed order and one thread give the same
+  photon per bunch id; upward bunches are never detected in this model.
+- Input validation: horizontal bunches and upward bunches without `lower_plane_z` are rejected.
+- Photon streams (Python and native, compared bit for bit): an upward beam is not detected; a
+  stream with downward photons followed by upward photons gives the camera photons of the
+  downward part exactly; the output does not depend on chunking or threads; horizontal photons are
+  rejected with the same message by both programs.
+- Lower input plane: below every optic, checked in the telescope frame and along the zenith of a
+  tilted pointing (the plane is the lowest optic less the 1 m margin); `trace_bunches` rejects a
+  plane above an optic.
+- Sources: `star_photons` with `towards_source` below the telescope emits upward photons; a
+  horizontal `towards_source` is rejected.
+
+Downward photons take the unchanged code path: the existing ray-tracing suites (kernels, trace,
+bounds, replay comparison, the native-versus-Python stream comparison) pass without changes to their
+expected values.

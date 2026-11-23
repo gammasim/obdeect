@@ -1,6 +1,7 @@
 """Shared builder of the pulsed-laser presets (``lidar``, ``laser-beam``).
 
-Model: a pulsed laser at a position above the observation level points DOWNWARDS. Its pulse is
+Model: a pulsed laser at a position above the observation level points downwards or upwards (not
+horizontally). Its pulse is
 one point emission of primary photons, ``E lambda / (h c)`` photons with pulse energy ``E``,
 wavelength ``lambda`` and exact SI constants. The emission starts at the laser, or at
 ``--start-height`` on the beam. The scattered light is not generated here; it is computed by
@@ -15,10 +16,13 @@ propagation (single scattering, Rayleigh and Mie, beam extinction, transmission)
 Time: t = 0 is the laser firing. With ``--start-height`` the emission starts later on the beam
 and ``time_offset_ns`` is the path from the laser to the start divided by c (vacuum).
 
-Limits: the beam must point downwards (zenith > 90 deg) and stay within ``--max-tilt`` of nadir,
-because the scattering model is plane-parallel. The beam direction is zenith and astronomical
-azimuth (clockwise from north; sky frame x north, y west). Telescope spheres are checked against
-the direct beam: a beam that hits one is an error unless ``--allow-direct-beam`` is given.
+Limits: the beam must not be horizontal, and its tilt from the vertical must stay within
+``--max-tilt`` (default 60 deg): measured from nadir for a downward beam (zenith > 90 deg), from
+the zenith for an upward beam (zenith < 90 deg). The scattering model is plane-parallel, so only
+near-vertical beams are valid. A horizontal beam never reaches the observation plane and needs the
+sphere representation (not yet supported). The beam direction is zenith and astronomical azimuth
+(clockwise from north; sky frame x north, y west). Telescope spheres are checked against the direct
+beam: a beam that hits one is an error unless ``--allow-direct-beam`` is given.
 """
 
 from __future__ import annotations
@@ -50,7 +54,8 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         type=float,
         required=True,
         metavar="DEG",
-        help="zenith of the beam direction; must be > 90 (pointing down) [deg]",
+        help="zenith of the beam direction: > 90 points down, < 90 up, 90 is horizontal and "
+        "rejected [deg]",
     )
     group.add_argument(
         "--beam-azimuth",
@@ -64,7 +69,8 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         type=float,
         default=60.0,
         metavar="DEG",
-        help="largest tilt of the beam from nadir, in [0, 90) (default 60) [deg]",
+        help="largest tilt of the beam from the vertical in its own hemisphere (from nadir for a "
+        "downward beam, from the zenith for an upward one), in [0, 90) (default 60) [deg]",
     )
     group.add_argument(
         "--divergence",
@@ -174,25 +180,33 @@ def build(args: argparse.Namespace, position) -> dict:
         raise ValueError(f"laser height {position[2]} m must be above the observation level")
 
     beam = unit_vector(args.beam_zenith, args.beam_azimuth)
-    if args.beam_zenith <= 90.0:
+    if abs(beam[2]) <= 1e-12:
         raise ValueError(
-            f"the beam must point downwards: --beam-zenith {args.beam_zenith} deg must be > 90"
+            f"--beam-zenith {args.beam_zenith} deg is horizontal: horizontal beams are not "
+            "supported yet (the photons never reach the observation plane; planned with the "
+            "sphere representation)"
         )
-    tilt = math.degrees(math.acos(min(1.0, -beam[2])))
+    tilt = math.degrees(math.acos(min(1.0, abs(beam[2]))))
     if tilt > max_tilt + 1e-9:  # the limit is inclusive; 1e-9 deg absorbs rounding
+        side = "nadir" if beam[2] < 0.0 else "the zenith"
         raise ValueError(
-            f"beam tilted {tilt:.3g} deg from nadir exceeds --max-tilt {max_tilt:g} deg: "
-            "the scattering model is plane-parallel, so only near-nadir beams are valid"
+            f"beam tilted {tilt:.3g} deg from {side} exceeds --max-tilt {max_tilt:g} deg: "
+            "the scattering model is plane-parallel, so only near-vertical beams are valid"
         )
 
     start, time_offset_ns = position, 0.0
     if args.start_height is not None:
         height = args.start_height
-        if not (math.isfinite(height) and 0.0 <= height < position[2]):
+        # The start lies on the beam beyond the laser's observation side: below the laser for a
+        # downward beam, above it for an upward one; never below the observation level.
+        along = (height - position[2]) * beam[2]
+        if not (math.isfinite(height) and height >= 0.0 and along > 0.0):
             raise ValueError(
-                f"--start-height {height} m must lie in [0, laser height {position[2]:g} m)"
+                f"--start-height {height} m must lie on the beam between the observation level "
+                f"and the laser at {position[2]:g} m (below the laser for a downward beam, above "
+                "it for an upward one)"
             )
-        path = (position[2] - height) / -beam[2]
+        path = (height - position[2]) / beam[2]  # > 0
         start = tuple(position[i] + beam[i] * path for i in range(2)) + (height,)
         time_offset_ns = path / SPEED_OF_LIGHT_M_NS
 

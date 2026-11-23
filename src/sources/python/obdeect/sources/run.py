@@ -39,8 +39,10 @@ def write(
 
     ``seed`` overrides ``run.seed``. ``max_rows`` rejects a run whose expected candidate rows
     (all telescopes) exceed it, before anything is written. The summary holds ``events``,
-    ``rows`` (all telescopes), ``weight`` (sum of weights written) and ``expected`` (expected sum
-    of weights).
+    ``rows`` (all telescopes), ``weight`` (sum of weights written), ``expected`` (expected sum
+    of weights of all emitted photons) and ``not_on_plane`` (photons of ``to_plane_z0`` emissions
+    that move away from the plane z = 0 and are dropped; they are in ``expected`` but not in
+    ``rows`` or ``weight``).
     """
     run = _normalized(description)
     if seed is not None:

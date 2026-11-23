@@ -20,11 +20,15 @@ def unit_vector(zenith_deg: float, azimuth_deg: float) -> Vector:
         raise ValueError(f"azimuth {azimuth_deg} deg must be finite")
     zenith = math.radians(zenith_deg)
     azimuth = math.radians(azimuth_deg)
-    # Adding 0.0 turns a negative zero into 0.0 (cosmetic, for the run description).
+
+    def component(value: float) -> float:
+        # Round-off below 1e-15 (sin 180 deg) is zero; adding 0.0 turns -0.0 into 0.0.
+        return 0.0 if abs(value) < 1e-15 else value + 0.0
+
     return (
-        math.sin(zenith) * math.cos(azimuth) + 0.0,
-        -math.sin(zenith) * math.sin(azimuth) + 0.0,
-        math.cos(zenith) + 0.0,
+        component(math.sin(zenith) * math.cos(azimuth)),
+        component(-math.sin(zenith) * math.sin(azimuth)),
+        component(math.cos(zenith)),
     )
 
 

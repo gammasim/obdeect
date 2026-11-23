@@ -1049,7 +1049,7 @@ void test_sky_plane_validation() {
   const auto between_levels = [&](const obdeect::propagation::SkyPlane &p, double z_m) {
     auto chunk = sky_chunk(1, 0, {sky_at(0.0, 0.0, z_m, 30.0)}, 1);
     const auto lost = obdeect::propagation::sky_to_ground(chunk, p);
-    CHECK(lost == 0);
+    CHECK(lost.total() == 0);
     CHECK(chunk[Column::w][0] > 0.0F);
     return chunk;
   };

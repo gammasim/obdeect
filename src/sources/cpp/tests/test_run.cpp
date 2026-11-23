@@ -8,6 +8,7 @@
 #include "obdeect/stream/photons.hpp"
 #include "obdeect/stream/stream.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -112,6 +113,7 @@ struct RunBlock {
   std::vector<RecordType> order;
   Metadata meta;
   std::vector<EventBlock> events;
+  Metadata end;
 };
 
 RunBlock parse_run(const std::string &bytes) {
@@ -147,6 +149,9 @@ RunBlock parse_run(const std::string &bytes) {
     case RecordType::telescope_end:
       if (!run.events.empty() && !run.events.back().telescopes.empty())
         run.events.back().telescopes.back().end = r.metadata;
+      break;
+    case RecordType::run_end:
+      run.end = r.metadata;
       break;
     default:
       break;
@@ -450,13 +455,145 @@ void test_to_plane_z0() {
     CHECK_NEAR(c[Column::zem][i], 2150.0, 1e-3);
   }
 
-  // Upward photons cannot reach the plane z = 0.
+  // Upward photons from above the plane move away from it: dropped and counted, not an error.
   const Source up =
       with_geometry(Point{Vec3{0.0, 0.0, 80.0}, Vec3{0.0, 0.0, 1.0}, FixedAngle{0.0}}, 100.0);
   Run upward = make_run({tel(1, {0.0, 0.0, 0.0}, 10.0)},
                         {make_event(1, {make_emission(up, 1.0, 0.0, true)})});
-  const std::string error = error_of([&] { write_bytes(upward); });
-  CHECK(error.find("travel down") != std::string::npos);
+  RunSummary away_summary;
+  const RunBlock away = parse_run(write_bytes(upward, max_cached_event_bytes, &away_summary));
+  CHECK(away_summary.not_on_plane == 100);
+  CHECK(away_summary.rows == 0);
+  CHECK(away_summary.weight == 0.0);
+  CHECK(away_summary.expected > 0.0);
+  CHECK(field<std::int64_t>(away.end, "not_on_plane") == 100);
+  const TelescopeBlock *none = telescope_of(away, 0, 0);
+  if (none) {
+    CHECK(none->chunks.empty());
+    CHECK(field<double>(none->end, "photons") == 0.0);
+  }
+
+  // Upward photons from below the plane reach it: path 25 m along (0.6, 0, 0.8) from z = -20 m.
+  const Source from_below =
+      with_geometry(Point{Vec3{0.0, 0.0, -20.0}, Vec3{0.6, 0.0, 0.8}, FixedAngle{0.0}}, 100.0);
+  Run below = make_run({tel(1, {0.0, 0.0, 0.0}, 10.0)},
+                       {make_event(1, {make_emission(from_below, 1.0, 0.0, true)})}, 3);
+  RunSummary below_summary;
+  const RunBlock b = parse_run(write_bytes(below, max_cached_event_bytes, &below_summary));
+  CHECK(below_summary.not_on_plane == 0);
+  CHECK(below_summary.rows == 100);
+  const TelescopeBlock *ub = telescope_of(b, 0, 0);
+  if (ub && ub->chunks.size() == 1) {
+    const PhotonChunk &c = ub->chunks[0];
+    CHECK(c.rows() == 100);
+    for (std::size_t i = 0; i < c.rows(); ++i) {
+      CHECK(c[Column::z][i] == 0.0F);
+      CHECK_NEAR(c[Column::x][i], 15.0, 1e-3);
+      CHECK_NEAR(c[Column::y][i], 0.0, 1e-3);
+      CHECK_NEAR(c[Column::t][i], 25.0 / speed_of_light_m_per_ns, 1e-3);
+    }
+  }
+
+  // Horizontal photons (cz = 0) move away from the plane and are dropped as well.
+  const Source horizontal =
+      with_geometry(Point{Vec3{0.0, 0.0, 80.0}, Vec3{1.0, 0.0, 0.0}, FixedAngle{0.0}}, 10.0);
+  RunSummary horizontal_summary;
+  write_bytes(make_run({tel(1, {0.0, 0.0, 0.0}, 10.0)},
+                       {make_event(1, {make_emission(horizontal, 1.0, 0.0, true)})}),
+              max_cached_event_bytes, &horizontal_summary);
+  CHECK(horizontal_summary.not_on_plane == 10);
+  CHECK(horizontal_summary.rows == 0);
+}
+
+// Isotropic light from above the plane: half the photons move down and reach it, the others are
+// dropped. The kept rows are the downward candidates in emission order, projected onto the plane.
+void test_isotropic_to_plane_keeps_half() {
+  const double photons = 1e5;
+  Source iso = isotropic_at({0.0, 0.0, 80.0}, photons);
+  Run plane = make_run({tel(1, {0.0, 0.0, 0.0}, 10.0)},
+                       {make_event(1, {make_emission(iso, 1.0, 0.0, true)})}, 11);
+  RunSummary summary;
+  const RunBlock p = parse_run(write_bytes(plane, max_cached_event_bytes, &summary));
+  const double kept = static_cast<double>(summary.rows);
+  const double dropped = static_cast<double>(summary.not_on_plane);
+  CHECK(kept + dropped == photons);
+  const double sigma = std::sqrt(photons * 0.25); // binomial, p = 1/2
+  CHECK(std::abs(kept - photons / 2.0) <= 4.0 * sigma);
+  CHECK(std::abs(dropped - photons / 2.0) <= 4.0 * sigma);
+  CHECK_NEAR(summary.weight, kept, 1e-6 * kept);
+
+  // The same candidates without the plane move: the kept ones, projected by hand, in order.
+  Run all = make_run({tel(1, {0.0, 0.0, 0.0}, 10.0)},
+                     {make_event(1, {make_emission(iso, 1.0, 0.0, false)})}, 11);
+  const RunBlock a = parse_run(write_bytes(all));
+  std::vector<std::array<double, 3>> expected;
+  const TelescopeBlock *ta = telescope_of(a, 0, 0);
+  if (ta)
+    for (const PhotonChunk &c : ta->chunks)
+      for (std::size_t i = 0; i < c.rows(); ++i) {
+        const double z = c[Column::z][i], cz = c[Column::cz][i];
+        if (!(z * cz < 0.0))
+          continue;
+        const double path = -z / cz;
+        expected.push_back({c[Column::x][i] + path * c[Column::cx][i],
+                            c[Column::y][i] + path * c[Column::cy][i],
+                            c[Column::t][i] + path / speed_of_light_m_per_ns});
+      }
+  CHECK(expected.size() == summary.rows);
+  const TelescopeBlock *tp = telescope_of(p, 0, 0);
+  std::size_t row = 0;
+  std::uint64_t next_index = 0;
+  if (tp)
+    for (const PhotonChunk &c : tp->chunks) {
+      CHECK(c.first_index == next_index); // consecutive numbering over the kept rows
+      next_index += c.rows();
+      for (std::size_t i = 0; i < c.rows() && row < expected.size(); ++i, ++row) {
+        CHECK(c[Column::z][i] == 0.0F);
+        // float32 rows: relative tolerance (positions and times reach 1e5 m and 1e6 ns here).
+        CHECK_NEAR(c[Column::x][i], expected[row][0], 1e-6 * (1.0 + std::abs(expected[row][0])));
+        CHECK_NEAR(c[Column::y][i], expected[row][1], 1e-6 * (1.0 + std::abs(expected[row][1])));
+        CHECK_NEAR(c[Column::t][i], expected[row][2], 1e-6 * (1.0 + std::abs(expected[row][2])));
+      }
+    }
+  CHECK(row == expected.size());
+  CHECK(next_index == summary.rows);
+
+  // Cache on and off give the same bytes.
+  CHECK(write_bytes(plane, 0) == write_bytes(plane));
+}
+
+// A point source below the telescope sphere emits upward into it: the written weight is the
+// solid-angle fraction of the sphere, 1/2 (1 - sqrt(1 - (R/d)^2)), times the photons. The same
+// holds for a source above it. Every row of the source below the sphere moves up.
+void test_sphere_target_below_and_above() {
+  const double photons = 1e6;
+  const double radius = 10.0;
+  const double distance = 50.0;
+  const double fraction = 0.5 * (1.0 - std::sqrt(1.0 - (radius / distance) * (radius / distance)));
+  const double mean = photons * fraction;
+  for (const double z : {-distance, distance}) {
+    Source s = isotropic_at({0.0, 0.0, z}, photons);
+    s.target = SphereTarget{Vec3{0.0, 0.0, 0.0}, radius};
+    const RunSummary summary = [&] {
+      RunSummary out;
+      write_bytes(make_run({tel(1, {0.0, 0.0, 0.0}, radius)}, {make_event(1, {make_emission(s)})}),
+                  max_cached_event_bytes, &out);
+      return out;
+    }();
+    std::printf("sphere target from z = %g: weight %.6g, analytic %.6g\n", z, summary.weight, mean);
+    CHECK(std::abs(summary.weight - mean) <= 4.0 * std::sqrt(mean));
+    CHECK(std::abs(summary.expected - mean) <= 1.0 + 1e-9 * mean);
+    CHECK(summary.not_on_plane == 0);
+    if (z < 0.0) {
+      const RunBlock r = parse_run(write_bytes(
+          make_run({tel(1, {0.0, 0.0, 0.0}, radius)}, {make_event(1, {make_emission(s)})})));
+      const TelescopeBlock *t = telescope_of(r, 0, 0);
+      if (t)
+        for (const PhotonChunk &c : t->chunks)
+          for (std::size_t i = 0; i < c.rows(); ++i)
+            CHECK(c[Column::cz][i] > 0.0);
+    }
+  }
 }
 
 void test_zem_and_frame() {
@@ -644,6 +781,8 @@ int main() {
     test_seeds_bunch_and_offset();
     test_bunch_size();
     test_to_plane_z0();
+    test_isotropic_to_plane_keeps_half();
+    test_sphere_target_below_and_above();
     test_zem_and_frame();
     test_resolve_auto_target();
     test_validation();

@@ -92,7 +92,8 @@ def emit_chunk(
 ) -> dict[str, np.ndarray]:
     """Candidates first_index .. first_index + rows - 1 (at most 2^16) as float32 columns.
 
-    Line photons that miss their target are dropped, so a line may return fewer rows.
+    Line photons that miss their target, and photons of a ``to_plane_z0`` emission that move away
+    from the plane z = 0, are dropped, so the chunk may hold fewer rows.
     """
     _check_rows(rows)
     if first_index < 0:

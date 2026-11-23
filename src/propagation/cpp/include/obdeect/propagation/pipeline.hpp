@@ -73,11 +73,12 @@ inline void validate_ground_chunk(obdeect::stream::PhotonChunk &chunk, bool need
     }
     if (chunk.has(Column::cz)) {
       const auto cz_given = static_cast<double>(chunk[Column::cz][row]);
-      // cz_matches_direction is false for NaN; the finiteness test is kept as the first check.
+      // cz of either sign (upward photons, docs/propagation/propagation.md). cz_is_consistent is
+      // false for NaN; the finiteness test is kept as the first check.
       if (!std::isfinite(cz_given) ||
-          !obdeect::stream::cz_matches_direction(cz_given, cx[row], cy[row])) {
+          !obdeect::stream::cz_is_consistent(cz_given, cx[row], cy[row])) {
         throw std::invalid_argument(
-            "cz column must be finite and match cx, cy (cz = -sqrt(1-cx^2-cy^2))");
+            "cz column must be finite and match cx, cy (cz = +/-sqrt(1-cx^2-cy^2))");
       }
     }
     if (!(w[row] >= 0.0F && std::isfinite(w[row]))) {

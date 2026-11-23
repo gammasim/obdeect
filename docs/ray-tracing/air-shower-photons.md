@@ -13,7 +13,8 @@ direction, time, emission height and wavelength.
 | Column | Unit | Meaning |
 | --- | --- | --- |
 | `x`, `y` | input length units | Position on the input plane |
-| `cx`, `cy` | 1 | Direction cosines; photons move towards -z, `cz = -sqrt(1 - cx^2 - cy^2)` |
+| `cx`, `cy` | 1 | Direction cosines; without `cz` photons move towards -z, `cz = -sqrt(1 - cx^2 - cy^2)` |
+| `cz` (optional) | 1 | Vertical direction cosine of either sign, never 0; `cz > 0` moves the bunch up from `lower_plane_z` |
 | `time_ns` | ns | Time of the bunch at the input plane |
 | `zem` | input length units | Emission height (used by the acceptance table only) |
 | `size` | photons | `ceil(size)` sub-photons; the last one has fraction `size - floor(size)` |
@@ -87,6 +88,12 @@ obscurer's highest point along `n`, and with each such mirror's highest point. I
 passes below one of them, it raises `ValueError` naming the obscurer or the mirror and the
 height along the telescope axis, `value / n_z` (for a mirror, the plane's value along `n`).
 Raise `plane_z` to fix it.
+
+Bunches moving up (`cz > 0`) start on `lower_plane_z`, which must lie below every optic: below
+every obscurer (any leg) and below the primary and the secondary. The check is the same, with
+the plane below the lowest point of each optic along `n`; `ValueError` names the optic. A bunch
+with `cz = 0` is rejected. The first hits of upward bunches follow
+[Light sources](light-sources.md#photons-from-below).
 
 `frame_offset_m` is the input origin in the telescope frame. For a model with an axes
 offset (see [Optical models](optical-models.md#axes-offset)), the native tracer subtracts
