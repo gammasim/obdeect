@@ -10,9 +10,10 @@ run file (TOML or JSON) is converted to a `Run` by the Python layer ([run file](
 - `Emission{source, bunch_size (default 1), time_offset_ns (0), to_plane_z0 (false)}`.
 - `Event{repeat (default 1), emissions, metadata}`.
 - `Run{number (1), seed (1), observation_level_m, atmosphere_id (-1), frame (sky), telescopes,
-  events, metadata, producer}`.
-- `RunSummary{events, rows, weight, expected, not_on_plane}`: rows written, sum of weights,
-  expected sum of weights, all telescopes; photons dropped by `to_plane_z0` (once per event).
+  events, metadata, producer}`. `frame` is sky, telescope, camera or ground (G, sphere rows).
+- `RunSummary{events, rows, weight, expected, not_on_plane, misses_sphere}`: rows written, sum of
+  weights, expected sum of weights, all telescopes; photons dropped by `to_plane_z0` (once per
+  event); photons of a ground run that miss the telescope sphere (once per event).
 
 ## Stream layout
 
@@ -24,7 +25,8 @@ stream, run, { event, { telescope, photon chunks*, telescope_end }*, event_end }
 - Each telescope block holds the photons of all emissions of the event, in emission order.
 - A chunk holds at most 65536 rows and has `telescope_id`, `frame` and `first_index` (rows written
   before it in the block).
-- Photon columns: x y z cx cy cz t w wavelength; plus `zem` in the sky frame.
+- Photon columns: x y z cx cy cz t w wavelength; plus `zem` in the sky and ground frames. Ground
+  (sphere) rows also have `path`.
 
 ## Metadata keys
 
@@ -42,19 +44,22 @@ Values are typed as the stream metadata (`i64`, `f64`, `vector<f64>`, string).
 | `n_telescopes` | i64 | |
 | `telescope_x_m`, `_y_m`, `_z_m`, `_r_m` | vector f64 | one entry per telescope |
 | `wavelength_min_nm`, `wavelength_max_nm` | f64 | over all emissions (only if there is one) |
+| `ground_representation` | string | `sphere` in ground runs only (absent: sky, telescope, camera) |
 
 Run `metadata` entries are added to the run record. Writer keys take precedence.
 The Python layer also stores the normalized run description as `run_description` (JSON text).
 
 `event` record: `event_number` (i64), then the event `metadata`.
 
-`telescope` record: `telescope_id`, `frame` (i64; sky 0, telescope 2, camera 3), `x_m`, `y_m`,
+`telescope` record: `telescope_id`, `frame` (i64; sky 0, ground 1, telescope 2, camera 3), `x_m`, `y_m`,
 `z_m`, `r_m` (f64).
 
 `telescope_end` record: `telescope_id` (i64), `photons` (f64, sum of the weights written).
 
 `run_end` record: `not_on_plane` (i64), the photons dropped by `to_plane_z0` in the run (see
-[bunch, time and plane moves](#bunch-time-and-plane-moves)).
+[bunch, time and plane moves](#bunch-time-and-plane-moves)); `misses_sphere` (i64), the photons
+dropped by a ground run because their path misses the telescope sphere (see
+[ground runs](#ground-runs-sphere-rows)).
 
 ## Seeds and draws
 
@@ -74,7 +79,33 @@ Then, per row:
    included) are dropped and counted in `not_on_plane`. Kept rows keep their order and are
    numbered consecutively (`first_index`); the draws of the kept photons are unchanged.
 2. `t += time_offset_ns`.
-3. Sky frame: `zem = observation_level_m + z`.
+3. Sky frame: `zem = observation_level_m + z`. Ground runs: see below.
+
+## Ground runs (sphere rows)
+
+A run with `frame = ground` writes the sphere representation of docs/stream/format.md (run key
+`ground_representation = "sphere"`). Requirements: exactly one telescope (its sphere is the
+origin of the frame) and no `to_plane_z0` emission (error otherwise).
+
+- Source positions and directions are relative to the telescope sphere centre (x, y, z up, sky-frame
+  axes). The sphere has radius `R` (the telescope's `radius_m`).
+- Per row, with the emission point `P` and direction `d`:
+  - `|P| <= R`: the row is `P`, `path = 0`, time unchanged (the photon starts inside the sphere).
+  - `|P| > R`: the line `P + s d` meets the sphere at the smallest `s > 0` (roots of
+    `s^2 + 2 (P.d) s + |P|^2 - R^2 = 0`). If it hits, the row is the entry point `P + s d` with
+    `path = s` and `t += s / c` (vacuum: no atmosphere at this level). If it misses, the photon is
+    dropped and counted in `misses_sphere`.
+- `zem` is the emission altitude a.s.l.: `observation_level_m + telescope z + P.z`, also for entry
+  points (the altitude of the emission, not of the row).
+- Columns: x y z cx cy cz t zem w path (+ wavelength). Rows satisfy `validate_sphere_rows`.
+- Numbering and draws are as for other runs: the kept rows are numbered consecutively, the draws
+  are keyed on the photon index, so the rows do not depend on the chunk size.
+- Targets: the sampling target is in the frame of the source (relative to the sphere centre). An
+  `auto` target is the sphere `(origin, R)`. A target only chooses the directions that are sampled;
+  each row still goes through the sphere rule, so a sampled photon that misses the telescope sphere
+  is counted in `misses_sphere`. `expected` includes these photons, `weight` does not.
+- Photons written by sky, telescope or camera runs with directions `cz = 0` are unchanged; the
+  sphere representation is what horizontal photons need in G.
 
 ## Auto target
 
@@ -98,4 +129,4 @@ telescope. The output is the same.
 - `expected` = `expected_weight(run)`: expected sum of weights, all events and telescopes. Disc
   targets use a 2000 x 2000 midpoint grid; line sphere targets use 20000 steps along the line.
 - `weight` = sum of the written weights; for a run with targets this approaches `expected`.
-  Dropped photons (`not_on_plane`) are in `expected` but not in `weight`.
+  Dropped photons (`not_on_plane`, `misses_sphere`) are in `expected` but not in `weight`.

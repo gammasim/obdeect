@@ -39,7 +39,14 @@ def fake_run(monkeypatch):
 
     def write(config, output, *, max_rows=None):
         calls["write"].append({"config": config, "output": output, "max_rows": max_rows})
-        return {"events": 2, "rows": 7, "weight": 1.5, "expected": 2.0, "not_on_plane": 3}
+        return {
+            "events": 2,
+            "rows": 7,
+            "weight": 1.5,
+            "expected": 2.0,
+            "not_on_plane": 3,
+            "misses_sphere": 4,
+        }
 
     def check(config):
         calls["check"].append(config)

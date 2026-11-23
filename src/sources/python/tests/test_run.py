@@ -188,3 +188,54 @@ def test_write_rejects_runs_over_max_rows(tmp_path):
     with pytest.raises(ValueError, match="photon rows"):
         run.write(RUN, out, max_rows=1)
     assert not out.exists()
+
+
+def test_ground_run_writes_sphere_rows_and_counts_the_misses(tmp_path):
+    # Isotropic light from 50 m above a telescope sphere (R = 10 m) at the frame origin: the kept
+    # fraction is the solid-angle fraction of the sphere. Rows are entry points on the sphere with
+    # path and time; zem is the emission altitude 2150 + 0 + 50.
+    photons = 2e5
+    radius = 10.0
+    emission = dict(EMISSIONS[0], photons=photons, position_m=[0.0, 0.0, 50.0], target="none")
+    description = {
+        "run": {"seed": 8, "observation_level_m": 2150.0, "frame": "ground"},
+        "telescopes": [{"id": 1, "position_m": [0.0, 0.0, 0.0], "radius_m": radius}],
+        "events": [{"repeat": 1, "emissions": [emission]}],
+    }
+    path = tmp_path / "ground.pst"
+    summary = run.write(description, path, max_rows=1e9)
+    assert run_record(path)["metadata"]["ground_representation"] == "sphere"
+    assert summary["misses_sphere"] + summary["rows"] == photons
+    fraction = 0.5 * (1.0 - np.sqrt(1.0 - (radius / 50.0) ** 2))
+    sigma = np.sqrt(photons * fraction * (1.0 - fraction))
+    assert abs(summary["rows"] - photons * fraction) <= 4 * sigma
+    end = next(r for r in records(path) if r["type"] == "run_end")
+    assert end["metadata"]["misses_sphere"] == summary["misses_sphere"]
+    telescope = next(r for r in records(path) if r["type"] == "telescope")
+    assert telescope["metadata"]["frame"] == 1
+    chunks = [r for r in records(path) if r["type"] == "photons"]
+    assert chunks
+    for chunk in chunks:
+        columns = chunk["columns"]
+        assert {"x", "y", "z", "cx", "cy", "cz", "t", "zem", "w", "path"} <= set(columns)
+        r = np.sqrt(np.square(columns["x"]) + np.square(columns["y"]) + np.square(columns["z"]))
+        assert np.allclose(r, radius, atol=1e-3)
+        assert np.all(np.asarray(columns["path"]) > 0.0)
+        assert np.allclose(columns["zem"], 2200.0, atol=1e-3)
+
+
+def test_ground_run_needs_one_telescope_and_no_plane_move(tmp_path):
+    base = {
+        "run": {"seed": 8, "observation_level_m": 2150.0, "frame": "ground"},
+        "telescopes": [{"id": 1, "radius_m": 10.0}],
+        "events": [{"repeat": 1, "emissions": [dict(EMISSIONS[0], target="none")]}],
+    }
+    two = dict(base, telescopes=[{"id": 1, "radius_m": 10.0}, {"id": 2, "radius_m": 5.0}])
+    with pytest.raises(ValueError, match="exactly one telescope"):
+        run.write(two, tmp_path / "two.pst")
+    plane = dict(
+        base,
+        events=[{"repeat": 1, "emissions": [dict(EMISSIONS[0], to_plane_z0=True, target="none")]}],
+    )
+    with pytest.raises(ValueError, match="to_plane_z0"):
+        run.write(plane, tmp_path / "plane.pst")

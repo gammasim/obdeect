@@ -298,7 +298,8 @@ void validation() {
   CHECK(rejects(bad)); // Upward rays from a start plane above the disc: the wrong side.
   bad = star_source(inf);
   bad.geometry = PlaneWave{{1.0, 0.0, 0.0}, inf, 5.0, 0.0, 30.0};
-  CHECK(rejects(bad)); // Horizontal: not supported yet (no horizontal start plane).
+  CHECK(
+      rejects(bad)); // Horizontal with start_z_m: no start plane z = const (use start_distance_m).
   bad = star_source(inf);
   bad.geometry = PlaneWave{{0.0, 0.0, 1.0}, inf, 5.0, 0.0, -30.0};
   CHECK(rejects(bad)); // Downward rays must start above the disc.
@@ -311,6 +312,40 @@ void validation() {
   bad = s;
   bad.pulse = Exponential{0.0, -1.0};
   CHECK(rejects(bad));
+}
+
+// The start rules of plane waves: exactly one of start_z_m and start_distance_m; start_z_m only
+// for non-horizontal directions (the message points to start_distance_m); start_distance_m at
+// least the disc's extent along towards_source.
+void plane_wave_start_rules() {
+  Source s;
+  s.photons = 10.0;
+  s.geometry = PlaneWave{{1.0, 0.0, 0.0}, inf, 5.0, 0.0, 30.0, std::nullopt};
+  CHECK(throws_invalid([&] { validate(s); }));
+  try {
+    validate(s);
+  } catch (const std::invalid_argument &e) {
+    CHECK(std::string(e.what()).find("start_distance_m") != std::string::npos);
+  }
+  s.geometry = PlaneWave{{1.0, 0.0, 0.0}, inf, 5.0, 0.0, std::nullopt, 30.0};
+  CHECK(!throws_invalid([&] { validate(s); }));
+  s.geometry = PlaneWave{{0.0, 0.0, 1.0}, inf, 5.0, 0.0, std::nullopt, std::nullopt};
+  CHECK(!throws_invalid([&] { validate(s); })); // neither start: start_z_m = 0 (as before)
+  s.geometry = PlaneWave{{1.0, 0.0, 0.0}, inf, 5.0, 0.0, std::nullopt, std::nullopt};
+  CHECK(throws_invalid([&] { validate(s); })); // horizontal with neither: needs start_distance_m
+  s.geometry = PlaneWave{{0.0, 0.0, 1.0}, inf, 5.0, 0.0, 30.0, 30.0};
+  CHECK(throws_invalid([&] { validate(s); })); // both starts
+  s.geometry = PlaneWave{{1.0, 0.0, 0.0}, inf, 5.0, 0.0, std::nullopt, 4.0};
+  CHECK(throws_invalid([&] { validate(s); })); // closer than the disc's extent (5 m)
+  s.geometry = PlaneWave{{1.0, 0.0, 0.0}, inf, 5.0, 0.0, std::nullopt, 5.0};
+  CHECK(!throws_invalid([&] { validate(s); }));
+  s.geometry = PlaneWave{{1.0, 0.0, 0.0}, inf, 5.0, 0.0, std::nullopt, -1.0};
+  CHECK(throws_invalid([&] { validate(s); }));
+  // Direction 60 deg from the vertical: the extent is 5 sqrt(1 - 0.25) = 4.33 m.
+  s.geometry = PlaneWave{normalised({0.866, 0.0, 0.5}), inf, 5.0, 0.0, std::nullopt, 4.5};
+  CHECK(!throws_invalid([&] { validate(s); }));
+  s.geometry = PlaneWave{normalised({0.866, 0.0, 0.5}), inf, 5.0, 0.0, std::nullopt, 4.0};
+  CHECK(throws_invalid([&] { validate(s); }));
 }
 
 void upward_plane_waves() {
@@ -418,6 +453,7 @@ int main() {
   return run_checks([] {
     stars();
     upward_plane_waves();
+    plane_wave_start_rules();
     emitters_isotropic_disc();
     disc_target_angular_profile();
     chunks_and_determinism();

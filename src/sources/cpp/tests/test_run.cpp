@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <initializer_list>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -710,9 +711,13 @@ void test_validation() {
            "distinct");
   rejected(make_run({tel(1, {0.0, 0.0, 0.0}, 10.0)}, {make_event(1, {make_emission(src, 0.5)})}),
            "bunch size");
-  Run ground = make_run({tel(1, {0.0, 0.0, 0.0}, 10.0)}, events);
+  Run ground = make_run({tel(1, {0.0, 0.0, 0.0}, 10.0), tel(2, {30.0, 0.0, 0.0}, 5.0)}, events);
   ground.frame = Frame::ground;
-  rejected(ground, "frame");
+  rejected(ground, "exactly one telescope");
+  Run ground_to_plane = make_run({tel(1, {0.0, 0.0, 0.0}, 10.0)},
+                                 {make_event(1, {make_emission(src, 1.0, 0.0, true)})});
+  ground_to_plane.frame = Frame::ground;
+  rejected(ground_to_plane, "to_plane_z0");
 }
 
 // Writes one emission and checks the weight sum against its expected value. The Monte Carlo
@@ -742,6 +747,174 @@ void check_weight_matches_expected(const char *label, const Run &run) {
   CHECK_NEAR(summary.weight, m1, 1e-9 * m1);
   CHECK(summary.expected > 0.0);
   CHECK(std::abs(summary.weight - summary.expected) <= 4.0 * sigma);
+}
+
+// ---- ground runs (sphere representation)
+
+// Rows of a ground run: one telescope block, its chunks concatenated and checked by
+// validate_sphere_rows. The run must have one event.
+std::vector<PhotonChunk> sphere_chunks(const RunBlock &r, double radius_m) {
+  std::vector<PhotonChunk> chunks;
+  const TelescopeBlock *t = telescope_of(r, 0, 0);
+  if (!t)
+    return chunks;
+  for (const PhotonChunk &c : t->chunks) {
+    CHECK(c.frame == Frame::ground);
+    CHECK(error_of([&] { obdeect::stream::validate_sphere_rows(c, radius_m); }).empty());
+    chunks.push_back(c);
+  }
+  return chunks;
+}
+
+// A line of photons along +x from x = -20 m to 20 m at the origin of the frame, sphere R = 10 m,
+// telescope z = 100 m (emission altitude = 2150 + 100 + z of the emission point). Photons
+// emitted inside the sphere give rows at their emission points (path 0); photons emitted at
+// x < -10 m give entry points at x = -10 m with path -10 - x; photons at x > 10 m move away and
+// miss. The muon-like time is s / c along the line, so every entry point has t = 10 m / c.
+void test_ground_line_crossing_the_sphere() {
+  const double c = speed_of_light_m_per_ns;
+  Source track = with_geometry(
+      Line{Vec3{-20.0, 0.0, 0.0}, Vec3{1.0, 0.0, 0.0}, 40.0, 1.0, FixedAngle{0.0}}, 1000.0);
+  Run run =
+      make_run({tel(1, {0.0, 0.0, 100.0}, 10.0)}, {make_event(1, {make_emission(track)})}, 21);
+  run.frame = Frame::ground;
+  RunSummary summary;
+  const RunBlock r = parse_run(write_bytes(run, max_cached_event_bytes, &summary));
+  CHECK(field<std::string>(r.meta, "ground_representation") == "sphere");
+  CHECK(summary.rows + summary.misses_sphere == 1000);
+  CHECK(field<std::int64_t>(r.end, "misses_sphere") ==
+        static_cast<std::int64_t>(summary.misses_sphere));
+  CHECK(summary.not_on_plane == 0);
+  // Expected: 500 inside (|x| < 10), 250 entries, 250 misses; binomial with p = 1/4 and 3/4.
+  CHECK(std::abs(static_cast<double>(summary.misses_sphere) - 250.0) <= 4.0 * std::sqrt(187.5));
+  const auto chunks = sphere_chunks(r, 10.0);
+  std::size_t inside = 0;
+  std::size_t entries = 0;
+  for (const PhotonChunk &ch : chunks) {
+    for (std::size_t i = 0; i < ch.rows(); ++i) {
+      const double x = ch[Column::x][i];
+      const double path = ch[Column::path][i];
+      CHECK_NEAR(ch[Column::cx][i], 1.0, 1e-6);
+      CHECK_NEAR(ch[Column::zem][i], 2150.0 + 100.0, 1e-3);
+      if (path == 0.0) {
+        // Inside: the emission point itself.
+        ++inside;
+        CHECK(std::abs(x) < 10.0);
+        CHECK_NEAR(ch[Column::y][i], 0.0, 1e-4);
+        CHECK_NEAR(ch[Column::z][i], 0.0, 1e-4);
+        CHECK_NEAR(ch[Column::t][i], (x + 20.0) / c, 1e-3);
+      } else {
+        // Entry point: on the sphere at x = -10 m, reached after a path of -10 - x_emission.
+        ++entries;
+        CHECK_NEAR(x, -10.0, 1e-4);
+        CHECK_NEAR(ch[Column::y][i], 0.0, 1e-4);
+        CHECK(path > 0.0 && path < 10.0);
+        CHECK_NEAR(ch[Column::t][i], 10.0 / c, 1e-3);
+      }
+    }
+  }
+  CHECK(inside + entries == summary.rows);
+  CHECK(std::abs(static_cast<double>(inside) - 500.0) <= 4.0 * std::sqrt(187.5));
+  CHECK(entries > 0);
+}
+
+// Isotropic light from a point at D = 50 m outside the sphere (R = 10 m): the kept fraction is the
+// solid-angle fraction (1 - sqrt(1 - (R/D)^2)) / 2. Each entry point lies on the sphere on the
+// photon's line, at path s with time s / c; zem is the point's emission altitude.
+void test_ground_isotropic_outside_fraction() {
+  const double c = speed_of_light_m_per_ns;
+  const double photons = 2e5;
+  const double radius = 10.0;
+  const double distance = 50.0;
+  Source iso = isotropic_at({0.0, 0.0, distance}, photons);
+  Run run = make_run({tel(1, {0.0, 0.0, 0.0}, radius)}, {make_event(1, {make_emission(iso)})}, 31);
+  run.frame = Frame::ground;
+  RunSummary summary;
+  const RunBlock r = parse_run(write_bytes(run, max_cached_event_bytes, &summary));
+  const double fraction = 0.5 * (1.0 - std::sqrt(1.0 - (radius / distance) * (radius / distance)));
+  const double expected = photons * fraction;
+  const double sigma = std::sqrt(photons * fraction * (1.0 - fraction));
+  const double kept = static_cast<double>(summary.rows);
+  CHECK(summary.rows + summary.misses_sphere == 200000);
+  CHECK(std::abs(kept - expected) <= 4.0 * sigma);
+  CHECK_NEAR(summary.weight, kept, 1e-6 * kept);
+  CHECK_NEAR(summary.expected, photons, 1e-6 * photons);
+  const auto chunks = sphere_chunks(r, radius);
+  for (const PhotonChunk &ch : chunks)
+    for (std::size_t i = 0; i < ch.rows(); ++i) {
+      const Vec3 row{ch[Column::x][i], ch[Column::y][i], ch[Column::z][i]};
+      const Vec3 d{ch[Column::cx][i], ch[Column::cy][i], ch[Column::cz][i]};
+      const double path = ch[Column::path][i];
+      CHECK_NEAR(norm(row), radius, 1e-4);
+      CHECK(path > 0.0);
+      CHECK_NEAR(ch[Column::t][i], path / c, 1e-3);
+      CHECK_NEAR(ch[Column::zem][i], 2150.0 + distance, 1e-3);
+      // The entry point lies on the photon's line from the source: source + path d = row.
+      const Vec3 source{0.0, 0.0, distance};
+      CHECK_NEAR(norm(source + d * path - row), 0.0, 1e-3);
+    }
+}
+
+// Auto target in a ground run: the isotropic point aims at the sphere at the frame origin (the
+// candidates are the photons that reach it), so every candidate hits and none is missed.
+void test_ground_auto_target_hits_the_sphere() {
+  Source iso = isotropic_at({0.0, 0.0, 50.0}, 1e6);
+  iso.target = AutoTarget{};
+  Run run = make_run({tel(1, {0.0, 0.0, 0.0}, 10.0)}, {make_event(1, {make_emission(iso)})}, 41);
+  run.frame = Frame::ground;
+  const double candidates = expected_count(plan(run)[0][0].emission.source);
+  RunSummary summary;
+  const RunBlock r = parse_run(write_bytes(run, max_cached_event_bytes, &summary));
+  CHECK(summary.misses_sphere == 0);
+  CHECK(std::abs(static_cast<double>(summary.rows) - candidates) <= 1.0);
+  CHECK(std::abs(summary.weight - summary.expected) <= 4.0 * std::sqrt(candidates));
+  CHECK(sphere_chunks(r, 10.0).size() > 0);
+}
+
+// Rows of a ground run do not depend on the chunk size: emitting the candidates in one chunk or in
+// two, and finishing each chunk, gives the same rows in the same order.
+void test_ground_rows_independent_of_chunk() {
+  Source iso = isotropic_at({3.0, -4.0, 40.0}, 1e3);
+  const Emission e = make_emission(iso, 2.0, 5.0);
+  Run run = make_run({tel(1, {0.0, 0.0, 30.0}, 10.0)}, {make_event(1, {e})}, 51);
+  run.frame = Frame::ground;
+  const std::size_t n = 1000;
+  const auto rows_of = [&](std::initializer_list<std::size_t> sizes) {
+    std::vector<PhotonChunk> out;
+    std::uint64_t first = 0;
+    for (const std::size_t rows : sizes) {
+      PhotonChunk chunk;
+      Drops drops;
+      emit(iso, 51, 1, 1, first, rows, chunk);
+      detail::finish_rows(e, run, chunk, drops);
+      out.push_back(chunk);
+      first += rows;
+    }
+    return out;
+  };
+  const auto whole = rows_of({n});
+  const auto split = rows_of({300, 1, 699});
+  std::vector<float> a_x, a_t, a_w, a_path;
+  std::vector<float> b_x, b_t, b_w, b_path;
+  for (const auto &c : whole)
+    for (std::size_t i = 0; i < c.rows(); ++i) {
+      a_x.push_back(c[Column::x][i]);
+      a_t.push_back(c[Column::t][i]);
+      a_w.push_back(c[Column::w][i]);
+      a_path.push_back(c[Column::path][i]);
+    }
+  for (const auto &c : split)
+    for (std::size_t i = 0; i < c.rows(); ++i) {
+      b_x.push_back(c[Column::x][i]);
+      b_t.push_back(c[Column::t][i]);
+      b_w.push_back(c[Column::w][i]);
+      b_path.push_back(c[Column::path][i]);
+    }
+  CHECK(!a_x.empty());
+  CHECK(a_x == b_x);
+  CHECK(a_t == b_t);
+  CHECK(a_w == b_w);
+  CHECK(a_path == b_path);
 }
 
 void test_summary_weight_matches_expected() {
@@ -787,5 +960,9 @@ int main() {
     test_resolve_auto_target();
     test_validation();
     test_summary_weight_matches_expected();
+    test_ground_line_crossing_the_sphere();
+    test_ground_isotropic_outside_fraction();
+    test_ground_auto_target_hits_the_sphere();
+    test_ground_rows_independent_of_chunk();
   });
 }

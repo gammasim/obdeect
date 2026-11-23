@@ -18,7 +18,7 @@ Required keys have no default. "Table" values are arrays of equal length (at lea
 | `seed` | int 0 to 2^64 - 1 | 1 | run seed |
 | `observation_level_m` | number | required | height of the observation level |
 | `atmosphere_id` | int | -1 | -1 = none |
-| `frame` | `sky`, `telescope`, `camera` | `sky` | frame of all photons |
+| `frame` | `sky`, `telescope`, `camera`, `ground` | `sky` | frame of all photons. `ground` (G) writes sphere rows: positions relative to the centre of the telescope sphere, exactly one telescope, no `to_plane_z0` (see [run.md](run.md)) |
 | `metadata` | table | `{}` | values: int, float, string or list of numbers; added to the run record |
 
 ## `[[telescopes]]`
@@ -50,7 +50,7 @@ At least one per event. Keys for every kind:
 | `photons` | number >= 0 | required | mean physical photons |
 | `bunch_size` | number >= 1 | 1 | photons per row |
 | `time_offset_ns` | number | 0 | |
-| `to_plane_z0` | bool | false | move rows with `z * cz < 0` (or `z = 0`) to z = 0; drop and count the others (`not_on_plane`) |
+| `to_plane_z0` | bool | false | move rows with `z * cz < 0` (or `z = 0`) to z = 0; drop and count the others (`not_on_plane`); not allowed in a `ground` run |
 | `spectrum` | spectrum table | required | |
 | `pulse` | pulse table | `{ kind = "fixed", time_ns = 0 }` | |
 | `target` | `"none"`, `"auto"`, or disc or sphere table | `"none"` | |
@@ -68,15 +68,27 @@ Keys per kind:
 | | `beta` | number in [0, 1] | 1 |
 | | `angular` | angular table | `{ kind = "cone", angle_deg = 0 }` |
 | | `profile` | `{ distance_m = [...], density = [...] }` | absent (uniform) |
-| `plane_wave` | `towards_source` | 3 numbers (unit, z != 0; photons travel along -towards_source) | required |
+| `plane_wave` | `towards_source` | 3 numbers (unit; photons travel along -towards_source; z = 0 horizontal) | required |
 | | `distance_m` | number > 0 | absent (infinite) |
 | | `disc_radius_m` | number > 0 | required |
 | | `disc_z_m` | number | 0 |
-| | `start_z_m` | number | 0 (on the source side of `disc_z_m`: above for z > 0, below for z < 0) |
+| | `start_z_m` | number | 0 (on the source side of `disc_z_m`; not for horizontal directions). At most one of `start_z_m` and `start_distance_m` |
+| | `start_distance_m` | number >= 0 | absent. Optional alternative to `start_z_m`; required for a horizontal `towards_source` |
 | `sky_background` | `radius_m` | number > 0 | required |
 | | `centre_m` | 3 numbers | `[0, 0, 0]` |
 | | `axis` | 3 numbers | `[0, 0, -1]` |
 | | `viewcone_deg` | number in (0, 180] | 90 |
+
+Plane-wave starts (at most one key; giving both is an error; a horizontal `towards_source` without
+`start_distance_m` is an error, and the message names it):
+
+- `start_z_m` (default 0 when neither key is given, so existing run files are unchanged):
+  photons start on the plane z = `start_z_m`, on the source side of `disc_z_m` (above it for
+  `towards_source.z > 0`, below it for `< 0`). Not for horizontal directions.
+- `start_distance_m`: photons start on the plane perpendicular to `towards_source` at this distance
+  from the disc centre `(0, 0, disc_z_m)`, towards the source. Valid for any direction. It must be at
+  least `disc_radius_m * sqrt(1 - towards_source.z^2)` (the plane lies on the source side of the
+  whole disc). For a vertical beam, `start_distance_m = start_z_m - disc_z_m` gives the same photons.
 
 Target tables: `{ kind = "disc", centre_m, normal, radius_m }` and
 `{ kind = "sphere", centre_m, radius_m }`. All their keys are required; `radius_m > 0`.

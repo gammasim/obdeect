@@ -102,8 +102,29 @@ inline void sample_plane_wave(const PlaneWave &w, std::uint64_t seed, std::uint3
   const Vec3 target{r * std::cos(phi), r * std::sin(phi), w.disc_z_m};
   const Vec3 centre{0.0, 0.0, w.disc_z_m};
   p.direction = -w.towards_source;
+  if (w.start_distance_m) {
+    // Start plane: (X - centre) . towards_source = start_distance.
+    const double start_distance = *w.start_distance_m;
+    if (std::isinf(w.distance_m)) {
+      p.position =
+          target + w.towards_source * (start_distance - dot(target - centre, w.towards_source));
+      p.time_ns += dot(p.position - centre, p.direction) / speed_of_light_m_per_ns;
+      return;
+    }
+    const Vec3 source = centre + w.towards_source * w.distance_m;
+    p.direction = normalised(target - source);
+    // The source lies at depth distance_m along towards_source: the photons start there when the
+    // start plane is beyond it, else where the ray crosses the plane.
+    p.position = w.distance_m <= start_distance
+                     ? source
+                     : source + p.direction * ((start_distance - w.distance_m) /
+                                               dot(p.direction, w.towards_source));
+    p.time_ns += (norm(p.position - source) - w.distance_m) / speed_of_light_m_per_ns;
+    return;
+  }
+  const double start_z = plane_wave_start_z(w);
   if (std::isinf(w.distance_m)) {
-    p.position = target + p.direction * ((w.start_z_m - target.z) / p.direction.z);
+    p.position = target + p.direction * ((start_z - target.z) / p.direction.z);
     p.time_ns += dot(p.position - centre, p.direction) / speed_of_light_m_per_ns;
     return;
   }
@@ -111,10 +132,9 @@ inline void sample_plane_wave(const PlaneWave &w, std::uint64_t seed, std::uint3
   p.direction = normalised(target - source);
   // The photons start at the source when it is already on the disc side of the start plane,
   // otherwise where the ray crosses the plane.
-  const bool source_is_on_path = p.direction.z * (source.z - w.start_z_m) >= 0.0;
-  p.position = source_is_on_path
-                   ? source
-                   : target + p.direction * ((w.start_z_m - target.z) / p.direction.z);
+  const bool source_is_on_path = p.direction.z * (source.z - start_z) >= 0.0;
+  p.position =
+      source_is_on_path ? source : target + p.direction * ((start_z - target.z) / p.direction.z);
   p.time_ns += (norm(p.position - source) - w.distance_m) / speed_of_light_m_per_ns;
 }
 

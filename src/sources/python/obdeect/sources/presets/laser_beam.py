@@ -11,9 +11,11 @@ Chain::
     obdeect propagation run --transmission T --site-altitude H --seed N --mode weighted \\
         --scattering S --scattering-points 64 -i primaries.pst -o scattered.pst
 
-t = 0 is the laser firing. Limits: the beam is not horizontal and its tilt from the vertical
-(nadir for a downward beam, the zenith for an upward one) is at most ``--max-tilt``; the
-atmosphere is plane-parallel and only single scattering is computed.
+t = 0 is the laser firing. Limits: a non-horizontal beam's tilt from the vertical (nadir for a
+downward beam, the zenith for an upward one) is at most ``--max-tilt``; a horizontal beam has no
+tilt limit and starts ``--start-distance`` along the beam (see ``_pulsed_beam``). The atmosphere is
+plane-parallel and only single scattering is computed, so the scattering chain is for beams within
+``--max-tilt``.
 Direction convention and the direct-beam check: see ``_pulsed_beam``.
 """
 

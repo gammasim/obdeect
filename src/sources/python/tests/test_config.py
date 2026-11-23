@@ -290,7 +290,7 @@ ERROR_CASES = [
     (_set("run", "number", 0), "run.number: must be >= 1"),
     (_set("run", "seed", -1), "run.seed: must be in 0..18446744073709551615"),
     (_set("run", "seed", 2**64), "run.seed: must be in 0..18446744073709551615"),
-    (_set("run", "frame", "earth"), "run.frame: must be one of sky, telescope, camera"),
+    (_set("run", "frame", "earth"), "run.frame: must be one of sky, telescope, camera, ground"),
     (_set("run", "observation_level_m", float("nan")), "run.observation_level_m: must be finite"),
     (
         _set("run", "metadata", {"note": True}),
@@ -427,3 +427,42 @@ def test_input_is_not_mutated(tmp_path):
     normalized["run"]["metadata"]["note"] = "changed"
     normalized["events"][0]["emissions"][1]["profile"]["density"][0] = 99.0
     assert raw == before
+
+
+def test_ground_frame_and_exactly_one_start_key():
+    description = {
+        "run": {"observation_level_m": 2150.0, "frame": "ground"},
+        "telescopes": [{"id": 1, "radius_m": 10.0}],
+        "events": [
+            {
+                "emissions": [
+                    {
+                        "kind": "plane_wave",
+                        "photons": 1.0,
+                        "spectrum": {"kind": "fixed", "wavelength_nm": 400.0},
+                        "towards_source": [1.0, 0.0, 0.0],
+                        "disc_radius_m": 2.0,
+                        "start_distance_m": 30.0,
+                    }
+                ]
+            }
+        ],
+    }
+    normalized = config.normalize(description)
+    assert normalized["run"]["frame"] == "ground"
+    emission = normalized["events"][0]["emissions"][0]
+    assert emission["start_distance_m"] == 30.0
+    assert "start_z_m" not in emission
+    both = copy.deepcopy(description)
+    both["events"][0]["emissions"][0]["start_z_m"] = 30.0
+    with pytest.raises(ValueError, match="not both"):
+        config.normalize(both)
+    # Neither key: start_z_m = 0 as before (vertical directions); horizontal needs start_distance_m.
+    neither = copy.deepcopy(description)
+    del neither["events"][0]["emissions"][0]["start_distance_m"]
+    neither["events"][0]["emissions"][0]["towards_source"] = [0.0, 0.0, 1.0]
+    assert config.normalize(neither)["events"][0]["emissions"][0]["start_z_m"] == 0.0
+    horizontal = copy.deepcopy(neither)
+    horizontal["events"][0]["emissions"][0]["towards_source"] = [1.0, 0.0, 0.0]
+    with pytest.raises(ValueError, match="needs start_distance_m"):
+        config.normalize(horizontal)

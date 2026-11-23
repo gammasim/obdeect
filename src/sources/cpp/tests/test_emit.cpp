@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -18,6 +19,8 @@ using namespace obdeect::sources;
 using obdeect::stream::Column;
 
 namespace {
+
+constexpr double inf = std::numeric_limits<double>::infinity();
 
 // All photons of a test source, one array per column (rows dropped by emit are not stored).
 struct Photons {
@@ -338,6 +341,102 @@ void line_validation() {
   CHECK(!throws_invalid([&] { validate(bad); }));
 }
 
+// Plane waves with start_distance_m: the start plane is perpendicular to towards_source at that
+// distance from the disc centre (any direction), and for a vertical beam it is the plane z =
+// start_z.
+void plane_wave_start_distance() {
+  const double c = speed_of_light_m_per_ns;
+  const std::size_t n = 2000;
+
+  // Horizontal beam from +x: every photon starts on the plane x = 30 with the disc's y and z,
+  // moves along -x, and reaches the disc centre's perpendicular plane at t = 0.
+  Source horizontal;
+  horizontal.photons = static_cast<double>(n);
+  horizontal.geometry = PlaneWave{{1.0, 0.0, 0.0}, inf, 2.0, 0.0, std::nullopt, 30.0};
+  CHECK(!throws_invalid([&] { validate(horizontal); }));
+  const auto h = emit_all(horizontal, 5, n);
+  CHECK(h.rows() == n);
+  for (std::size_t i = 0; i < h.rows(); ++i) {
+    CHECK_NEAR(h[Column::x][i], 30.0, 1e-4);
+    CHECK(std::hypot(h[Column::y][i], h[Column::z][i]) <= 2.0 + 1e-4);
+    CHECK_NEAR(h[Column::cx][i], -1.0, 1e-6);
+    CHECK_NEAR(h[Column::cy][i], 0.0, 1e-6);
+    CHECK_NEAR(h[Column::cz][i], 0.0, 1e-6);
+    CHECK_NEAR(h[Column::t][i], -30.0 / c, 1e-4);
+  }
+
+  // Upward beam from below, towards_source = (0.6, 0, -0.8), start plane at distance 30 from the
+  // disc centre: each start satisfies (X - C) . towards_source = 30, lies on the line to its
+  // target, and the photon moves up along (-0.6, 0, 0.8).
+  Source up;
+  up.photons = static_cast<double>(n);
+  const Vec3 towards = normalised({0.6, 0.0, -0.8});
+  up.geometry = PlaneWave{towards, inf, 2.0, 0.0, std::nullopt, 30.0};
+  CHECK(!throws_invalid([&] { validate(up); }));
+  const auto u = emit_all(up, 6, n);
+  CHECK(u.rows() == n);
+  for (std::size_t i = 0; i < u.rows(); ++i) {
+    const Vec3 start{u[Column::x][i], u[Column::y][i], u[Column::z][i]};
+    CHECK_NEAR(dot(start, towards), 30.0, 1e-4);
+    CHECK_NEAR(u[Column::cz][i], 0.8, 1e-6);
+    CHECK_NEAR(u[Column::cx][i], -0.6, 1e-6);
+    CHECK_NEAR(u[Column::t][i], -30.0 / c, 1e-4);
+  }
+
+  // Vertical beam from above: start_distance = start_z - disc_z gives the same photons.
+  Source by_z;
+  by_z.photons = static_cast<double>(n);
+  by_z.geometry = PlaneWave{{0.0, 0.0, 1.0}, inf, 5.0, 1.5, 31.5, std::nullopt};
+  Source by_distance;
+  by_distance.photons = static_cast<double>(n);
+  by_distance.geometry = PlaneWave{{0.0, 0.0, 1.0}, inf, 5.0, 1.5, std::nullopt, 30.0};
+  const auto z = emit_all(by_z, 9, n);
+  const auto d = emit_all(by_distance, 9, n);
+  CHECK(z.rows() == d.rows());
+  for (const Column column : {Column::x, Column::y, Column::z, Column::cx, Column::cy, Column::cz,
+                              Column::t, Column::w}) {
+    for (std::size_t i = 0; i < std::min(z.rows(), d.rows()); ++i)
+      CHECK_NEAR(z[column][i], d[column][i], 1e-5);
+  }
+
+  // No start key: start_z_m = 0 (the same photons as an explicit 0).
+  Source none;
+  none.photons = static_cast<double>(n);
+  none.geometry = PlaneWave{{0.0, 0.0, 1.0}, inf, 5.0, 0.0, std::nullopt, std::nullopt};
+  Source zero = none;
+  zero.geometry = PlaneWave{{0.0, 0.0, 1.0}, inf, 5.0, 0.0, 0.0, std::nullopt};
+  const auto no_key = emit_all(none, 12, n);
+  const auto zero_key = emit_all(zero, 12, n);
+  CHECK(no_key.rows() == zero_key.rows() && no_key.rows() == n);
+  for (const Column column : {Column::x, Column::y, Column::z, Column::cz, Column::t})
+    for (std::size_t i = 0; i < std::min(no_key.rows(), zero_key.rows()); ++i)
+      CHECK_NEAR(no_key[column][i], zero_key[column][i], 0.0);
+
+  // Finite distance from above the beam's side: source at 100 m along towards = (0.6, 0, 0.8);
+  // start plane 30 m from the centre (crossed by the rays): X . towards = 30 and time (|X - S| -
+  // 100) / c. A start plane beyond the source (150 m) starts the photons at the source.
+  const Vec3 towards_fin = normalised({0.6, 0.0, 0.8});
+  const Vec3 source = towards_fin * 100.0;
+  Source fin;
+  fin.photons = static_cast<double>(n);
+  fin.geometry = PlaneWave{towards_fin, 100.0, 2.0, 0.0, std::nullopt, 30.0};
+  const auto f = emit_all(fin, 3, n);
+  CHECK(f.rows() == n);
+  for (std::size_t i = 0; i < f.rows(); ++i) {
+    const Vec3 start{f[Column::x][i], f[Column::y][i], f[Column::z][i]};
+    CHECK_NEAR(dot(start, towards_fin), 30.0, 1e-3);
+    CHECK_NEAR(f[Column::t][i], (norm(start - source) - 100.0) / c, 1e-3);
+  }
+  Source beyond = fin;
+  beyond.geometry = PlaneWave{towards_fin, 100.0, 2.0, 0.0, std::nullopt, 150.0};
+  const auto b = emit_all(beyond, 3, 10);
+  for (std::size_t i = 0; i < b.rows(); ++i) {
+    CHECK_NEAR(b[Column::x][i], source.x, 1e-3);
+    CHECK_NEAR(b[Column::z][i], source.z, 1e-3);
+    CHECK_NEAR(b[Column::t][i], -100.0 / c, 1e-4);
+  }
+}
+
 } // namespace
 
 int main() {
@@ -351,5 +450,6 @@ int main() {
     arc_matches_brute_force();
     arc_on_axis();
     line_validation();
+    plane_wave_start_distance();
   });
 }

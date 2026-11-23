@@ -4,7 +4,8 @@
 
 User-facing units are in [sources](../sources.md#frames-and-units). Here:
 
-- Stream frame codes: sky 0, ground 1, telescope (T) 2, camera (C) 3. Sources emit in sky, T or C only.
+- Stream frame codes: sky 0, ground 1, telescope (T) 2, camera (C) 3. Sources emit in sky, T, C
+  or G (`ground` runs: positions relative to the one telescope sphere centre, sphere rows).
 - Sky frame: origin at the observation level above the telescope, z up. Sky z values are
   heights above the observation level; the column `zem` is `observation_level_m + z`.
 - Angular profiles use `u = 1 - cos(theta)`, so `dOmega = 2 pi du`, `u in [0, 2]`.

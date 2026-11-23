@@ -258,7 +258,7 @@ def _execute(command: str, argv: list[str]) -> int:
     print(
         f"events {summary['events']}, rows {summary['rows']}, "
         f"sum of weights {summary['weight']:.6g}, expected {summary['expected']:.6g}, "
-        f"not on plane {summary['not_on_plane']}",
+        f"not on plane {summary['not_on_plane']}, misses sphere {summary['misses_sphere']}",
         file=sys.stderr,
     )
     return 0
