@@ -64,5 +64,23 @@ before any window refraction is added.
 Photons moving up are traced from a plane below the optics, and their first hit is classified.
 Reflections off the secondary and direct hits on the focal surface from below are counted as
 losses (`non_sequential`, `direct_focal`); they are not traced further. Full non-sequential
-tracing is planned (phase 2). Horizontal photons are rejected until the sphere representation
-of the telescope sphere is added. See [Light sources](light-sources.md#photons-from-below).
+tracing is planned (phase 2). Horizontal photons are rejected in plane runs; sphere runs trace
+them from their sphere rows. See [Light sources](light-sources.md#photons-from-below) and
+[Sphere rows](light-sources.md#sphere-rows).
+
+## Sphere runs
+
+- The enclosure check bounds each mirror and obscurer by the box of its support functions, so a
+  sphere within a few centimetres of the optics can be rejected although it encloses them. The
+  check never accepts a sphere that does not enclose the optics.
+- The focal surface is a plane of unbounded extent in the model. Its only check is that the plane
+  reaches the sphere (its height above the sphere centre is at most R). An asphere focal surface
+  is bounded like the mirrors.
+- A row emitted inside the sphere is traced from its emission point; the tracer does not check that
+  the point lies outside the optics. Emission inside a mirror or an obscurer is not detected as
+  such.
+- The output `path` adds the traced path inside the telescope in metres (for a plane run, the move
+  to the input plane is included, which can make the path of a photon emitted below the input
+  plane negative: such input is rejected). The path of a reflected photon is the sum of its legs.
+- Each telescope's radius comes from `telescope_r_m` indexed by telescope id; a run without it, or
+  with a shorter array, is rejected.

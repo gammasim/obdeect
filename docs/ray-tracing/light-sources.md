@@ -95,6 +95,29 @@ are the light that the planned phase 2 (non-sequential tracing) will recover. A 
 moves horizontally (zero component along the axis of its input plane) has no plane to start on
 and is rejected with an error.
 
+## Sphere rows
+
+In a sphere run (see [Photon stream](photon-stream.md#input-frames)) each ground-frame row is a
+start point inside or on the telescope sphere, and it is traced from that point: its position is
+transformed into the telescope frame as a point (rotation, then the axes offset), with its own z.
+Its time is the row's time at that point. Nothing is moved to an input plane, so the plane checks
+do not apply to these rows.
+
+The branch follows the direction in the telescope frame, as for bunches from below: a row with
+traced z < 0 takes the sequential path (the primary's reflecting face, then the secondary and the
+focal surface), and a row with traced z >= 0 takes the first-hit path. A horizontal ground row
+(cz = 0) on a tilted telescope has traced z = R d_z and so takes whichever branch its traced
+direction selects; with traced z = 0 it takes the first-hit path.
+
+The sequential path looks ahead from the start point only. A photon that starts between the
+primary and the focal surface and moves towards the primary is reflected by it; one that moves
+towards the camera reaches the focal surface from below (`direct_focal`). Obscurers behind the
+start point are not met, which is correct for a start point inside the telescope.
+
+For the same photons, the sphere row of each downward photon is the entry point of its line into
+the sphere, and the tracer gives the same detected photons as the plane run (checked in
+[Validation](VALIDATION.md#sphere-runs-ray-tracing-phase-5d)).
+
 ## Air-shower photons and custom inputs
 
 `trace_bunches` traces photon bunches from an external air-shower simulation; it does not

@@ -369,6 +369,38 @@ Checks in `src/ray_tracing` (native tests in `cpp/tests/test_trace.cpp`, Python 
 - Sources: `star_photons` with `towards_source` below the telescope emits upward photons; a
   horizontal `towards_source` is rejected.
 
+## Sphere runs (ray tracing phase 5d)
+
+Checks in `src/ray_tracing` (native `cpp/tests/test_sphere_rows.cpp`, Python `python/tests/test_sphere.py`):
+
+- Sphere rows equal plane rows: the downward photons of a plane run (segmented model, 20000 photons
+  on a 0.5 m disc, direction (0.01, -0.005)) and their sphere entry points on a sphere of 40 m,
+  with the time at the entry. Both detect the same 9551 photons; the largest differences of the
+  camera photons are 7.5e-9 m in x, 3.7e-9 m in y, 6e-8 in cz, 1.5e-5 ns in time, and the weights
+  are identical (float32 rounding of the start point). The native test checks the same at the
+  bunch level (20000 photons; positions 1e-4 m, directions 1e-6, time 1e-3 ns).
+- Horizontal rows on a tilted telescope (zenith 30 deg): the traced direction has z < -0.4; the rows
+  start on the sphere, the photons reach the dish front from the side and are detected. The native
+  test compares a horizontal row with the sequential trace of the same ray (positions 1e-6 m).
+- Start inside the sphere: a row at z = 4 m moving towards the primary is detected (the dish
+  reflects it to the focus, analytic primary sag 0.00225 m at r = 0.3 m); the same row moving towards
+  the camera gives `direct_focal` (no detected photons), native and Python.
+- Native and Python write the same stream for downward and horizontal sphere rows (compared record by
+  record, columns bit for bit).
+- Output does not depend on chunking (700-row chunks against one chunk) or threads (1 and 3), nor on
+  the order of the rows (native bunch test: reversed order, same photons per bunch id).
+- Enclosure: a sphere of 0.5 m around the segmented model is rejected by both programs with the
+  element named ("must enclose the optical model"); the distances of every element are positive and
+  the focal plane's distance is its height.
+- Row validation: missing `z`, a row outside the sphere, a missing `telescope_r_m`, a negative
+  `path` and an unknown `ground_representation` are rejected; plane runs still reject horizontal
+  photons.
+- Path: the output `path` is the input path plus the traced path (native: 5 m in, 40 m traced on the
+  axis from z = 30 m through the dish to the focus at 10 m gives 45 m, exact); Python and native
+  streams with a `path` column (sphere and plane rows) are equal bit for bit; for sphere rows the
+  output path is at least R minus the focal distance more than the input.
+- Sanitizer build (AddressSanitizer and UndefinedBehaviorSanitizer) of `test_sphere_rows`: clean.
+
 Downward photons take the unchanged code path: the existing ray-tracing suites (kernels, trace,
 bounds, replay comparison, the native-versus-Python stream comparison) pass without changes to their
 expected values.

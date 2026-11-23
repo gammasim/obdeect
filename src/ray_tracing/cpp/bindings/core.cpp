@@ -250,7 +250,8 @@ public:
       const std::optional<std::tuple<In1<double>, In1<double>>> &density,
       const std::optional<std::tuple<double, double>> &wavelength_law, bool roulette,
       bool classify_losses, bool normalise_transmission, const std::optional<In1<float>> &cz,
-      std::optional<double> lower_plane_z, obdeect::ray_tracing::ThreadPool &pool) const {
+      std::optional<double> lower_plane_z, const std::optional<In1<float>> &z,
+      const std::optional<In1<double>> &path, obdeect::ray_tracing::ThreadPool &pool) const {
     const std::size_t n = x.shape(0);
     for (const std::size_t length :
          {y.shape(0), cx.shape(0), cy.shape(0), time_ns.shape(0), zem.shape(0), size.shape(0),
@@ -258,6 +259,10 @@ public:
       if (length != n)
         throw nb::value_error("bunch arrays must have the same length");
     if (cz && cz->shape(0) != n)
+      throw nb::value_error("bunch arrays must have the same length");
+    if (path && path->shape(0) != n)
+      throw nb::value_error("bunch arrays must have the same length");
+    if (z && z->shape(0) != n)
       throw nb::value_error("bunch arrays must have the same length");
     if (rotation.shape(0) != 9 || offset_m.shape(0) != 3)
       throw nb::value_error("rotation needs nine elements and offset_m three");
@@ -313,7 +318,9 @@ public:
                                                  wavelength_nm.data(),
                                                  bunch_id.data(),
                                                  n,
-                                                 cz ? cz->data() : nullptr};
+                                                 cz ? cz->data() : nullptr,
+                                                 z ? z->data() : nullptr,
+                                                 path ? path->data() : nullptr};
     static constexpr const char *names[] = {"position_m",    "direction",   "time_ns",   "weight",
                                             "wavelength_nm", "bunch_index", "sub_photon"};
     nb::dict result;
@@ -336,11 +343,17 @@ public:
             result["wavelength_nm"] = wavelength;
             result["bunch_index"] = index;
             result["sub_photon"] = sub;
+            double *path_out = nullptr;
+            if (path) {
+              const auto out = owned_array<double>(rows);
+              result["path_m"] = out;
+              path_out = data_of<double>(out);
+            }
             return obdeect::ray_tracing::BunchResult{
                 data_of<double>(position),   data_of<double>(direction),
                 data_of<double>(time),       data_of<double>(weight),
                 data_of<double>(wavelength), data_of<std::uint64_t>(index),
-                data_of<std::uint32_t>(sub)};
+                data_of<std::uint32_t>(sub), path_out};
           });
     } catch (const obdeect::ray_tracing::ModelError &error) {
       throw nb::value_error(error.what());
@@ -581,7 +594,7 @@ NB_MODULE(_core, module) {
            "telescope"_a = 0, "acceptance"_a = nb::none(), "wavelength_density"_a = nb::none(),
            "wavelength_law"_a = nb::none(), "roulette"_a = true, "classify_losses"_a = true,
            "normalise_transmission"_a = false, "cz"_a = nb::none(), "lower_plane_z"_a = nb::none(),
-           "pool"_a)
+           "z"_a = nb::none(), "path"_a = nb::none(), "pool"_a)
       .def("obscurer_crossings", &Model::obscurer_crossings, "start"_a, "end"_a, "leg"_a);
   module.def("trace_many", &trace_many, "items"_a, nb::kw_only(), "seed"_a, "pool"_a);
   nb::class_<Emitter>(module, "Emitter")

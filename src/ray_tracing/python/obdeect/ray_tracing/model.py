@@ -479,7 +479,13 @@ class OpticalModel:
         float32; wavelength 0 means "sample one from `wavelength_density` or
         `wavelength_law`") and bunch_id (uint64, unique per bunch for one
         `seed`). The optional column cz (float32, either sign, never 0) gives the
-        direction; without it the bunches move towards -z. The random draws are keyed
+        direction; without it the bunches move towards -z. With the column z
+        (float32, input units; sphere rows, which need cz and may have cz = 0) every
+        bunch starts at its own point (x, y, z) in the input frame, with time_ns there,
+        and the input planes (`plane_z`, `lower_plane_z`) are not used. The optional column
+        path (float64, m) is the path from the emission to each start point; the result then
+        gives path_m, the path to each output point (the input path plus the traced path).
+        The random draws are keyed
         on (`seed`, `event`, `telescope`, bunch, sub-photon), as in the other components.
         `frame_rotation` (3 x 3, input to telescope frame), `frame_offset_m`,
         `length_unit_m` (metres per input length unit) and `plane_z` (input units) place
@@ -528,6 +534,19 @@ class OpticalModel:
             arrays["cz"] = np.ascontiguousarray(bunches["cz"], dtype=np.float32)
             if arrays["cz"].shape != arrays["x"].shape:
                 raise ValueError("bunch arrays must have the same length")
+        path = None
+        if "path" in bunches:
+            # Path [m] from the emission to each start point (output: path_m, input plus trace).
+            path = np.ascontiguousarray(bunches["path"], dtype=np.float64)
+            if path.shape != arrays["x"].shape:
+                raise ValueError("bunch arrays must have the same length")
+        if "z" in bunches:
+            # Sphere rows: each bunch starts at its own height; the input planes do not apply.
+            if "cz" not in bunches:
+                raise ValueError("start heights z need the direction column cz")
+            arrays["z"] = np.ascontiguousarray(bunches["z"], dtype=np.float32)
+            if arrays["z"].shape != arrays["x"].shape:
+                raise ValueError("bunch arrays must have the same length")
         rotation = np.ascontiguousarray(frame_rotation, dtype=np.float64)
         if rotation.shape != (3, 3):
             raise ValueError("frame_rotation must be a 3 x 3 matrix")
@@ -535,7 +554,7 @@ class OpticalModel:
         # The traced input origin is offset - axes_offset_m (applied natively).
         traced_offset = offset - np.asarray(self.axes_offset_m, dtype=np.float64)
         top = self._incoming_top()
-        if float(length_unit_m) > 0.0:
+        if float(length_unit_m) > 0.0 and "z" not in arrays:
             # The input plane is {p : n.p = value} with n = R[:, 2]. Its height on the
             # telescope axis is value / n_z, and an optic with support s = max over its points
             # q of n.q lies entirely below the plane iff s <= value (for n_z > 0).
@@ -614,6 +633,8 @@ class OpticalModel:
             float(length_unit_m),
             float(plane_z),
             cz=arrays.get("cz"),
+            z=arrays.get("z"),
+            path=path,
             lower_plane_z=None if lower_plane_z is None else float(lower_plane_z),
             seed=seed,
             event=event,
@@ -692,7 +713,11 @@ def _mirror_support(mirror: Mapping[str, Any], direction: np.ndarray) -> float:
             sag = radius - math.sqrt(max(0.0, radius * radius - reach * reach)) if radius else 0.0
             best = max(best, float(np.dot(facet["centre_m"], direction)) + reach + sag)
         return best
-    asphere = mirror["asphere"]
+    return _asphere_support(mirror["asphere"], direction)
+
+
+def _asphere_support(asphere: Mapping[str, Any], direction: np.ndarray) -> float:
+    """Conservative bound on the dot product over an asphere (a mirror or the focal surface)."""
     radii = np.linspace(
         float(asphere["inner_radius_m"]), float(asphere["outer_radius_m"]), _ASPHERE_SAMPLES
     )
