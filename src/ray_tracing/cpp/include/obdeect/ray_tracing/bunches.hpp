@@ -152,6 +152,7 @@ public:
           (!in_.cz && !(static_cast<double>(in_.cx[i]) * in_.cx[i] +
                             static_cast<double>(in_.cy[i]) * in_.cy[i] <
                         1.0)) ||
+          (in_.path_m && (!std::isfinite(in_.path_m[i]) || in_.path_m[i] < 0.0)) ||
           (in_.z && !std::isfinite(static_cast<double>(in_.z[i]))) ||
           !std::isfinite(in_.time_ns[i]) || !std::isfinite(in_.zem[i]))
         bad = true;

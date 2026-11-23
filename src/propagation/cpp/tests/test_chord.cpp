@@ -493,6 +493,16 @@ void test_sphere_input_checks(const TransmissionTable &table) {
         "missing cz");
   }
   {
+    PhotonChunk no_z = good;
+    no_z.columns[static_cast<std::size_t>(Column::z)].clear();
+    expect_invalid(
+        [&] {
+          obdeect::propagation::atmospheric_acceptance_sphere<double>(no_z, table, depths, geometry,
+                                                                      p);
+        },
+        "missing z");
+  }
+  {
     PhotonChunk negative = sphere_chunk({direction_row(0.5, false, 0.0, 0.0, 0.0, -5.0, kLambda)});
     expect_invalid(
         [&] {

@@ -178,5 +178,5 @@ inline void bind_propagator(nb::module_ &module) {
       "WavelengthInterpolation. dispersion_reference_nm: wavelength [nm] of the profile's n-1; "
       "None: no dispersion (needs a profile; rejected for refracted input). ground_representation: "
       "plane (default) or sphere (rows on the telescope sphere, needs telescope_r_m; extinction of "
-      "sphere rows is not implemented yet, use geometry_only).");
+      "sphere rows is applied along the chord).");
 }

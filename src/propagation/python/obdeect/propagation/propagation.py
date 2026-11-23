@@ -107,8 +107,8 @@ def propagate(
         ground_representation: ``"plane"`` (default: rows at z = 0 relative to the telescope) or
             ``"sphere"`` (rows where the path enters the telescope sphere, columns z, cz, zem and
             path; docs/propagation/propagation.md, "Sphere representation"). Sphere needs the run
-            key telescope_r_m. Extinction of sphere rows is not implemented yet: use
-            ``extinction=False``.
+            key telescope_r_m. Sphere rows take extinction along the chord through the sphere
+            (docs/propagation/extinction.md, "Chord integral").
 
     Returns:
         Dict with photons_in, photons_out, dropped (sky-frame photons not reaching the

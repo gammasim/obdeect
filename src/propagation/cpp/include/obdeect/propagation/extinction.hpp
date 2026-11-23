@@ -202,8 +202,8 @@ void atmospheric_acceptance_sphere(const obdeect::stream::PhotonChunk &chunk,
   if (p.size() != rows) {
     throw std::invalid_argument("acceptance vector must have one entry per row");
   }
-  if (!chunk.has(Column::cz) || !chunk.has(Column::path)) {
-    throw std::invalid_argument("sphere rows need the cz and path columns");
+  if (!chunk.has(Column::z) || !chunk.has(Column::cz) || !chunk.has(Column::path)) {
+    throw std::invalid_argument("sphere rows need the z, cz and path columns");
   }
   const auto &x = chunk[Column::x];
   const auto &y = chunk[Column::y];

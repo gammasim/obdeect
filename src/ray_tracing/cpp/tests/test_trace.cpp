@@ -1101,6 +1101,33 @@ void bunch_direction_validation() {
   const float half_minus = -0.5F;
   in.cz = &half_minus;
   CHECK(run(in, frame));
+  // The input path, when given, is finite and not negative.
+  in.cz = nullptr;
+  in.cx = &zero;
+  const double ok_path = 0.0, negative_path = -1.0, nan_path = std::nan("");
+  std::vector<double> position, direction, time, weight, lambda, path;
+  std::vector<std::uint64_t> bunch;
+  std::vector<std::uint32_t> sub;
+  const auto allocate_all = [&](std::size_t rows) {
+    position.resize(3 * rows);
+    direction.resize(3 * rows);
+    time.resize(rows);
+    weight.resize(rows);
+    lambda.resize(rows);
+    bunch.resize(rows);
+    sub.resize(rows);
+    path.resize(rows);
+    return BunchResult{position.data(), direction.data(), time.data(), weight.data(),
+                       lambda.data(),   bunch.data(),     sub.data(),  path.data()};
+  };
+  in.path_m = &ok_path;
+  CHECK(!throws_invalid_argument(
+      [&] { trace_bunches(model, in, frame, BunchOptions{}, 1, pool, allocate_all); }));
+  in.path_m = &negative_path;
+  CHECK(run(in, frame));
+  in.path_m = &nan_path;
+  CHECK(run(in, frame));
+  in.path_m = nullptr;
 }
 
 // A photon that moves down in the input frame can move up in the telescope frame, arriving from
