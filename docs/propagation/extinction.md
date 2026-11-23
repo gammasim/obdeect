@@ -157,7 +157,10 @@ $|u| = 0.1$ the plane (or slant) form and the chord agree to $10^{-9}$ in depth 
 Rows of the sphere representation (`ground_representation = sphere`, [](propagation.md#sphere-representation))
 have the row point $Q = C + r$ on the telescope sphere, the direction $d$ at Q, the emission altitude
 $z_{em}$ and the chord length $L$ = `path`. The emission point is $E = Q - L\,d$. For a refracted row
-the bent path is approximated by this straight chord.
+the bent path is approximated by this straight chord. The chord formulas need a unit direction: the
+float32 components are normalised in double before E = Q - L d is formed (their norm is 1 only to
+about 6e-8, which would move a spherical chord by about 0.3 m in altitude, a depth error of 3e-5
+for a horizontal chord at 2 km).
 
 - $h_E = z_{em}$ (the emission altitude as written).
 - $h_Q$: the altitude of Q. Flat: observation level + $Q_z$ (sky frame, z above the observation

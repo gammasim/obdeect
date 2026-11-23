@@ -135,6 +135,34 @@ inline bool segment_sphere_entry(const std::array<double, 3> &x, const std::arra
   return false;
 }
 
+// Moves the state onto the sphere (centre C, radius R) along the straight line through its point
+// and direction d: the displacement along d is -q.d - sqrt(R^2 - |q x d|^2) with q = x - C (the
+// entry of the line, the smaller root of |q + s d|^2 = R^2; a backward march takes the same root
+// as its entry). Time and path follow the displacement at the state's group index. The straight
+// line is accurate only for a short displacement: a curved ray leaves it by about |kappa| s^2 / 2
+// (kappa the curvature of the ray). The callers take an RK4 step onto the estimated crossing first,
+// so the displacement here is a fraction of a metre.
+inline void straight_to_sphere(const RayMedium &medium, RayState &state,
+                               const std::array<double, 3> &centre, double radius_m) {
+  const std::array<double, 3> &d = state.d;
+  const double qx = state.x[0] - centre[0], qy = state.x[1] - centre[1],
+               qz = state.x[2] - centre[2];
+  const double qd = qx * d[0] + qy * d[1] + qz * d[2];
+  const double cx = qy * d[2] - qz * d[1], cy = qz * d[0] - qx * d[2], cz = qx * d[1] - qy * d[0];
+  const double disc = radius_m * radius_m - (cx * cx + cy * cy + cz * cz);
+  const double displacement = -qd - std::sqrt(std::max(0.0, disc));
+  const double altitude = ray_altitude_m(medium, state.x);
+  const double ng =
+      1.0 +
+      medium.k_group *
+          (medium.profile != nullptr ? medium.profile->refractive_index_minus_one(altitude) : 0.0);
+  for (std::size_t i = 0; i < 3; ++i) {
+    state.x[i] += displacement * d[i];
+  }
+  state.t += displacement * ng / speed_of_light_m_per_ns;
+  state.path += displacement;
+}
+
 // Result of integrating a ray to the telescope sphere.
 enum class MarchEnd : std::uint8_t { entered, below_ground, escaped, closest_passed, step_limit };
 
@@ -142,7 +170,8 @@ enum class MarchEnd : std::uint8_t { entered, below_ground, escaped, closest_pas
 // entry, state holds the entry point (absolute sky position), its direction, time and path.
 // Stops with the reason otherwise (state is then the last point reached). Each step is step_m
 // long at most; the sphere is checked on the straight segment of each step, so a step that enters
-// the sphere is finished with the straight intersection. max_steps bounds the work.
+// the sphere is taken to the straight estimate of the crossing by RK4 and finished with the
+// straight residual (straight_to_sphere). max_steps bounds the work.
 inline MarchEnd march_to_sphere(const RayMedium &medium, RayState &state,
                                 const std::array<double, 3> &centre, double radius_m,
                                 double step_m = 50.0, std::size_t max_steps = 200000) {
@@ -170,15 +199,9 @@ inline MarchEnd march_to_sphere(const RayMedium &medium, RayState &state,
     }
     double s_hit = 0.0;
     if (segment_sphere_entry(state.x, state.d, centre, radius_m, step_m, s_hit)) {
-      const double ng =
-          1.0 + medium.k_group * (medium.profile != nullptr
-                                      ? medium.profile->refractive_index_minus_one(altitude)
-                                      : 0.0);
-      for (std::size_t i = 0; i < 3; ++i) {
-        state.x[i] += s_hit * state.d[i];
-      }
-      state.t += s_hit * ng / speed_of_light_m_per_ns;
-      state.path += s_hit;
+      // RK4 onto the straight estimate of the crossing, then the straight residual.
+      ray_rk4_step(medium, state, s_hit);
+      straight_to_sphere(medium, state, centre, radius_m);
       return MarchEnd::entered;
     }
     ray_rk4_step(medium, state, step_m);
@@ -192,7 +215,8 @@ inline MarchEnd march_to_sphere(const RayMedium &medium, RayState &state,
 // On a hit, state holds the crossing (absolute sky position), the forward direction there, the time
 // (decreased along the ray: dT/ds = n_g / c with s running backwards) and the path (decreased).
 // Stops with the reason otherwise: below_ground, escaped (above the table top moving upwards) or
-// step_limit.
+// step_limit. The crossing of a step that reaches it is the RK4 step onto the straight estimate
+// plus the straight residual (straight_to_sphere).
 inline MarchEnd march_back_to_sphere(const RayMedium &medium, RayState &state,
                                      const std::array<double, 3> &centre, double radius_m,
                                      double step_m = 50.0, std::size_t max_steps = 200000) {
@@ -219,15 +243,10 @@ inline MarchEnd march_back_to_sphere(const RayMedium &medium, RayState &state,
     if (disc >= 0.0) {
       const double sigma = qd + std::sqrt(disc);
       if (sigma > 0.0 && sigma <= step_m) {
-        const double ng =
-            1.0 + medium.k_group * (medium.profile != nullptr
-                                        ? medium.profile->refractive_index_minus_one(altitude)
-                                        : 0.0);
-        for (std::size_t i = 0; i < 3; ++i) {
-          state.x[i] -= sigma * state.d[i];
-        }
-        state.t -= sigma * ng / speed_of_light_m_per_ns;
-        state.path -= sigma;
+        // RK4 back onto the straight estimate of the crossing, then the straight residual (the
+        // same root: the entry is the smaller displacement along d, see straight_to_sphere).
+        ray_rk4_step(medium, state, -sigma);
+        straight_to_sphere(medium, state, centre, radius_m);
         return MarchEnd::entered;
       }
     }

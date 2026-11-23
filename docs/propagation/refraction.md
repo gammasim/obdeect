@@ -309,8 +309,13 @@ from the Earth centre and h = |X - centre| - R (see [](curvature.md)). nu'(h) is
 derivative of the tabulated profile (`AtmosphereProfile::index_minus_one_slope_cm`, exponential
 inside each fine cell; tested against finite differences). The state is advanced by classical
 RK4 with a fixed step of 50 m at most; the direction is renormalised after each step. A step whose
-straight segment enters the telescope sphere is finished at the straight intersection: the row is
-the entry point minus C, the path and time include the partial step.
+straight segment enters the telescope sphere is not finished on that straight segment: the RK4
+step is shortened to the straight estimate of the crossing, and the remaining distance (a fraction
+of a metre) is taken on the straight line from there (`straight_to_sphere`). A straight line from a
+50 m step leaves a curved ray by about kappa s^2 / 2 (the curvature kappa = |nu'| is about 2.5e-8
+m^-1 near the ground): for a photon of the validation run the entry was 3e-5 m off along the ray, a
+time error of 1e-4 ns. The row is
+the entry point minus C, the path and time include the partial steps.
 
 Termination (`march_to_sphere`): entry into the sphere (`entered`); altitude below the observation
 level (`below_ground`); above the top of the profile while moving up (`escaped`); past the closest
@@ -331,8 +336,9 @@ found with the 3D ray integrator from Q (ray_march.hpp), not with a straight tan
 tangent from Q is off by up to tens of metres for shallow rays: about 74 m long at |cz| = 0.16, with
 errors of 3e-4 m). The straight line through Q decides the side of the entry: its smaller root s of
 |Q + s d_t - C| = R. If s < 0 (the entry lies before Q) the ray is integrated backwards from Q
-(reverse direction, time decreasing with n_group); otherwise forwards. Each step is RK4 of 50 m with
-the straight intersection of the last step, the same limit as the integrator from the emission. The
+(reverse direction, time decreasing with n_group); otherwise forwards. Each step is RK4 of 50 m; the
+last step is RK4 onto the straight estimate of the crossing and the straight residual, as in the
+integrator from the emission. The
 output is the entry relative to C, the bent direction there, the time there, and the path: the
 straight chord |entry - P| from the emission P (a chord, not the bent path length). With no
 straight root the photon is `misses_sphere`; an integration that reaches the ground is
@@ -344,8 +350,9 @@ Measured with the test suite (`test_sphere.cpp`, ECMWF profile, observation leve
 
 | Comparison | Result |
 | --- | --- |
-| hybrid rule vs integrator, |cz| 0.1 to 0.3, impact -6 to 8 m (25 rows) | 7.7e-5 m, 2.7e-5 ns (max) |
-| hybrid rule (integrates from Q) vs integrator, |cz| 0.1 to 0.3 (0.16 included), impact -12 to 12 m (|Q| up to R; 66 rows) | 7.6e-5 m, 4.6e-5 ns (max) |
+| hybrid rule vs integrator, |cz| 0.1 to 0.3, impact -6 to 8 m (25 rows) | 4.8e-5 m, 1.1e-5 ns (max) |
+| hybrid rule (integrates from Q) vs integrator, |cz| 0.1 to 0.3 (0.16 included), impact -12 to 12 m (|Q| up to R; 66 rows) | 4.8e-5 m, 1.7e-5 ns (max) |
+| hybrid rule, photon 148 of the validation run (upward, |cz| 0.16, entry 22.6 m before Q) vs scipy integration from the emission | 1.1e-7 m, 3.6e-7 ns |
 | integrator vs `bend_quadrature`, downward, 2.7 km path | 1e-9 m, 1e-9 ns |
 | integrator vs `bend_upward`, upward, 1.3 km path | agrees to the printed precision, 1e-7 m |
 | integrator vs independent Snell reference, turning ray, 318 km path (apex 300 m above the emission) | 3e-4 m, 1e-3 ns |

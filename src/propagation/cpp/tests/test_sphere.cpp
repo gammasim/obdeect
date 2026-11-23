@@ -647,6 +647,64 @@ void test_hybrid_shallow_against_integrator() {
   CHECK(worst_t <= 1e-4);
 }
 
+// Photon 148 of the validation run (sphere representation, upward from 4.13 m above the observation
+// level, |cz| = 0.16, telescope centre at 20 m, R = 12.5 m, ECMWF tables, no dispersion). Its plane
+// crossing is at the telescope plane 97.8 m along the ray, 22.6 m after the sphere entry, so the
+// hybrid rule integrates backwards from the crossing. The reference is an independent scipy
+// integration of the ray equation from the emission (DOP853, rtol 1e-12; validation adapter
+// sphere_geometry.py): entry (1.22508583, -2.34695243, -12.21642251) relative to the centre,
+// t = 103.23170775791107 ns. The straight line from a 50 m step was off by 1.1e-4 ns (about 3e-5 m
+// along the ray): the entry is taken after an RK4 step onto the straight estimate, then the
+// residual.
+void test_hybrid_photon_148() {
+  const AtmosphereProfile profile = ecmwf_profile();
+  const double R = 12.5;
+  const double tz = 20.0;
+  const RefractionTables tables(profile, kObs + tz);
+  SkyPlane plane = plane_at(0.0, 0.0, tz);
+  plane.profile = &profile;
+  plane.tables = &tables;
+  const std::array<double, 3> ref_entry{1.22508583, -2.34695243, -12.21642251};
+  const double ref_t = 103.23170775791107;
+  // Double precision: plane-mode crossing and the hybrid rule (no float32 storage).
+  {
+    const double x = -14.034931182861328, y = -18.51064109802246, z = 4.129739284515381;
+    const double cx = 0.6773982048034668, cy = 0.7175125479698181;
+    const double cz = std::sqrt(1.0 - cx * cx - cy * cy);
+    const double t0 = 28.0711669921875;
+    double x_p = 0, y_p = 0, cx_p = 0, cy_p = 0, t_p = 0;
+    CHECK(obdeect::propagation::plane_arrival(plane, x, y, z, cx, cy, cz, 1.0, true, kObs + z, t0,
+                                              1.0, 1.0, x_p, y_p, cx_p, cy_p,
+                                              t_p) == obdeect::propagation::Drop::none);
+    std::array<double, 3> entry_rel{}, u_out{};
+    double t_out = 0.0, path_out = 0.0;
+    CHECK(obdeect::propagation::hybrid_sphere_row(plane, R, x_p, y_p, cx_p, cy_p, true, t_p, 1.0,
+                                                  1.0, {x, y, z}, entry_rel, u_out, t_out,
+                                                  path_out) == obdeect::propagation::Drop::none);
+    std::fprintf(stderr, "photon 148 (double): dt %.3e ns, dpos %.3e m\n", t_out - ref_t,
+                 std::sqrt((entry_rel[0] - ref_entry[0]) * (entry_rel[0] - ref_entry[0]) +
+                           (entry_rel[1] - ref_entry[1]) * (entry_rel[1] - ref_entry[1]) +
+                           (entry_rel[2] - ref_entry[2]) * (entry_rel[2] - ref_entry[2])));
+    CHECK_NEAR(t_out, ref_t, 1e-6);
+    for (int i = 0; i < 3; ++i) {
+      CHECK_NEAR(entry_rel[i], ref_entry[i], 1e-6);
+    }
+  }
+  // The kernel as run (sky_to_sphere, float32 columns): the stored time has a float32 spacing of
+  // 7.6e-6 ns at 103 ns.
+  {
+    PhotonChunk chunk =
+        sky_chunk({{-14.034931182861328, -18.51064109802246, 4.129739284515381, 0.6773982048034668,
+                    0.7175125479698181, 0.1621956080198288, 28.0711669921875}});
+    const DropCounts counts = obdeect::propagation::sky_to_sphere(chunk, plane, R);
+    CHECK(counts.total() == 0);
+    CHECK_NEAR(static_cast<double>(chunk[Column::t][0]), ref_t, 1e-5);
+    CHECK_NEAR(static_cast<double>(chunk[Column::x][0]), ref_entry[0], 1e-5);
+    CHECK_NEAR(static_cast<double>(chunk[Column::y][0]), ref_entry[1], 1e-5);
+    CHECK_NEAR(static_cast<double>(chunk[Column::z][0]), ref_entry[2], 1e-5);
+  }
+}
+
 // Chunking and row order do not change the rows (the kernel is per row).
 void test_chunk_and_order_invariance() {
   const AtmosphereProfile profile = ecmwf_profile();
@@ -839,6 +897,7 @@ int main() {
     test_spherical_horizontal_vacuum();
     test_hybrid_against_integrator();
     test_hybrid_shallow_against_integrator();
+    test_hybrid_photon_148();
     test_chunk_and_order_invariance();
     test_plane_arrival_matches_plane_mode();
     test_ground_to_sky_round_trip();

@@ -287,9 +287,14 @@ void atmospheric_acceptance_sphere(const obdeect::stream::PhotonChunk &chunk,
                       static_cast<T>(h_q), static_cast<T>(od_focus), radius);
         continue;
       }
-      const std::array<double, 3> v_e{v_q[0] - length * dx, v_q[1] - length * dy,
-                                      v_q[2] - length * dz};
-      const double chord = spherical_chord_depth(table, lambda, v_e, {dx, dy, dz}, length, radius);
+      // The chord formulas need a unit direction: the float32 components have a norm that differs
+      // from 1 by up to direction_norm_tolerance, which would move the chord by metres at the
+      // Earth radius. Normalise them in double (the same unit d on both ends of the chord).
+      const double norm = std::sqrt(dx * dx + dy * dy + dz * dz);
+      const std::array<double, 3> d_unit{dx / norm, dy / norm, dz / norm};
+      const std::array<double, 3> v_e{v_q[0] - length * d_unit[0], v_q[1] - length * d_unit[1],
+                                      v_q[2] - length * d_unit[2]};
+      const double chord = spherical_chord_depth(table, lambda, v_e, d_unit, length, radius);
       const double depth = chord + od_focus;
       p[row] = depth > max_total_depth ? T(0) : static_cast<T>(std::exp(-depth));
       continue;

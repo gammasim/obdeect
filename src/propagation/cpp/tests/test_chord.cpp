@@ -41,6 +41,7 @@ using obdeect::stream::PhotonChunk;
 constexpr double kObs = 2000.0;                        // observation level [m a.s.l.]
 constexpr double kR = obdeect::stream::earth_radius_m; // Earth radius [m]
 constexpr double kLambda = 355.0;                      // [nm]
+constexpr double kTelescopeZ = 30.0;                   // telescope centre above H2 [m]
 
 std::string data_file(const std::string &name) {
   return std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/" + name;
@@ -386,6 +387,48 @@ void test_sphere_rows_match_plane_rows(const TransmissionTable &table) {
   }
 }
 
+// Sphere row 77 of the validation run: near-horizontal (u = -2e-6), path 3714 m at 2031 m, 401.27
+// nm, direction with cz = 0 and |d|^2 - 1 = -5.7e-8 (float32 cx, cy). Such a norm error moves the
+// chord formulas (which assume a unit d) by about 0.3 m in altitude at the Earth radius, a depth
+// error of 3e-5 relative. The reference integrates the table's extinction coefficient by Simpson's
+// rule along the chord from E = Q - L d (d normalised in double), with the altitudes from the
+// vector norms (no chord.hpp code).
+void test_sphere_row_chord_normalised(const TransmissionTable &table) {
+  const Row row{-8.1801405, 9.4517355, 0.0,        0.654408336, -0.756141305,
+                0.0,        2031.0896, 3714.27661, 401.269989};
+  const PhotonChunk chunk = sphere_chunk({row});
+  const double x = chunk[Column::x][0], y = chunk[Column::y][0], z = chunk[Column::z][0];
+  const double cx = chunk[Column::cx][0], cy = chunk[Column::cy][0], cz = chunk[Column::cz][0];
+  const double length = chunk[Column::path][0], lambda = chunk[Column::wavelength][0];
+  // Reference: Earth-centred coordinates (the Earth centre at (0, 0, -(R + H2)) in the sky frame).
+  const std::array<double, 3> q{x, y, kR + kObs + kTelescopeZ + z};
+  const double norm = std::sqrt(cx * cx + cy * cy + cz * cz);
+  const std::array<double, 3> d{cx / norm, cy / norm, cz / norm};
+  const std::array<double, 3> e{q[0] - length * d[0], q[1] - length * d[1], q[2] - length * d[2]};
+  const auto altitude = [&](double s) {
+    const double a = e[0] + s * d[0], b = e[1] + s * d[1], c = e[2] + s * d[2];
+    return std::sqrt(a * a + b * b + c * c) - kR;
+  };
+  CHECK_NEAR(altitude(length), std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2]) - kR, 1e-6);
+  constexpr int panels = 20000;
+  const double step = length / panels;
+  double simpson = 0.0;
+  for (int i = 0; i <= panels; ++i) {
+    const double s = i * step;
+    const double weight = (i == 0 || i == panels) ? 1.0 : (i % 2 == 1 ? 4.0 : 2.0);
+    simpson += weight * table.extinction_coefficient<double>(lambda, altitude(s));
+  }
+  simpson *= step / 3.0;
+  CHECK(simpson > 0.0);
+  // The chord integral of obdeect (flat telescope depths: no in-telescope path).
+  const TelescopeDepths depths = table.telescope_depths(kObs + kTelescopeZ, 0.0);
+  const obdeect::propagation::SphereGeometry geometry{kObs, kR, 0.0, 0.0, kTelescopeZ};
+  std::vector<double> p(1, 0.0);
+  obdeect::propagation::atmospheric_acceptance_sphere<double>(chunk, table, depths, geometry, p);
+  CHECK(p[0] > 0.0);
+  CHECK_NEAR(-std::log(p[0]), simpson, 1e-9 * simpson);
+}
+
 // Rows of a wide mixture (both directions, |u| on both sides of the switch, zero paths, a row below
 // the observation level, a wavelength above the table) give the same p for any row order and any
 // split into ranges.
@@ -501,6 +544,7 @@ int main() {
     test_continuity_at_switch(floor_table);
     test_sphere_rows_match_plane_rows(linear);
     test_sphere_rows_match_plane_rows(floor_table);
+    test_sphere_row_chord_normalised(linear);
     test_order_and_range_invariance(linear);
     test_sphere_input_checks(linear);
   });
