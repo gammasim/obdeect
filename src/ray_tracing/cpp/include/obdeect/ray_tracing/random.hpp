@@ -25,6 +25,14 @@ enum class Stream : std::uint32_t {
   wavelength = 4
 };
 
+// The draws of reflection k >= 2 of a photon (its k-th reflection, on any mirror; k
+// counts from 1). Stream ids 5 to 7 are reserved; the first reflection on each mirror
+// keeps primary_scatter and secondary_scatter. Each reflection of a photon has its own
+// k, so the draws of the reflections are independent.
+[[nodiscard]] constexpr Stream reflection_stream(std::uint32_t reflection) {
+  return static_cast<Stream>(8U + reflection);
+}
+
 // Key of the ray-tracing draws, shared with the other components
 // (obdeect::stream::DrawKey with stage_ray_tracing). Outside photon streams the
 // event and telescope are 0, so a run seed alone is a key.

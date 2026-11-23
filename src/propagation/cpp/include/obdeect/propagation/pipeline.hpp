@@ -33,6 +33,9 @@ struct ExtinctionSettings {
   bool weighted{};
   // Spherical atmosphere (atmospheric_acceptance_curved) if set, plane-parallel otherwise.
   std::optional<CurvedPath> curved{};
+  // Sphere rows (frame G, sphere representation): atmospheric_acceptance_sphere, which takes
+  // precedence over curved. The chunk must then carry the cz and path columns.
+  std::optional<SphereGeometry> sphere{};
   // Threads for the rows of the chunk (1: in place). The result does not depend on it.
   unsigned threads{1};
 };
@@ -149,7 +152,10 @@ apply_extinction_chunk(obdeect::stream::PhotonChunk chunk, const ExtinctionSetti
   // Acceptance p = p_atm * E(lambda); rows at or above MAX_LAMBDA are dropped (p = 0).
   std::vector<double> p(rows, 0.0);
   for_row_blocks(rows, threads, [&](std::size_t begin, std::size_t end) {
-    if (settings.curved) {
+    if (settings.sphere) {
+      atmospheric_acceptance_sphere<double>(chunk, *settings.table, *settings.depths,
+                                            *settings.sphere, p, begin, end);
+    } else if (settings.curved) {
       atmospheric_acceptance_curved<double>(chunk, *settings.table, *settings.depths,
                                             *settings.curved, p, begin, end);
     } else {

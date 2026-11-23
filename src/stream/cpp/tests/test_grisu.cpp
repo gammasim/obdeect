@@ -272,6 +272,10 @@ void error_cases() {
   std::vector<Record> camera = stream_records();
   camera[5] = photons_of(1, {{0.F, 0.F, 0.F, 0.F, 0.F, 1.F, 1.F, 400.F}}, Frame::camera);
   CHECK(throws_error([&] { convert(camera, options); }));
+  // Sphere runs are not converted (GrISU photon text is plane-based).
+  std::vector<Record> sphere = stream_records();
+  sphere[1].metadata["ground_representation"] = std::string("sphere"); // the run record
+  CHECK(throws_error([&] { convert(sphere, options); }));
   // No observation height.
   std::vector<Record> no_height = stream_records();
   no_height[1].metadata.erase("observation_level_m");

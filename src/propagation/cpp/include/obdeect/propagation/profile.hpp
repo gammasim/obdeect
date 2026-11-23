@@ -148,6 +148,30 @@ public:
     return thick_[j + 1] + (thick_[j] - thick_[j + 1]) * std::clamp(fraction, 0., 1.);
   }
 
+  // Derivative d(n-1)/dh [1/cm] at height h [cm]: exact for the tabulated profile (n-1 is
+  // exponential inside a fine-grid cell, so the derivative is -rate (n-1)). Below the table the
+  // bottom value is constant (derivative 0); above it 0.
+  double index_minus_one_slope_cm(double h) const {
+    double nu = 0.;
+    double slope = 0.;
+    index_and_slope_cm(h, nu, slope);
+    return slope;
+  }
+
+  // n-1 and its derivative d(n-1)/dh [1/cm] at height h [cm] in one lookup (see
+  // index_minus_one_cm and index_minus_one_slope_cm).
+  void index_and_slope_cm(double h, double &nu, double &slope) const {
+    check(h);
+    if (h > zf_.back()) {
+      nu = 0.;
+      slope = 0.;
+      return;
+    }
+    const std::size_t k = cell(h);
+    nu = nuf_[k] * std::exp(-rate_nu_[k] * (std::max(h, zf_.front()) - zf_[k]));
+    slope = h < zf_.front() ? 0. : -rate_nu_[k] * nu;
+  }
+
   // Integral of (n-1) from height h to the top of the table [cm]. Below the table (n-1)
   // keeps its bottom value.
   double index_integral_cm(double h) const {

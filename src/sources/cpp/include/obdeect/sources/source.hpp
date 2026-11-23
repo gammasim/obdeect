@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -66,17 +67,23 @@ struct Line {
   LinearDensity profile{};
 };
 
-// Parallel beam (infinite distance) or point source at a finite distance, through a disc at
-// height disc_z_m; rays start on the plane z = start_z_m. Photons travel along -towards_source:
-// towards_source.z > 0 is a beam from above (downward photons), z < 0 a beam from below (upward
-// photons). The start plane lies on the source side of the disc. Horizontal beams (z = 0) need
-// the sphere representation (not yet supported).
+// Parallel beam (infinite distance) or point source at a finite distance, through a disc of radius
+// disc_radius_m centred at (0, 0, disc_z_m). Photons travel along -towards_source: towards_source.z
+// > 0 is a beam from above (downward photons), z < 0 from below (upward photons), z = 0 horizontal.
+// The start is one of (at most one of the two may be given):
+// - start_z_m (default 0 when neither is given): photons start on the plane z = start_z_m, on the
+//   source side of the disc. Not for horizontal directions (they have no such plane);
+// - start_distance_m: photons start on the plane perpendicular to towards_source at this distance
+//   from the disc centre, on the source side (any direction; for a vertical beam it is the plane
+//   z = disc_z + start_distance for a beam from above, and the same photons as start_z_m).
+// A horizontal direction (z = 0) needs start_distance_m.
 struct PlaneWave {
   Vec3 towards_source{0.0, 0.0, 1.0};
   double distance_m{std::numeric_limits<double>::infinity()};
   double disc_radius_m{};
   double disc_z_m{};
-  double start_z_m{};
+  std::optional<double> start_z_m{};
+  std::optional<double> start_distance_m{};
 };
 
 // Diffuse light: photons start on a sphere and travel inwards, directions uniform in solid angle
@@ -87,6 +94,9 @@ struct SkyBackground {
   Vec3 axis{0.0, 0.0, -1.0};
   double viewcone_deg{90.0};
 };
+
+// Start height of a plane wave without start_distance_m (start_z_m, default 0).
+inline double plane_wave_start_z(const PlaneWave &w) { return w.start_z_m.value_or(0.0); }
 
 using Geometry = std::variant<Point, Line, PlaneWave, SkyBackground>;
 
@@ -262,19 +272,35 @@ inline void validate_line(const Line &l, const Target &target) {
 inline void validate_plane_wave(const PlaneWave &w, const Target &target) {
   require(std::holds_alternative<std::monostate>(target), "a plane wave takes no target");
   require(is_unit(w.towards_source), "plane wave: towards_source must be a unit vector");
-  require(w.towards_source.z != 0.0,
-          "plane wave: a horizontal towards_source (z = 0) is not supported yet: horizontal plane "
-          "waves need the sphere representation (planned)");
   require(w.distance_m == std::numeric_limits<double>::infinity() ||
               positive_within_limits(w.distance_m),
           "plane wave: distance must be infinite or positive within limits");
   require(positive_within_limits(w.disc_radius_m), "plane wave: disc radius out of range");
-  require(within_limits(w.disc_z_m) && within_limits(w.start_z_m),
-          "plane wave: disc or start height out of range");
-  // The photons move from the start plane to the disc: the plane must be on the source side.
-  require((w.start_z_m - w.disc_z_m) * w.towards_source.z >= 0.0,
-          "plane wave: the start plane z = start_z must lie on the source side of the disc (above "
-          "it for towards_source.z > 0, below it for towards_source.z < 0)");
+  require(within_limits(w.disc_z_m), "plane wave: disc height out of range");
+  require(!(w.start_z_m && w.start_distance_m),
+          "plane wave: give start_z_m or start_distance_m, not both");
+  if (!w.start_distance_m) {
+    require(w.towards_source.z != 0.0,
+            "plane wave: a horizontal towards_source (z = 0) has no start plane z = const: give "
+            "start_distance_m");
+    const double start_z = plane_wave_start_z(w);
+    require(within_limits(start_z), "plane wave: start height out of range");
+    // The photons move from the start plane to the disc: the plane must be on the source side.
+    require((start_z - w.disc_z_m) * w.towards_source.z >= 0.0,
+            "plane wave: the start plane z = start_z must lie on the source side of the disc "
+            "(above it for towards_source.z > 0, below it for towards_source.z < 0)");
+  } else {
+    const double distance = *w.start_distance_m;
+    require(std::isfinite(distance) && distance >= 0.0 && within_limits(distance),
+            "plane wave: start_distance_m must be finite and >= 0");
+    // Every ray from the disc must reach the start plane on the source side of the disc: the plane
+    // lies at least the disc's largest extent along towards_source from its centre.
+    const double extent =
+        w.disc_radius_m * std::sqrt(std::max(0.0, 1.0 - w.towards_source.z * w.towards_source.z));
+    require(distance >= extent,
+            "plane wave: start_distance_m must be at least disc_radius_m * sqrt(1 - "
+            "towards_source.z^2), so that the start plane lies on the source side of the disc");
+  }
 }
 
 inline void validate_sky_background(const SkyBackground &b, const Target &target) {

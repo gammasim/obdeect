@@ -349,6 +349,51 @@ struct Asphere {
     return normalized(Vec3{-k * p.x, -k * p.y, 1.0});
   }
 
+  // False only if the ray provably meets no point of the annulus at t > t_min: the surface lies
+  // in the height band |z - sag(0)| <= max_slope * outer_radius, and a ray that is inside the
+  // band for an interval of t only reaches radii that are convex in t. Exact rejection, the
+  // cheap first step of intersect() (its result is then "no hit" too).
+  [[nodiscard]] bool may_meet(const Ray &ray, double t_min) const {
+    if (!std::isfinite(max_slope))
+      return true;
+    const double half = max_slope * outer_radius * (1.0 + 1e-9) + 1e-9;
+    // The band is centred on the sag at the axis (vertex_z plus the first coefficient).
+    const double dz = ray.direction.z, z0 = ray.origin.z - sag(0.0);
+    double t_lo = t_min, t_hi = std::numeric_limits<double>::infinity();
+    if (dz == 0.0) {
+      if (std::abs(z0) > half)
+        return false;
+    } else {
+      double ta = (-half - z0) / dz, tb = (half - z0) / dz;
+      if (ta > tb)
+        std::swap(ta, tb);
+      t_lo = std::max(t_lo, ta);
+      t_hi = std::min(t_hi, tb);
+      if (!(t_lo <= t_hi))
+        return false;
+    }
+    if (!std::isfinite(t_hi))
+      return true;
+    const auto radius2 = [&](double t) {
+      const double x = ray.origin.x + ray.direction.x * t, y = ray.origin.y + ray.direction.y * t;
+      return x * x + y * y;
+    };
+    return std::max(radius2(t_lo), radius2(t_hi)) >= inner_radius2_margin();
+  }
+
+  // Squared inner radius, less a relative margin (rejections must be safe).
+  [[nodiscard]] double inner_radius2_margin() const {
+    return (inner_radius * inner_radius) * (1.0 - 1e-9);
+  }
+
+  // True if the surface can be crossed at most once by a line of this direction (the condition
+  // of the single-root shortcut in intersect()). A ray that starts on the surface then meets it
+  // nowhere else, so it need not be tested against the surface again.
+  [[nodiscard]] bool single_crossing(const Vec3 &direction) const {
+    return std::abs(direction.z) >
+           max_slope * std::sqrt(direction.x * direction.x + direction.y * direction.y);
+  }
+
   // Nearest intersection beyond t_min inside the annulus for which
   // accept(point) holds. Sets `failed` if the root search did not converge.
   template <class Accept>

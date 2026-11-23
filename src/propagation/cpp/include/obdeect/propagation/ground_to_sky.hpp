@@ -208,6 +208,109 @@ ground_to_sky(const obdeect::stream::PhotonChunk &input, const GroundPlane &plan
   return out;
 }
 
+// Sphere representation (docs/propagation/ground-to-sky.md, "Sphere rows"). A row is the point
+// where the path inside the telescope sphere begins, relative to the centre C = (telescope x, y,
+// z); the photon travelled the straight path `path` [m] from its emission along the unit direction
+// (cx, cy, cz). The emission point is the straight back-projection row + C - path d (an
+// approximation: refraction is not inverted). Its emission altitude must agree with zem within 1 m
+// (else std::invalid_argument: the row does not come from a straight path). The time is t - path /
+// c minus the straight air delay (profile given, k_group = 1). Inputs: x, y, z (relative to C), cx,
+// cy, cz (signed), zem [m a.s.l.], t [ns] and path [m]. Output: sky x, y, z (above the observation
+// level) and t. Returns false for non-finite inputs or a path that is negative.
+inline bool ground_to_sky_sphere_row(const GroundPlane &plane, double x, double y, double z,
+                                     double cx, double cy, double cz, double zem, double t,
+                                     double path, double &x_out, double &y_out, double &z_out,
+                                     double &t_out) {
+  if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || !std::isfinite(cx) ||
+      !std::isfinite(cy) || !std::isfinite(cz) || !std::isfinite(zem) || !std::isfinite(t) ||
+      !std::isfinite(path) || path < 0.0) {
+    return false;
+  }
+  const double norm2 = cx * cx + cy * cy + cz * cz;
+  if (!(std::abs(norm2 - 1.0) <= 1e-5)) {
+    throw std::invalid_argument("sphere row direction is not a unit vector");
+  }
+  const double ex = plane.telescope_x_m + x - path * cx;
+  const double ey = plane.telescope_y_m + y - path * cy;
+  const double ez = plane.telescope_z_m + z - path * cz; // above the observation level
+  const double emission_altitude = plane.observation_m + ez;
+  if (std::abs(emission_altitude - zem) > 1.0) {
+    throw std::invalid_argument("sphere row: emission altitude differs from zem by more than 1 m "
+                                "(the row does not follow a straight path from its emission)");
+  }
+  const double row_altitude = plane.observation_m + plane.telescope_z_m + z;
+  double delay_ns = path / obdeect::stream::speed_of_light_m_per_ns;
+  if (plane.profile != nullptr && path > 0.0) {
+    delay_ns +=
+        straight_line_air_delay_ns(*plane.profile, emission_altitude, row_altitude, path, 1.0);
+  }
+  x_out = ex;
+  y_out = ey;
+  z_out = ez;
+  t_out = t - delay_ns;
+  return true;
+}
+
+// Converts the rows of a sphere-representation G chunk to frame sky with ground_to_sky_sphere_row.
+// Rows with w = 0 (dropped rows, see sky_to_sphere) are not converted and count as dropped, as do
+// rows that ground_to_sky_sphere_row rejects. Needs the columns x y z cx cy cz t zem path w.
+// Returns the converted rows as chunks (kept rows, first_index continued, as ground_to_sky).
+inline std::vector<obdeect::stream::PhotonChunk>
+ground_to_sky_sphere(const obdeect::stream::PhotonChunk &input, const GroundPlane &plane,
+                     std::uint64_t &dropped) {
+  using obdeect::stream::Column;
+  if (input.frame != obdeect::stream::Frame::ground) {
+    throw std::invalid_argument("ground_to_sky needs photons in frame G");
+  }
+  input.validate();
+  for (const Column required : {Column::x, Column::y, Column::z, Column::cx, Column::cy, Column::cz,
+                                Column::t, Column::zem, Column::path, Column::w}) {
+    if (input.rows() > 0 && !input.has(required)) {
+      throw std::invalid_argument("sphere rows need the columns x y z cx cy cz t zem path w");
+    }
+  }
+  const std::size_t rows = input.rows();
+  obdeect::stream::PhotonChunk converted = input;
+  converted.frame = obdeect::stream::Frame::sky;
+  converted[Column::z].assign(rows, 0.0F);
+  std::vector<std::uint8_t> keep(rows, 0);
+  for (std::size_t row = 0; row < rows; ++row) {
+    if (!(input[Column::w][row] > 0.0F)) {
+      continue; // dropped row
+    }
+    double x_sky = 0.0, y_sky = 0.0, z_sky = 0.0, t_sky = 0.0;
+    if (ground_to_sky_sphere_row(plane, input[Column::x][row], input[Column::y][row],
+                                 input[Column::z][row], input[Column::cx][row],
+                                 input[Column::cy][row], input[Column::cz][row],
+                                 input[Column::zem][row], input[Column::t][row],
+                                 input[Column::path][row], x_sky, y_sky, z_sky, t_sky)) {
+      keep[row] = 1;
+      converted[Column::x][row] = static_cast<float>(x_sky);
+      converted[Column::y][row] = static_cast<float>(y_sky);
+      converted[Column::z][row] = static_cast<float>(z_sky);
+      converted[Column::t][row] = static_cast<float>(t_sky);
+    }
+  }
+  std::vector<obdeect::stream::PhotonChunk> out;
+  std::uint64_t kept = 0;
+  std::size_t row = 0;
+  while (row < rows) {
+    if (keep[row] == 0) {
+      ++row;
+      continue;
+    }
+    std::size_t end = row;
+    while (end < rows && keep[end] != 0) {
+      ++end;
+    }
+    out.push_back(ground_slice(converted, row, end));
+    kept += end - row;
+    row = end;
+  }
+  dropped += static_cast<std::uint64_t>(rows) - kept;
+  return out;
+}
+
 struct ToSkySummary {
   std::uint64_t photons_in{};  // rows of the input photon records
   std::uint64_t photons_out{}; // rows written (sky frame)
@@ -257,6 +360,8 @@ inline const std::vector<double> &array(const obdeect::stream::Metadata &metadat
 struct RunSite {
   double observation_m{};
   std::vector<double> x_m, y_m, z_m; // index = telescope_id - 1
+  bool sphere{};                     // ground_representation = "sphere"
+  std::vector<double> r_m;           // sphere radii (telescope_r_m), sphere runs only
 };
 
 inline RunSite run_geometry(const obdeect::stream::Metadata &metadata,
@@ -297,6 +402,19 @@ inline RunSite run_geometry(const obdeect::stream::Metadata &metadata,
   for (std::size_t i = 0; i < site.x_m.size(); ++i) {
     if (!std::isfinite(site.x_m[i]) || !std::isfinite(site.y_m[i]) || !std::isfinite(site.z_m[i])) {
       throw std::invalid_argument("telescope positions must be finite");
+    }
+  }
+  site.sphere = obdeect::stream::ground_representation(metadata) ==
+                obdeect::stream::GroundRepresentation::sphere;
+  if (site.sphere) {
+    site.r_m = array(metadata, "telescope_r_m");
+    if (site.r_m.size() != site.x_m.size()) {
+      throw std::invalid_argument("sphere runs need telescope_r_m, one per telescope");
+    }
+    for (const double radius : site.r_m) {
+      if (!(std::isfinite(radius) && radius > 0.0)) {
+        throw std::invalid_argument("telescope_r_m must be finite and positive");
+      }
     }
   }
   return site;
@@ -381,7 +499,9 @@ inline ToSkySummary ground_to_sky_stream(std::istream &in, std::ostream &out,
       const auto index = static_cast<std::size_t>(*open_telescope - 1);
       const GroundPlane plane{run->x_m[index], run->y_m[index], run->z_m[index], run->observation_m,
                               profile ? &*profile : nullptr};
-      for (const auto &piece : ground_to_sky(chunk, plane, summary.dropped)) {
+      const auto pieces = run->sphere ? ground_to_sky_sphere(chunk, plane, summary.dropped)
+                                      : ground_to_sky(chunk, plane, summary.dropped);
+      for (const auto &piece : pieces) {
         writer.write_chunk(piece);
         for (float weight : piece[obdeect::stream::Column::w]) {
           telescope_weight += weight;

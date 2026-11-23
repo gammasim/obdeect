@@ -93,6 +93,13 @@ struct PhotonChunk {
     if (rows_ > max_chunk_rows) {
       throw std::invalid_argument("photon chunk exceeds 2^16 rows");
     }
+    if (has(Column::path)) {
+      for (const float path : (*this)[Column::path]) {
+        if (!std::isfinite(path) || path < 0.0F) {
+          throw std::invalid_argument("photon chunk path must be finite and >= 0");
+        }
+      }
+    }
   }
 
 private:
@@ -133,6 +140,80 @@ inline void snap_direction_to_cz(float &cx, float &cy, double cz) {
     const double scale = std::sqrt((1.0 - cz * cz) / r2);
     cx = static_cast<float>(cx * scale);
     cy = static_cast<float>(cy * scale);
+  }
+}
+
+// Ground representation of a run (docs/format.md, "Run metadata"): `plane` (default) has rows at
+// z = 0 with x, y relative to the telescope sphere centre; `sphere` has 3D rows on or inside the
+// telescope sphere. Throws std::runtime_error for any other value or type.
+enum class GroundRepresentation : std::uint8_t { plane, sphere };
+
+[[nodiscard]] inline GroundRepresentation ground_representation(const Metadata &run) {
+  const auto it = run.find("ground_representation");
+  if (it == run.end()) {
+    return GroundRepresentation::plane;
+  }
+  const auto *name = std::get_if<std::string>(&it->second);
+  if (name == nullptr) {
+    throw std::runtime_error("obdeect stream: ground_representation must be a string");
+  }
+  if (*name == "plane") {
+    return GroundRepresentation::plane;
+  }
+  if (*name == "sphere") {
+    return GroundRepresentation::sphere;
+  }
+  throw std::runtime_error("obdeect stream: ground_representation must be \"plane\" or "
+                           "\"sphere\", not \"" +
+                           *name + "\"");
+}
+
+// Tolerances for |r| against the telescope sphere radius R of sphere rows: a row is on the sphere
+// if |r| >= R (1 - 1e-6) - 1e-4 m (rounding of float32 positions), and no row may lie outside
+// R (1 + 1e-6) + 1e-4 m.
+inline constexpr double sphere_relative_tolerance = 1e-6;
+inline constexpr double sphere_absolute_tolerance_m = 1e-4;
+
+// Throws std::invalid_argument unless the chunk is a valid set of sphere rows (G frame, see
+// docs/format.md) for a telescope sphere of radius radius_m: x y z cx cy cz t zem w present (z and
+// cz included) and finite, cz consistent with (cx, cy), and |r| <= R (1 + 1e-6) + 1e-4 m for every
+// row. Optional columns (path, wavelength) are checked by PhotonChunk::validate().
+inline void validate_sphere_rows(const PhotonChunk &chunk, double radius_m) {
+  if (chunk.frame != Frame::ground) {
+    throw std::invalid_argument("sphere rows must be in the ground frame");
+  }
+  if (!(std::isfinite(radius_m) && radius_m > 0.0)) {
+    throw std::invalid_argument("telescope sphere radius must be finite and positive");
+  }
+  constexpr std::uint32_t sphere_columns =
+      column_bit(Column::x) | column_bit(Column::y) | column_bit(Column::z) |
+      column_bit(Column::cx) | column_bit(Column::cy) | column_bit(Column::cz) |
+      column_bit(Column::t) | column_bit(Column::zem) | column_bit(Column::w);
+  if (chunk.rows() > 0 && (chunk.mask() & sphere_columns) != sphere_columns) {
+    throw std::invalid_argument("sphere rows lack a required column (x y z cx cy cz t zem w)");
+  }
+  chunk.validate();
+  const double limit = radius_m * (1.0 + sphere_relative_tolerance) + sphere_absolute_tolerance_m;
+  for (std::size_t i = 0; i < chunk.rows(); ++i) {
+    const double x = chunk[Column::x][i];
+    const double y = chunk[Column::y][i];
+    const double z = chunk[Column::z][i];
+    const double cx = chunk[Column::cx][i];
+    const double cy = chunk[Column::cy][i];
+    const double cz = chunk[Column::cz][i];
+    const double t = chunk[Column::t][i];
+    const double zem = chunk[Column::zem][i];
+    const double w = chunk[Column::w][i];
+    if (!(std::isfinite(x) && std::isfinite(y) && std::isfinite(z) && std::isfinite(cx) &&
+          std::isfinite(cy) && std::isfinite(t) && std::isfinite(zem) && std::isfinite(w))) {
+      throw std::invalid_argument("sphere row has a non-finite value");
+    }
+    if (!cz_is_consistent(cz, cx, cy)) {
+      throw std::invalid_argument("sphere row direction (cx, cy, cz) is not a unit vector");
+    }
+    if (std::sqrt(x * x + y * y + z * z) > limit) {
+      throw std::invalid_argument("sphere row lies outside the telescope sphere");
+    }
   }
 }
 

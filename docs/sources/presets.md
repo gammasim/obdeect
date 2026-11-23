@@ -65,7 +65,9 @@ at `--scan-start`, runs along x for `--scan-extent-x`, then along y for `--scan-
 of `--scan-step`, with the beam at height `--height`. Each position is one point emission of one
 event. The beam points down by default: `--beam-zenith` (> 90 down, < 90 up; default 180) and
 `--beam-azimuth` (default 0) set another direction. A horizontal beam (`--beam-zenith 90`) is
-rejected: it never reaches the camera plane. Frame `sky`, target `none`: all photons are written.
+allowed: its photons move at the scan height, reach the telescope sphere only if that height lies
+within it, and are cz = 0 rows (the sphere representation is needed for G consumers). Frame `sky`,
+target `none`: all photons are written.
 
 Required: `--photons-per-position`, `--spectrum`, `--camera-radius`, `--scan-start X Y`,
 `--scan-extent-x`, `--scan-extent-y`, `--scan-step`, `--height`.
@@ -78,7 +80,7 @@ obdeect sources run beam-scan --observation-level 2150 --spectrum fixed:waveleng
 
 ## laser-beam
 
-A pulsed laser pointing down or up, at `--laser-position` (sky frame, z above the observation
+A pulsed laser pointing down, up or horizontally, at `--laser-position` (sky frame, z above the observation
 level).
 One point emission per event: the pulse is `E lambda / (h c)` primary photons, with pulse energy
 `--pulse-energy` (J) and `--wavelength-nm` (exact SI constants; the spectrum is fixed at that
@@ -96,15 +98,16 @@ obdeect sources run laser-beam --observation-level 2150 --laser-position 200,0,3
 
 ## lidar
 
-A pulsed satellite lidar pointing down (or up). Same model as `laser-beam`, with the emission at the
+A pulsed satellite lidar pointing down, up or horizontally. Same model as `laser-beam`, with the emission at the
 satellite: `--satellite-altitude M` above the observation level at `--satellite-offset X,Y`
 (default 0,0), or `--satellite-position X,Y,Z`. Each pulse is one event (`--events`).
 
 Required: `--satellite-altitude` or `--satellite-position`, `--beam-zenith`,
 `--beam-azimuth`, `--divergence`, `--pulse-energy`, `--wavelength-nm`, one of `--telescope-radius`
-or `--telescope X,Y,Z,R`. `--start-height M` moves the emission along the beam to that height
-(for example 100000 for a satellite; for an upward beam, above the satellite); `--rows` sets the
-sampled rows per pulse.
+or `--telescope X,Y,Z,R`. `--start-height M` moves the emission along a non-horizontal beam to
+that height (for example 100000 for a satellite; for an upward beam, above the satellite);
+`--start-distance M` moves the start of a horizontal beam M metres along it from the laser. `--rows`
+sets the sampled rows per pulse.
 
 ### Satellite lidar example
 
@@ -144,15 +147,18 @@ The shortened start assumes negligible extinction and scattering along the 300 k
 
 Model and limits, shared by both presets:
 
-- t = 0 is the laser firing. With `--start-height`, `time_offset_ns` is the path from the laser to
-  the start divided by c (vacuum), so the times stay relative to the firing.
-- The beam must not be horizontal (`--beam-zenith` 90 is rejected: horizontal beams need the
-  sphere representation, not yet supported). Its tilt from the vertical must be at most
-  `--max-tilt` (default 60 deg, range [0, 90)): measured from nadir for a downward beam
-  (`--beam-zenith` > 90), from the zenith for an upward one (`--beam-zenith` < 90). The scattering
-  model is plane-parallel, so only near-vertical beams are valid.
-- `--start-height` must lie on the beam between the observation level and the laser: below the
-  laser for a downward beam, above it for an upward one.
+- t = 0 is the laser firing. A later start (`--start-height` or `--start-distance`) gives
+  `time_offset_ns` = the path from the laser to the start divided by c (vacuum), so the times stay
+  relative to the firing.
+- Tilt rule: a non-horizontal beam's tilt from the vertical must be at most `--max-tilt` (default
+  60 deg, range [0, 90)): measured from nadir for a downward beam (`--beam-zenith` > 90), from the
+  zenith for an upward one (`--beam-zenith` < 90). A horizontal beam (`--beam-zenith` 90) has no
+  tilt limit. The scattering model is plane-parallel, so the scattering chain is valid only for
+  beams within `--max-tilt`; for horizontal beams only the primary photons are valid.
+- Start rule: a non-horizontal beam starts at `--start-height`, which must lie on the beam between
+  the observation level and the laser (below the laser for a downward beam, above it for an upward
+  one); `--start-distance` is an error. A horizontal beam stays at the laser height and starts at
+  `--start-distance` (metres along the beam from the laser, default 0); `--start-height` is an error.
 - Only single scattering. A beam that passes a telescope sphere (closest approach within the
   sphere plus the beam radius at that point, below the start) is an error, unless
   `--allow-direct-beam` is given.

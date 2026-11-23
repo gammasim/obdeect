@@ -15,6 +15,7 @@
 // Straight lines, plane-parallel atmosphere, single scattering, no polarisation, no refraction.
 // The primary photon itself is not changed; its extinction is applied by the extinction step.
 
+#include "obdeect/propagation/chord.hpp"
 #include "obdeect/propagation/profile.hpp"
 #include "obdeect/propagation/streams.hpp"
 #include "obdeect/propagation/thinning.hpp"
@@ -520,6 +521,12 @@ struct ScatteringConfig {
   // time at a scattering point adds the air delay of the straight path from the point up to the
   // emission height at the primary's zenith angle (straight_path_air_delay_ns).
   const AtmosphereProfile *air_profile{nullptr};
+  // Sphere runs (docs/propagation/scattering.md, "Sphere runs"): a scattered photon whose path to
+  // the telescope centre is near horizontal (|h_s - h_c| / distance < near_horizontal_cos) takes
+  // the chord integral of the extinction for its transmission (no h_s == h_c skip), and a primary
+  // with |cz| < near_horizontal_cos is scattered along its straight path (scatter_horizontal).
+  // Plane runs: false (unchanged behaviour).
+  bool sphere_geometry{false};
 };
 
 namespace detail {
@@ -632,14 +639,14 @@ inline void scatter_to_telescopes(const ScatteringTable &table,
                                   std::span<const ScatterTelescope> telescopes,
                                   const Primary &primary, const ScatterPoint &point, std::size_t n,
                                   std::size_t j, const obdeect::stream::DrawKey &key,
-                                  ScatteredLists &out) {
+                                  bool sphere_geometry, ScatteredLists &out) {
   const std::size_t n_telescopes = telescopes.size();
   const double lambda = primary.lambda;
   const double h_s = point.h;
   for (std::size_t t = 0; t < n_telescopes; ++t) {
     const ScatterTelescope &tel = telescopes[t];
     const double h_c = primary.observation_level + tel.z_m;
-    if (h_s == h_c) {
+    if (h_s == h_c && !sphere_geometry) {
       continue;
     }
     const double dx = tel.x_m - point.x;
@@ -654,10 +661,17 @@ inline void scatter_to_telescopes(const ScatteringTable &table,
     // the absolute value covers both directions.
     const double ratio = tel.radius_m / distance;
     const double solid_angle = 2.0 * std::numbers::pi * (1.0 - std::sqrt(1.0 - ratio * ratio));
-    const double optical_depth = std::abs(transmission.optical_depth<double>(lambda, h_s) -
-                                          transmission.optical_depth<double>(lambda, h_c));
-    const double airmass = distance / std::abs(h_s - h_c);
-    const double transmitted = std::exp(-optical_depth * airmass);
+    double transmitted = 0.0;
+    if (sphere_geometry && std::abs(h_s - h_c) < near_horizontal_cos * distance) {
+      // Near-horizontal path: the chord integral from the point to the centre (the plane form
+      // has airmass distance / |h_s - h_c|, which is singular at h_s == h_c).
+      transmitted = std::exp(-flat_chord_depth(transmission, lambda, h_s, h_c, distance));
+    } else {
+      const double optical_depth = std::abs(transmission.optical_depth<double>(lambda, h_s) -
+                                            transmission.optical_depth<double>(lambda, h_c));
+      const double airmass = distance / std::abs(h_s - h_c);
+      transmitted = std::exp(-optical_depth * airmass);
+    }
 
     // Aim point: uniform over the projected disc of the sphere, perpendicular to the line of
     // sight through the centre.
@@ -777,7 +791,8 @@ inline void scatter_downward(const ScatteringConfig &config, const ScatteringTab
       // straight_path_air_delay_from_cos_ns). abs_cz > 0 here.
       point.time += straight_path_air_delay_from_cos_ns(*config.air_profile, h_s, h0, abs_cz);
     }
-    scatter_to_telescopes(table, transmission, telescopes, primary, point, n, j, key, out);
+    scatter_to_telescopes(table, transmission, telescopes, primary, point, n, j, key,
+                          config.sphere_geometry, out);
   }
 }
 
@@ -835,7 +850,190 @@ inline void scatter_upward(const ScatteringConfig &config, const ScatteringTable
     if (config.air_profile != nullptr) {
       point.time += straight_path_air_delay_from_cos_ns(*config.air_profile, h0, h_s, abs_cz);
     }
-    scatter_to_telescopes(table, transmission, telescopes, primary, point, n, j, key, out);
+    scatter_to_telescopes(table, transmission, telescopes, primary, point, n, j, key,
+                          config.sphere_geometry, out);
+  }
+}
+
+// Sphere runs: primaries with |cz| < near_horizontal_cos (cz = 0: horizontal) are scattered along
+// their straight path (no bending of the primary; the point is at x0 + c s, altitude h0 + cz s).
+// Extinction depth from the emission to path length s: D(s) = |tau(h0 + cz s) - tau(h0)| / |cz|,
+// with tau the scattering table's optical depth above an altitude (exact for a straight path with
+// altitude linear in s). For |cz| < horizontal_cz_exact_limit the altitude is constant to the
+// path's precision and D(s) = k(h0) s, k = -d tau/dh from a central difference over 1 m; then the
+// inverse is exact. Otherwise D is tabulated at horizontal_nodes + 1 path lengths (uniform in s up
+// to the path's end) and inverted by linear interpolation (D is monotone). The path ends where the
+// altitude leaves [observation level, table top] (ground or top), where D reaches
+// horizontal_depth_cut (exp(-D) = 1e-9; the rest is not sampled) or at horizontal_path_cap_m.
+// Segments of equal depth: boundaries by the inverse; the point of segment j is drawn by the
+// inverse of exp(-D) within the segment, as in scatter_downward. The molecular and aerosol mix of
+// a segment is the local one (central differences at its mid-altitude): along a near-horizontal
+// path the segment's own vertical depths are not enough (they are zero for cz = 0).
+inline constexpr double horizontal_depth_cut = 20.72326583694641; // -ln(1e-9)
+inline constexpr double horizontal_path_cap_m = 1e9;
+inline constexpr double horizontal_cz_exact_limit = 1e-9;
+inline constexpr std::size_t horizontal_nodes = 256;
+
+// Total optical depth of the scattering table from altitude h to the top [m a.s.l.].
+inline double table_depth(const ScatteringTable &table, double lambda, double h) {
+  const auto s = table.state<double>(lambda, h);
+  return s.tau_mol + s.tau_aer;
+}
+
+// Extinction depth [1] of a straight primary from emission altitude h0 with signed cz, as a
+// function of the path length s (see the comment above), and its inverse on the path.
+class HorizontalDepth {
+public:
+  // s_limit: the path length where the altitude leaves the atmosphere (may be large). Throws
+  // nothing; the caller checks s_limit > 0.
+  HorizontalDepth(const ScatteringTable &table, double lambda, double h0, double cz, double s_limit)
+      : table_(table), lambda_(lambda), h0_(h0), cz_(cz) {
+    if (std::abs(cz) < horizontal_cz_exact_limit) {
+      flat_ = true;
+      k_ = 0.5 *
+           std::abs(table_depth(table, lambda, h0 - 1.0) - table_depth(table, lambda, h0 + 1.0));
+      s_end_ = std::min(s_limit, horizontal_depth_cut / std::max(k_, 1e-300));
+      d_end_ = k_ * s_end_;
+      if (!(k_ > 0.0)) {
+        s_end_ = 0.0;
+        d_end_ = 0.0;
+      }
+      return;
+    }
+    flat_ = false;
+    tau0_ = table_depth(table, lambda, h0);
+    s_end_ = s_limit;
+    if (depth(s_limit) > horizontal_depth_cut) {
+      // Bisection (64 steps): the length where the depth reaches the cut.
+      double lo = 0.0, hi = s_limit;
+      for (int step = 0; step < 64; ++step) {
+        const double mid = 0.5 * (lo + hi);
+        (depth(mid) < horizontal_depth_cut ? lo : hi) = mid;
+      }
+      s_end_ = 0.5 * (lo + hi);
+    }
+    d_end_ = depth(s_end_);
+    for (std::size_t i = 0; i <= horizontal_nodes; ++i) {
+      nodes_s_[i] = s_end_ * static_cast<double>(i) / static_cast<double>(horizontal_nodes);
+      nodes_d_[i] = depth(nodes_s_[i]);
+    }
+    nodes_d_[horizontal_nodes] = d_end_;
+  }
+
+  // Depth at the end of the path (the cut, or the path's end at ground or top).
+  [[nodiscard]] double depth_end() const noexcept { return d_end_; }
+  // Path length of the end [m].
+  [[nodiscard]] double length_end() const noexcept { return s_end_; }
+  // Depth from the emission to path length s [m], 0 for s <= 0.
+  [[nodiscard]] double depth(double s) const {
+    if (!(s > 0.0)) {
+      return 0.0;
+    }
+    if (flat_) {
+      return k_ * s;
+    }
+    return std::abs(table_depth(table_, lambda_, h0_ + cz_ * s) - tau0_) / std::abs(cz_);
+  }
+  // Path length at which the depth equals d (0 <= d <= depth_end()).
+  [[nodiscard]] double length_at(double d) const {
+    if (flat_) {
+      return d / k_;
+    }
+    const auto upper = std::upper_bound(nodes_d_.begin(), nodes_d_.end(), d);
+    const auto i = static_cast<std::size_t>(upper - nodes_d_.begin());
+    if (i == 0) {
+      return 0.0;
+    }
+    if (i > horizontal_nodes) {
+      return s_end_;
+    }
+    const double d0 = nodes_d_[i - 1], d1 = nodes_d_[i];
+    const double f = d1 > d0 ? (d - d0) / (d1 - d0) : 0.0;
+    return nodes_s_[i - 1] + f * (nodes_s_[i] - nodes_s_[i - 1]);
+  }
+
+private:
+  const ScatteringTable &table_;
+  double lambda_;
+  double h0_;
+  double cz_;
+  bool flat_{};
+  double k_{};
+  double tau0_{};
+  double s_end_{};
+  double d_end_{};
+  std::array<double, horizontal_nodes + 1> nodes_s_{};
+  std::array<double, horizontal_nodes + 1> nodes_d_{};
+};
+
+// Scattered photons of one horizontal (sphere runs, |cz| < near_horizontal_cos) primary. The
+// boundary span has points_per_photon + 1 entries (path lengths of the segment boundaries).
+inline void scatter_horizontal(const ScatteringConfig &config, const ScatteringTable &table,
+                               const TransmissionTable &transmission,
+                               std::span<const ScatterTelescope> telescopes, const Primary &primary,
+                               const obdeect::stream::DrawKey &key, std::span<double> boundary,
+                               ScatteredLists &out) {
+  const std::size_t n = config.points_per_photon;
+  const double lambda = primary.lambda;
+  const double h0 = primary.h0;
+  const double cz = primary.cz;
+  const double top = table.max_altitude_m();
+  double s_limit = horizontal_path_cap_m;
+  if (cz < 0.0) {
+    s_limit = std::min(s_limit, (h0 - primary.observation_level) / -cz);
+  } else if (cz > 0.0) {
+    s_limit = std::min(s_limit, (top - h0) / cz);
+  }
+  if (!(s_limit > 0.0)) {
+    return;
+  }
+  const HorizontalDepth depth(table, lambda, h0, cz, s_limit);
+  if (!(depth.depth_end() > 0.0)) {
+    return;
+  }
+  const double d_end = depth.depth_end();
+  const double step = d_end / static_cast<double>(n);
+  const double segment_weight = -std::expm1(-step); // 1 - exp(-dD)
+  boundary[0] = 0.0;
+  boundary[n] = depth.length_end();
+  for (std::size_t j = 1; j < n; ++j) {
+    boundary[j] = depth.length_at(step * static_cast<double>(j));
+  }
+
+  for (std::size_t j = 0; j < n; ++j) {
+    const double u = deviate(key, j);
+    const double depth_in_segment = -std::log1p(-u * segment_weight);
+    const double target = step * static_cast<double>(j) + depth_in_segment;
+    const double s_p = std::clamp(depth.length_at(target), boundary[j], boundary[j + 1]);
+    // Extinction mix at the middle of the segment (central differences of the table).
+    const double h_mid = h0 + cz * 0.5 * (boundary[j] + boundary[j + 1]);
+    const auto mid_down = table.state<double>(lambda, h_mid - 1.0);
+    const auto mid_up = table.state<double>(lambda, h_mid + 1.0);
+    const double k_mol = 0.5 * (mid_down.tau_mol - mid_up.tau_mol);
+    const double k_aer = 0.5 * (mid_down.tau_aer - mid_up.tau_aer);
+    const double k_total = k_mol + k_aer;
+    if (!(k_total > 0.0)) {
+      continue;
+    }
+    const double h_p = h0 + cz * s_p;
+    const auto local = table.state<double>(lambda, h_p);
+    ScatterPoint point;
+    point.p_scatter = std::exp(-step * static_cast<double>(j)) * segment_weight *
+                      ((k_mol + local.ssa * k_aer) / k_total);
+    point.tau_mol = k_mol;
+    point.tau_aer = k_aer;
+    point.ssa = local.ssa;
+    point.asymmetry = local.asymmetry;
+    point.x = primary.x0 + primary.cx * s_p;
+    point.y = primary.y0 + primary.cy * s_p;
+    point.z = h_p - primary.observation_level;
+    point.h = h_p;
+    point.time = primary.t0 + s_p / speed_of_light_m_per_ns;
+    if (config.air_profile != nullptr) {
+      point.time += straight_line_air_delay_ns(*config.air_profile, h0, h_p, s_p, 1.0);
+    }
+    scatter_to_telescopes(table, transmission, telescopes, primary, point, n, j, key,
+                          config.sphere_geometry, out);
   }
 }
 
@@ -861,15 +1059,23 @@ inline void scatter_primary(const ScatteringConfig &config, const ScatteringTabl
   primary.abs_cz =
       std::sqrt(std::max(0.0, 1.0 - primary.cx * primary.cx - primary.cy * primary.cy));
   primary.h0 = primary.observation_level + chunk[Column::z][row];
-  // Sign from the cz column (absent: downward). cz = 0 is a horizontal primary: not scattered.
+  // Sign from the cz column (absent: downward). Plane runs: cz = 0 is a horizontal primary, not
+  // scattered. Sphere runs: |cz| < near_horizontal_cos is scattered along its straight path.
   const float cz_column = chunk.has(Column::cz) ? chunk[Column::cz][row] : -1.0F;
-  if (cz_column == 0.0F || primary.weight <= 0.0 || primary.abs_cz <= 0.0 ||
-      primary.h0 <= primary.observation_level) {
+  if (primary.weight <= 0.0 || primary.h0 <= primary.observation_level) {
+    return;
+  }
+  const obdeect::stream::DrawKey key{seed, stage_atmosphere, event, 0, photon, stream_scattering};
+  if (config.sphere_geometry && (cz_column == 0.0F || primary.abs_cz < near_horizontal_cos)) {
+    primary.cz = cz_column == 0.0F ? 0.0 : (cz_column > 0.0F ? primary.abs_cz : -primary.abs_cz);
+    scatter_horizontal(config, table, transmission, telescopes, primary, key, boundary, out);
+    return;
+  }
+  if (cz_column == 0.0F || primary.abs_cz <= 0.0) {
     return;
   }
   const bool upward = cz_column > 0.0F;
   primary.cz = upward ? primary.abs_cz : -primary.abs_cz;
-  const obdeect::stream::DrawKey key{seed, stage_atmosphere, event, 0, photon, stream_scattering};
   if (upward) {
     scatter_upward(config, table, transmission, telescopes, primary, key, boundary, out);
   } else {

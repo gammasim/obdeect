@@ -1,11 +1,11 @@
 """Shared builder of the pulsed-laser presets (``lidar``, ``laser-beam``).
 
-Model: a pulsed laser at a position above the observation level points downwards or upwards (not
-horizontally). Its pulse is
-one point emission of primary photons, ``E lambda / (h c)`` photons with pulse energy ``E``,
-wavelength ``lambda`` and exact SI constants. The emission starts at the laser, or at
-``--start-height`` on the beam. The scattered light is not generated here; it is computed by
-propagation (single scattering, Rayleigh and Mie, beam extinction, transmission)::
+Model: a pulsed laser at a position above the observation level points in any direction. Its
+pulse is one point emission of primary photons, ``E lambda / (h c)`` photons with pulse energy
+``E``, wavelength ``lambda`` and exact SI constants. The emission starts at the laser, or further
+along the beam: at ``--start-height`` for a non-horizontal beam, at ``--start-distance`` for a
+horizontal one. The scattered light is not generated here; it is computed by propagation (single
+scattering, Rayleigh and Mie, beam extinction, transmission)::
 
     obdeect sources run lidar ... -o primaries.pst
     obdeect propagation run --transmission T --site-altitude H --seed N --mode weighted \\
@@ -13,16 +13,24 @@ propagation (single scattering, Rayleigh and Mie, beam extinction, transmission)
 
 ``--mode weighted`` is needed because the primary weights exceed 2048.
 
-Time: t = 0 is the laser firing. With ``--start-height`` the emission starts later on the beam
-and ``time_offset_ns`` is the path from the laser to the start divided by c (vacuum).
+Time: t = 0 is the laser firing. A later start shifts time: ``time_offset_ns`` is the path from
+the laser to the start divided by c (vacuum).
 
-Limits: the beam must not be horizontal, and its tilt from the vertical must stay within
-``--max-tilt`` (default 60 deg): measured from nadir for a downward beam (zenith > 90 deg), from
-the zenith for an upward beam (zenith < 90 deg). The scattering model is plane-parallel, so only
-near-vertical beams are valid. A horizontal beam never reaches the observation plane and needs the
-sphere representation (not yet supported). The beam direction is zenith and astronomical azimuth
-(clockwise from north; sky frame x north, y west). Telescope spheres are checked against the direct
-beam: a beam that hits one is an error unless ``--allow-direct-beam`` is given.
+Limits:
+
+- A non-horizontal beam (``--start-height``): its tilt from the vertical must stay within
+  ``--max-tilt`` (default 60 deg), measured from nadir for a downward beam (zenith > 90 deg) and
+  from the zenith for an upward beam (zenith < 90 deg). ``--start-height`` must lie on the beam
+  between the observation level and the laser.
+- A horizontal beam (zenith 90 deg): no tilt limit. The beam stays at the laser height; the start
+  is ``--start-distance`` metres along the beam from the laser (default 0: at the laser). The
+  primary photons are valid; the scattering chain above is plane-parallel and only for beams within
+  ``--max-tilt``, so it is not valid for horizontal beams. Horizontal photons (cz = 0) need the
+  sphere representation (docs/stream/format.md).
+
+The beam direction is zenith and astronomical azimuth (clockwise from north; sky frame x north, y
+west). Telescope spheres are checked against the direct beam: a beam that hits one is an error
+unless ``--allow-direct-beam`` is given.
 """
 
 from __future__ import annotations
@@ -54,8 +62,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         type=float,
         required=True,
         metavar="DEG",
-        help="zenith of the beam direction: > 90 points down, < 90 up, 90 is horizontal and "
-        "rejected [deg]",
+        help="zenith of the beam direction: > 90 points down, < 90 up, 90 is horizontal [deg]",
     )
     group.add_argument(
         "--beam-azimuth",
@@ -69,8 +76,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         type=float,
         default=60.0,
         metavar="DEG",
-        help="largest tilt of the beam from the vertical in its own hemisphere (from nadir for a "
-        "downward beam, from the zenith for an upward one), in [0, 90) (default 60) [deg]",
+        help="largest tilt of a non-horizontal beam from the vertical in its own hemisphere (from "
+        "nadir for a downward beam, from the zenith for an upward one), in [0, 90) (default 60); "
+        "not used for a horizontal beam [deg]",
     )
     group.add_argument(
         "--divergence",
@@ -83,8 +91,15 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         "--start-height",
         type=float,
         metavar="M",
-        help="start the emission at this height on the beam, e.g. 100000 for a satellite "
-        "(default: at the laser) [m]",
+        help="non-horizontal beams: start the emission at this height on the beam, e.g. 100000 "
+        "for a satellite (default: at the laser) [m]",
+    )
+    group.add_argument(
+        "--start-distance",
+        type=float,
+        metavar="M",
+        help="horizontal beams: start the emission this distance along the beam from the laser "
+        "(default 0: at the laser) [m]",
     )
     group = parser.add_argument_group("pulse")
     group.add_argument(
@@ -161,8 +176,28 @@ def direct_hit(
     return None
 
 
+def _start_on_beam(position, beam, height) -> tuple[tuple[float, float, float], float]:
+    """Start of a non-horizontal beam at ``height`` and the time offset of the path from the laser.
+
+    The start lies on the beam beyond the laser's observation side: below the laser for a downward
+    beam, above it for an upward one; never below the observation level. No height: the laser.
+    """
+    if height is None:
+        return tuple(position), 0.0
+    along = (height - position[2]) * beam[2]
+    if not (math.isfinite(height) and height >= 0.0 and along > 0.0):
+        raise ValueError(
+            f"--start-height {height} m must lie on the beam between the observation level "
+            f"and the laser at {position[2]:g} m (below the laser for a downward beam, above "
+            "it for an upward one)"
+        )
+    path = (height - position[2]) / beam[2]  # > 0
+    start = tuple(position[i] + beam[i] * path for i in range(2)) + (height,)
+    return start, path / SPEED_OF_LIGHT_M_NS
+
+
 def build(args: argparse.Namespace, position) -> dict:
-    """Run description of one pulse: one point emission at the laser (or the start height).
+    """Run description of one pulse: one point emission at the laser or further along the beam.
 
     ``position`` is the laser position in the sky frame, z above the observation level.
     """
@@ -180,36 +215,35 @@ def build(args: argparse.Namespace, position) -> dict:
         raise ValueError(f"laser height {position[2]} m must be above the observation level")
 
     beam = unit_vector(args.beam_zenith, args.beam_azimuth)
-    if abs(beam[2]) <= 1e-12:
-        raise ValueError(
-            f"--beam-zenith {args.beam_zenith} deg is horizontal: horizontal beams are not "
-            "supported yet (the photons never reach the observation plane; planned with the "
-            "sphere representation)"
-        )
-    tilt = math.degrees(math.acos(min(1.0, abs(beam[2]))))
-    if tilt > max_tilt + 1e-9:  # the limit is inclusive; 1e-9 deg absorbs rounding
-        side = "nadir" if beam[2] < 0.0 else "the zenith"
-        raise ValueError(
-            f"beam tilted {tilt:.3g} deg from {side} exceeds --max-tilt {max_tilt:g} deg: "
-            "the scattering model is plane-parallel, so only near-vertical beams are valid"
-        )
-
+    horizontal = abs(beam[2]) <= 1e-12
     start, time_offset_ns = position, 0.0
-    if args.start_height is not None:
-        height = args.start_height
-        # The start lies on the beam beyond the laser's observation side: below the laser for a
-        # downward beam, above it for an upward one; never below the observation level.
-        along = (height - position[2]) * beam[2]
-        if not (math.isfinite(height) and height >= 0.0 and along > 0.0):
+    if horizontal:
+        if args.start_height is not None:
             raise ValueError(
-                f"--start-height {height} m must lie on the beam between the observation level "
-                f"and the laser at {position[2]:g} m (below the laser for a downward beam, above "
-                "it for an upward one)"
+                "--start-height is for non-horizontal beams: a horizontal beam stays at the laser "
+                "height, so give --start-distance (metres along the beam from the laser)"
             )
-        path = (height - position[2]) / beam[2]  # > 0
-        start = tuple(position[i] + beam[i] * path for i in range(2)) + (height,)
-        time_offset_ns = path / SPEED_OF_LIGHT_M_NS
-
+        distance = (
+            0.0
+            if args.start_distance is None
+            else non_negative(args.start_distance, "start distance")
+        )
+        start = tuple(position[i] + beam[i] * distance for i in range(3))
+        time_offset_ns = distance / SPEED_OF_LIGHT_M_NS
+    else:
+        if args.start_distance is not None:
+            raise ValueError(
+                "--start-distance is for horizontal beams; a non-horizontal beam starts at "
+                "--start-height"
+            )
+        tilt = math.degrees(math.acos(min(1.0, abs(beam[2]))))
+        if tilt > max_tilt + 1e-9:  # the limit is inclusive; 1e-9 deg absorbs rounding
+            side = "nadir" if beam[2] < 0.0 else "the zenith"
+            raise ValueError(
+                f"beam tilted {tilt:.3g} deg from {side} exceeds --max-tilt {max_tilt:g} deg: "
+                "the scattering model is plane-parallel, so only near-vertical beams are valid"
+            )
+        start, time_offset_ns = _start_on_beam(position, beam, args.start_height)
     if args.telescope is not None:
         telescopes = args.telescope
     else:
@@ -259,6 +293,7 @@ def build(args: argparse.Namespace, position) -> dict:
         "laser_y_m": position[1],
         "laser_z_m": position[2],
         "start_height_m": start[2],
+        "start_distance_m": math.dist(start, position),
     }
     return {
         "run": _common.run_section(args, frame="sky", **metadata),

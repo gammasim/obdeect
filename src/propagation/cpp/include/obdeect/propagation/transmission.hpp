@@ -168,6 +168,9 @@ public:
   [[nodiscard]] int first_wavelength_nm() const noexcept { return first_; }
   [[nodiscard]] int last_wavelength_nm() const noexcept { return first_ + rows_ - 1; }
   [[nodiscard]] WavelengthInterpolation wavelength_interpolation() const noexcept { return mode_; }
+  // Table heights [m a.s.l.]: the observation level and the heights H1 (ascending). The extinction
+  // coefficient has a kink at each of them (chord integrals split there).
+  [[nodiscard]] const std::vector<double> &node_heights_m() const noexcept { return height_m_; }
 
   // Vertical optical depth from the observation level to height_m; linear in log10(height)
   // between the table heights, zero at and below the observation level, constant above the
@@ -183,6 +186,26 @@ public:
       return T(0);
     }
     return static_cast<T>(tau_at(at, std::log10(h)));
+  }
+
+  // Extinction coefficient |d tau / dh| [1/m] at height_m: the exact derivative of optical_depth
+  // (its log10-linear interpolation, per table interval; the linear blend in wavelength blends the
+  // derivatives too). Zero at and below the observation level and above the last table height,
+  // where tau is constant. Used by the chord integrals of near-horizontal paths (chord.hpp).
+  template <class T> [[nodiscard]] T extinction_coefficient(T wavelength_nm, T height_m) const {
+    const Lookup at = lookup_of(static_cast<double>(wavelength_nm));
+    const double h = static_cast<double>(height_m);
+    if (!std::isfinite(h)) {
+      throw std::invalid_argument("height must be finite");
+    }
+    if (h <= 1000.0 * h2_km_) {
+      return T(0);
+    }
+    const double log_h = std::log10(h);
+    if (log_h >= grid_.back()) {
+      return T(0);
+    }
+    return static_cast<T>(std::fabs(slope_at(at, log_h)) / (h * std::log(10.0)));
   }
 
   // Transmission exp(-|tau(zem) - od_tel| * airmass - od_focus). Zero below the observation
@@ -370,6 +393,23 @@ private:
     }
     const double b = detail::rpol(grid_, lower + n, log_height);
     return (1.0 - at.frac) * a + at.frac * b;
+  }
+
+  // d tau / d log10(h) of the rows of `at` at log_height (the slope of the interval containing it,
+  // blended as tau_at). Requires grid_[0] <= log_height < grid_.back().
+  [[nodiscard]] double slope_at(const Lookup &at, double log_height) const {
+    const std::size_t n = grid_.size();
+    const auto upper = std::upper_bound(grid_.begin(), grid_.end(), log_height);
+    const auto i = static_cast<std::size_t>(upper - grid_.begin()); // grid_[i-1] <= x < grid_[i]
+    const double *lower = &tau_[static_cast<std::size_t>(at.lower - first_) * n];
+    const auto slope = [&](const double *y) {
+      return (y[i] - y[i - 1]) / (grid_[i] - grid_[i - 1]);
+    };
+    double value = slope(lower);
+    if (at.upper != at.lower) {
+      value = (1.0 - at.frac) * value + at.frac * slope(lower + n);
+    }
+    return value;
   }
 
   // Validates the arguments of the curved-atmosphere lookups and returns the table rows.

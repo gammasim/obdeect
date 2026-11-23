@@ -33,7 +33,8 @@ from typing import Any
 REQUIRED = object()
 ABSENT = object()
 
-_FRAMES = ("sky", "telescope", "camera")
+_FRAMES = ("sky", "telescope", "camera", "ground")
+
 
 # Pairs of arrays that must have equal length (checked wherever both keys are present).
 _PAIRS = (
@@ -210,6 +211,18 @@ def _fields(section: Mapping[str, Any], path: str, schema: dict) -> dict[str, An
         if isinstance(out.get(x), list) and isinstance(out.get(y), list):
             if len(out[x]) != len(out[y]):
                 _fail(path, f"{x} and {y} differ in length")
+    if "start_z_m" in schema and "start_distance_m" in schema:
+        # A plane wave: at most one start key; a horizontal direction needs start_distance_m.
+        if "start_z_m" in section and "start_distance_m" in section:
+            _fail(path, "give start_z_m or start_distance_m, not both")
+        if "start_distance_m" in out and "start_z_m" not in section:
+            del out[
+                "start_z_m"
+            ]  # the default start_z_m = 0 is not given alongside start_distance_m
+        direction = out.get("towards_source")
+        horizontal = isinstance(direction, list) and direction[2] == 0.0 and any(direction)
+        if "start_distance_m" not in out and horizontal:
+            _fail(path, "a horizontal towards_source (z = 0) needs start_distance_m")
     return out
 
 
@@ -307,6 +320,7 @@ _EMISSION = {
         "disc_radius_m": (_num(0, strict=True), REQUIRED),
         "disc_z_m": (_any_num, 0.0),
         "start_z_m": (_any_num, 0.0),
+        "start_distance_m": (_num(0), ABSENT),
     },
     "sky_background": {
         "radius_m": (_num(0, strict=True), REQUIRED),

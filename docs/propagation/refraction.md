@@ -293,3 +293,72 @@ is wrong by about $(L/R)\,\Delta x$. For $\Delta x \approx 0.2$ m (1 km path, ze
 $\nu \approx 3 \times 10^{-4}$) this is about 3 x 10^-5 m, and below 3 x 10^-4 m at 89 degrees.
 The straight path of the G plane is taken as in the downward case, and its altitudes are the
 spherical ones in the `spherical` mode.
+
+## Integrator
+
+The sphere representation ([](propagation.md#sphere-representation)) needs the ray where the
+plane-parallel tables are not enough: near-horizontal rays, rays that turn over, and rays that do
+not cross the telescope plane. `ray_march.hpp` integrates the ray in three dimensions, in frame
+sky (z above the observation level):
+
+    dX/ds = d,    dd/ds = (g - (g . d) d) / n,    dT/ds = n_group / c,
+
+with n = 1 + k nu(h), n_group = 1 + k_group nu(h), g = grad n = k nu'(h) up. In flat geometry
+up = (0, 0, 1) and h = observation level + z; in spherical geometry up is the radial unit vector
+from the Earth centre and h = |X - centre| - R (see [](curvature.md)). nu'(h) is the exact
+derivative of the tabulated profile (`AtmosphereProfile::index_minus_one_slope_cm`, exponential
+inside each fine cell; tested against finite differences). The state is advanced by classical
+RK4 with a fixed step of 50 m at most; the direction is renormalised after each step. A step whose
+straight segment enters the telescope sphere is not finished on that straight segment: the RK4
+step is shortened to the straight estimate of the crossing, and the remaining distance (a fraction
+of a metre) is taken on the straight line from there (`straight_to_sphere`). A straight line from a
+50 m step leaves a curved ray by about kappa s^2 / 2 (the curvature kappa = |nu'| is about 2.5e-8
+m^-1 near the ground): for a photon of the validation run the entry was 3e-5 m off along the ray, a
+time error of 1e-4 ns. The row is
+the entry point minus C, the path and time include the partial steps.
+
+Termination (`march_to_sphere`): entry into the sphere (`entered`); altitude below the observation
+level (`below_ground`); above the top of the profile while moving up (`escaped`); past the closest
+approach to C and outside the sphere (`closest_passed`); 200 000 steps (`step_limit`). The last
+three are `misses_sphere`. The integrator starts at the emission and costs about 0.2 us per step;
+a horizontal photon from 10 km that enters a sphere 10 km away takes about 200 steps, 45 us.
+Because of that cost the integrator is used only for the rows that the hybrid rule does not take.
+
+Arithmetic is in double, inputs and outputs are converted to the float32 columns by the caller.
+Chunk size, thread count and row order do not change a row: each row is a separate integration.
+
+### Hybrid rule
+
+For a downward or upward ray with |cz| >= 0.1 at the telescope plane, where the emission is farther
+than R from the plane, the plane-mode computation (`bend`, `bend_quadrature`, `bend_upward`) gives
+the crossing Q of the telescope plane, the direction d_t there and the time t_Q. The entry is then
+found with the 3D ray integrator from Q (ray_march.hpp), not with a straight tangent line (a
+tangent from Q is off by up to tens of metres for shallow rays: about 74 m long at |cz| = 0.16, with
+errors of 3e-4 m). The straight line through Q decides the side of the entry: its smaller root s of
+|Q + s d_t - C| = R. If s < 0 (the entry lies before Q) the ray is integrated backwards from Q
+(reverse direction, time decreasing with n_group); otherwise forwards. Each step is RK4 of 50 m; the
+last step is RK4 onto the straight estimate of the crossing and the straight residual, as in the
+integrator from the emission. The
+output is the entry relative to C, the bent direction there, the time there, and the path: the
+straight chord |entry - P| from the emission P (a chord, not the bent path length). With no
+straight root the photon is `misses_sphere`; an integration that reaches the ground is
+`below_ground`.
+
+### Accuracy
+
+Measured with the test suite (`test_sphere.cpp`, ECMWF profile, observation level 2000 m):
+
+| Comparison | Result |
+| --- | --- |
+| hybrid rule vs integrator, |cz| 0.1 to 0.3, impact -6 to 8 m (25 rows) | 4.8e-5 m, 1.1e-5 ns (max) |
+| hybrid rule (integrates from Q) vs integrator, |cz| 0.1 to 0.3 (0.16 included), impact -12 to 12 m (|Q| up to R; 66 rows) | 4.8e-5 m, 1.7e-5 ns (max) |
+| hybrid rule, photon 148 of the validation run (upward, |cz| 0.16, entry 22.6 m before Q) vs scipy integration from the emission | 1.1e-7 m, 3.6e-7 ns |
+| integrator vs `bend_quadrature`, downward, 2.7 km path | 1e-9 m, 1e-9 ns |
+| integrator vs `bend_upward`, upward, 1.3 km path | agrees to the printed precision, 1e-7 m |
+| integrator vs independent Snell reference, turning ray, 318 km path (apex 300 m above the emission) | 3e-4 m, 1e-3 ns |
+| horizontal photon, sagitta L^2 |nu'|/2 at L = 2 km | 3e-4 relative |
+
+The turning ray reference (Snell's law parametrised by v = sqrt(1 - s), no apex singularity) has a
+quadrature noise of about 2e-3 m at this path length, which bounds the comparison; the profile's
+kinks at the levels and cells limit the midpoint rule. Step size changes of the integrator (0.1,
+0.5, 2 m) move the 318 km result by 4e-4 m.

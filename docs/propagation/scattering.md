@@ -166,6 +166,46 @@ The photons that point to a part of the sphere below the telescope centre travel
 point below the centre; in the plane representation they never reach the telescope plane, and the
 propagation stage counts them as `moving_away`.
 
+## Sphere runs
+
+With `ground_representation = sphere` the scattering uses the same kernel with two additions
+(`ScatteringConfig::sphere_geometry`; plane runs are unchanged):
+
+- Scattered photons whose path to the telescope centre is near horizontal,
+  $|h_S - h_C| / d < 0.1$, take the transmission of the chord integral
+  ([](extinction.md#chord-integral)) from the scattering point to the centre, $T = \exp(-\int k\,\mathrm{d}s)$.
+  The plane form $|\tau(h_S) - \tau(h_C)|\, d / |h_S - h_C|$ is singular at $h_S = h_C$; in sphere
+  runs a point at the telescope's height is kept (its photons are horizontal), where the plane
+  kernel skips it. Other scattered photons are unchanged.
+- Primaries with $|c_z| < 0.1$ (including $c_z = 0$, horizontal) are scattered along their straight
+  path. The primary is not bent: the scattering point is at $x_0 + c_x s$, $y_0 + c_y s$, altitude
+  $h_0 + c_z s$, and the time $t_0 + s/c$ plus the straight air delay with an air profile. The
+  cumulative depth from the emission is
+
+$$
+D(s) = \frac{|\tau(h_0 + c_z s) - \tau(h_0)|}{|c_z|},
+$$
+
+  the exact depth of a straight path with altitude linear in $s$ (with $\tau$ the scattering table's
+  optical depth above an altitude). For $|c_z| < 10^{-9}$ the altitude is constant to the path's
+  precision and $D(s) = k(h_0)\,s$, with $k$ from a central difference of the table over 1 m; the
+  inverse is then exact. Otherwise $D$ is tabulated at 257 path lengths, uniform in $s$ up to the end
+  of the path, and inverted by linear interpolation ($D$ is monotone). The path ends where the
+  altitude leaves [observation level, top of the table], where $D$ reaches $-\ln 10^{-9} = 20.72$
+  (the rest of the path is not sampled: its scattering probability is below $10^{-9}$), or at
+  $10^9$ m. Equal-depth segments are as for the other primaries: the boundaries are the inverse of
+  $D$ at $jD_{\text{end}}/N_s$, and the point of segment $j$ is drawn by inverting $e^{-D}$ inside it.
+  The molecular and aerosol mix of a segment is taken at its middle (central differences of the
+  table), since a horizontal path has zero vertical depth per segment.
+
+Steep primaries ($|c_z| \ge 0.1$) use the downward and upward branches unchanged. A plane run keeps
+its behaviour: horizontal primaries (cz = 0) are not scattered and $h_S = h_C$ points are skipped.
+
+Test (`test_scattering`): a horizontal beam at the telescope's height, against the integral
+$W = \int_0^{s_{\text{end}}} \alpha e^{-\alpha s}\,P(\cos\theta)\,\Omega(d)\,e^{-\alpha_T d}\,\mathrm{d}s$
+with P the Rayleigh phase and $\alpha_T d$ the chord to the centre. The per-primary totals of 100 000
+primaries agree with W to 1 % (within the Monte Carlo error, about 1 %).
+
 ## Output
 
 Scattered photons, one list per telescope, frame sky, `telescope_id` set, columns x, y, z (position =

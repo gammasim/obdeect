@@ -12,6 +12,7 @@
 #include "obdeect/ray_tracing/json.hpp"
 #include "obdeect/ray_tracing/model_hash.hpp"
 #include "obdeect/ray_tracing/model_json.hpp"
+#include "obdeect/stream/photons.hpp"
 #include "obdeect/stream/stream.hpp"
 
 #include <algorithm>
@@ -303,6 +304,9 @@ using Vec = std::array<double, 3>;
                   dot(end, direction) + radii[1] * radial);
 }
 
+// Conservative bound on the dot product over an asphere's aperture (defined below).
+[[nodiscard]] inline double asphere_support(const Value &asphere, const Vec &direction);
+
 // Conservative bound on the dot product with a direction over a mirror's surface.
 [[nodiscard]] inline double mirror_support(const Value &mirror, const Vec &direction) {
   if (const Value *facets = mirror.find("facets")) {
@@ -317,7 +321,12 @@ using Vec = std::array<double, 3>;
     }
     return best;
   }
-  const Value &asphere = at(mirror, "asphere");
+  return asphere_support(at(mirror, "asphere"), direction);
+}
+
+// Conservative bound on the dot product over an asphere's aperture (a mirror's or the focal
+// surface's `asphere` record).
+[[nodiscard]] inline double asphere_support(const Value &asphere, const Vec &direction) {
   const double inner = number(at(asphere, "inner_radius_m"));
   const double outer = number(at(asphere, "outer_radius_m"));
   const double scale = number(at(asphere, "radial_scale_m"));
@@ -409,6 +418,52 @@ struct StreamModel {
     return top;
   }
 };
+
+// Largest distance [m] from `centre` to a body, bounded through its support function (an upper
+// bound of the dot product with any direction): the body lies in the box spanned by its supports
+// along the three axes, so its distance from the centre is at most the box's diagonal reach.
+template <class Support>
+[[nodiscard]] inline double support_box_distance(const Support &support, const Vec &centre) {
+  double sum = 0.0;
+  for (std::size_t i = 0; i < 3; ++i) {
+    Vec axis{0.0, 0.0, 0.0};
+    axis[i] = 1.0;
+    const Vec flipped{-axis[0], -axis[1], -axis[2]};
+    const double reach = std::max(support(axis) - centre[i], support(flipped) + centre[i]);
+    sum += reach * reach;
+  }
+  return std::sqrt(sum);
+}
+
+// Name and distance [m] from the sphere centre (in the traced frame, -axes_offset) of every
+// mirror that exists, every obscurer (any leg) and the focal surface. The distance of a mirror,
+// an obscurer or an asphere focal surface is an upper bound (support box). The focal plane has no
+// lateral extent in the model: its entry is the distance of its height from the centre, so the
+// check requires the plane to reach the sphere.
+[[nodiscard]] inline std::vector<std::pair<std::string, double>>
+enclosure_distances(const StreamModel &model) {
+  const Vec centre = minus({0.0, 0.0, 0.0}, model.axes_offset());
+  std::vector<std::pair<std::string, double>> out;
+  for (const std::string role : {"primary", "secondary"}) {
+    const Value *mirror = model.optics().find(role);
+    if (mirror != nullptr && mirror->kind() != Value::Kind::null)
+      out.emplace_back(role, support_box_distance(
+                                 [&](const Vec &d) { return mirror_support(*mirror, d); }, centre));
+  }
+  for (const auto &obscurer : items(at(model.optics(), "obscurers")))
+    out.emplace_back(
+        text(at(obscurer, "name")),
+        support_box_distance([&](const Vec &d) { return obscurer_support(obscurer, d); }, centre));
+  const Value &focal = at(model.optics(), "focal_surface");
+  const Value *asphere = focal.find("asphere");
+  if (asphere != nullptr && asphere->kind() != Value::Kind::null)
+    out.emplace_back(
+        "focal surface",
+        support_box_distance([&](const Vec &d) { return asphere_support(*asphere, d); }, centre));
+  else
+    out.emplace_back("focal surface (plane)", std::abs(number(at(focal, "plane_z_m")) - centre[2]));
+  return out;
+}
 
 // Loads an optical-model file's text; the sha256 entry must match the content.
 [[nodiscard]] inline std::shared_ptr<const StreamModel> load_stream_model(std::string_view text) {
@@ -677,6 +732,9 @@ struct Optics {
   double on_axis{};
   double telescope_plane_m{};       // Input plane of telescope-frame photons.
   double telescope_lower_plane_m{}; // Input plane of telescope-frame photons from below.
+  // Sphere runs: name and distance [m] from the sphere centre of each optical element (see
+  // enclosure_distances); the sphere of a telescope must reach every one.
+  std::vector<std::pair<std::string, double>> enclosure;
   std::string provenance;
 
   [[nodiscard]] bool normalise() const { return part == TransmissionPart::angular; }
@@ -708,6 +766,7 @@ make_optics(std::shared_ptr<const StreamModel> model, TransmissionPart part,
     top = top ? std::max(*top, *mirror) : *mirror;
   optics->telescope_plane_m = top.value_or(0.0) + kInputPlaneMarginM;
   optics->telescope_lower_plane_m = lower_input_plane_m(*model, {0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
+  optics->enclosure = enclosure_distances(*model);
   optics->provenance = "obdeect " + version + " model " + model->sha256;
   optics->model = std::move(model);
   return optics;
@@ -919,9 +978,33 @@ private:
                     "telescope_pointing_azimuth_rad") *
               radians_to_degrees};
     }
+    // Ground representation (format 1.2): sphere runs have G rows at their own 3D points.
+    try {
+      sphere_ = st::ground_representation(metadata) == st::GroundRepresentation::sphere;
+    } catch (const std::runtime_error &error) {
+      throw ModelError(error.what());
+    }
+    radii_.clear();
+    if (sphere_) {
+      const auto found = metadata.find("telescope_r_m");
+      if (found != metadata.end()) {
+        const auto *radii = std::get_if<std::vector<double>>(&found->second);
+        if (radii == nullptr)
+          throw ModelError("run record: telescope_r_m must be a float array");
+        radii_ = *radii;
+      }
+    }
     event_.reset();
     writer_.write_metadata(obdeect::stream::RecordType::run, metadata);
     run_status_pending_ = !per_telescope();
+  }
+
+  // Sphere radius [m] of a telescope (id 1 is the first entry, as sim_telarray).
+  [[nodiscard]] double sphere_radius(std::uint32_t telescope_id) const {
+    if (telescope_id == 0 || telescope_id > radii_.size())
+      throw ModelError("sphere run: telescope " + std::to_string(telescope_id) +
+                       " has no radius in the run record (telescope_r_m)");
+    return radii_[telescope_id - 1];
   }
 
   void efficiency_status(const Metadata &metadata) {
@@ -976,6 +1059,15 @@ private:
     const auto next = next_index_.find(id);
     telescope.out_index = next == next_index_.end() ? 0 : next->second;
     telescope_ = std::move(telescope);
+    if (telescope_->kept && sphere_) {
+      const double radius = sphere_radius(id);
+      for (const auto &[name, distance] : optics(id).enclosure)
+        if (distance > radius)
+          throw ModelError("telescope " + std::to_string(id) +
+                           ": the sphere (telescope_r_m = " + format_3f(radius) +
+                           " m) must enclose the optical model, but '" + name + "' lies " +
+                           format_3f(distance) + " m from the sphere centre; raise telescope_r_m");
+    }
     if (telescope_->kept) {
       Metadata out = metadata;
       out["frame"] = static_cast<std::int64_t>(obdeect::stream::Frame::camera);
@@ -1086,6 +1178,15 @@ private:
         chunk.frame != obdeect::stream::Frame::telescope)
       throw ModelError("photon frame " + std::to_string(static_cast<std::uint32_t>(chunk.frame)) +
                        " is not supported: trace-stream takes ground (1) or telescope (2) photons");
+    // Sphere rows (G frame of a sphere run): each row starts at its own point, see below.
+    const bool sphere_rows = sphere_ && chunk.frame == obdeect::stream::Frame::ground;
+    if (sphere_rows) {
+      try {
+        st::validate_sphere_rows(chunk, sphere_radius(telescope.id));
+      } catch (const std::invalid_argument &error) {
+        throw ModelError(error.what());
+      }
+    }
     ensure_status(telescope);
     const Config &config = this->config(telescope);
     const Optics &optics = this->optics(telescope.id);
@@ -1115,21 +1216,23 @@ private:
       throw ModelError("photon directions must be finite unit vectors (cx, cy in the unit disc)");
     if (cz_mismatch)
       throw ModelError("photon column cz does not match cx and cy");
-    if (horizontal)
+    // Plane rows cannot be horizontal (they have no plane to start on); sphere rows can.
+    if (horizontal && !sphere_rows)
       throw ModelError("horizontal photons relative to the telescope axis are not supported yet");
     std::array<double, 9> rotation = {1, 0, 0, 0, 1, 0, 0, 0, 1};
     Vec offset = {0.0, 0.0, 0.0};
     double plane = 0.0, lower = std::numeric_limits<double>::quiet_NaN();
     const bool ground = chunk.frame == obdeect::stream::Frame::ground;
     if (ground) {
-      if (chunk.has(Column::z))
+      if (chunk.has(Column::z) && !sphere_rows)
         for (const float z : chunk[Column::z])
           if (z != 0.0F)
             throw ModelError("ground-frame photons must lie in the plane z = 0");
       const auto &geometry = ground_geometry(telescope.id);
       rotation = geometry.rotation;
-      plane = geometry.upper;
-      lower = geometry.lower;
+      // Sphere rows start at their own z: the input planes are not used.
+      plane = sphere_rows ? 0.0 : geometry.upper;
+      lower = sphere_rows ? std::numeric_limits<double>::quiet_NaN() : geometry.lower;
     } else {
       if (!chunk.has(Column::z))
         throw ModelError("telescope-frame photons need the column z");
@@ -1144,24 +1247,41 @@ private:
     if (event_number < 0 || event_number >= (std::int64_t{1} << 32) ||
         chunk.first_index >= index_limit || rows >= index_limit - chunk.first_index)
       throw ModelError("bunch ids need event numbers and photon indices below 2^32");
-    if (downward)
+    if (downward && !sphere_rows)
       check_input_plane(*optics.model, rotation, offset, plane);
-    if (upward)
+    if (upward && !sphere_rows)
       check_lower_input_plane(*optics.model, rotation, offset, lower);
     const auto &x_in = chunk[Column::x];
     const auto &y_in = chunk[Column::y];
     const auto &t_in = chunk[Column::t];
     std::vector<float> x(rows), y(rows), time(rows);
     std::vector<std::uint64_t> bunch_id(rows);
+    // Path from the emission to each start point [m] (format 1.2 column path, carried through):
+    // the input path, moved by the signed distance along the direction from the row to the start.
+    const bool has_path = chunk.has(Column::path);
+    std::vector<double> path_start(has_path ? rows : 0);
     for (std::size_t i = 0; i < rows; ++i) {
-      const double z = ground ? 0.0 : static_cast<double>(chunk[Column::z][i]);
-      const double row_plane = cz[i] < 0.0 ? plane : lower;
-      const double s = (row_plane - z) / cz[i];
-      x[i] = static_cast<float>(static_cast<double>(x_in[i]) + s * static_cast<double>(cx_in[i]));
-      y[i] = static_cast<float>(static_cast<double>(y_in[i]) + s * static_cast<double>(cy_in[i]));
-      const double norm = std::sqrt(static_cast<double>(cx_in[i]) * cx_in[i] +
-                                    static_cast<double>(cy_in[i]) * cy_in[i] + cz[i] * cz[i]);
-      time[i] = static_cast<float>(static_cast<double>(t_in[i]) + s * norm / kSpeedOfLightMPerNs);
+      if (sphere_rows) {
+        // The row is the start point itself; its time and path are those there.
+        x[i] = x_in[i];
+        y[i] = y_in[i];
+        time[i] = t_in[i];
+      } else {
+        const double z = ground ? 0.0 : static_cast<double>(chunk[Column::z][i]);
+        const double row_plane = cz[i] < 0.0 ? plane : lower;
+        const double s = (row_plane - z) / cz[i];
+        x[i] = static_cast<float>(static_cast<double>(x_in[i]) + s * static_cast<double>(cx_in[i]));
+        y[i] = static_cast<float>(static_cast<double>(y_in[i]) + s * static_cast<double>(cy_in[i]));
+        const double norm = std::sqrt(static_cast<double>(cx_in[i]) * cx_in[i] +
+                                      static_cast<double>(cy_in[i]) * cy_in[i] + cz[i] * cz[i]);
+        time[i] = static_cast<float>(static_cast<double>(t_in[i]) + s * norm / kSpeedOfLightMPerNs);
+        if (has_path)
+          path_start[i] = static_cast<double>(chunk[Column::path][i]) + s * norm;
+      }
+      if (has_path && sphere_rows)
+        path_start[i] = static_cast<double>(chunk[Column::path][i]);
+      if (has_path && path_start[i] < 0.0)
+        throw ModelError("photon path is shorter than its move to the start point");
       bunch_id[i] = (static_cast<std::uint64_t>(event_number) << 32) | (chunk.first_index + i);
     }
     const std::vector<float> zeros(rows, 0.0F);
@@ -1177,7 +1297,9 @@ private:
                            wavelength.data(),
                            bunch_id.data(),
                            rows,
-                           chunk.has(Column::cz) ? chunk[Column::cz].data() : nullptr};
+                           chunk.has(Column::cz) ? chunk[Column::cz].data() : nullptr,
+                           sphere_rows ? chunk[Column::z].data() : nullptr,
+                           has_path ? path_start.data() : nullptr};
     BunchFrame frame;
     std::copy(rotation.begin(), rotation.end(), frame.rotation);
     std::copy(offset.begin(), offset.end(), frame.offset_m);
@@ -1192,6 +1314,7 @@ private:
     std::vector<double> position, direction, t_out, weight, wavelength_out;
     std::vector<std::uint64_t> bunch_index;
     std::vector<std::uint32_t> sub_photon;
+    std::vector<double> path_out;
     const std::size_t traced = trace_bunches(
         optics.model->model, block, frame, options,
         RandomKey{settings_.seed, static_cast<std::uint32_t>(event_number), telescope.id}, pool_,
@@ -1203,9 +1326,12 @@ private:
           wavelength_out.resize(n);
           bunch_index.resize(n);
           sub_photon.resize(n);
-          return BunchResult{position.data(),  direction.data(),      t_out.data(),
-                             weight.data(),    wavelength_out.data(), bunch_index.data(),
-                             sub_photon.data()};
+          if (has_path)
+            path_out.resize(n);
+          return BunchResult{position.data(),       direction.data(),
+                             t_out.data(),          weight.data(),
+                             wavelength_out.data(), bunch_index.data(),
+                             sub_photon.data(),     has_path ? path_out.data() : nullptr};
         });
     counts_.photons_in += rows;
 
@@ -1236,6 +1362,8 @@ private:
         mask |= obdeect::stream::column_bit(c);
       if (with_zem)
         mask |= obdeect::stream::column_bit(Column::zem);
+      if (has_path)
+        mask |= obdeect::stream::column_bit(Column::path);
       out_.resize(n, mask);
       out_.telescope_id = telescope.id;
       out_.frame = obdeect::stream::Frame::camera;
@@ -1252,6 +1380,8 @@ private:
         out_[Column::wavelength][k] = static_cast<float>(wavelength_out[i]);
         if (with_zem)
           out_[Column::zem][k] = zem[bunch_index[i]];
+        if (has_path)
+          out_[Column::path][k] = static_cast<float>(path_out[i]);
       }
       writer_.write_chunk(out_);
       telescope.out_index += n;
@@ -1265,6 +1395,8 @@ private:
   std::shared_ptr<const Optics> shared_;
   std::map<std::uint32_t, std::shared_ptr<const Optics>> per_telescope_;
   obdeect::stream::Writer &writer_;
+  bool sphere_{false};        // The run's ground representation is sphere.
+  std::vector<double> radii_; // telescope_r_m of a sphere run.
   StreamTraceSettings settings_;
   ThreadPool pool_;
   std::optional<std::pair<double, double>> run_pointing_;

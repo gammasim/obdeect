@@ -19,7 +19,7 @@ random numbers depend only on the seed and its id). It returns, per photon:
 
 | Array | Meaning |
 | --- | --- |
-| `status` | index into `STATUS_NAMES`: detected, missed_primary, missed_secondary, missed_focal_surface, blocked, invalid_input, numerical_failure, non_sequential, direct_focal (the last two for photons from below, see [Light sources](light-sources.md#photons-from-below)) |
+| `status` | index into `STATUS_NAMES`: detected, missed_primary, missed_secondary, missed_focal_surface, blocked, invalid_input, numerical_failure, non_sequential (no longer produced), direct_focal (a plane focal surface from its receiving side before the last mirror), bounce_limit (16 reflections); see [Optical models](optical-models.md#reflecting-sides-and-photons-from-below) |
 | `terminal_surface` | id of the surface the photon ended on (focal surface, obscurer, mirror) |
 | `position_m`, `direction` | at the focal surface, or where the photon was lost |
 | `path_length_m`, `time_ns` | geometric path; time with the model's group index |
@@ -27,6 +27,7 @@ random numbers depend only on the seed and its id). It returns, per photon:
 | `primary_point_m`, `primary_surface`, `primary_incidence_deg` | reflection on the primary |
 | `secondary_point_m`, `secondary_surface`, `secondary_incidence_deg` | reflection on the secondary (NaN for single-mirror telescopes) |
 | `focal_incidence_deg` | angle to the focal-surface normal |
+| `reflections` | number of reflections of the photon (on either mirror) |
 
 `trace` returns all 14 arrays by default. Request only what you use:
 

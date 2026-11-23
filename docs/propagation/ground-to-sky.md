@@ -69,6 +69,22 @@ back = propagation.propagate(
 )
 ```
 
+## Sphere rows
+
+A run in the sphere representation ([](propagation.md#sphere-representation)) has rows on the telescope
+sphere: x, y, z relative to the centre C = (telescope x, y, z), with the direction (cx, cy, cz), the
+emission altitude `zem`, the time `t` at the row and the path `path` from the emission. Rows with
+w = 0 are dropped rows and are not converted (counted as dropped). For the others the emission
+point is the straight back-projection
+
+    E = row + C - path d,    zem must equal obs + E_z within 1 m (else std::invalid_argument),
+
+the sky position of the photon at emission is E, and the time at emission is
+t - path / c - (straight air delay of the profile, with k_group = 1). This is an approximation:
+a bent path is not inverted, so the back-projection is exact only for rows of straight paths
+(refraction not applied, or an emission whose path is straight to 1 m). `to-sky` applies it to
+sphere runs; the check fails for rows of refracted paths, which is the expected error for them.
+
 ## Limits
 
 - Round trip: exact to float32 rounding when the input has `refraction_applied = 1` (CORSIKA with

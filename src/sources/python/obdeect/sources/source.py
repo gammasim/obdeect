@@ -36,8 +36,8 @@ from obdeect.sources import _core, config
 #: Largest number of photons in one chunk (photon stream chunk limit).
 CHUNK_ROWS = 1 << 16
 
-#: Frames of the photon stream (G is not a source frame); a run sets its frame.
-FRAMES = {"sky": 0, "telescope": 2, "camera": 3}
+#: Frames of the photon stream. A run sets its frame; ground (G) runs write sphere rows.
+FRAMES = {"sky": 0, "ground": 1, "telescope": 2, "camera": 3}
 
 #: Columns of the emitted photons, in obdeect stream column names.
 COLUMNS = ("x", "y", "z", "cx", "cy", "cz", "t", "w", "wavelength")

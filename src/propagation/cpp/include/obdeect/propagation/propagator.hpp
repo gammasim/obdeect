@@ -25,6 +25,7 @@
 #include "obdeect/propagation/refraction.hpp"
 #include "obdeect/propagation/scattering.hpp"
 #include "obdeect/propagation/sky.hpp"
+#include "obdeect/propagation/sphere.hpp"
 #include "obdeect/propagation/streams.hpp"
 #include "obdeect/propagation/thinning.hpp"
 #include "obdeect/propagation/timing.hpp"
@@ -82,6 +83,20 @@ inline Curvature parse_curvature(std::string_view text) {
                               std::string(text) + "'");
 }
 
+// Ground representation of the output (docs/propagation/propagation.md, "Sphere representation"):
+// plane (default, rows at z = 0 relative to the telescope) or sphere (rows on the telescope sphere,
+// columns path and cz). "plane" or "sphere"; throws std::invalid_argument for other text.
+inline obdeect::stream::GroundRepresentation parse_ground_representation(std::string_view text) {
+  if (text == "plane") {
+    return obdeect::stream::GroundRepresentation::plane;
+  }
+  if (text == "sphere") {
+    return obdeect::stream::GroundRepresentation::sphere;
+  }
+  throw std::invalid_argument("ground representation must be plane or sphere: '" +
+                              std::string(text) + "'");
+}
+
 // An envelope factor f^env(lambda) of a later efficiency (efficiency_status state `envelope`).
 // The stage applies the product of all envelope factors. name: [A-Za-z0-9_-]+.
 struct EnvelopeFactor {
@@ -130,6 +145,12 @@ struct PropagatorConfig {
   // efficiency status) and spherical. Must be finite and above 1e6 m.
   Curvature curvature{Curvature::none};
   double earth_radius_m{obdeect::stream::earth_radius_m};
+  // Ground representation of the output (see parse_ground_representation). Sphere needs the run key
+  // telescope_r_m (one radius per telescope). Input sphere runs are kept as sphere rows and need
+  // this setting too. Sphere rows take extinction and scattering (docs/propagation/extinction.md,
+  // "Sphere rows"; docs/propagation/scattering.md, "Sphere runs").
+  obdeect::stream::GroundRepresentation ground_representation{
+      obdeect::stream::GroundRepresentation::plane};
   // Threads for the extinction of each chunk (1: in place). The output does not depend on it.
   unsigned threads{1};
   // Telescopes to keep (1-based ids). Blocks of other telescopes (telescope, photons,
@@ -395,6 +416,9 @@ private:
   struct Run {
     double observation_m{};
     bool refraction_applied{};
+    bool sphere{};                // output in the sphere representation (config)
+    bool sphere_input{};          // the input run is in the sphere representation
+    std::vector<double> radius_m; // telescope sphere radii [m] (sphere mode)
     std::vector<double> x_m, y_m, z_m;
     std::vector<double> pathlen_m; // path inside each telescope [m], index = telescope_id - 1
     WavelengthRange wavelengths{};
@@ -408,6 +432,7 @@ private:
     double altitude_m{}; // a.s.l. of the telescope plane
     double pathlen_m{};  // path inside the telescope [m]
     double x_m{}, y_m{}, z_m{};
+    double radius_m{};                // sphere radius [m] (sphere mode)
     double nx{0.0}, ny{0.0}, nz{1.0}; // local vertical of the telescope (frame G)
     const TelescopeDepths *depths{};  // cached per (altitude, pathlen) (depths_cache_)
     std::uint64_t out_index{};        // output rows so far (first_index of the next chunk)
@@ -656,6 +681,28 @@ private:
     } else if (config_.profile) {
       throw std::invalid_argument("run lacks refraction_applied (needed with a profile)");
     }
+    const bool sphere_input = obdeect::stream::ground_representation(metadata) ==
+                              obdeect::stream::GroundRepresentation::sphere;
+    const bool sphere =
+        config_.ground_representation == obdeect::stream::GroundRepresentation::sphere;
+    config_.scattering.sphere_geometry = sphere;
+    if (sphere_input && !sphere) {
+      throw std::invalid_argument(
+          "input run is in the sphere representation (ground_representation "
+          "= sphere): select ground representation sphere");
+    }
+    std::vector<double> radius_m;
+    if (sphere) {
+      radius_m = array_field(metadata, "telescope_r_m");
+      if (radius_m.size() != x_m.size()) {
+        throw std::invalid_argument("sphere representation needs telescope_r_m, one per telescope");
+      }
+      for (const double radius : radius_m) {
+        if (!(std::isfinite(radius) && radius > 0.0)) {
+          throw std::invalid_argument("telescope_r_m must be finite and positive");
+        }
+      }
+    }
     WavelengthRange wavelengths{};
     if (config_.wavelength_range) {
       wavelengths = *config_.wavelength_range;
@@ -706,6 +753,9 @@ private:
     }
     Run run{observation_m,
             refraction_applied,
+            sphere,
+            sphere_input,
+            radius_m,
             x_m,
             y_m,
             z_m,
@@ -715,6 +765,9 @@ private:
             make_efficiency_status(wavelengths, pathlen_m)};
     if (config_.profile) {
       out["refraction_applied"] = std::int64_t{1}; // sky-frame photons are refracted from here on
+    }
+    if (sphere) {
+      out["ground_representation"] = std::string("sphere");
     }
     run_ = std::move(run);
     telescope_.open = false;
@@ -843,6 +896,7 @@ private:
     telescope_.x_m = run_->x_m[index];
     telescope_.y_m = run_->y_m[index];
     telescope_.z_m = run_->z_m[index];
+    telescope_.radius_m = run_->sphere ? run_->radius_m[index] : 0.0;
     telescope_.altitude_m = run_->observation_m + telescope_.z_m; // the run's observation level
     telescope_.nx = 0.0;
     telescope_.ny = 0.0;
@@ -1108,7 +1162,11 @@ private:
     const bool weighted = config_.mode == OutputMode::weighted;
     for (const auto &scattered : list) {
       obdeect::stream::PhotonChunk plane_input = scattered;
-      sky_to_ground(plane_input, sky_plane(plane_input), true); // stored cz of the scattering
+      if (run_->sphere) {
+        sky_to_sphere(plane_input, sky_plane(plane_input), telescope_.radius_m, true);
+      } else {
+        sky_to_ground(plane_input, sky_plane(plane_input), true); // stored cz of the scattering
+      }
       for (auto &out : apply_envelope_chunk(
                std::move(plane_input), run_->envelope, *config_.transmission, *telescope_.depths,
                weighted, config_.seed, event_number_, telescope_.id, telescope_.out_index)) {
@@ -1202,9 +1260,24 @@ private:
         }
         assign_wavelengths(chunk_, run_->wavelengths, config_.seed, event_number_, telescope_.id);
       }
-      const DropCounts counts = sky_to_ground(chunk_, sky_plane(chunk_));
+      const DropCounts counts = run_->sphere
+                                    ? sky_to_sphere(chunk_, sky_plane(chunk_), telescope_.radius_m)
+                                    : sky_to_ground(chunk_, sky_plane(chunk_));
       summary_.dropped_by_reason += counts;
       summary_.dropped = summary_.dropped_by_reason.total();
+    } else if (run_->sphere) {
+      if (!run_->sphere_input) {
+        throw std::invalid_argument(
+            "sphere representation: frame G photons of a plane run cannot be "
+            "converted to sphere rows (use sky-frame input)");
+      }
+      if (!chunk_.has(obdeect::stream::Column::path)) {
+        chunk_[obdeect::stream::Column::path].assign(chunk_.rows(), 0.0F); // emitted at the row
+      }
+      obdeect::stream::validate_sphere_rows(chunk_, telescope_.radius_m);
+    } else if (run_->sphere_input) {
+      throw std::invalid_argument("input run is in the sphere representation: select ground "
+                                  "representation sphere");
     }
 
     if (config_.geometry_only) {
@@ -1227,7 +1300,12 @@ private:
     settings.telescope = telescope_.id;
     settings.threads = config_.threads;
     settings.weighted = config_.mode == OutputMode::weighted;
-    if (config_.curvature != Curvature::none) {
+    if (run_->sphere) {
+      settings.sphere =
+          SphereGeometry{run_->observation_m,
+                         config_.curvature == Curvature::spherical ? config_.earth_radius_m : 0.0,
+                         telescope_.x_m, telescope_.y_m, telescope_.z_m};
+    } else if (config_.curvature != Curvature::none) {
       settings.curved = curved_path(telescope_);
     }
     std::vector<obdeect::stream::PhotonChunk> outputs =

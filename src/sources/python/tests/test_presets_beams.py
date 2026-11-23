@@ -198,11 +198,35 @@ def test_upward_beam_axis_and_metadata():
     assert description["run"]["metadata"]["start_height_m"] == 4000.0
 
 
-def test_horizontal_beam_is_rejected_with_reason():
-    with pytest.raises(ValueError, match="horizontal beams are not supported yet"):
-        build_lidar(replaced(LIDAR, "--beam-zenith", "90"))
-    with pytest.raises(ValueError, match="horizontal"):
-        build_laser(LASER.replace("--beam-zenith 180", "--beam-zenith 90") + " --max-tilt 89")
+def test_horizontal_beam_has_no_tilt_limit_and_starts_at_the_laser():
+    # Horizontal beams are allowed, also with --max-tilt below 90 (no tilt limit applies).
+    point = emission(build_lidar(replaced(LIDAR, "--beam-zenith", "90")))
+    assert point["axis"] == pytest.approx([1.0, 0.0, 0.0], abs=1e-12)  # azimuth 0: north
+    assert point["position_m"] == pytest.approx([1000.0, 0.0, 400000.0])
+    assert point["time_offset_ns"] == 0.0
+    emitted = emission(
+        build_laser(LASER.replace("--beam-zenith 180", "--beam-zenith 90") + " --max-tilt 1")
+    )
+    assert emitted["axis"][2] == 0.0
+
+
+def test_horizontal_beam_start_distance_moves_the_point_along_the_beam():
+    text = replaced(LIDAR, "--beam-zenith", "90") + " --start-distance 5000"
+    description = build_lidar(text)
+    point = emission(description)
+    assert point["position_m"] == pytest.approx([6000.0, 0.0, 400000.0], abs=1e-9)
+    assert point["time_offset_ns"] == pytest.approx(5000.0 / C_M_NS, rel=1e-12)
+    assert description["run"]["metadata"]["start_distance_m"] == pytest.approx(5000.0)
+    assert description["run"]["metadata"]["start_height_m"] == pytest.approx(400000.0)
+
+
+def test_start_height_is_rejected_for_horizontal_and_start_distance_for_tilted_beams():
+    with pytest.raises(ValueError, match="start-distance"):
+        build_lidar(replaced(LIDAR, "--beam-zenith", "90") + " --start-height 100000")
+    with pytest.raises(ValueError, match="start-height"):
+        build_lidar(LIDAR + " --start-distance 100")
+    with pytest.raises(ValueError, match="start distance"):
+        build_lidar(replaced(LIDAR, "--beam-zenith", "90") + " --start-distance -1")
 
 
 def test_too_tilted_beam_is_rejected_with_reason():

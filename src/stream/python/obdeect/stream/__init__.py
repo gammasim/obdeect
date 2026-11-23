@@ -11,6 +11,7 @@ _EXPORTS = {
     "column_names": "obdeect.stream._core",
     "corsika_to_stream": "obdeect.stream.convert",
     "FRAMES": "obdeect.stream.stream",
+    "ground_representation": "obdeect.stream.stream",
     "frame_ids": "obdeect.stream._core",
     "format_major": "obdeect.stream._core",
     "format_minor": "obdeect.stream._core",

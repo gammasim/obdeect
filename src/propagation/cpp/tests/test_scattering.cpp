@@ -1308,6 +1308,244 @@ void test_mixed_directions_chunk_invariance() {
 
 } // namespace
 
+// Transmission table of the exponential atmosphere tau_T(h) = k (exp(-obs/scale) - exp(-h/scale)):
+// the depth from the observation level up to h (the table's convention), with extinction
+// coefficient k exp(-h/scale) / scale. Heights 3 to 60 km in 1 km steps, wavelengths 354..356 nm.
+std::string exponential_transmission_text(double k, double scale_m) {
+  std::ostringstream text;
+  text.precision(17);
+  text << "# H2= 2.000, H1=";
+  for (int km = 3; km <= 60; ++km) {
+    text << ' ' << km;
+  }
+  text << "\n";
+  for (int wl = 354; wl <= 356; ++wl) {
+    text << wl;
+    for (int km = 3; km <= 60; ++km) {
+      text << ' ' << k * (std::exp(-obs_m / scale_m) - std::exp(-1000.0 * km / scale_m));
+    }
+    text << "\n";
+  }
+  return text.str();
+}
+
+// Sphere runs, horizontal primaries (docs/propagation/scattering.md, "Sphere runs"). A horizontal
+// beam (weight 1) at the telescope's height h0, emitted at the origin along +x. Its extinction is
+// the scattering table's (central difference at h0), alpha; the scattering probability per metre
+// is alpha exp(-alpha s), truncated at exp(-D) = 1e-9. The scattered photon goes to the telescope
+// centre at (3000, 2000) m, horizontal, so its transmission is the chord integral alpha_T d with
+// alpha_T the transmission table's coefficient at h0. The expected weight per primary is
+//   W = int_0^{s_end} alpha exp(-alpha s) P(cos theta) Omega(d) exp(-alpha_T d) ds,
+// with P the Rayleigh phase (no aerosol), cos theta = (3000 - s) / d, d(s) the distance to the
+// centre, Omega the solid angle of the sphere and s_end = 20.72 / alpha. The per-primary totals of
+// scatter_chunk average to W (Monte Carlo, the standard error is reported in the check).
+void test_horizontal_beam_against_integral() {
+  constexpr double k = 0.3, scale = 8000.0;
+  const double h0 = 10000.0;
+  const double tel_x = 3000.0, tel_y = 2000.0, tel_z = h0 - obs_m;
+  const obdeect::propagation::ScatteringTable table(exponential_table_text(k, scale));
+  const obdeect::propagation::TransmissionTable tr(
+      exponential_transmission_text(k, scale), obs_m,
+      obdeect::propagation::WavelengthInterpolation::linear);
+  const double lambda = lambda_nm;
+  const double alpha = 0.5 * (table.state<double>(lambda, h0 - 1.0).tau_mol -
+                              table.state<double>(lambda, h0 + 1.0).tau_mol);
+  const double alpha_t = tr.extinction_coefficient<double>(lambda, h0);
+  // Table nodes every 0.5 km (scattering) and 1 km (transmission): log-linear interpolation.
+  CHECK_NEAR(alpha, k / scale * std::exp(-h0 / scale), 1e-3 * alpha);
+  CHECK_NEAR(alpha_t, alpha, 3e-2 * alpha);
+  const double s_end = -std::log(1e-9) / alpha;
+  const auto integrand = [&](double s) {
+    // The scattering point is at the telescope's height: the distance is horizontal.
+    const double dx = tel_x - s, dy = tel_y;
+    const double d = std::sqrt(dx * dx + dy * dy);
+    const double cos_theta = dx / d;
+    const double ratio = radius_m / d;
+    const double solid = 2.0 * std::numbers::pi * (1.0 - std::sqrt(1.0 - ratio * ratio));
+    return alpha * std::exp(-alpha * s) * obdeect::propagation::rayleigh_phase(cos_theta) * solid *
+           std::exp(-alpha_t * d);
+  };
+  const double expected = simpson(integrand, 0.0, s_end, 200000);
+
+  obdeect::propagation::ScatteringConfig config;
+  config.enabled = true;
+  config.points_per_photon = 8;
+  config.sphere_geometry = true;
+  const std::vector<obdeect::propagation::ScatterTelescope> sphere = {
+      {1, tel_x, tel_y, tel_z, radius_m}};
+  const std::size_t n = 100000;
+  std::vector<double> totals(n, 0.0);
+  for (std::size_t i = 0; i < n; ++i) {
+    obdeect::stream::PhotonChunk chunk;
+    chunk.frame = obdeect::stream::Frame::sky;
+    chunk.first_index = i;
+    chunk.resize(1, mask_of({Column::x, Column::y, Column::z, Column::cx, Column::cy, Column::cz,
+                             Column::t, Column::w, Column::wavelength}));
+    chunk[Column::z][0] = static_cast<float>(tel_z);
+    chunk[Column::cx][0] = 1.0F;
+    chunk[Column::cz][0] = 0.0F;
+    chunk[Column::w][0] = 1.0F;
+    chunk[Column::wavelength][0] = static_cast<float>(lambda);
+    std::vector<std::vector<obdeect::stream::PhotonChunk>> lists;
+    obdeect::propagation::scatter_chunk(config, table, tr, sphere, chunk, seed, 1, i, lists);
+    for (const auto &piece : lists.at(0)) {
+      for (const float w : piece[Column::w]) {
+        totals[i] += static_cast<double>(w);
+      }
+    }
+  }
+  double mean = 0.0;
+  for (const double t : totals) {
+    mean += t;
+  }
+  mean /= static_cast<double>(n);
+  double var = 0.0;
+  for (const double t : totals) {
+    var += (t - mean) * (t - mean);
+  }
+  const double sem = std::sqrt(var / static_cast<double>(n - 1) / static_cast<double>(n));
+  CHECK(expected > 0.0);
+  CHECK(mean > 0.0);
+  CHECK(std::abs(mean - expected) <= 4.0 * sem + 1e-12);
+  std::fprintf(stderr, "horizontal beam: mean %.6g expected %.6g sem %.3g\n", mean, expected, sem);
+
+  // Plane runs: horizontal primaries are not scattered (cz = 0 skipped, as before).
+  obdeect::propagation::ScatteringConfig plane = config;
+  plane.sphere_geometry = false;
+  obdeect::stream::PhotonChunk chunk;
+  chunk.frame = obdeect::stream::Frame::sky;
+  chunk.resize(1, mask_of({Column::x, Column::y, Column::z, Column::cx, Column::cy, Column::cz,
+                           Column::t, Column::w, Column::wavelength}));
+  chunk[Column::z][0] = static_cast<float>(tel_z);
+  chunk[Column::cx][0] = 1.0F;
+  chunk[Column::w][0] = 1.0F;
+  chunk[Column::wavelength][0] = static_cast<float>(lambda);
+  std::vector<std::vector<obdeect::stream::PhotonChunk>> lists;
+  obdeect::propagation::scatter_chunk(plane, table, tr, sphere, chunk, seed, 1, 0, lists);
+  std::size_t rows = 0;
+  for (const auto &piece : lists.at(0)) {
+    rows += piece.rows();
+  }
+  CHECK(rows == 0);
+}
+
+// Sphere runs: the mixed population (horizontal, near-horizontal and steep, downward and upward,
+// over several telescopes) gives the same photons for any split of the chunk and any first index
+// offset of the pieces (the draws are keyed on the primary's index).
+void test_horizontal_mixed_chunk_invariance() {
+  const obdeect::propagation::ScatteringTable table(exponential_table_text(0.3, 8000.0));
+  const obdeect::propagation::TransmissionTable tr(
+      exponential_transmission_text(0.3, 8000.0), obs_m,
+      obdeect::propagation::WavelengthInterpolation::linear);
+  obdeect::propagation::ScatteringConfig config;
+  config.enabled = true;
+  config.points_per_photon = 6;
+  config.sphere_geometry = true;
+  const std::vector<obdeect::propagation::ScatterTelescope> sphere = {
+      {1, 3000.0, 2000.0, 10000.0 - obs_m, radius_m}, {2, -4000.0, 0.0, 9000.0 - obs_m, radius_m}};
+  const double cz_values[] = {0.0, 0.05, -0.05, -0.5, 0.7, -1.0, 0.0, 0.09};
+  const std::size_t n = 40;
+  obdeect::stream::PhotonChunk all;
+  all.frame = obdeect::stream::Frame::sky;
+  all.resize(n, mask_of({Column::x, Column::y, Column::z, Column::cx, Column::cy, Column::cz,
+                         Column::t, Column::w, Column::wavelength}));
+  for (std::size_t r = 0; r < n; ++r) {
+    const double cz = cz_values[r % 8];
+    const double c_xy = std::sqrt(std::max(0.0, 1.0 - cz * cz));
+    const double phi = 0.3 * static_cast<double>(r);
+    all[Column::x][r] = static_cast<float>(100.0 * static_cast<double>(r % 5));
+    all[Column::y][r] = static_cast<float>(50.0 * static_cast<double>(r % 3));
+    all[Column::z][r] = static_cast<float>(cz == 0.0 ? 10000.0 - obs_m : 30000.0 - obs_m);
+    all[Column::cx][r] = static_cast<float>(c_xy * std::cos(phi));
+    all[Column::cy][r] = static_cast<float>(c_xy * std::sin(phi));
+    all[Column::cz][r] = static_cast<float>(cz);
+    all[Column::w][r] = 1.0F + static_cast<float>(r % 4);
+    all[Column::wavelength][r] = static_cast<float>(355.0 + static_cast<double>(r % 2));
+  }
+  // The cz column must match cx, cy: recompute cx, cy snapped to cz (stored float).
+  for (std::size_t r = 0; r < n; ++r) {
+    obdeect::stream::snap_direction_to_cz(all[Column::cx][r], all[Column::cy][r],
+                                          all[Column::cz][r]);
+  }
+  // Photon by photon (all columns of a photon, then the next one): independent of the pieces.
+  const auto flatten = [](const std::vector<std::vector<obdeect::stream::PhotonChunk>> &lists) {
+    std::vector<float> values;
+    for (const auto &list : lists) {
+      for (const auto &piece : list) {
+        for (std::size_t r = 0; r < piece.rows(); ++r) {
+          for (const Column c : obdeect::propagation::scatter_output_columns) {
+            values.push_back(piece[c][r]);
+          }
+        }
+      }
+    }
+    return values;
+  };
+  std::vector<std::vector<obdeect::stream::PhotonChunk>> whole;
+  obdeect::propagation::scatter_chunk(config, table, tr, sphere, all, seed, 3, 0, whole);
+  // Pieces of 7 and 33 rows (first_index follows the rows).
+  std::vector<std::vector<obdeect::stream::PhotonChunk>> split;
+  std::size_t first = 0;
+  for (const std::size_t size : {std::size_t{7}, std::size_t{33}}) {
+    obdeect::stream::PhotonChunk piece;
+    piece.frame = obdeect::stream::Frame::sky;
+    piece.resize(size, all.mask());
+    for (std::size_t r = 0; r < size; ++r) {
+      for (std::uint32_t c = 0; c < obdeect::stream::n_columns; ++c) {
+        if (all.has(static_cast<Column>(c))) {
+          piece.columns[c][r] = all.columns[c][first + r];
+        }
+      }
+    }
+    obdeect::propagation::scatter_chunk(config, table, tr, sphere, piece, seed, 3, first, split);
+    first += size;
+  }
+  const std::vector<float> a = flatten(whole);
+  const std::vector<float> b = flatten(split);
+  CHECK(!a.empty());
+  CHECK(a == b);
+}
+
+// Sphere runs keep the steep primaries as in plane runs: the photons agree with the plane kernel
+// (same draws; only the transmission of points within 0.1 of the horizontal differs, by the
+// quadrature error of the chord).
+void test_sphere_flag_matches_plane_for_steep_primaries() {
+  const obdeect::propagation::ScatteringTable table(exponential_table_text(0.3, 8000.0));
+  const obdeect::propagation::TransmissionTable tr(
+      exponential_transmission_text(0.3, 8000.0), obs_m,
+      obdeect::propagation::WavelengthInterpolation::linear);
+  const std::vector<obdeect::propagation::ScatterTelescope> sphere = {
+      {1, distance_m, 0.0, 0.0, radius_m}};
+  obdeect::propagation::ScatteringConfig plane;
+  plane.enabled = true;
+  plane.points_per_photon = 8;
+  obdeect::propagation::ScatteringConfig spherical = plane;
+  spherical.sphere_geometry = true;
+  double sum_plane = 0.0, sum_sphere = 0.0;
+  std::size_t count_plane = 0, count_sphere = 0;
+  for (std::size_t i = 0; i < 500; ++i) {
+    obdeect::stream::PhotonChunk chunk = vertical_primary(i, 50000.0 - obs_m, false, lambda_nm);
+    std::vector<std::vector<obdeect::stream::PhotonChunk>> a, b;
+    obdeect::propagation::scatter_chunk(plane, table, tr, sphere, chunk, seed, 1, i, a);
+    obdeect::propagation::scatter_chunk(spherical, table, tr, sphere, chunk, seed, 1, i, b);
+    for (const auto &piece : a.at(0)) {
+      count_plane += piece.rows();
+      for (const float w : piece[Column::w]) {
+        sum_plane += static_cast<double>(w);
+      }
+    }
+    for (const auto &piece : b.at(0)) {
+      count_sphere += piece.rows();
+      for (const float w : piece[Column::w]) {
+        sum_sphere += static_cast<double>(w);
+      }
+    }
+  }
+  CHECK(count_plane == count_sphere);
+  CHECK(sum_plane > 0.0);
+  CHECK_NEAR(sum_sphere, sum_plane, 1e-7 * sum_plane);
+}
+
 int main() {
   return run_checks([] {
     test_parsing_rules();
@@ -1330,5 +1568,8 @@ int main() {
     test_upward_vertical_laser_against_lidar_integral();
     test_downward_scattering_below_telescope();
     test_mixed_directions_chunk_invariance();
+    test_horizontal_beam_against_integral();
+    test_horizontal_mixed_chunk_invariance();
+    test_sphere_flag_matches_plane_for_steep_primaries();
   });
 }

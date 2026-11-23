@@ -24,6 +24,12 @@
 // -sqrt(1 - cx^2 - cy^2)). sim_telarray and the CORSIKA 1205 bunch format do not store the sign
 // of cz, so an upward (cz > 0), horizontal (cz = 0) or non-finite cz in these frames is rejected
 // with std::invalid_argument naming the frame; such photons are never written as downward ones.
+// Ground-frame (G) photons of a sphere run (ground_representation "sphere", docs/format.md) start
+// on or inside the telescope sphere of radius telescope_r_m. A downward photon that starts on the
+// sphere is written as a plane bunch: its crossing of the plane z = 0 (x, y), the arrival time at
+// the crossing, the emission altitude and the direction unchanged; the z and path columns are
+// dropped. A downward photon starting inside the sphere cannot be represented and is rejected, as
+// an upward one. The run header written is that of a plane run.
 // Camera-frame (C) photons are already at the camera entrance: sim_telarray (Bypass_Optics=2)
 // uses only (cx, cy) there, and the sign of cz depends on the side the camera faces (+z after
 // a single mirror), so it is not checked.
@@ -245,6 +251,55 @@ inline void require_downward_cz(const PhotonChunk &chunk, const char *frame) {
                                   "not store the sign of cz");
     }
   }
+}
+
+// Converts the ground-frame sphere rows of one telescope (radius radius_m) in place to plane
+// bunches at z = 0 (see the file comment). The rows are validated first (validate_sphere_rows).
+// Throws std::invalid_argument, leaving the chunk unchanged, for a row that does not move
+// downwards or starts inside the sphere (|r| below R (1 - 1e-6) - 1e-4 m).
+inline void sphere_to_plane_bunches(PhotonChunk &chunk, double radius_m) {
+  validate_sphere_rows(chunk, radius_m);
+  const std::size_t n = chunk.rows();
+  const double on_sphere =
+      radius_m * (1.0 - sphere_relative_tolerance) - sphere_absolute_tolerance_m;
+  const std::vector<float> &x = chunk[Column::x];
+  const std::vector<float> &y = chunk[Column::y];
+  const std::vector<float> &z = chunk[Column::z];
+  const std::vector<float> &cx = chunk[Column::cx];
+  const std::vector<float> &cy = chunk[Column::cy];
+  const std::vector<float> &cz = chunk[Column::cz];
+  const std::vector<float> &t = chunk[Column::t];
+  // The results are collected first, so a rejected chunk is left unchanged.
+  std::vector<float> new_x(n);
+  std::vector<float> new_y(n);
+  std::vector<float> new_t(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    const double czi = cz[i];
+    if (!is_downward(czi)) {
+      throw std::invalid_argument("ground-frame photon must move downwards (cz < 0): sim_telarray "
+                                  "does not store the sign of cz");
+    }
+    const double xi = x[i];
+    const double yi = y[i];
+    const double zi = z[i];
+    if (std::sqrt(xi * xi + yi * yi + zi * zi) < on_sphere) {
+      throw std::invalid_argument("ground-frame photon emitted inside the telescope sphere: not "
+                                  "representable for sim_telarray");
+    }
+    // Signed path to the plane: s >= -R / |cz| (the entry point is at most R from the centre).
+    const double s = -zi / czi;
+    new_x[i] = static_cast<float>(xi + s * cx[i]);
+    new_y[i] = static_cast<float>(yi + s * cy[i]);
+    new_t[i] = static_cast<float>(t[i] + s / speed_of_light_m_per_ns);
+    if (!std::isfinite(new_x[i]) || !std::isfinite(new_y[i]) || !std::isfinite(new_t[i])) {
+      throw std::invalid_argument("ground-frame photon converts to a value out of range");
+    }
+  }
+  chunk[Column::x] = std::move(new_x);
+  chunk[Column::y] = std::move(new_y);
+  chunk[Column::t] = std::move(new_t);
+  chunk[Column::z].clear();
+  chunk[Column::path].clear();
 }
 
 // Converts telescope-frame (T) emission points and directions in place to bunches at the
@@ -696,6 +751,12 @@ private:
         throw std::runtime_error("telescope " + std::to_string(chunk.telescope_id) +
                                  " is in the camera map but has ground-frame photons");
       }
+      if (sphere_ground_) {
+        PhotonChunk converted = chunk;
+        sphere_to_plane_bunches(converted, telescope_radius(chunk.telescope_id));
+        writer_.write_chunk(converted);
+        return;
+      }
       require_downward_cz(chunk, "ground");
       writer_.write_chunk(chunk);
       return;
@@ -834,8 +895,19 @@ private:
     }
   }
 
+  // Sphere radius [m] of a telescope (1-based id) from the run metadata (telescope_r_m).
+  double telescope_radius(std::uint32_t telescope_id) const {
+    const std::vector<double> radii = simtel_detail::array_field(run_metadata_, "telescope_r_m");
+    if (telescope_id == 0 || telescope_id > radii.size()) {
+      throw std::runtime_error("telescope " + std::to_string(telescope_id) +
+                               " is not in the run metadata (telescope_r_m)");
+    }
+    return radii[telescope_id - 1];
+  }
+
   void begin_run(const Metadata &metadata) {
     run_open_ = true;
+    sphere_ground_ = ground_representation(metadata) == GroundRepresentation::sphere;
     run_metadata_ = metadata;
     run_headers_done_ = false;
     atmprof_pending_ = atmprof_.has_value();
@@ -1164,6 +1236,7 @@ private:
   std::set<std::string> allow_pending_;
   std::set<std::string> scaled_;
   bool keep_telpos_height_{};
+  bool sphere_ground_{}; // the open run has ground_representation "sphere"
   std::vector<Metadata> run_efficiency_statuses_;
   std::vector<Metadata> telescope_efficiency_statuses_;
   bool telescope_open_{};

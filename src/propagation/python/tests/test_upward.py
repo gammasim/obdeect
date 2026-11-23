@@ -122,6 +122,7 @@ def test_loss_categories_are_counted_by_reason(tmp_path):
         "turns_over": 0,
         "not_bendable": 0,
         "misses_level": 0,
+        "misses_sphere": 0,
     }
     assert summary["dropped"] == sum(by_reason.values()) == 5 * n
 

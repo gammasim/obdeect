@@ -49,26 +49,65 @@ For mirrors, obscurers and the telescope-structure table, see
 
 ## Reflecting sides and photons from below
 
-Photons from above (downward, the usual case) meet the primary on its reflecting face. Photons
-from below (upward, `cz > 0` in the input frame) meet the back of the primary, and the other
-faces of the optics from their own sides. Phase 1 of the ray tracer decides the side of each
-first hit from the surface normal (`trace_photon`, see [Light sources](light-sources.md#photons-from-below)):
+The tracer follows every photon through one loop (ray tracing phase 2): after each reflection it
+searches the surfaces again until the photon is detected, absorbed or escapes. Photons from
+above (downward, the usual case) meet the primary on its reflecting face first; photons from
+below (upward, `cz > 0` in the input frame) meet the back of the primary and, if the light passes
+the primary's hole, the reflecting face of the secondary. The side of a hit follows from the
+surface normal the tracer returns:
 
-| Surface | Normal returned by the tracer | Reflecting side | Photon from below |
+| Surface | Normal returned by the tracer | Reflecting side | Hit from the other side |
 | --- | --- | --- | --- |
-| Primary facets | towards the reflecting side | the normal side: `n . d < 0` | back face (blocked) |
-| Primary asphere | `+z` | above (`n . d < 0`) | back face (blocked) |
-| Secondary asphere | `+z` (a graph surface) | below, facing the primary (`n . d > 0`) | reflecting face (non-sequential) |
-| Focal surface | `+z` | receives light from below (`n . d > 0`) | receiving side (direct focal) |
+| Primary facets | towards the reflecting side | the normal side: `n . d < 0` | blocked (back face) |
+| Primary asphere | `+z` | above (`n . d < 0`) | blocked (back face) |
+| Secondary asphere | `+z` (a graph surface) | below, facing the primary (`n . d > 0`) | blocked (back face) |
+| Focal surface | `+z` | the receiving side (below for a single mirror, above for a dual mirror; see below) | passed (see below) |
 
-The secondary is an asphere whose sag is reversed: its reflecting face looks down, against
-the normal. A facet is hit on its reflecting side only if its normal points to it, so the back
-of a facet is not a mirror hit for downward photons; the two-sided search is used for photons
-from below only.
+The secondary is an asphere whose sag is reversed: its reflecting face looks down, against the
+normal. The reflected direction does not depend on the side.
+
+### Focal surface
+
+The focal surface detects light on its receiving side: the side that the light of the sequence
+arrives from. For a single mirror the light leaves the primary upwards, so the receiving side is
+the lower one; for a dual mirror the light leaves the secondary downwards, and the focal surface
+lies below the secondary, so the receiving side is the upper one.
+
+- On the leg after the last mirror (the final leg), a hit from either side is detected: the
+  sequential path, unchanged.
+- On any other leg (before the last mirror, including light from below before any reflection),
+  an asphere focal surface is detected inside its extent (`outer_radius_m`) from its receiving
+  side. A plane focal surface has no extent: a hit from its receiving side is `direct_focal`, a
+  counted loss. A hit from the other side is passed: it is not a surface the light meets, and the
+  camera body shadows it (obscurers on the legs; for a dual mirror the camera back plate on the
+  after-primary leg).
+
+The model has no fiducial radius. A plane focal surface is unbounded; the camera body obscurers
+(`camera_body_diameter`, `camera_depth`) give it a lateral extent only as shadows, not as a
+detection area. The asphere's outer radius is the only lateral extent of a focal surface.
+
+### Loop rules
+
+- Obscurers: those of the current leg, the first one nearer than the surface hit blocks the photon
+  (ties go to the surfaces: primary, secondary, focal surface, then obscurers). Light from below
+  meets the obscurers of every leg before its first reflection, as it crosses them all on its way
+  up. The secondary is tested on the incoming leg only where it blocks the sky
+  (`secondary_blocks_incoming`) or the photon comes from below.
+- Legs: `incoming` until the first reflection, then `after_primary` or `after_secondary` after the
+  last reflection on that mirror.
+- A photon with no reflection yet that meets nothing is `missed_primary`; after a reflection on the
+  primary of a dual mirror, `missed_secondary`; otherwise `missed_focal_surface`.
+- Reflections are limited to 16 (`kMaxReflections`); a photon that would reflect again ends as
+  `bounce_limit` on that mirror.
+- A reflection keeps the mirror's reflectivity (at the incidence angle), degradation and scatter.
+  The first reflection on each mirror draws its random numbers as before (`primary_scatter`,
+  `secondary_scatter`); later reflections use `reflection_stream(k)`, k their reflection number.
+  The output `primary_*` and `secondary_*` columns record the first hit on each mirror;
+  `reflections` counts all reflections.
 
 Status values (`STATUS_NAMES`, in this order): `detected`, `missed_primary`, `missed_secondary`,
-`missed_focal_surface`, `blocked`, `invalid_input`, `numerical_failure`, and, for photons from
-below, `non_sequential` (the reflecting face of the secondary, out of sequence) and `direct_focal`
-(the focal surface, on its receiving side, before any mirror). Every status but `detected` has
-weight zero. Full non-sequential tracing (bounces off all surfaces until detection or escape) is
-planned as phase 2; until then these statuses are counted losses.
+`missed_focal_surface`, `blocked`, `invalid_input`, `numerical_failure`, `non_sequential`,
+`direct_focal`, `bounce_limit`. `non_sequential` is no longer produced: the reflecting face of the
+secondary is traced on (its value is kept so that the numbering is stable). `direct_focal` is
+produced only for a plane focal surface (no extent) hit from its receiving side before the last
+mirror. Every status but `detected` has weight zero.

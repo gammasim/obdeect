@@ -37,7 +37,9 @@ struct Emission {
   bool to_plane_z0{};
 };
 
-// Emissions written `repeat` times as events numbered on from the previous ones.
+// Emissions written `repeat` times as events numbered on from the previous ones. In a ground run
+// (frame G, sphere representation) the positions and directions of an emission are relative to
+// the centre of the telescope sphere, and to_plane_z0 is not allowed.
 struct Event {
   std::uint64_t repeat{1};
   std::vector<Emission> emissions;
@@ -65,6 +67,14 @@ struct RunSummary {
   // once per event (the photons are the same for every telescope); not in rows or weight. The
   // run_end record holds the same count.
   std::uint64_t not_on_plane{};
+  // Photons of a ground run whose path misses the telescope sphere (dropped, like not_on_plane).
+  std::uint64_t misses_sphere{};
+};
+
+// Photons dropped by finish_rows (counted in the run summary).
+struct Drops {
+  std::uint64_t not_on_plane{};
+  std::uint64_t misses_sphere{};
 };
 
 // Sphere that holds every telescope sphere: centred on the mean telescope position.
@@ -80,12 +90,19 @@ inline SphereTarget fiducial_sphere(const std::vector<Telescope> &telescopes) {
   return sphere;
 }
 
-// Target "auto" of a source, from the fiducial sphere (centre C, radius R): no target for a point
-// within 1.02 R of C, the sphere for an isotropic point, none for a fixed angle, otherwise a disc
-// of radius R about C in the plane z = C.z. A line with a fixed angle or isotropic emission gets
-// the sphere; other lines and geometries no target.
-inline Target resolve_auto_target(const Source &s, const std::vector<Telescope> &telescopes) {
-  const SphereTarget sphere = fiducial_sphere(telescopes);
+// The sphere that the automatic target of a run aims at: the fiducial sphere of the telescopes in
+// sky, T and C runs; in a ground run the telescope sphere at the origin of the G frame.
+inline SphereTarget target_sphere(const Run &run) {
+  if (run.frame == obdeect::stream::Frame::ground && !run.telescopes.empty())
+    return SphereTarget{Vec3{}, run.telescopes.front().radius_m};
+  return fiducial_sphere(run.telescopes);
+}
+
+// Target "auto" of a source, from a sphere (centre C, radius R): no target for a point within
+// 1.02 R of C, the sphere for an isotropic point, none for a fixed angle, otherwise a disc of
+// radius R about C in the plane z = C.z. A line with a fixed angle or isotropic emission gets the
+// sphere; other lines and geometries no target.
+inline Target resolve_auto_target(const Source &s, const SphereTarget &sphere) {
   if (!(sphere.radius_m > 0.0))
     throw std::invalid_argument("an automatic target needs at least one telescope");
   if (const auto *l = std::get_if<Line>(&s.geometry)) {
@@ -107,13 +124,23 @@ inline Target resolve_auto_target(const Source &s, const std::vector<Telescope> 
   return DiscTarget{sphere.centre, {0.0, 0.0, 1.0}, sphere.radius_m};
 }
 
+// Automatic target from the telescopes of a sky, T or C run (the fiducial sphere).
+inline Target resolve_auto_target(const Source &s, const std::vector<Telescope> &telescopes) {
+  const SphereTarget sphere = fiducial_sphere(telescopes);
+  if (!(sphere.radius_m > 0.0))
+    throw std::invalid_argument("an automatic target needs at least one telescope");
+  return resolve_auto_target(s, sphere);
+}
+
 namespace detail {
 
 inline void validate_run(const Run &run) {
   require(run.frame == obdeect::stream::Frame::sky ||
               run.frame == obdeect::stream::Frame::telescope ||
-              run.frame == obdeect::stream::Frame::camera,
-          "run: frame must be sky, telescope or camera");
+              run.frame == obdeect::stream::Frame::camera ||
+              run.frame == obdeect::stream::Frame::ground,
+          "run: frame must be sky, telescope, camera or ground");
+  const bool ground = run.frame == obdeect::stream::Frame::ground;
   require(std::isfinite(run.observation_level_m), "run: observation level must be finite");
   require(!run.telescopes.empty(), "run: needs at least one telescope");
   std::uint64_t event_count = 0;
@@ -122,6 +149,9 @@ inline void validate_run(const Run &run) {
             "run: total event count exceeds the Philox event key range");
     event_count += event.repeat;
   }
+  require(!ground || run.telescopes.size() == 1,
+          "run: a ground run (frame ground) needs exactly one telescope: its sphere is the origin "
+          "of the frame");
   for (std::size_t i = 0; i < run.telescopes.size(); ++i) {
     const auto &t = run.telescopes[i];
     require(within_limits(t.position) && positive_within_limits(t.radius_m),
@@ -134,15 +164,87 @@ inline void validate_run(const Run &run) {
       require(std::isfinite(e.bunch_size) && e.bunch_size >= 1.0,
               "emission: bunch size must be finite and >= 1");
       require(within_limits(e.time_offset_ns), "emission: time offset out of range");
+      require(!(ground && e.to_plane_z0),
+              "emission: to_plane_z0 is not used in a ground run (its rows are on the telescope "
+              "sphere)");
     }
+}
+
+// Rows of one emission chunk in a ground run: the sphere representation (docs/stream/format.md).
+// A photon at P (relative to the sphere centre, radius R) with direction d gives the row P when
+// |P| <= R, else the entry point P + s d with the smallest s > 0 where the line meets the sphere
+// (path s, time + s / c). A line that misses the sphere is dropped and counted in misses_sphere.
+// zem is the emission altitude: observation level + telescope z + z of the emission point P.
+inline void finish_sphere_rows(const Emission &e, const Run &run,
+                               obdeect::stream::PhotonChunk &chunk, Drops &drops) {
+  using obdeect::stream::Column;
+  const Telescope &telescope = run.telescopes.front();
+  const double radius2 = telescope.radius_m * telescope.radius_m;
+  const double emission_zem_base = run.observation_level_m + telescope.position.z;
+  const std::size_t rows = chunk.rows();
+  auto &x = chunk[Column::x];
+  auto &y = chunk[Column::y];
+  auto &z = chunk[Column::z];
+  auto &cx = chunk[Column::cx];
+  auto &cy = chunk[Column::cy];
+  auto &cz = chunk[Column::cz];
+  auto &t = chunk[Column::t];
+  auto &w = chunk[Column::w];
+  chunk[Column::zem].assign(rows, 0.0F);
+  chunk[Column::path].assign(rows, 0.0F);
+  auto &zem = chunk[Column::zem];
+  auto &path = chunk[Column::path];
+  std::size_t kept = 0;
+  for (std::size_t i = 0; i < rows; ++i) {
+    // Read the row before it is written to the position kept (kept <= i).
+    const Vec3 start{x[i], y[i], z[i]};
+    const Vec3 direction{cx[i], cy[i], cz[i]};
+    double time = static_cast<double>(t[i]) + e.time_offset_ns;
+    const double weight = static_cast<double>(w[i]) * e.bunch_size;
+    const double emission_zem = emission_zem_base + start.z;
+    Vec3 row = start;
+    double s = 0.0;
+    const double r2 = dot(start, start);
+    if (r2 > radius2) {
+      // Solve |start + s d|^2 = R^2 (d is a unit vector): s^2 + 2 b s + (r2 - R^2) = 0.
+      const double b = dot(start, direction);
+      const double disc = b * b - (r2 - radius2);
+      s = -b - std::sqrt(std::max(0.0, disc));
+      // Both roots have the same sign (r2 > R^2): the smaller one must lie ahead of the photon.
+      if (!(disc >= 0.0) || !(s > 0.0)) {
+        ++drops.misses_sphere;
+        continue;
+      }
+      row = start + direction * s;
+      time += s / speed_of_light_m_per_ns;
+    }
+    if (kept != i)
+      for (auto &column : chunk.columns)
+        if (!column.empty())
+          column[kept] = column[i];
+    x[kept] = static_cast<float>(row.x);
+    y[kept] = static_cast<float>(row.y);
+    z[kept] = static_cast<float>(row.z);
+    t[kept] = static_cast<float>(time);
+    w[kept] = static_cast<float>(weight);
+    zem[kept] = static_cast<float>(emission_zem);
+    path[kept] = static_cast<float>(s);
+    ++kept;
+  }
+  chunk.truncate(kept);
 }
 
 // Rows of one emission chunk: bunch weight, time offset, move to z = 0 and zem (sky frame).
 // With to_plane_z0 a row reaches the plane when z == 0 (no move) or z * cz < 0 (towards the
-// plane from either side); other rows are dropped and counted in dropped. Kept rows are compacted
-// to the front in their order, so the rows of the chunk stay in emission order.
+// plane from either side); other rows are dropped and counted in drops.not_on_plane. Kept rows
+// are compacted to the front in their order, so the rows of the chunk stay in emission order.
+// Ground runs write sphere rows instead (finish_sphere_rows).
 inline void finish_rows(const Emission &e, const Run &run, obdeect::stream::PhotonChunk &chunk,
-                        std::uint64_t &dropped) {
+                        Drops &drops) {
+  if (run.frame == obdeect::stream::Frame::ground) {
+    finish_sphere_rows(e, run, chunk, drops);
+    return;
+  }
   using obdeect::stream::Column;
   const std::size_t rows = chunk.rows();
   auto &x = chunk[Column::x];
@@ -161,7 +263,7 @@ inline void finish_rows(const Emission &e, const Run &run, obdeect::stream::Phot
       const double zd = static_cast<double>(zi);
       const double cz = static_cast<double>(chunk[Column::cz][i]);
       if (!(zd * cz < 0.0)) {
-        ++dropped;
+        ++drops.not_on_plane;
         continue;
       }
       const double path = -zd / cz;
@@ -202,6 +304,7 @@ struct PlannedEmission {
 
 inline std::vector<std::vector<PlannedEmission>> plan(const Run &run) {
   detail::validate_run(run);
+  const SphereTarget sphere = target_sphere(run);
   std::vector<std::vector<PlannedEmission>> planned;
   std::uint64_t k = 0;
   for (const auto &event : run.events) {
@@ -209,7 +312,7 @@ inline std::vector<std::vector<PlannedEmission>> plan(const Run &run) {
     for (const auto &e : event.emissions) {
       PlannedEmission p{e, source_seed(run.seed, k++)};
       if (std::holds_alternative<AutoTarget>(p.emission.source.target))
-        p.emission.source.target = resolve_auto_target(p.emission.source, run.telescopes);
+        p.emission.source.target = resolve_auto_target(p.emission.source, sphere);
       p.emission.source.photons = e.source.photons / e.bunch_size;
       validate(p.emission.source);
       list.push_back(std::move(p));
@@ -245,6 +348,8 @@ inline RunSummary write_run(std::ostream &out, const Run &run,
   constexpr std::uint32_t key = 0;
 
   obdeect::stream::Metadata m;
+  if (run.frame == obdeect::stream::Frame::ground)
+    m["ground_representation"] = std::string("sphere");
   m["run_number"] = run.number;
   m["seed"] = static_cast<std::int64_t>(run.seed);
   m["observation_level_m"] = run.observation_level_m;
@@ -305,16 +410,16 @@ inline RunSummary write_run(std::ostream &out, const Run &run,
       }
       // Calls f(chunk) for every chunk of the event, in emission and photon order; dropped photons
       // are added to dropped_sink.
-      std::uint64_t dropped = 0;
-      std::uint64_t dropped_again = 0; // drops of the telescopes after the first (not counted)
-      const auto generate = [&](auto &&f, std::uint64_t &dropped_sink) {
+      Drops drops;
+      Drops drops_again; // drops of the telescopes after the first (not counted)
+      const auto generate = [&](auto &&f, Drops &drops_sink) {
         for (std::size_t k = 0; k < emissions.size(); ++k) {
           const auto &p = emissions[k];
           for (std::uint64_t done = 0; done < counts[k];) {
             const auto rows = static_cast<std::size_t>(
                 std::min<std::uint64_t>(obdeect::stream::max_chunk_rows, counts[k] - done));
             emit(p.emission.source, p.seed, event, key, done, rows, chunk);
-            detail::finish_rows(p.emission, run, chunk, dropped_sink);
+            detail::finish_rows(p.emission, run, chunk, drops_sink);
             done += rows;
             if (chunk.rows() > 0)
               f(chunk);
@@ -325,10 +430,10 @@ inline RunSummary write_run(std::ostream &out, const Run &run,
           run.telescopes.size() > 1 && total <= max_cached_bytes / cached_bytes_per_photon;
       cached.clear();
       if (use_cache)
-        generate([&](const obdeect::stream::PhotonChunk &c) { cached.push_back(c); }, dropped);
+        generate([&](const obdeect::stream::PhotonChunk &c) { cached.push_back(c); }, drops);
       for (const auto &tel : run.telescopes) {
         // The photons of the event are the same for every telescope: count the drops once.
-        std::uint64_t &dropped_sink = &tel == &run.telescopes.front() ? dropped : dropped_again;
+        Drops &drops_sink = &tel == &run.telescopes.front() ? drops : drops_again;
         obdeect::stream::Metadata tm;
         tm["telescope_id"] = static_cast<std::int64_t>(tel.id);
         tm["frame"] = static_cast<std::int64_t>(run.frame);
@@ -352,19 +457,21 @@ inline RunSummary write_run(std::ostream &out, const Run &run,
           for (auto &block : cached)
             write_block(block);
         else
-          generate(write_block, dropped_sink);
+          generate(write_block, drops_sink);
         writer.write_metadata(
             RecordType::telescope_end,
             {{"telescope_id", static_cast<std::int64_t>(tel.id)}, {"photons", weight}});
         summary.rows += written;
         summary.weight += weight;
       }
-      summary.not_on_plane += dropped;
+      summary.not_on_plane += drops.not_on_plane;
+      summary.misses_sphere += drops.misses_sphere;
       writer.write_metadata(RecordType::event_end, {});
     }
   }
   writer.write_metadata(RecordType::run_end,
-                        {{"not_on_plane", static_cast<std::int64_t>(summary.not_on_plane)}});
+                        {{"not_on_plane", static_cast<std::int64_t>(summary.not_on_plane)},
+                         {"misses_sphere", static_cast<std::int64_t>(summary.misses_sphere)}});
   writer.finish();
   return summary;
 }

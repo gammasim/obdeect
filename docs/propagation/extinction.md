@@ -113,6 +113,85 @@ independent Bernoulli trials per photon of the bunch. Thinned output has one row
 photon with w = 1. Weighted output keeps every row with $w \leftarrow w\,p$. Both write the column p
 only with `--store-p`.
 
+## Chord integral
+
+The plane formula $|\tau(h_1) - \tau(h_2)| / |u|$ of a straight path with cosine $u$ to the local
+vertical is ill-conditioned for $u \to 0$. For a straight chord the same optical depth is the
+integral of the extinction coefficient $k = |d\tau/dh|$ along the path,
+
+$$
+\tau_{\text{chord}} = \int_0^L k\big(h(s)\big)\,\mathrm{d}s,
+$$
+
+with $L$ the chord length and $h(s)$ its altitude. The table's coefficient is the exact derivative
+of its interpolation (`TransmissionTable::extinction_coefficient`): in each interval, with $y =
+\log_{10} h$,
+
+$$
+k(h) = \frac{|\tau_{i+1} - \tau_i|}{(\log_{10} h_{i+1} - \log_{10} h_i)\, h \ln 10},
+$$
+
+zero at and below H2 and above the last height. The linear blend in wavelength blends the
+coefficients as it blends the depths. The integral is 8-point Gauss-Legendre on equal pieces, with a
+piece count of $\lceil \Delta h / 250\,\mathrm{m} \rceil$, where $\Delta h$ is the altitude change over
+the piece: $k$ depends only on the altitude, so a horizontal chord is a single piece. A chord that dips below the observation level (possible only for a refracted row, whose bent path the
+straight chord approximates) needs no cut: k = 0 below H2, so its depth is that of the part above
+the ground. The chord is split where it crosses a table height (the coefficient has a kink there), and at the lowest point
+of a spherical chord (the altitude is monotone between the splits). Any chord length is accepted.
+
+Flat geometry: $h(s)$ is linear, and the integral equals the plane formula exactly
+($|\tau(h_1) - \tau(h_2)| / |u|$ with $u = dh/ds$), so the chord is the same function, stable as
+$u \to 0$ (for a constant height it is $k(h)\,L$).
+
+Spherical geometry (Earth radius R): for a straight line from the Earth-centred point $v$ with unit
+direction $d$, $r(s)^2 = b^2 + (s + c)^2$ with $c = v \cdot d$ and $b = |v \times d|$, and the
+altitude $h(s) = r(s) - R$. The line dips to $h = b - R$ at $s = -c$ when this lies inside the
+chord. The slant integral of [](curvature.md) is the same integral written in the height.
+
+Near-horizontal use: the chord is used when $|u| < 0.1$ (the constant `near_horizontal_cos`). At
+$|u| = 0.1$ the plane (or slant) form and the chord agree to $10^{-9}$ in depth for chords up to
+100 km, in both wavelength modes (test: `test_chord`).
+
+## Sphere rows
+
+Rows of the sphere representation (`ground_representation = sphere`, [](propagation.md#sphere-representation))
+have the row point $Q = C + r$ on the telescope sphere, the direction $d$ at Q, the emission altitude
+$z_{em}$ and the chord length $L$ = `path`. The emission point is $E = Q - L\,d$. For a refracted row
+the bent path is approximated by this straight chord. The chord formulas need a unit direction: the
+float32 components are normalised in double before E = Q - L d is formed (their norm is 1 only to
+about 6e-8, which would move a spherical chord by about 0.3 m in altitude, a depth error of 3e-5
+for a horizontal chord at 2 km).
+
+- $h_E = z_{em}$ (the emission altitude as written).
+- $h_Q$: the altitude of Q. Flat: observation level + $Q_z$ (sky frame, z above the observation
+  level, $Q_z = z_C + r_z$). Spherical: $|Q - \text{Earth centre}| - R$, from the sky position with
+  the Earth centre at $(0, 0, -(R + H_2))$.
+- $u$: the cosine between d and the local vertical at Q (flat: $c_z$; spherical: $d \cdot n_Q$).
+
+The extinction of a row with $L > 0$ and $z_{em} \ge H_2$ is:
+
+| Case | Flat | Spherical |
+|---|---|---|
+| $\lvert u \rvert \ge 0.1$ | $\exp\!\big(-\lvert\tau(h_E) - \tau(h_Q)\rvert / \lvert u\rvert - \tau_{\text{focus}}\big)$ | the slant integral between $h_Q$ and $h_E$ with cosine $|u|$ at Q (`transmission_curved`, or `_upward` if $h_E < h_Q$), times $\exp(-\tau_{\text{focus}})$ |
+| $\lvert u \rvert < 0.1$ | $\exp\!\big(-\int_E^Q k\,\mathrm{d}s - \tau_{\text{focus}}\big)$ | the same integral along the straight line from E to Q (chord integral) |
+
+$\tau_{\text{focus}}$ is the in-telescope depth of the run (`od_focus`: $\tau(h_T + \ell) - \tau(h_T)$
+for the telescope path $\ell$), as for the plane rows. The depth at Q is taken as the table value at
+$h_Q$ in place of the telescope altitude; the limits are those of the plane rows: zero below H2, zero
+for $\tau(h_Q) > 1000$ and for a total depth above 100. A row with a cosine clearly pointing away from
+the ground at Q (spherical) gets $p = 0$, as in the spherical plane mode.
+
+Rows emitted inside the sphere ($L = 0$) have no atmospheric depth: $p = \exp(-\tau_{\text{focus}})$
+with the same limits. Rows with a wavelength at or above 1000 nm get $p = 0$.
+
+The Q altitude replaces the telescope altitude in the formulas, so a row point on the sphere
+above or below the telescope centre is attenuated over its own path. The sphere rows of a photon
+that crosses the telescope centre height (Q at the centre height) agree with the plane rows of the
+same photon to $10^{-6}$ relative (test: `test_chord`, flat and spherical).
+
+The sphere rows take the same wavelength assignment, efficiency bounds and thinning as the plane
+rows; the efficiency status records the same factors (`atmosphere`, `wavelength`).
+
 ## Python example
 
 ```python

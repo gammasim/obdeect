@@ -1,11 +1,15 @@
 #include "check.hpp"
 
+#include "obdeect/stream/constants.hpp"
 #include "obdeect/stream/corsika.hpp"
+#include "obdeect/stream/simtel.hpp"
+#include "obdeect/stream/stream.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
 #include <random>
 #include <sstream>
 #include <stdexcept>
@@ -534,6 +538,392 @@ void open_telescope_blocks_array_flush() {
   CHECK(throws_error([&] { feed_writer({big}); }));
 }
 
+// ---------------------------------------------------------------------------
+// 3D photon bunches (1217) and sphere runs.
+
+// Bytes of data/photons3d.iact, written by data/make_photons3d_fixture.c with the CORSIKA IACT
+// library (provenance in data/photons3d_provenance.txt).
+std::string read_fixture(const char *name) {
+  const std::string source = __FILE__; // .../cpp/tests/test_corsika.cpp
+  const std::string dir = source.substr(0, source.rfind('/'));
+  std::ifstream in{dir + "/data/" + name, std::ios::binary};
+  std::ostringstream buffer;
+  buffer << in.rdbuf();
+  return buffer.str();
+}
+
+// A 1217 block as CORSIKA writes it (io_simtel.c write_tel_photons3d): short array, short tel,
+// real photons, long n, then n bunches of 10 reals (x y z cx cy cz ctime dist photons lambda).
+EventioBlock photons3d_block(int tel, const std::vector<Bunch3d> &bunches, float photons = 0.0F,
+                             int array = 0) {
+  Bytes body;
+  ByteWriter out{body};
+  out.i16(static_cast<std::int16_t>(array));
+  out.i16(static_cast<std::int16_t>(tel));
+  out.f32(photons);
+  out.i32(static_cast<std::int32_t>(bunches.size()));
+  for (const Bunch3d &b : bunches) {
+    for (const float v : {b.x, b.y, b.z, b.cx, b.cy, b.cz, b.ctime, b.dist, b.photons, b.lambda}) {
+      out.f32(v);
+    }
+  }
+  return make_block(iact::photons3d, 0, static_cast<std::uint32_t>(1000 * array + tel),
+                    std::move(body));
+}
+
+Bunch3d bunch3(float x, float y, float z, float cx, float cy, float cz, float ctime, float dist,
+               float photons, float lambda = 0.0F) {
+  Bunch3d b;
+  b.x = x;
+  b.y = y;
+  b.z = z;
+  b.cx = cx;
+  b.cy = cy;
+  b.cz = cz;
+  b.ctime = ctime;
+  b.dist = dist;
+  b.photons = photons;
+  b.lambda = lambda;
+  return b;
+}
+
+// A run of the synthetic file of telpos_block() (telescopes of radius 12 m, 12 m and 12 m) with
+// one event holding the given container children.
+std::string sphere_stream(const std::vector<EventioBlock> &children) {
+  return serialize({runh_block(), telpos_block(), evth_block(1),
+                    make_container(iact::telarray, 0, 0, children), evte_block(1), rune_block()});
+}
+
+// Expected G sphere row of one bunch of the fixture (CORSIKA bunches, see
+// make_photons3d_fixture.c, converted by hand: m, ns, m a.s.l.).
+struct ExpectedRow {
+  double x, y, z, cx, cy, cz, t_ns, path_m, zem_m, w, wavelength;
+};
+
+// Telescope 1: radius 12 m, centre at 18 m above the observation level (2200 m).
+const std::vector<ExpectedRow> fixture_tel1_rows{
+    // downward, arrival on the sphere top; E = (0, 0, 42) m
+    {0.0, 0.0, 12.0, 0.0, 0.0, -1.0, 100.0, 30.0, 2260.0, 2.0, 0.0},
+    // downward, emitted inside at (3, 0, 4) m; arrival 8 m below it
+    {3.0, 0.0, 4.0, 0.0, 0.0, -1.0, 50.0 - 8.0 / speed_of_light_m_per_ns, 0.0, 2222.0, 5.0, 350.0},
+    // upward from 30 m below the centre; enters the sphere from below at s = 18 m
+    {0.0, 0.0, -12.0, 0.0, 0.0, 1.0, 200.0 - 12.0 / speed_of_light_m_per_ns, 18.0, 2188.0, 3.0,
+     0.0},
+    // horizontal from (-20, 0, 0) m; enters at x = -12 m after 8 m
+    {-12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 300.0 - 12.0 / speed_of_light_m_per_ns, 8.0, 2218.0, 4.0, 0.0},
+    // arrival (9, 0, -12) m outside; E = (-9, 0, 12) m, the line enters at s = 3 m
+    {-7.2, 0.0, 9.6, 0.6, 0.0, -0.8, 400.0 - 27.0 / speed_of_light_m_per_ns, 3.0, 2230.0, 6.0, 0.0},
+    // downward, arrival on the sphere top; E = (0, 0, 30) m (arrival 18 m after emission)
+    {0.0, 0.0, 12.0, 0.0, 0.0, -1.0, 700.0, 18.0, 2248.0, 1.5, 532.0},
+};
+
+// Telescope 2: radius 8 m, centre at 20 m above the observation level.
+const std::vector<ExpectedRow> fixture_tel2_rows{
+    // downward, arrival on the sphere top; E = (0, 0, 28) m
+    {0.0, 0.0, 8.0, 0.0, 0.0, -1.0, 120.0, 20.0, 2248.0, 1.0, 0.0},
+    // upward (cz = 0.8), E = (-9.4, 0, -8.8) m outside; enters at s = 5 m
+    {-6.4, 0.0, -4.8, 0.6, 0.0, 0.8, 150.0 - 5.0 / speed_of_light_m_per_ns, 5.0, 2211.2, 4.0,
+     532.0},
+    // downward, emitted inside at (0, 0, 3) m
+    {0.0, 0.0, 3.0, 0.0, 0.0, -1.0, 60.0 - 5.0 / speed_of_light_m_per_ns, 0.0, 2223.0, 2.0, 0.0},
+};
+
+void check_row(const PhotonChunk &chunk, std::size_t i, const ExpectedRow &e) {
+  CHECK_NEAR(chunk[Column::x][i], e.x, 1.0e-5);
+  CHECK_NEAR(chunk[Column::y][i], e.y, 1.0e-5);
+  CHECK_NEAR(chunk[Column::z][i], e.z, 1.0e-5);
+  CHECK_NEAR(chunk[Column::cx][i], e.cx, 1.0e-6);
+  CHECK_NEAR(chunk[Column::cy][i], e.cy, 1.0e-6);
+  CHECK_NEAR(chunk[Column::cz][i], e.cz, 1.0e-6);
+  CHECK_NEAR(chunk[Column::t][i], e.t_ns, 1.0e-3);
+  CHECK_NEAR(chunk[Column::zem][i], e.zem_m, 1.0e-3);
+  CHECK_NEAR(chunk[Column::w][i], e.w, 1.0e-6);
+  CHECK_NEAR(chunk[Column::path][i], e.path_m, 1.0e-5);
+  CHECK_NEAR(chunk[Column::wavelength][i], e.wavelength, 1.0e-3);
+}
+
+// Every crafted bunch of the fixture: row, path, time and zem against hand-derived values; the two
+// misses are counted in the run end and not written.
+void photons3d_fixture_sphere_rows() {
+  const std::vector<Record> records = convert(read_fixture("photons3d.iact"));
+  CHECK(!records.empty());
+  if (records.empty()) {
+    return;
+  }
+  using T = RecordType;
+  // RUNH, TELPOS before the event; EVTH and TELOFF inside it; EVTE and RUNE after the telescopes.
+  const std::vector<RecordType> expected{
+      T::run,       T::blob,      T::blob,          T::event,     T::blob,    T::blob,
+      T::telescope, T::photons,   T::telescope_end, T::telescope, T::photons, T::telescope_end,
+      T::blob,      T::event_end, T::blob,          T::run_end};
+  CHECK(types_of(records) == expected);
+  if (types_of(records) != expected) {
+    return;
+  }
+
+  const Metadata &run = records[0].metadata;
+  CHECK(meta<std::string>(run, "ground_representation") == "sphere");
+  CHECK(meta<std::int64_t>(run, "run_number") == 1);
+  CHECK(meta<double>(run, "observation_level_m") == 2200.0);
+  CHECK(meta<std::int64_t>(run, "curvature_applied") == 0);
+  CHECK(meta<std::int64_t>(records[15].metadata, "misses_sphere") == 2);
+
+  CHECK(meta<std::int64_t>(records[6].metadata, "telescope_id") == 1);
+  CHECK(meta<double>(records[6].metadata, "r_m") == 12.0);
+  CHECK(meta<double>(records[6].metadata, "z_m") == 18.0);
+  CHECK(meta<double>(records[8].metadata, "photons") == 37.5);
+  CHECK(meta<std::int64_t>(records[9].metadata, "telescope_id") == 2);
+  CHECK(meta<double>(records[9].metadata, "r_m") == 8.0);
+  CHECK(meta<double>(records[9].metadata, "z_m") == 20.0);
+  CHECK(meta<double>(records[11].metadata, "photons") == 7.0);
+
+  const PhotonChunk &tel1 = records[7].chunk;
+  const PhotonChunk &tel2 = records[10].chunk;
+  CHECK(tel1.telescope_id == 1);
+  CHECK(tel2.telescope_id == 2);
+  CHECK(tel1.first_index == 0 && tel2.first_index == 0);
+  CHECK(tel1.rows() == fixture_tel1_rows.size());
+  CHECK(tel2.rows() == fixture_tel2_rows.size());
+  if (tel1.rows() != fixture_tel1_rows.size() || tel2.rows() != fixture_tel2_rows.size()) {
+    return;
+  }
+  for (std::size_t i = 0; i < tel1.rows(); ++i) {
+    check_row(tel1, i, fixture_tel1_rows[i]);
+  }
+  for (std::size_t i = 0; i < tel2.rows(); ++i) {
+    check_row(tel2, i, fixture_tel2_rows[i]);
+  }
+  const std::uint32_t sphere_mask =
+      column_bit(Column::x) | column_bit(Column::y) | column_bit(Column::z) |
+      column_bit(Column::cx) | column_bit(Column::cy) | column_bit(Column::cz) |
+      column_bit(Column::t) | column_bit(Column::zem) | column_bit(Column::w) |
+      column_bit(Column::path) | column_bit(Column::wavelength);
+  CHECK(tel1.mask() == sphere_mask && tel2.mask() == sphere_mask);
+  CHECK(!throws_error([&] { validate_sphere_rows(tel1, 12.0); }));
+  CHECK(!throws_error([&] { validate_sphere_rows(tel2, 8.0); }));
+}
+
+// Two conversions of the same bytes give the same records (no hidden state across runs).
+void photons3d_conversion_is_deterministic() {
+  const std::string bytes = read_fixture("photons3d.iact");
+  std::ostringstream first;
+  std::ostringstream second;
+  std::istringstream in_first{bytes};
+  std::istringstream in_second{bytes};
+  corsika_to_stream(in_first, first, "test");
+  corsika_to_stream(in_second, second, "test");
+  CHECK(!first.str().empty());
+  CHECK(first.str() == second.str());
+}
+
+// The converted sphere run is a valid format 1.2 stream: it reads back and its rows pass
+// validate_sphere_rows against the radius of their telescope.
+void photons3d_stream_reads_back_as_sphere_run() {
+  std::istringstream in{read_fixture("photons3d.iact")};
+  std::ostringstream out;
+  corsika_to_stream(in, out, "test");
+  std::istringstream back{out.str()};
+  Reader reader{back};
+  Record record;
+  std::vector<Record> records;
+  while (reader.next(record)) {
+    records.push_back(record);
+  }
+  CHECK(reader.ended());
+  CHECK(!records.empty());
+  std::size_t photon_chunks = 0;
+  for (const Record &r : records) {
+    if (r.type == RecordType::run) {
+      CHECK(ground_representation(r.metadata) == GroundRepresentation::sphere);
+    }
+    if (r.type == RecordType::photons) {
+      ++photon_chunks;
+      const double radius = r.chunk.telescope_id == 1 ? 12.0 : 8.0;
+      CHECK(!throws_error([&] { validate_sphere_rows(r.chunk, radius); }));
+    }
+  }
+  CHECK(photon_chunks == 2);
+}
+
+// Pure geometry, analytic cases (radius 12 m, centre at the origin; metres and ns).
+void sphere_bunch_geometry() {
+  const double radius = 12.0;
+  const double altitude = 2200.0;
+  // Arrival (9, 0, -12) m, d = (0.6, 0, -0.8), dist 30 m: E = (-9, 0, 12), |E| = 15 > 12, the
+  // entry is at s = 3 m (row (-7.2, 0, 9.6)).
+  {
+    const detail::SphereBunch s = detail::sphere_bunch(
+        bunch3(900.0F, 0.0F, -1200.0F, 0.6F, 0.0F, -0.8F, 400.0F, 3000.0F, 1.0F), radius, altitude);
+    CHECK(s.hits);
+    CHECK_NEAR(s.x, -7.2, 1.0e-5);
+    CHECK_NEAR(s.z, 9.6, 1.0e-5);
+    CHECK_NEAR(s.path, 3.0, 1.0e-5);
+    CHECK_NEAR(s.time_ns, 400.0 - 27.0 / speed_of_light_m_per_ns, 1.0e-5);
+    CHECK_NEAR(s.zem_m, altitude + 12.0, 1.0e-5);
+  }
+  // Tangent: E = (-20, 12, 0) m, d = (1, 0, 0): one root, s = 20 m, row (0, 12, 0).
+  {
+    const detail::SphereBunch s = detail::sphere_bunch(
+        bunch3(2000.0F, 1200.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 4000.0F, 1.0F), radius, altitude);
+    CHECK(s.hits);
+    CHECK_NEAR(s.x, 0.0, 1.0e-5);
+    CHECK_NEAR(s.y, 12.0, 1.0e-5);
+    CHECK_NEAR(s.path, 20.0, 1.0e-5);
+  }
+  // Passes at y = 13 m: no root.
+  CHECK(!detail::sphere_bunch(bunch3(2000.0F, 1300.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 4000.0F, 1.0F),
+                              radius, altitude)
+             .hits);
+  // Emitted at (20, 0, 0) m and pointing away (+x): no root with s >= 0.
+  CHECK(!detail::sphere_bunch(bunch3(3000.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1000.0F, 1.0F),
+                              radius, altitude)
+             .hits);
+  // Emitted at the sphere surface: counts as inside, path 0.
+  {
+    const detail::SphereBunch s = detail::sphere_bunch(
+        bunch3(0.0F, 0.0F, 0.0F, 0.0F, 0.0F, -1.0F, 10.0F, 1200.0F, 1.0F), radius, altitude);
+    CHECK(s.hits);
+    CHECK_NEAR(s.z, 12.0, 1.0e-5);
+    CHECK_NEAR(s.path, 0.0, 1.0e-5);
+  }
+  // Invalid bunches are errors, never misses.
+  CHECK(throws_error([&] {
+    detail::sphere_bunch(bunch3(0.0F, 0.0F, 1200.0F, 0.0F, 0.0F, -1.0F, 0.0F, 3000.0F, -1.0F),
+                         radius, altitude);
+  }));
+  CHECK(throws_error([&] {
+    detail::sphere_bunch(bunch3(0.0F, 0.0F, 1200.0F, 0.0F, 0.0F, -0.5F, 0.0F, 3000.0F, 1.0F),
+                         radius, altitude);
+  }));
+  CHECK(throws_error([&] {
+    detail::sphere_bunch(bunch3(0.0F, 0.0F, 1200.0F, 0.0F, 0.0F, -1.0F, 0.0F, -3000.0F, 1.0F),
+                         radius, altitude);
+  }));
+  CHECK(throws_error([&] {
+    detail::sphere_bunch(bunch3(0.0F, 0.0F, 1200.0F, 0.0F, 0.0F, -1.0F, NAN, 3000.0F, 1.0F), radius,
+                         altitude);
+  }));
+}
+
+// Bunches that miss the sphere are counted in misses_sphere and not written; the rows of the other
+// bunches keep their order and the photon indices count written rows only.
+void photons3d_misses_are_counted() {
+  const std::vector<Bunch3d> bunches{
+      bunch3(0.0F, 0.0F, 1200.0F, 0.0F, 0.0F, -1.0F, 10.0F, 3000.0F, 1.0F),   // hits
+      bunch3(-3000.0F, 1500.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 3000.0F, 9.0F), // misses
+      bunch3(0.0F, 0.0F, 1200.0F, 0.0F, 0.0F, -1.0F, 20.0F, 3000.0F, 2.0F),   // hits
+  };
+  const std::vector<Record> records = convert(sphere_stream({photons3d_block(0, bunches, 12.0F)}));
+  CHECK(!records.empty() && records.front().type == RecordType::run);
+  if (records.empty()) {
+    return;
+  }
+  CHECK(meta<std::string>(records.front().metadata, "ground_representation") == "sphere");
+  CHECK(meta<std::int64_t>(records.back().metadata, "misses_sphere") == 1);
+  const PhotonChunk *chunk = nullptr;
+  for (const Record &r : records) {
+    if (r.type == RecordType::photons) {
+      chunk = &r.chunk;
+    }
+  }
+  CHECK(chunk != nullptr && chunk != nullptr && chunk->rows() == 2);
+  if (chunk != nullptr && chunk->rows() == 2) {
+    CHECK(chunk->first_index == 0);
+    CHECK((*chunk)[Column::w] == (std::vector<float>{1.0F, 2.0F}));
+    CHECK_NEAR((*chunk)[Column::t][1], 20.0, 1.0e-3); // path = dist: arrival time kept
+  }
+}
+
+// One representation per run: 1205 and 1217 blocks may not mix, in an array or across events.
+void photon_representations_do_not_mix() {
+  const std::vector<Bunch3d> hits{
+      bunch3(0.0F, 0.0F, 1200.0F, 0.0F, 0.0F, -1.0F, 0.0F, 3000.0F, 1.0F)};
+  // 1205 and 1217 in one array container.
+  CHECK(throws_error([&] {
+    convert(sphere_stream({long_block(0, 1.0F, tel0_bunches), photons3d_block(1, hits)}));
+  }));
+  CHECK(throws_error([&] {
+    convert(sphere_stream({photons3d_block(0, hits), long_block(1, 1.0F, tel1_bunches)}));
+  }));
+  // 1205 in event 1, 1217 in event 2 (and the other way round).
+  const std::string plane_then_sphere = serialize(
+      {runh_block(), telpos_block(), evth_block(1),
+       make_container(iact::telarray, 0, 0, {long_block(0, 1.0F, tel0_bunches)}), evte_block(1),
+       evth_block(2), make_container(iact::telarray, 0, 0, {photons3d_block(0, hits)}),
+       evte_block(2), rune_block()});
+  CHECK(throws_error([&] { convert(plane_then_sphere); }));
+  const std::string sphere_then_plane = serialize(
+      {runh_block(), telpos_block(), evth_block(1),
+       make_container(iact::telarray, 0, 0, {photons3d_block(0, hits)}), evte_block(1),
+       evth_block(2), make_container(iact::telarray, 0, 0, {long_block(0, 1.0F, tel0_bunches)}),
+       evte_block(2), rune_block()});
+  CHECK(throws_error([&] { convert(sphere_then_plane); }));
+  // Two sphere events are fine; the run key is written once, in the run record.
+  const std::vector<Record> records = convert(
+      serialize({runh_block(), telpos_block(), evth_block(1),
+                 make_container(iact::telarray, 0, 0, {photons3d_block(0, hits)}), evte_block(1),
+                 evth_block(2), make_container(iact::telarray, 0, 0, {photons3d_block(1, hits)}),
+                 evte_block(2), rune_block()}));
+  CHECK(!records.empty() && records.front().type == RecordType::run);
+  if (!records.empty() && records.front().type == RecordType::run) {
+    CHECK(meta<std::string>(records.front().metadata, "ground_representation") == "sphere");
+  }
+}
+
+// 1205 runs are plane runs: no run key (absent means plane, output as before), no sphere counts.
+void plane_runs_are_marked_plane() {
+  const std::vector<Record> records = convert(build_stream_a());
+  CHECK(!records.empty() && records.front().type == RecordType::run);
+  if (records.empty() || records.front().type != RecordType::run) {
+    return;
+  }
+  CHECK(!records.front().metadata.contains("ground_representation"));
+  CHECK(ground_representation(records.front().metadata) == GroundRepresentation::plane);
+  CHECK(records.back().type == RecordType::run_end && records.back().metadata.empty());
+}
+
+// The 1217 representation needs RUNH (observation level) and a TELPOS entry for the telescope.
+void photons3d_needs_runh_and_telpos() {
+  const std::vector<Bunch3d> hits{
+      bunch3(0.0F, 0.0F, 1200.0F, 0.0F, 0.0F, -1.0F, 0.0F, 3000.0F, 1.0F)};
+  CHECK(throws_error([&] {
+    convert(serialize({telpos_block(), evth_block(1),
+                       make_container(iact::telarray, 0, 0, {photons3d_block(0, hits)}),
+                       evte_block(1), rune_block()}));
+  }));
+  CHECK(throws_error([&] {
+    convert(serialize({runh_block(), evth_block(1),
+                       make_container(iact::telarray, 0, 0, {photons3d_block(0, hits)}),
+                       evte_block(1), rune_block()}));
+  }));
+  CHECK(throws_error([&] { convert(sphere_stream({photons3d_block(3, hits)})); }));
+}
+
+// A 1217 block with the particle indices (999, 999) is a blob, as for 1205.
+void photons3d_particle_block_is_a_blob() {
+  const std::vector<Bunch3d> bunches{
+      bunch3(0.0F, 0.0F, 0.0F, 0.0F, 0.0F, -1.0F, 0.0F, 0.0F, 1.0F, 9999.0F)};
+  const std::vector<Record> records =
+      convert(serialize({runh_block(), telpos_block(), evth_block(1),
+                         photons3d_block(999, bunches, 1.0F, 999), evte_block(1), rune_block()}));
+  bool blob = false;
+  for (const Record &r : records) {
+    blob |= r.type == RecordType::blob && r.blob_eventio_type == iact::photons3d;
+    CHECK(r.type != RecordType::telescope);
+  }
+  CHECK(blob);
+}
+
+// Photons written by the converter validate as sphere rows also when the run has no photons.
+void sphere_run_without_photons() {
+  const std::vector<Record> records = convert(sphere_stream({photons3d_block(0, {}, 0.0F)}));
+  CHECK(!records.empty() && records.front().type == RecordType::run);
+  if (!records.empty() && records.front().type == RecordType::run) {
+    CHECK(meta<std::string>(records.front().metadata, "ground_representation") == "sphere");
+    CHECK(meta<std::int64_t>(records.back().metadata, "misses_sphere") == 0);
+  }
+}
+
 } // namespace
 
 int main() {
@@ -552,5 +942,15 @@ int main() {
     chunk_indices_continue_across_array_reuses();
     telescope_end_must_match_open_telescope();
     open_telescope_blocks_array_flush();
+    photons3d_fixture_sphere_rows();
+    photons3d_conversion_is_deterministic();
+    photons3d_stream_reads_back_as_sphere_run();
+    sphere_bunch_geometry();
+    photons3d_misses_are_counted();
+    photon_representations_do_not_mix();
+    plane_runs_are_marked_plane();
+    photons3d_needs_runh_and_telpos();
+    photons3d_particle_block_is_a_blob();
+    sphere_run_without_photons();
   });
 }

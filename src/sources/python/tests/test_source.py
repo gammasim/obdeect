@@ -392,3 +392,86 @@ def test_complex_pulse_widths_must_be_finite():
         with pytest.raises(ValueError):
             emit_chunk(dict(FLASHER, pulse=dict(complex_pulse, **{name: math.inf})), seed=1, rows=5)
     assert expected_photons(dict(FLASHER, pulse=complex_pulse)) > 0.0
+
+
+PLANE_WAVE_HORIZONTAL = {
+    "kind": "plane_wave",
+    "photons": 2000.0,
+    "spectrum": {"kind": "fixed", "wavelength_nm": 400.0},
+    "towards_source": [1.0, 0.0, 0.0],
+    "disc_radius_m": 2.0,
+    "disc_z_m": 0.0,
+    "start_distance_m": 30.0,
+}
+
+
+def test_horizontal_plane_wave_starts_on_the_plane_at_the_start_distance():
+    # Photons travel along -x from the plane x = 30 m (perpendicular to the beam); t = -30 m / c.
+    photons = emit(PLANE_WAVE_HORIZONTAL, seed=3)
+    assert np.allclose(photons["x"], 30.0, atol=1e-4)
+    assert np.hypot(photons["y"], photons["z"]).max() <= 2.0 + 1e-4
+    assert np.allclose(photons["cx"], -1.0, atol=1e-6)
+    assert np.allclose(photons["cz"], 0.0, atol=1e-6)
+    assert np.allclose(photons["t"], -30.0 / 0.299792458, atol=1e-3)
+
+
+def test_upward_and_downward_start_distances_are_perpendicular_to_the_beam():
+    towards = np.array([0.6, 0.0, -0.8])  # beam from below: photons travel up
+    up = emit(
+        dict(PLANE_WAVE_HORIZONTAL, towards_source=list(towards), start_distance_m=30.0), seed=4
+    )
+    assert np.allclose(up["x"] * towards[0] + up["z"] * towards[2], 30.0, atol=1e-3)
+    assert np.all(up["cz"] > 0.0)
+    down = emit(
+        dict(PLANE_WAVE_HORIZONTAL, towards_source=[0.6, 0.0, 0.8], start_distance_m=30.0), seed=4
+    )
+    assert np.allclose(down["x"] * 0.6 + down["z"] * 0.8, 30.0, atol=1e-3)
+    assert np.all(down["cz"] < 0.0)
+
+
+def test_start_distance_equals_start_z_for_a_vertical_beam():
+    vertical = dict(PLANE_WAVE, towards_source=[0.0, 0.0, 1.0])
+    by_z = emit(vertical, seed=5)
+    by_distance = emit(
+        {k: v for k, v in vertical.items() if k != "start_z_m"} | {"start_distance_m": 30.0},
+        seed=5,
+    )
+    for key in ("x", "y", "z", "t", "cz"):
+        assert np.allclose(by_z[key], by_distance[key], atol=1e-5)
+
+
+def test_plane_wave_without_start_keys_starts_at_start_z_zero():
+    # No start key: start_z_m = 0 (the same photons as an explicit start_z_m = 0).
+    vertical = dict(PLANE_WAVE, towards_source=[0.0, 0.0, 1.0])
+    without = {k: v for k, v in vertical.items() if k != "start_z_m"}
+    a = emit(without, seed=12)
+    b = emit(dict(vertical, start_z_m=0.0), seed=12)
+    for key in a:
+        assert np.array_equal(a[key], b[key])
+    assert np.allclose(a["z"], 0.0)
+
+
+@pytest.mark.parametrize(
+    "spec, message",
+    [
+        # both starts
+        (dict(PLANE_WAVE_HORIZONTAL, start_z_m=30.0), "not both"),
+        # horizontal without start_distance_m (neither key): the message names start_distance_m
+        (
+            {k: v for k, v in PLANE_WAVE_HORIZONTAL.items() if k != "start_distance_m"},
+            "start_distance_m",
+        ),
+        # horizontal with start_z_m: the message points to start_distance_m
+        (
+            {k: v for k, v in PLANE_WAVE_HORIZONTAL.items() if k != "start_distance_m"}
+            | {"start_z_m": 30.0},
+            "start_distance_m",
+        ),
+        # closer than the disc's extent along the beam (2 m for a horizontal beam)
+        (dict(PLANE_WAVE_HORIZONTAL, start_distance_m=1.0), "at least"),
+        (dict(PLANE_WAVE_HORIZONTAL, start_distance_m=-1.0), "start_distance_m"),
+    ],
+)
+def test_plane_wave_start_rules_are_checked(spec, message):
+    with pytest.raises(ValueError, match=message):
+        emit(spec, seed=1)

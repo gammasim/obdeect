@@ -164,6 +164,11 @@ public:
       }
       return;
     case RecordType::run:
+      if (ground_representation(record.metadata) == GroundRepresentation::sphere) {
+        // GrISU photon text has the ground photons at the plane z = 0 only.
+        throw std::runtime_error("obdeect stream to-grisu: sphere runs (ground_representation "
+                                 "sphere) are not supported; convert plane runs only");
+      }
       end_run();
       run_metadata_ = record.metadata;
       run_open_ = true;

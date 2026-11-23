@@ -200,7 +200,9 @@ obdeect::stream::Frame frame_of(const std::string &name, const std::string &wher
     return obdeect::stream::Frame::telescope;
   if (name == "camera")
     return obdeect::stream::Frame::camera;
-  bad(where, "frame must be sky, telescope or camera, not '" + name + "'");
+  if (name == "ground")
+    return obdeect::stream::Frame::ground;
+  bad(where, "frame must be sky, telescope, camera or ground, not '" + name + "'");
 }
 
 double cone_u0(double angle_deg, const std::string &where) {
@@ -325,7 +327,10 @@ Geometry geometry_of(const Section &s, const std::string &kind) {
       w.distance_m = s.real("distance_m");
     w.disc_radius_m = s.real("disc_radius_m");
     w.disc_z_m = s.real("disc_z_m");
-    w.start_z_m = s.real("start_z_m");
+    if (s.has_value("start_z_m"))
+      w.start_z_m = s.real("start_z_m");
+    if (s.has_value("start_distance_m"))
+      w.start_distance_m = s.real("start_distance_m");
     return w;
   }
   if (kind == "sky_background") {
@@ -430,6 +435,7 @@ nb::dict write_run_py(nb::handle run_description, const std::string &path) {
   out["weight"] = summary.weight;
   out["expected"] = summary.expected;
   out["not_on_plane"] = summary.not_on_plane;
+  out["misses_sphere"] = summary.misses_sphere;
   return out;
 }
 
@@ -474,8 +480,8 @@ nb::dict emit_chunk_py(nb::handle emission, std::uint64_t seed, std::uint32_t ev
   // that do not reach the plane are dropped (their count is not returned here).
   Run camera_run;
   camera_run.frame = obdeect::stream::Frame::camera;
-  std::uint64_t not_on_plane = 0;
-  detail::finish_rows(e, camera_run, chunk, not_on_plane);
+  Drops drops;
+  detail::finish_rows(e, camera_run, chunk, drops);
   nb::dict out;
   for (std::uint32_t c = 0; c < obdeect::stream::n_columns; ++c)
     if ((source_columns >> c) & 1U) {
@@ -514,6 +520,7 @@ NB_MODULE(_core, m) {
     frames["sky"] = static_cast<int>(obdeect::stream::Frame::sky);
     frames["telescope"] = static_cast<int>(obdeect::stream::Frame::telescope);
     frames["camera"] = static_cast<int>(obdeect::stream::Frame::camera);
+    frames["ground"] = static_cast<int>(obdeect::stream::Frame::ground);
     d["frames"] = frames;
     nb::list columns;
     for (std::uint32_t c = 0; c < obdeect::stream::n_columns; ++c)

@@ -46,6 +46,20 @@ def _metadata_value(value):
     raise TypeError(f"unsupported metadata value of type {type(value).__name__}")
 
 
+GROUND_REPRESENTATIONS = ("plane", "sphere")
+
+
+def ground_representation(run_metadata: Mapping[str, object]) -> str:
+    """Ground representation of a run: "plane" (default, also when the key is absent) or "sphere".
+
+    Raises ValueError for any other value (docs/format.md, "Run metadata").
+    """
+    value = run_metadata.get("ground_representation", "plane")
+    if not isinstance(value, str) or value not in GROUND_REPRESENTATIONS:
+        raise ValueError(f"ground_representation must be 'plane' or 'sphere', not {value!r}")
+    return value
+
+
 def reject_same_file(input: object, output: object) -> None:
     """Raise ValueError if output is the same file as input (also via links)."""
     source, target = os.fspath(input), os.fspath(output)
@@ -92,4 +106,13 @@ class Writer(_core.Writer):
         super().write_photons(telescope_id, _frame(frame), first_index, arrays)
 
 
-__all__ = ["COLUMNS", "FRAMES", "METADATA_RECORDS", "REQUIRED_COLUMNS", "Reader", "Writer"]
+__all__ = [
+    "COLUMNS",
+    "FRAMES",
+    "GROUND_REPRESENTATIONS",
+    "METADATA_RECORDS",
+    "REQUIRED_COLUMNS",
+    "Reader",
+    "Writer",
+    "ground_representation",
+]

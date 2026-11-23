@@ -770,6 +770,141 @@ void test_telescope_frame_rejected() {
   }));
 }
 
+// Sphere runs (ground_representation "sphere", docs/format.md). Telescope 1 is at the origin with
+// radius 12 m (light_source_run).
+Metadata sphere_run() {
+  Metadata m = light_source_run();
+  m["ground_representation"] = std::string("sphere");
+  return m;
+}
+
+// Ground-frame sphere rows of telescope 1: x y z cx cy cz t zem w wavelength.
+PhotonChunk sphere_chunk(const std::vector<double> &x, const std::vector<double> &y,
+                         const std::vector<double> &z, const std::vector<double> &cx,
+                         const std::vector<double> &cy, const std::vector<double> &cz,
+                         const std::vector<double> &t) {
+  PhotonChunk chunk;
+  chunk.telescope_id = 1;
+  chunk.frame = Frame::ground;
+  const std::size_t n = x.size();
+  chunk.resize(n, required_columns | column_bit(Column::z) | column_bit(Column::cz) |
+                      column_bit(Column::zem) | column_bit(Column::wavelength));
+  for (std::size_t i = 0; i < n; ++i) {
+    chunk[Column::x][i] = static_cast<float>(x[i]);
+    chunk[Column::y][i] = static_cast<float>(y[i]);
+    chunk[Column::z][i] = static_cast<float>(z[i]);
+    chunk[Column::cx][i] = static_cast<float>(cx[i]);
+    chunk[Column::cy][i] = static_cast<float>(cy[i]);
+    chunk[Column::cz][i] = static_cast<float>(cz[i]);
+    chunk[Column::t][i] = static_cast<float>(t[i]);
+    chunk[Column::w][i] = 1.0F;
+    chunk[Column::zem][i] = 2200.0F;
+    chunk[Column::wavelength][i] = 400.0F;
+  }
+  return chunk;
+}
+
+std::vector<Record> sphere_records(const Metadata &run, const PhotonChunk &chunk) {
+  return {
+      record_of(RecordType::run, run),
+      record_of(RecordType::event, Metadata{{"event_number", std::int64_t{1}}}),
+      record_of(RecordType::telescope,
+                Metadata{{"telescope_id", std::int64_t{1}}, {"array_index", std::int64_t{0}}}),
+      photons_of(chunk),
+      record_of(RecordType::telescope_end, Metadata{{"telescope_id", std::int64_t{1}}}),
+      record_of(RecordType::event_end),
+      record_of(RecordType::run_end),
+  };
+}
+
+// Downward rows on the sphere become the crossing of the plane z = 0 along their line, with the
+// time of the crossing; rows starting inside the sphere, upward and horizontal rows are rejected.
+void test_sphere_to_plane() {
+  const double c = 0.299792458;
+  const double xa = std::sqrt(108.0); // on the sphere (R = 12 m) at z = 6 m
+  // Direction (0.6, 0, -0.8): s = -z / cz = 7.5 m, so the crossing is at x + 4.5 m.
+  // The second row starts at z = -6 m: s = -7.5 m, the crossing lies at x - 4.5 m (behind it).
+  PhotonChunk chunk = sphere_chunk({xa, xa}, {0.0, 0.0}, {6.0, -6.0}, {0.6, 0.6}, {0.0, 0.0},
+                                   {-0.8, -0.8}, {1.0, 2.0});
+  chunk[Column::path] = {0.5F, 0.5F};
+  PhotonChunk converted = chunk;
+  sphere_to_plane_bunches(converted, 12.0);
+  CHECK(!converted.has(Column::z) && !converted.has(Column::path));
+  CHECK(converted.has(Column::cz) && converted.has(Column::zem) && converted.has(Column::w));
+  CHECK_NEAR(converted[Column::x][0], xa + 4.5, 1e-4);
+  CHECK_NEAR(converted[Column::x][1], xa - 4.5, 1e-4);
+  CHECK_NEAR(converted[Column::y][0], 0.0, 1e-6);
+  CHECK_NEAR(converted[Column::cz][0], -0.8, 1e-6);
+  CHECK_NEAR(converted[Column::t][0], 1.0 + 7.5 / c, 1e-3);
+  CHECK_NEAR(converted[Column::t][1], 2.0 - 7.5 / c, 1e-3);
+  CHECK_NEAR(converted[Column::zem][0], 2200.0, 1e-3);
+  CHECK_NEAR(converted[Column::wavelength][1], 400.0, 1e-6);
+
+  // The run is written as a plane run: the EventIO equals that of the converted plane rows
+  // under a run without ground_representation.
+  const std::string sphere_out = run_adapter(sphere_records(sphere_run(), chunk), {});
+  const std::string plane_out = run_adapter(sphere_records(light_source_run(), converted), {});
+  CHECK(!sphere_out.empty());
+  CHECK(sphere_out == plane_out);
+
+  // Rows starting inside the sphere (|r| = 3 m and |r| = 11.5 m) are rejected, chunk unchanged.
+  for (const PhotonChunk &inside :
+       {sphere_chunk({3.0}, {0.0}, {0.0}, {0.6}, {0.0}, {-0.8}, {1.0}),
+        sphere_chunk({xa}, {0.0}, {-5.0}, {0.6}, {0.0}, {-0.8}, {1.0})}) {
+    PhotonChunk unchanged = inside;
+    CHECK(throws_error([&] { sphere_to_plane_bunches(unchanged, 12.0); }));
+    CHECK(unchanged.columns == inside.columns);
+    try {
+      run_adapter(sphere_records(sphere_run(), inside), {});
+      CHECK(false);
+    } catch (const std::invalid_argument &error) {
+      CHECK(std::string(error.what())
+                .find("inside the telescope sphere: not representable for "
+                      "sim_telarray") != std::string::npos);
+    }
+  }
+
+  // Upward and horizontal rows on the sphere are rejected.
+  const std::string downward_msg = "ground-frame photon must move downwards";
+  CHECK(throws_error([&] {
+    run_adapter(
+        sphere_records(sphere_run(), sphere_chunk({xa}, {0.0}, {6.0}, {0.6}, {0.0}, {0.8}, {1.0})),
+        {});
+  }));
+  CHECK(rejected_with(
+      sphere_records(sphere_run(), sphere_chunk({12.0}, {0.0}, {0.0}, {1.0}, {0.0}, {0.0}, {1.0})),
+      {}, downward_msg));
+
+  // Rows outside the sphere, rows without z, and telescopes without a radius are rejected.
+  CHECK(throws_error([&] {
+    run_adapter(sphere_records(sphere_run(),
+                               sphere_chunk({0.0}, {0.0}, {13.0}, {0.0}, {0.0}, {-1.0}, {1.0})),
+                {});
+  }));
+  PhotonChunk no_z = sphere_chunk({xa}, {0.0}, {6.0}, {0.6}, {0.0}, {-0.8}, {1.0});
+  no_z[Column::z].clear();
+  CHECK(throws_error([&] { run_adapter(sphere_records(sphere_run(), no_z), {}); }));
+  PhotonChunk no_radius = sphere_chunk({xa}, {0.0}, {6.0}, {0.6}, {0.0}, {-0.8}, {1.0});
+  no_radius.telescope_id = 3; // the light-source run has two telescopes
+  CHECK(throws_error([&] { run_adapter(sphere_records(sphere_run(), no_radius), {}); }));
+
+  // Plane rows (no z column) in a sphere run are rejected: sphere rows need z and cz.
+  CHECK(throws_error([&] {
+    run_adapter(
+        sphere_records(sphere_run(), chunk_of(1, Frame::ground, {0.5}, {0.2}, {0.1}, {-0.2})), {});
+  }));
+}
+
+// A plane run is unchanged: downward ground rows with a z column are written as before.
+void test_plane_run_unchanged() {
+  const PhotonChunk plane = chunk_of(1, Frame::ground, {0.5}, {0.2}, {0.1}, {-0.2});
+  CHECK(!throws_error([&] { run_adapter(sphere_records(light_source_run(), plane), {}); }));
+  // An invalid run representation is rejected.
+  Metadata flat = light_source_run();
+  flat["ground_representation"] = std::string("flat");
+  CHECK(throws_error([&] { run_adapter(sphere_records(flat, plane), {}); }));
+}
+
 // Atmospheric table of three levels (a stand-in for a CORSIKA atmprof file).
 AtmosphereTable three_level_table() {
   AtmosphereTable table;
@@ -1443,5 +1578,7 @@ int main() {
     test_run_without_events();
     test_atmprof_option_conflicts_with_stream();
     test_no_warnings_with_corsika_headers();
+    test_sphere_to_plane();
+    test_plane_run_unchanged();
   });
 }

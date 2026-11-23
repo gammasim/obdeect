@@ -3,8 +3,10 @@
 The scan starts at ``--scan-start``, runs along x for ``--scan-extent-x`` and then along y for
 ``--scan-extent-y``, in steps of ``--scan-step``. Each scan position is one point emission of a
 single event, at ``--height``. The beam points downwards by default; ``--beam-zenith`` (zenith,
-> 90 down, < 90 up) and ``--beam-azimuth`` set another direction. A horizontal beam is rejected:
-it never reaches the camera plane (planned with the sphere representation). Old program:
+> 90 down, < 90 up) and ``--beam-azimuth`` set another direction. A horizontal beam (zenith 90)
+is allowed: its photons move at the scan height, so they reach the telescope sphere only if that
+height lies within it, and they are cz = 0 sky-frame rows (consumers need the sphere
+representation of docs/stream/format.md). Old program:
 ``beam-scan.hpp`` (its extents and step were fractions of the radius).
 """
 
@@ -48,8 +50,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         type=float,
         default=_DOWNWARD_ZENITH,
         metavar="DEG",
-        help="zenith of the beam: 180 (default) points down, 0 up; 90 (horizontal) is rejected "
-        "[deg]",
+        help="zenith of the beam: 180 (default) points down, 0 up, 90 horizontal [deg]",
     )
     beam.add_argument(
         "--beam-azimuth",
@@ -117,11 +118,6 @@ def scan_positions(
 def build(args: argparse.Namespace) -> dict:
     """Run description: one event with a point emission per scan position."""
     axis = list(unit_vector(args.beam_zenith, args.beam_azimuth))
-    if abs(axis[2]) <= 1e-12:
-        raise ValueError(
-            f"--beam-zenith {args.beam_zenith} deg is horizontal: horizontal beams are not "
-            "supported yet (the photons never reach the camera plane)"
-        )
     positions = scan_positions(
         tuple(args.scan_start), args.scan_extent_x, args.scan_extent_y, args.scan_step
     )

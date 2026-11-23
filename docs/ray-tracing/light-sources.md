@@ -76,24 +76,54 @@ start on the input plane below the optics.
 `trace_bunches` with cz > 0 start on the lower input plane, which lies a margin of 1 m below
 every obscurer (any leg) and every mirror (primary and secondary) along the telescope axis.
 
-The trace branch is chosen by the direction in the telescope frame: a photon whose traced
-direction has z >= 0 takes the first-hit path below, whatever the sign of cz in the input frame.
-For a telescope at a large zenith angle, a ground-frame photon with cz < 0 can move up in the
-telescope frame; it arrives from behind the dish and is blocked by its back. Photons moving
-down in the telescope frame are traced exactly as before.
+Every photon goes through the same loop, whatever its direction (see
+[Optical models](optical-models.md#reflecting-sides-and-photons-from-below)). The branch that
+an input takes follows the direction in the telescope frame: a photon whose traced direction
+has z >= 0 starts from below, whatever the sign of cz in the input frame. For a telescope at a
+large zenith angle, a ground-frame photon with cz < 0 can move up in the telescope frame; it
+arrives from behind the dish and is blocked by its back.
 
-`trace` and `trace_bunches` report the first hit of an upward photon:
+`trace` and `trace_bunches` report the outcome of each photon after its last interaction:
 
 - an obscurer, or the back face of a mirror: `blocked`, with the surface recorded;
-- the reflecting face of the primary: the sequential path continues (the photon may be detected);
-- the reflecting face of the secondary: `non_sequential` (phase 1 does not trace further);
-- the focal surface from below (on its receiving side): `direct_focal`;
-- nothing: `missed_primary`.
+- the reflecting face of a mirror: reflected and traced on (the photon may be detected after
+  several reflections, up to 16: `bounce_limit`);
+- the focal surface on its receiving side: `detected` for an asphere within its extent;
+  a plane focal surface gives `direct_focal` (a counted loss: it has no extent);
+- nothing: `missed_primary`, `missed_secondary` or `missed_focal_surface`.
 
-Phase 1 counts `non_sequential` and `direct_focal` photons as losses with weight zero; they
-are the light that the planned phase 2 (non-sequential tracing) will recover. A photon that
-moves horizontally (zero component along the axis of its input plane) has no plane to start on
-and is rejected with an error.
+A photon that moves horizontally (zero component along the axis of its input plane) has no plane
+to start on and is rejected with an error.
+
+## Sphere rows
+
+In a sphere run (see [Photon stream](photon-stream.md#input-frames)) each ground-frame row is a
+start point inside or on the telescope sphere, and it is traced from that point: its position is
+transformed into the telescope frame as a point (rotation, then the axes offset), with its own z.
+Its time is the row's time at that point. Nothing is moved to an input plane, so the plane checks
+do not apply to these rows.
+
+Every row is traced by the same loop as the photons of a plane run; the start point is the row point.
+A horizontal ground row (cz = 0) on a tilted telescope has traced z = R d_z.
+
+The tracer looks ahead from the start point only. A photon that starts between the primary and the
+focal surface and moves towards the primary is reflected by it and traced on; one that moves
+towards a plane focal surface reaches it from its receiving side (`direct_focal`), and one that
+moves towards an asphere focal surface is detected inside its extent. Obscurers behind the start
+point are not met, which is correct for a start point inside the telescope.
+
+For the same photons, the sphere row of each downward photon is the entry point of its line into
+the sphere, and the tracer gives the same detected photons as the plane run (checked in
+[Validation](VALIDATION.md#sphere-runs-ray-tracing-phase-5d)).
+
+Times differ slightly between the two representations. A plane row is moved from the ground
+plane to the input plane at the vacuum speed of light ($t + s\,|d|/c$, $s$ signed) and is then
+traced with the model's `propagation_group_index` $n_g$; a sphere row is traced with $n_g$ from
+its entry point. For the same photon the detected times therefore differ by
+$(n_g - 1)\,\Delta s / c$, with $\Delta s$ the signed distance along the ray between the sphere
+entry point and the plane row's start point on the input plane (about $3 \times 10^{-4}$ of that
+distance at a 2 km site, so at most a few hundredths of a nanosecond). The plane convention is kept
+unchanged for compatibility with existing results.
 
 ## Air-shower photons and custom inputs
 

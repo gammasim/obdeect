@@ -1,0 +1,29 @@
+photons3d.iact: CORSIKA IACT EventIO file with 3D photon bunches (block 1217), a test fixture
+for obdeect stream from-corsika (cpp/tests/test_corsika.cpp, python/tests/test_convert.py).
+
+Writer:     make_photons3d_fixture.c (this directory), compiled with the CORSIKA IACT/ATMO
+            library (Konrad Bernloehr, IACT/ATMO package release 1.69, February 2025), from
+            ../corsika7/bernlohr. Library sources compiled and linked:
+            eventio.c io_simtel.c fileopen.c warning.c straux.c mc_atmprof.c
+            (1217 layout: write_tel_photons3d() of io_simtel.c; header and trailer blocks:
+            write_tel_block(), write_tel_pos(), write_tel_offset(), begin/end_write_tel_array()).
+Command:    cc -std=c99 -O1 -w -I../corsika7/bernlohr -o /tmp/make_photons3d_fixture \
+              src/stream/cpp/tests/data/make_photons3d_fixture.c \
+              ../corsika7/bernlohr/eventio.c ../corsika7/bernlohr/io_simtel.c \
+              ../corsika7/bernlohr/fileopen.c ../corsika7/bernlohr/warning.c \
+              ../corsika7/bernlohr/straux.c ../corsika7/bernlohr/mc_atmprof.c -lm
+            /tmp/make_photons3d_fixture src/stream/cpp/tests/data/photons3d.iact
+Date:       2026-11-23
+Platform:   macOS (Darwin 27.2), Apple clang 21, little-endian (arm64).
+Byte order: little-endian, the sync tag 37 8a 1f d4 (0xD41F8A37 as read by eventio.hpp).
+
+Content: one run (RUNH, TELPOS for 2 telescopes, EVTH, TELOFF, 1204 array with two 1217 blocks,
+EVTE, RUNE). Telescope 1 at (0, 0, 1800) cm, radius 1200 cm; telescope 2 at (1000, -500, 2000) cm,
+radius 800 cm. 11 bunches: 9 hit their sphere (downward on the sphere, emitted inside, upward,
+horizontal, arrival outside whose line enters, entry at s > 0), 2 miss (test: misses_sphere
+= 2). The expected G rows, paths, times and zem are derived by hand in test_corsika.cpp
+(fixture_tel1_rows, fixture_tel2_rows); the comments in make_photons3d_fixture.c give the geometry.
+
+Layout check: the 1217 block written here is read by the importer's decode_photons3d() and the
+tests above; the header fields (short array, short tel, real photons, long n, 10 reals per bunch)
+were also checked against write_tel_photons3d() and read_tel_photons3d() in io_simtel.c.

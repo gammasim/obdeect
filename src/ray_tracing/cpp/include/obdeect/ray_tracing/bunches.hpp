@@ -19,14 +19,21 @@ namespace obdeect::ray_tracing {
 // that share position, direction, time, emission height and wavelength. Lengths
 // are in input units (BunchFrame::length_unit_m). Without `cz` the photons move
 // towards -z in the input frame: cz = -sqrt(max(0, 1 - cx^2 - cy^2)). With `cz`
-// (either sign, never 0) a bunch with cz < 0 moves down and starts on
+// (either sign, never 0 without z) a bunch with cz < 0 moves down and starts on
 // BunchFrame::plane_z; one with cz > 0 moves up and starts on
 // BunchFrame::lower_plane_z, below the optics.
+//
+// With `z` (sphere rows, docs/ray-tracing/photon-stream.md) every bunch starts at its own
+// point (x, y, z[i]) in the input frame, whatever its direction, so `cz` is required and may be
+// 0; then the input planes are not used and `time_ns` is the time at that point.
 struct BunchBlock {
   const float *x{}, *y{}, *cx{}, *cy{}, *time_ns{}, *zem{}, *size{}, *wavelength_nm{};
   const std::uint64_t *bunch_id{}; // Unique per bunch for one seed.
   std::size_t n{};
-  const float *cz{}; // Optional vertical direction cosine (either sign, nonzero).
+  const float *cz{}; // Optional vertical direction cosine (either sign; 0 only with z).
+  const float *z{};  // Optional start height per bunch (input units); null: on the input plane.
+  // Optional path [m] from the emission to each start point; null: not carried to the output.
+  const double *path_m{};
 };
 
 // Input frame to telescope frame: p = R (u x, u y, u plane_z) + offset and
@@ -67,6 +74,9 @@ struct BunchResult {
   double *position_m{}, *direction{}, *time_ns{}, *weight{}, *wavelength_nm{};
   std::uint64_t *bunch_index{}; // Input row of the bunch.
   std::uint32_t *sub_photon{};  // Photon number within the bunch.
+  // Path [m] from the emission to the output point, when BunchBlock::path_m is given: the input
+  // path plus the traced path length. Null when not requested.
+  double *path_m{};
 };
 
 namespace detail {
@@ -112,6 +122,8 @@ public:
   BunchTask(const OpticalModel &model, const BunchBlock &in, const BunchFrame &frame,
             const BunchOptions &options, const RandomKey &seed)
       : model_(model), in_(in), frame_(frame), options_(options), seed_(seed) {
+    if (in.z && !in.cz)
+      throw std::invalid_argument("bunches: start heights z need the direction column cz");
     for (std::size_t k = 0; k < in.n; ++k)
       check_photon_ids(in.bunch_id[k], 1);
   }
@@ -130,15 +142,18 @@ public:
           !(static_cast<double>(in_.cx[i]) * in_.cx[i] +
                 static_cast<double>(in_.cy[i]) * in_.cy[i] <=
             1.0 + 1e-6) ||
-          (in_.cz && (!std::isfinite(static_cast<double>(in_.cz[i])) || in_.cz[i] == 0.0F ||
-                      (in_.cz[i] > 0.0F && !std::isfinite(frame_.lower_plane_z)) ||
-                      std::abs(static_cast<double>(in_.cx[i]) * in_.cx[i] +
-                               static_cast<double>(in_.cy[i]) * in_.cy[i] +
-                               static_cast<double>(in_.cz[i]) * in_.cz[i] - 1.0) > 1e-5)) ||
+          (in_.cz &&
+           (!std::isfinite(static_cast<double>(in_.cz[i])) || (in_.cz[i] == 0.0F && !in_.z) ||
+            (in_.cz[i] > 0.0F && !in_.z && !std::isfinite(frame_.lower_plane_z)) ||
+            std::abs(static_cast<double>(in_.cx[i]) * in_.cx[i] +
+                     static_cast<double>(in_.cy[i]) * in_.cy[i] +
+                     static_cast<double>(in_.cz[i]) * in_.cz[i] - 1.0) > 1e-5)) ||
           // Without cz the derived cz is -sqrt(1 - cx^2 - cy^2): zero for a horizontal bunch.
           (!in_.cz && !(static_cast<double>(in_.cx[i]) * in_.cx[i] +
                             static_cast<double>(in_.cy[i]) * in_.cy[i] <
                         1.0)) ||
+          (in_.path_m && (!std::isfinite(in_.path_m[i]) || in_.path_m[i] < 0.0)) ||
+          (in_.z && !std::isfinite(static_cast<double>(in_.z[i]))) ||
           !std::isfinite(in_.time_ns[i]) || !std::isfinite(in_.zem[i]))
         bad = true;
       else
@@ -161,7 +176,10 @@ public:
     // The model's axes offset O displaces the optical origin: P is traced at R P - O.
     const auto &axes = model_.axes_offset_m;
     const auto transform = [&](std::size_t i) {
-      const double plane_z = in_.cz && in_.cz[i] > 0.0F ? frame_.lower_plane_z : frame_.plane_z;
+      // The start height: the row's own z (sphere rows), else the input plane of its direction.
+      const double plane_z = in_.z                        ? static_cast<double>(in_.z[i])
+                             : in_.cz && in_.cz[i] > 0.0F ? frame_.lower_plane_z
+                                                          : frame_.plane_z;
       const double x = u * in_.x[i], y = u * in_.y[i], z = u * plane_z;
       double cx = in_.cx[i], cy = in_.cy[i];
       double cz = in_.cz ? in_.cz[i] : -std::sqrt(std::max(0.0, 1.0 - cx * cx - cy * cy));
@@ -252,8 +270,11 @@ public:
                                     options_.classify_losses, sub, from_below);
         if (t.status != Status::detected)
           continue;
-        const double ratio = std::min(1.0, (t.weight / norm) / cached_bound);
-        if (options_.roulette && !(roulette_draw < ratio))
+        // ratio = weight / bound may exceed one (see response_bound): such a photon is kept
+        // with probability one and carries the excess in its weight, so the expected weight is
+        // the traced weight (unbiased). Sequential photons have ratio <= 1: unchanged.
+        const double ratio = (t.weight / norm) / cached_bound;
+        if (options_.roulette && !(roulette_draw < std::min(1.0, ratio)))
           continue;
         out.position_m[3 * row] = t.position.x;
         out.position_m[3 * row + 1] = t.position.y;
@@ -262,10 +283,12 @@ public:
         out.direction[3 * row + 1] = t.direction.y;
         out.direction[3 * row + 2] = t.direction.z;
         out.time_ns[row] = t.time_ns;
-        out.weight[row] = options_.roulette ? 1.0 : ratio;
+        out.weight[row] = options_.roulette ? std::max(1.0, ratio) : ratio;
         out.wavelength_nm[row] = lambda;
         out.bunch_index[row] = i;
         out.sub_photon[row] = sub;
+        if (out.path_m)
+          out.path_m[row] = (in_.path_m ? in_.path_m[i] : 0.0) + t.path_length_m;
         ++row;
       }
     }
@@ -285,8 +308,10 @@ private:
 // Trace photon bunches through the optical model. Each photon of a bunch is
 // kept with probability size-fraction x acceptance x response bound, traced
 // with its own random numbers (seed, bunch_id, sub-photon), and, with
-// `roulette`, kept again with probability weight / bound, so that the expected
-// weight is the weight a full trace would give. The results do not depend on
+// `roulette`, kept again with probability min(1, weight / bound) and output
+// with weight max(1, weight / bound). Without `roulette` the output weight is
+// weight / bound. Either way the expected output weight is the weight a full
+// trace would give, also for a photon whose weight exceeds the bound. The results do not depend on
 // the thread count, the chunking or the order of the bunches; bunch ids must be
 // unique per seed.
 //
@@ -295,7 +320,7 @@ private:
 // hit is the reflecting face of the primary (see trace_photon).
 //
 // Invalid input (a non-orthonormal frame, acceptance outside [0, 1], a bunch of
-// wavelength 0 without a density or law, bad sizes, cz = 0 or an upward bunch
+// wavelength 0 without a density or law, bad sizes, cz = 0 without z or an upward bunch
 // without lower_plane_z) throws std::invalid_argument before any tracing; so does a
 // transmission without a known maximum (ModelError).
 //
@@ -365,6 +390,7 @@ std::size_t trace_bunches(const OpticalModel &model, const BunchBlock &in, const
   detail::add_column(columns, out.wavelength_nm, 1);
   detail::add_column(columns, out.bunch_index, 1);
   detail::add_column(columns, out.sub_photon, 1);
+  detail::add_column(columns, out.path_m, 1);
   output_start.pop_back();
   return detail::compact_chunks(
       columns, output_start, found,

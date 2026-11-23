@@ -37,6 +37,7 @@ void usage() {
       "                       [--scattering-primaries ID[,ID...]]\n"
       "                       [--pathlen M] [--telescope-pathlen ID=M]...\n"
       "                       [--curvature none|corsika|spherical] [--earth-radius-m M]\n"
+      "                       [--ground-representation plane|sphere]\n"
       "                       [--threads N] [--telescopes ID[,ID...]]\n"
       "                       [-i FILE|-] [-o FILE|-]\n");
 }
@@ -159,6 +160,8 @@ int main(int argc, char **argv) {
         std::map<std::uint32_t, double> telescope_pathlen;
         Curvature curvature = Curvature::none;
         std::optional<double> earth_radius;
+        obdeect::stream::GroundRepresentation ground_representation =
+            obdeect::stream::GroundRepresentation::plane;
         unsigned threads = 1;
         std::optional<std::vector<std::uint32_t>> telescopes;
         std::string input = "-";
@@ -233,6 +236,15 @@ int main(int argc, char **argv) {
               telescope_pathlen[id] = metres;
             } else if (arg == "--curvature") {
               curvature = parse_curvature_flag(value("--curvature"));
+            } else if (arg == "--ground-representation") {
+              const std::string text = value("--ground-representation");
+              if (text == "plane") {
+                ground_representation = obdeect::stream::GroundRepresentation::plane;
+              } else if (text == "sphere") {
+                ground_representation = obdeect::stream::GroundRepresentation::sphere;
+              } else {
+                throw UsageError("--ground-representation is plane or sphere: " + text);
+              }
             } else if (arg == "--earth-radius-m") {
               earth_radius = parse_double(value("--earth-radius-m"), "--earth-radius-m");
             } else if (arg == "--threads") {
@@ -304,6 +316,7 @@ int main(int argc, char **argv) {
           config.default_pathlen_m = pathlen;
           config.telescope_pathlen_m = telescope_pathlen;
           config.curvature = curvature;
+          config.ground_representation = ground_representation;
           if (earth_radius) {
             config.earth_radius_m = *earth_radius;
           }
