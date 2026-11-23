@@ -30,6 +30,7 @@
 // whichever is lower) take the values at that height.
 
 #include "obdeect/propagation/dispersion.hpp"
+#include "obdeect/propagation/parallel.hpp"
 #include "obdeect/propagation/profile.hpp"
 #include "obdeect/propagation/timing.hpp"
 #include "obdeect/stream/constants.hpp"
@@ -39,6 +40,7 @@
 #include <cmath>
 #include <cstddef>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -216,16 +218,18 @@ public:
     shift_.resize(count);
     bent_.resize(count);
     straight_.resize(count);
-    for (std::size_t i = 0; i < theta_.size(); ++i) {
-      for (std::size_t j = 0; j < heights_.size(); ++j) {
+    // Every node is independent and writes its own slot: the thread count does not change the
+    // result.
+    const std::size_t nh = heights_.size();
+    for_row_blocks(count, build_threads(), [&](std::size_t begin, std::size_t end) {
+      for (std::size_t k = begin; k < end; ++k) {
         const CurvedRayIntegrals v = curved_ray_integrals(
-            profile_, earth_radius_m_, telescope_altitude_m_, theta_[i], heights_[j]);
-        const std::size_t k = i * heights_.size() + j;
+            profile_, earth_radius_m_, telescope_altitude_m_, theta_[k / nh], heights_[k % nh]);
         shift_[k] = v.shift_m;
         bent_[k] = v.excess_bent_ns;
         straight_[k] = v.excess_straight_ns;
       }
-    }
+    });
     if (enable_accurate_dispersion) {
       build_accurate_dispersion_tables();
     }
@@ -354,23 +358,34 @@ private:
     dispersion_bent_delta_.resize(accurate_k_node_count * plane_size);
     dispersion_straight_.resize(accurate_k_node_count * plane_size);
     for (std::size_t q = 0; q < accurate_k_node_count; ++q) {
-      const double k = low + (high - low) * static_cast<double>(q) /
-                                 static_cast<double>(accurate_k_node_count - 1);
-      dispersion_k_[q] = k;
-      for (std::size_t i = accurate_theta_start; i < theta_.size(); ++i) {
-        for (std::size_t j = 0; j < nh; ++j) {
-          double bent_group_delta = 0.;
-          const CurvedRayIntegrals equal =
-              curved_ray_integrals(profile_, earth_radius_m_, telescope_altitude_m_, theta_[i],
-                                   heights_[j], k, k, &bent_group_delta);
-          const std::size_t index = q * plane_size + (i - accurate_theta_start) * nh + j;
-          dispersion_shift_[index] = equal.shift_m;
-          dispersion_bent_[index] = equal.excess_bent_ns;
-          dispersion_bent_delta_[index] = bent_group_delta;
-          dispersion_straight_[index] = equal.excess_straight_ns / k;
-        }
-      }
+      dispersion_k_[q] = low + (high - low) * static_cast<double>(q) /
+                                   static_cast<double>(accurate_k_node_count - 1);
     }
+    // Flat index f = q * plane_size + (i - accurate_theta_start) * nh + j; each node is
+    // independent.
+    for_row_blocks(accurate_k_node_count * plane_size, build_threads(),
+                   [&](std::size_t begin, std::size_t end) {
+                     for (std::size_t index = begin; index < end; ++index) {
+                       const std::size_t q = index / plane_size;
+                       const std::size_t rest = index % plane_size;
+                       const std::size_t i = accurate_theta_start + rest / nh;
+                       const std::size_t j = rest % nh;
+                       const double k = dispersion_k_[q];
+                       double bent_group_delta = 0.;
+                       const CurvedRayIntegrals equal =
+                           curved_ray_integrals(profile_, earth_radius_m_, telescope_altitude_m_,
+                                                theta_[i], heights_[j], k, k, &bent_group_delta);
+                       dispersion_shift_[index] = equal.shift_m;
+                       dispersion_bent_[index] = equal.excess_bent_ns;
+                       dispersion_bent_delta_[index] = bent_group_delta;
+                       dispersion_straight_[index] = equal.excess_straight_ns / k;
+                     }
+                   });
+  }
+
+  // Threads for the table build: the hardware count (at least one).
+  static unsigned build_threads() noexcept {
+    return std::max(1U, std::thread::hardware_concurrency());
   }
 
   [[nodiscard]] bool lookup_accurate(double theta, double emission_altitude_m, double k,
