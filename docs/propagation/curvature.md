@@ -230,6 +230,20 @@ $4 \times 4$ Lagrange stencil, with no allocation.
   laterally displaced telescopes (at most lateral$/R$) is neglected in the direction of the
   displacement.
 
+## Spherical integrator (sphere representation)
+
+With `--curvature spherical` and the sphere representation ([](propagation.md#sphere-representation))
+the ray integrator of [](refraction.md#integrator) uses the spherical geometry: the altitude of a
+point is |X - C_E| - R with the Earth centre C_E = (0, 0, -(R + observation level)) and the
+gradient of n points along the radial unit vector from C_E. The straight-line air delay of rows
+without refraction takes the altitude along the line from |r| (`straight_line_air_delay_sky_ns`).
+A horizontal photon in vacuum (no profile) at the origin passes a telescope at (L, 0, 0), whose
+spherical altitude is obs + sqrt(L^2 + (R + obs)^2) - R - obs = L^2 / (2 (R + obs)) to second order;
+the sphere row of such a photon is the straight entry, with no curvature in the path (the flat
+frame is the Earth-centred frame translated, so straight lines stay straight). Only this vacuum
+case is tested for the spherical geometry (`test_sphere.cpp`); the spherical refraction of the
+integrator is implemented but has no independent reference yet.
+
 ## Efficiency status
 
 The efficiency status of the [atmosphere](../stream/efficiency-status.md) records the geometry:

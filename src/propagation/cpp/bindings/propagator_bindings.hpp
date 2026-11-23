@@ -36,6 +36,7 @@ inline nb::dict dropped_by_reason_dict(const DropCounts &counts) {
   out["turns_over"] = counts.turns_over;
   out["not_bendable"] = counts.not_bendable;
   out["misses_level"] = counts.misses_level;
+  out["misses_sphere"] = counts.misses_sphere;
   return out;
 }
 
@@ -56,7 +57,8 @@ inline void bind_propagator(nb::module_ &module) {
          const std::optional<std::vector<std::int64_t>> &telescopes, std::int64_t threads,
          const std::optional<std::vector<std::int64_t>> &scattering_primaries,
          const std::string &wavelength_interpolation,
-         const std::optional<double> &dispersion_reference_nm) {
+         const std::optional<double> &dispersion_reference_nm,
+         const std::string &ground_representation) {
         if (threads < 1 || threads > 256) {
           throw std::invalid_argument("threads must be an integer from 1 to 256");
         }
@@ -84,6 +86,8 @@ inline void bind_propagator(nb::module_ &module) {
           config.scattering_primaries = std::move(selection);
         }
         config.curvature = obdeect::propagation::parse_curvature(curvature);
+        config.ground_representation =
+            obdeect::propagation::parse_ground_representation(ground_representation);
         if (earth_radius_m) {
           config.earth_radius_m = *earth_radius_m;
         }
@@ -158,7 +162,7 @@ inline void bind_propagator(nb::module_ &module) {
       nb::arg("earth_radius_m") = nb::none(), nb::arg("telescopes") = nb::none(),
       nb::arg("threads") = std::int64_t{1}, nb::arg("scattering_primaries") = nb::none(),
       nb::arg("wavelength_interpolation") = "linear",
-      nb::arg("dispersion_reference_nm") = nb::none(),
+      nb::arg("dispersion_reference_nm") = nb::none(), nb::arg("ground_representation") = "plane",
       "Run the atmosphere stage on a photon stream file (geometry_only: no extinction, see "
       "docs/propagation.md). envelope_paths: (name, file) pairs of "
       "two-column text tables (nm, value). scattering_path: optional scattering table (single "
@@ -172,5 +176,7 @@ inline void bind_propagator(nb::module_ &module) {
       "dropped and not decoded. threads: 1 to 256 worker threads, the output does not depend on "
       "it. wavelength_interpolation: linear (default) or floor (sim_telarray), see "
       "WavelengthInterpolation. dispersion_reference_nm: wavelength [nm] of the profile's n-1; "
-      "None: no dispersion (needs a profile; rejected for refracted input).");
+      "None: no dispersion (needs a profile; rejected for refracted input). ground_representation: "
+      "plane (default) or sphere (rows on the telescope sphere, needs telescope_r_m; extinction of "
+      "sphere rows is not implemented yet, use geometry_only).");
 }

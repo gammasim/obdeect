@@ -5,6 +5,7 @@
 #include "obdeect/propagation/profile.hpp"
 #include "obdeect/stream/constants.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <stdexcept>
@@ -17,6 +18,43 @@ inline constexpr double speed_of_light_m_per_ns = obdeect::stream::speed_of_ligh
 namespace detail {
 
 inline constexpr std::size_t ambient_grid_points = 40000;
+
+// 8-point Gauss-Legendre rule on [0, 1]: nodes g = (1 + xi) / 2 and weights w / 2 of the rule on
+// [-1, 1] (the same values as refraction_horizon.hpp).
+inline constexpr std::array<double, 8> gauss8_xi = {
+    -0.9602898564975363, -0.7966664774136267, -0.5255324099163290, -0.1834346424956498,
+    0.1834346424956498,  0.5255324099163290,  0.7966664774136267,  0.9602898564975363};
+inline constexpr std::array<double, 8> gauss8_w = {
+    0.1012285362903763, 0.2223810344533745, 0.3137066458778873, 0.3626837833783620,
+    0.3626837833783620, 0.3137066458778873, 0.2223810344533745, 0.1012285362903763};
+inline constexpr std::array<double, 8> gauss8_nodes = {
+    0.5 * (1.0 + gauss8_xi[0]), 0.5 * (1.0 + gauss8_xi[1]), 0.5 * (1.0 + gauss8_xi[2]),
+    0.5 * (1.0 + gauss8_xi[3]), 0.5 * (1.0 + gauss8_xi[4]), 0.5 * (1.0 + gauss8_xi[5]),
+    0.5 * (1.0 + gauss8_xi[6]), 0.5 * (1.0 + gauss8_xi[7])};
+inline constexpr std::array<double, 8> gauss8_weights = {
+    0.5 * gauss8_w[0], 0.5 * gauss8_w[1], 0.5 * gauss8_w[2], 0.5 * gauss8_w[3],
+    0.5 * gauss8_w[4], 0.5 * gauss8_w[5], 0.5 * gauss8_w[6], 0.5 * gauss8_w[7]};
+
+// Largest piece [m] of a straight path in the Gauss-Legendre quadrature of the air delay.
+inline constexpr double straight_delay_piece_m = 250.0;
+
+// Mean of f(s) over the path s in [0, length_m] (m): 8-point Gauss-Legendre on pieces of at most
+// straight_delay_piece_m. f is called at the nodes only.
+template <class F> double straight_path_mean(double length_m, F &&f) {
+  if (!(length_m > 0.0)) {
+    return f(0.0);
+  }
+  const auto pieces = static_cast<std::size_t>(std::ceil(length_m / straight_delay_piece_m));
+  const double piece = length_m / static_cast<double>(pieces);
+  double sum = 0.0;
+  for (std::size_t p = 0; p < pieces; ++p) {
+    const double start = piece * static_cast<double>(p);
+    for (std::size_t i = 0; i < gauss8_nodes.size(); ++i) {
+      sum += gauss8_weights[i] * piece * f(start + gauss8_nodes[i] * piece);
+    }
+  }
+  return sum / length_m;
+}
 
 } // namespace detail
 
@@ -112,6 +150,27 @@ inline double straight_path_air_delay_ns(const AtmosphereProfile &profile, doubl
     throw std::invalid_argument("air delay needs 0 <= zenith < pi/2");
   }
   return straight_path_air_delay_from_cos_ns(profile, low_m, high_m, std::cos(zenith));
+}
+
+// Extra travel time [ns] of a straight path of length_m [m] whose height changes linearly from h_a
+// to h_b [m a.s.l.] (flat geometry): (length / c) times the mean of k_group (n-1) along the path,
+// by 8-point Gauss-Legendre quadrature on pieces of at most 250 m. The profile's n-1 is evaluated
+// at each node; for h_a == h_b the result is exact, k_group (n-1) at that height times length / c.
+// k_group = 1 gives the air delay of the unscaled profile. See docs/propagation/refraction.md.
+inline double straight_line_air_delay_ns(const AtmosphereProfile &profile, double h_a_m,
+                                         double h_b_m, double length_m, double k_group) {
+  if (!std::isfinite(h_a_m) || !std::isfinite(h_b_m) || !std::isfinite(length_m) ||
+      !std::isfinite(k_group) || length_m < 0.0 || k_group < 0.0) {
+    throw std::invalid_argument(
+        "straight line air delay needs finite heights and length, k_group >= 0");
+  }
+  if (!(length_m > 0.0)) {
+    return 0.0;
+  }
+  const double slope = (h_b_m - h_a_m) / length_m; // height per metre of path
+  const double mean = detail::straight_path_mean(
+      length_m, [&](double s) { return profile.refractive_index_minus_one(h_a_m + slope * s); });
+  return length_m * k_group * mean / speed_of_light_m_per_ns;
 }
 
 } // namespace obdeect::propagation

@@ -210,7 +210,8 @@ enum class Drop : std::uint8_t {
   below_ground,
   turns_over,
   not_bendable,
-  misses_level
+  misses_level,
+  misses_sphere
 };
 
 // Dropped rows of sky_to_ground by reason (docs/propagation/propagation.md, "Dropped photons").
@@ -222,9 +223,12 @@ struct DropCounts {
   std::uint64_t turns_over{};   // upward ray turned over (sin theta >= 1) before the plane
   std::uint64_t not_bendable{}; // bending failed otherwise (series limit, quadrature, unit disc)
   std::uint64_t misses_level{}; // spherical geometry: the line does not reach the telescope level
+  std::uint64_t
+      misses_sphere{}; // sphere representation: the path does not enter the telescope sphere
 
   [[nodiscard]] std::uint64_t total() const noexcept {
-    return moving_away + horizontal + below_ground + turns_over + not_bendable + misses_level;
+    return moving_away + horizontal + below_ground + turns_over + not_bendable + misses_level +
+           misses_sphere;
   }
 
   void count(Drop reason) noexcept {
@@ -249,6 +253,9 @@ struct DropCounts {
     case Drop::misses_level:
       ++misses_level;
       break;
+    case Drop::misses_sphere:
+      ++misses_sphere;
+      break;
     }
   }
 
@@ -259,6 +266,7 @@ struct DropCounts {
     turns_over += other.turns_over;
     not_bendable += other.not_bendable;
     misses_level += other.misses_level;
+    misses_sphere += other.misses_sphere;
     return *this;
   }
 };

@@ -12,6 +12,7 @@ from obdeect.propagation import _core
 
 MODES = ("thinned", "weighted")
 CURVATURES = ("none", "corsika", "spherical")
+GROUND_REPRESENTATIONS = ("plane", "sphere")
 WAVELENGTH_INTERPOLATIONS = ("linear", "floor")
 DEFAULT_SCATTERING_POINTS = 8
 
@@ -40,6 +41,7 @@ def propagate(
     threads: int = 1,
     wavelength_interpolation: str = "linear",
     dispersion_reference_nm: float | None = None,
+    ground_representation: str = "plane",
 ) -> dict[str, float]:
     """Run the atmosphere stage on a photon stream file.
 
@@ -102,12 +104,18 @@ def propagate(
             bending and the travel time of the bent sky-frame photons to their wavelength
             (docs/propagation/refraction.md, "Dispersion"). Needs profile; rejected for a run
             with refraction_applied = 1. Default None: no dispersion.
+        ground_representation: ``"plane"`` (default: rows at z = 0 relative to the telescope) or
+            ``"sphere"`` (rows where the path enters the telescope sphere, columns z, cz, zem and
+            path; docs/propagation/propagation.md, "Sphere representation"). Sphere needs the run
+            key telescope_r_m. Extinction of sphere rows is not implemented yet: use
+            ``extinction=False``.
 
     Returns:
         Dict with photons_in, photons_out, dropped (sky-frame photons not reaching the
         telescope plane), dropped_by_reason (dict of the dropped photons by reason: moving_away,
-        horizontal, below_ground, turns_over, not_bendable, misses_level; the values sum to
-        dropped) and weight_out (sum of w of the output). See docs/propagation/propagation.md.
+        horizontal, below_ground, turns_over, not_bendable, misses_level, misses_sphere; the
+        values sum to dropped) and weight_out (sum of w of the output). See
+        docs/propagation/propagation.md.
 
     Raises:
         ValueError: invalid settings or input, or an input efficiency status that shows a
@@ -118,6 +126,11 @@ def propagate(
         raise ValueError(f"mode must be one of {MODES}, not {mode!r}")
     if curvature not in CURVATURES:
         raise ValueError(f"curvature must be one of {CURVATURES}, not {curvature!r}")
+    if ground_representation not in GROUND_REPRESENTATIONS:
+        raise ValueError(
+            f"ground_representation must be one of {GROUND_REPRESENTATIONS}, "
+            f"not {ground_representation!r}"
+        )
     if scattering_primaries is not None and scattering is None:
         raise ValueError("scattering_primaries needs scattering")
     if extinction:
@@ -186,6 +199,7 @@ def propagate(
             else [operator.index(telescope) for telescope in scattering_primaries],
             wavelength_interpolation,
             None if dispersion_reference_nm is None else float(dispersion_reference_nm),
+            ground_representation,
         )
     )
 
