@@ -55,8 +55,9 @@ and an entry in the list of efficiency factors built there.
 A downward photon reaches the plane if it starts at or above it. An upward photon reaches it if it
 starts between the observation level and the plane (emitted below the plane, it travels up to it;
 see [](refraction.md#upward-photons)). Horizontal photons (cz = 0) never reach the plane. The other
-photons are dropped and counted by reason (see [Dropped photons](#dropped-photons)). Their rows stay
-in the chunk with w = 0, so the random draws of the other photons do not change.
+photons are dropped and counted by reason (see [Dropped photons](#dropped-photons)). Inside the
+stage their rows keep w = 0, so the random draws of the other photons do not change; they are not
+written (the output numbers the surviving photons consecutively).
 
 ## Dropped photons
 
@@ -174,7 +175,7 @@ obdeect propagation run: photons in <n>, out <m> (weight <w>), dropped <d>
 | `--scattering-points N` | scattering points per photon, 1 to 1024 (default 8; needs `--scattering`) |
 | `--curvature none\|corsika\|spherical` | Earth curvature of the atmosphere (default none), see [](curvature.md) |
 | `--earth-radius-m M` | Earth radius for the curved modes [m] (default 6371315, the CORSIKA CURVED radius) |
-| `--ground-representation plane\|sphere` | output representation of frame G (default plane); `sphere` rows are points on the telescope sphere ([](#sphere-representation)); needs `telescope_r_m` and `--no-extinction` for now |
+| `--ground-representation plane\|sphere` | output representation of frame G (default plane); `sphere` rows are points on the telescope sphere ([](#sphere-representation)); needs `telescope_r_m`; extinction, thinning and scattering apply to the sphere rows ([](extinction.md#sphere-rows), [](scattering.md#sphere-runs)) |
 | `--pathlen M` | path inside each telescope [m], finite and ≥ 0 (default 0) |
 | `--telescope-pathlen ID=M` | path inside telescope ID (1-based) [m]; overrides `--pathlen`; repeatable |
 | `--threads N` | threads for the rows of each chunk, 1 to 256 (default 1); the output does not depend on N |
@@ -297,7 +298,7 @@ of the sky frame and the radius R = `telescope_r_m` of the run:
 - emitted inside the sphere: the emission point, |r| < R, with path 0.
 
 Columns: `x y z cx cy cz t zem w path`, plus `wavelength` and `p` as before. `path` is the distance
-from the emission to the row point [m] (written for every row in sphere mode, 0 for dropped rows);
+from the emission to the row point [m] (written for every row of the output in sphere mode);
 `cz` is always written. A muon track crossing the sphere gives rows of both kinds in one event.
 
 Sky-frame photons are converted with these rules, in this order (`sky_to_sphere` in `obdeect/propagation/sphere.hpp`):
@@ -313,13 +314,20 @@ Sky-frame photons are converted with these rules, in this order (`sky_to_sphere`
    reaches the telescope plane with |cz| >= 0.1 there and the emission is farther than R from the
    plane; otherwise the 3D ray integrator ([](refraction.md#integrator)).
 
-Rows that do not reach the sphere are dropped and counted in `dropped_by_reason` as above, with
-w = 0 and zeros; the row index is kept, as in plane mode.
+Rows that do not reach the sphere are dropped: they are not written (the surviving rows are numbered
+consecutively, as in plane mode, with and without extinction) and are counted in `dropped_by_reason`
+as above.
 
-Limits of this stage (phase 5b-1): extinction and thinning of sphere rows are not implemented yet
-(phase 5b-2, docs/propagation/extinction.md). A run in sphere mode with extinction (no
-`--no-extinction`) is rejected with an explicit error. Scattering in sphere mode goes through the
-same conversion; its photons reach the same rejection. Input runs in the sphere representation
+Extinction, thinning and scattering apply to sphere rows: a row is attenuated over its chord from
+the emission point to the row point, with the altitude of the row point in place of the telescope
+altitude ([](extinction.md#sphere-rows)); a near-horizontal chord uses the chord integral
+([](extinction.md#chord-integral)). Scattered photons go through the same conversion. Horizontal
+primaries are scattered along their straight path in sphere runs ([](scattering.md#sphere-runs)).
+The efficiency status records the same factors as a plane run. Limit: the chord of a refracted row
+is the straight line from its emission point to the row point (the bent path is approximated by
+it). A straight segment of the straight rule cannot dip below the observation level: z is linear
+along it and the spherical altitude is at least obs + z, so checking z >= 0 at the two ends is
+enough (test: `test_sphere`, straight chords). Input runs in the sphere representation
 (from sources or CORSIKA) are kept as sphere rows; sphere rows need the `z` and `cz` columns and a
 run key `telescope_r_m`. Frame G photons of a plane run cannot be converted to sphere rows (sky-frame
 input is needed).

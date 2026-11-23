@@ -146,22 +146,160 @@ def test_plane_mode_is_the_default(tmp_path):
     assert summary["dropped_by_reason"]["misses_sphere"] == 0
 
 
-def test_extinction_of_sphere_rows_is_rejected(tmp_path):
+def _horizontal_stream(rows_per_telescope=200, seed=11):
+    """Horizontal sky-frame primaries (cz = 0) at 5 km above the observation level, starting 4 km
+    from each telescope in random azimuths: they are scattered into the spheres (sphere runs)."""
+    rng = np.random.default_rng(seed)
+    writer = StreamWriter()
+    writer.metadata(
+        "run",
+        {
+            "run_number": 1,
+            "observation_level_m": SITE_M,
+            "telescope_x_m": [t[0] for t in TELESCOPES],
+            "telescope_y_m": [t[1] for t in TELESCOPES],
+            "telescope_z_m": [t[2] for t in TELESCOPES],
+            "telescope_r_m": [RADIUS_M, RADIUS_M],
+            "refraction_applied": 0,
+            "wavelength_min_nm": 345.0,  # inside the scattering table (340 to 400 nm)
+            "wavelength_max_nm": 395.0,
+        },
+    )
+    writer.metadata("event", {"event_number": 5})
+    for telescope_id, (tx, ty, _) in enumerate(TELESCOPES, start=1):
+        writer.metadata("telescope", {"telescope_id": telescope_id, "frame": 0})
+        n = rows_per_telescope
+        azimuth = rng.uniform(0.0, 2.0 * np.pi, n)
+        cx, cy = np.cos(azimuth), np.sin(azimuth)
+        columns = {
+            "x": tx - 4000.0 * cx + rng.uniform(-300.0, 300.0, n),
+            "y": ty - 4000.0 * cy + rng.uniform(-300.0, 300.0, n),
+            "z": np.full(n, 5000.0),
+            "cx": cx,
+            "cy": cy,
+            "cz": np.zeros(n),
+            "t": np.zeros(n),
+            "w": np.ones(n),
+        }
+        writer.photons(telescope_id, 0, columns, first_index=0)
+        writer.metadata("telescope_end", {"telescope_id": telescope_id, "photons": 0.0})
+    writer.metadata("event_end")
+    writer.metadata("run_end")
+    return writer.getvalue()
+
+
+TRANSMISSION = (
+    Path(__file__).resolve().parents[2]
+    / "cpp"
+    / "tests"
+    / "data"
+    / "atm_trans_2000_1_10_0_0_2000.dat"
+)
+SCATTERING = (
+    Path(__file__).resolve().parents[2] / "cpp" / "tests" / "data" / "scattering_exponential.dat"
+)
+
+
+def _photon_arrays(path):
+    """All photon columns of the output, in record order (for comparisons)."""
+    arrays = {}
+    for record in _records(path):
+        if record["type"] != "photons":
+            continue
+        for name, values in record["columns"].items():
+            arrays.setdefault(name, []).append(np.asarray(values))
+    return {name: np.concatenate(parts) for name, parts in arrays.items() if parts}
+
+
+def test_extinction_of_sphere_rows_is_applied(tmp_path):
     source = tmp_path / "in.pst"
     source.write_bytes(_sky_stream())
-    with pytest.raises(ValueError, match="phase 5b-2"):
-        obdeect_propagation.propagate(
+    summary = {}
+    outputs = {}
+    for threads in (1, 3):
+        output = tmp_path / f"out{threads}.pst"
+        summary[threads] = obdeect_propagation.propagate(
             source,
-            tmp_path / "out.pst",
-            transmission=Path(__file__).resolve().parents[2]
-            / "cpp"
-            / "tests"
-            / "data"
-            / "atm_trans_2000_1_10_0_0_2000.dat",
+            output,
+            transmission=TRANSMISSION,
             site_altitude_m=SITE_M,
             seed=1,
             ground_representation="sphere",
+            threads=threads,
         )
+        outputs[threads] = output
+    assert summary[1]["photons_out"] > 0
+    assert summary[1]["photons_out"] == summary[3]["photons_out"]
+    efficiency = [r for r in _records(outputs[1]) if r["type"] == "efficiency_status"]
+    assert efficiency
+    assert efficiency[-1]["metadata"]["factors"] == "atmosphere,wavelength"
+    assert efficiency[-1]["metadata"]["atmosphere.state"] == "applied"
+    # Thinned output: the photons of both thread counts are identical.
+    one, three = _photon_arrays(outputs[1]), _photon_arrays(outputs[3])
+    assert set(one) == set(three)
+    for name in one:
+        np.testing.assert_array_equal(one[name], three[name])
+    # Weighted output keeps the extinction in the weights (the atmosphere factor is below 1).
+    weighted = tmp_path / "weighted.pst"
+    obdeect_propagation.propagate(
+        source,
+        weighted,
+        transmission=TRANSMISSION,
+        site_altitude_m=SITE_M,
+        seed=1,
+        ground_representation="sphere",
+        mode="weighted",
+    )
+    w = _photon_arrays(weighted)["w"]
+    assert np.all(w >= 0.0)
+    assert np.any(w < 1.0)
+    assert np.all(w <= 1.0 + 1e-6)
+
+
+def test_horizontal_primaries_scatter_in_sphere_runs(tmp_path):
+    source = tmp_path / "horizontal.pst"
+    source.write_bytes(_horizontal_stream())
+    output = tmp_path / "out.pst"
+    # Weighted output: the scattered weights are tiny, thinning would drop them all.
+    summary = obdeect_propagation.propagate(
+        source,
+        output,
+        transmission=TRANSMISSION,
+        scattering=SCATTERING,
+        scattering_points=4,
+        site_altitude_m=SITE_M,
+        seed=3,
+        ground_representation="sphere",
+        mode="weighted",
+    )
+    assert summary["photons_out"] > 0
+    efficiency = [r for r in _records(output) if r["type"] == "efficiency_status"]
+    assert "scattering" in efficiency[-1]["metadata"]["factors"]
+    arrays = _photon_arrays(output)
+    # Sphere rows of the scattered photons: on or inside the sphere (path >= 0), direction unit.
+    radius = np.sqrt(arrays["x"] ** 2 + arrays["y"] ** 2 + arrays["z"] ** 2)
+    assert np.all(radius <= RADIUS_M + 1e-3)
+    np.testing.assert_allclose(
+        arrays["cx"] ** 2 + arrays["cy"] ** 2 + arrays["cz"] ** 2, 1.0, atol=1e-5
+    )
+    # The same run with 2 threads gives the same photons.
+    output2 = tmp_path / "out2.pst"
+    obdeect_propagation.propagate(
+        source,
+        output2,
+        transmission=TRANSMISSION,
+        scattering=SCATTERING,
+        scattering_points=4,
+        site_altitude_m=SITE_M,
+        seed=3,
+        ground_representation="sphere",
+        mode="weighted",
+        threads=2,
+    )
+    other = _photon_arrays(output2)
+    assert set(other) == set(arrays)
+    for name in arrays:
+        np.testing.assert_array_equal(arrays[name], other[name])
 
 
 def test_invalid_ground_representation_and_missing_radius(tmp_path):

@@ -326,15 +326,17 @@ Chunk size, thread count and row order do not change a row: each row is a separa
 
 For a downward or upward ray with |cz| >= 0.1 at the telescope plane, where the emission is farther
 than R from the plane, the plane-mode computation (`bend`, `bend_quadrature`, `bend_upward`) gives
-the crossing Q of the telescope plane and the direction d_t there. Near the sphere the ray is
-straight (the curvature is about |nu'| = 4e-8 per metre), so the entry is the tangent line from Q:
-the smaller root s of |Q + s d_t - C| = R (s may be negative, the root may lie behind Q). The
-time is t_Q + s n_group(h_C) / c, the path is the straight chord |entry - P| (a chord, not the
-bent path length). With no root the photon is `misses_sphere`.
-
-The rule is used only where the plane-mode computation reaches the plane, so it never extrapolates
-a bent ray that does not cross it. Its error is the straight-line approximation between Q and the
-entry, which is of the order of the bending over the chord (metres of path at most).
+the crossing Q of the telescope plane, the direction d_t there and the time t_Q. The entry is then
+found with the 3D ray integrator from Q (ray_march.hpp), not with a straight tangent line (a
+tangent from Q is off by up to tens of metres for shallow rays: about 74 m long at |cz| = 0.16, with
+errors of 3e-4 m). The straight line through Q decides the side of the entry: its smaller root s of
+|Q + s d_t - C| = R. If s < 0 (the entry lies before Q) the ray is integrated backwards from Q
+(reverse direction, time decreasing with n_group); otherwise forwards. Each step is RK4 of 50 m with
+the straight intersection of the last step, the same limit as the integrator from the emission. The
+output is the entry relative to C, the bent direction there, the time there, and the path: the
+straight chord |entry - P| from the emission P (a chord, not the bent path length). With no
+straight root the photon is `misses_sphere`; an integration that reaches the ground is
+`below_ground`.
 
 ### Accuracy
 
@@ -343,6 +345,7 @@ Measured with the test suite (`test_sphere.cpp`, ECMWF profile, observation leve
 | Comparison | Result |
 | --- | --- |
 | hybrid rule vs integrator, |cz| 0.1 to 0.3, impact -6 to 8 m (25 rows) | 7.7e-5 m, 2.7e-5 ns (max) |
+| hybrid rule (integrates from Q) vs integrator, |cz| 0.1 to 0.3 (0.16 included), impact -12 to 12 m (|Q| up to R; 66 rows) | 7.6e-5 m, 4.6e-5 ns (max) |
 | integrator vs `bend_quadrature`, downward, 2.7 km path | 1e-9 m, 1e-9 ns |
 | integrator vs `bend_upward`, upward, 1.3 km path | agrees to the printed precision, 1e-7 m |
 | integrator vs independent Snell reference, turning ray, 318 km path (apex 300 m above the emission) | 3e-4 m, 1e-3 ns |

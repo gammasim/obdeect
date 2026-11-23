@@ -27,6 +27,7 @@
 #include <cstdio>
 #include <fstream>
 #include <limits>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -546,7 +547,7 @@ void test_hybrid_against_integrator() {
       double t_h = 0.0, path_h = 0.0;
       const auto hr =
           obdeect::propagation::hybrid_sphere_row(plane, R, x_p, y_p, cx_p, cy_p, false, t_p, 1.0,
-                                                  {sx, 0.0, sz}, entry_rel, u_t, t_h, path_h);
+                                                  1.0, {sx, 0.0, sz}, entry_rel, u_t, t_h, path_h);
       if (hr != obdeect::propagation::Drop::none) {
         continue;
       }
@@ -573,6 +574,75 @@ void test_hybrid_against_integrator() {
       "hybrid vs integrator (double): %d rows, max position diff %.3e m, max time diff %.3e ns\n",
       hybrid_rows, worst_x, worst_t);
   CHECK(hybrid_rows >= 10);
+  CHECK(worst_x <= 1e-4);
+  CHECK(worst_t <= 1e-4);
+}
+
+// Hybrid rule against the integrator (forced from the emission) for shallow rays: the plane-mode
+// crossing Q with |cz| = 0.1 to 0.3 and impact parameters |Q| up to R (the entry before Q for |Q| <
+// R, after it otherwise). The hybrid integrates from Q, so both agree to the integrator's step.
+void test_hybrid_shallow_against_integrator() {
+  const AtmosphereProfile profile = ecmwf_profile();
+  const double R = 12.0;
+  const double tz = 10.0;
+  const RefractionTables tables(profile, kObs + tz);
+  SkyPlane plane = plane_at(0.0, 0.0, tz);
+  plane.profile = &profile;
+  plane.tables = &tables;
+  double worst_x = 0.0, worst_t = 0.0;
+  int rows = 0;
+  for (const double cz_mag : {0.1, 0.13, 0.16, 0.2, 0.25, 0.3}) {
+    for (const double offset : {-12.0, -9.0, -6.0, -3.0, -1.0, 0.0, 1.0, 3.0, 6.0, 9.0, 12.0}) {
+      const double cx = static_cast<float>(std::sqrt(1.0 - cz_mag * cz_mag));
+      const double cz = signed_cz(cx, 0.0, -1.0);
+      const double z_start = 25000.0;
+      double x_start = offset - (z_start - tz) * cx / cz_mag;
+      for (int iteration = 0; iteration < 4; ++iteration) {
+        double xp = 0, yp = 0, cxp = 0, cyp = 0, tp = 0;
+        obdeect::propagation::plane_arrival(plane, x_start, 0.0, z_start, cx, 0.0, cz_mag, 1.0,
+                                            false, kObs + z_start, 0.0, 1.0, 1.0, xp, yp, cxp, cyp,
+                                            tp);
+        x_start += offset - xp;
+      }
+      PhotonChunk chunk = sky_chunk({{x_start, 0.0, z_start, cx, 0.0, cz, 0.0}});
+      const double sx = chunk[Column::x][0], sz = chunk[Column::z][0];
+      const double scx = chunk[Column::cx][0];
+      double x_p = 0, y_p = 0, cx_p = 0, cy_p = 0, t_p = 0;
+      const double cz_plane = std::sqrt(1.0 - scx * scx);
+      if (obdeect::propagation::plane_arrival(plane, sx, 0.0, sz, scx, 0.0, cz_plane, 1.0, false,
+                                              kObs + sz, 0.0, 1.0, 1.0, x_p, y_p, cx_p, cy_p,
+                                              t_p) != obdeect::propagation::Drop::none) {
+        continue;
+      }
+      std::array<double, 3> entry_rel{}, u_t{};
+      double t_h = 0.0, path_h = 0.0;
+      if (obdeect::propagation::hybrid_sphere_row(plane, R, x_p, y_p, cx_p, cy_p, false, t_p, 1.0,
+                                                  1.0, {sx, 0.0, sz}, entry_rel, u_t, t_h,
+                                                  path_h) != obdeect::propagation::Drop::none) {
+        continue;
+      }
+      RayState start;
+      start.x = {sx, 0.0, sz};
+      start.d = {scx, 0.0, -cz_plane};
+      RayState entry;
+      if (obdeect::propagation::integrate_sphere_row(plane, R, start, 1.0, 1.0, entry) !=
+          obdeect::propagation::Drop::none) {
+        continue;
+      }
+      ++rows;
+      const double dx = entry_rel[0] - entry.x[0];
+      const double dy = entry_rel[1] - entry.x[1];
+      const double dz = entry_rel[2] - (entry.x[2] - tz);
+      const double rowerr = std::sqrt(dx * dx + dy * dy + dz * dz);
+      worst_x = std::max(worst_x, rowerr);
+      worst_t = std::max(worst_t, std::abs(t_h - entry.t));
+    }
+  }
+  std::fprintf(stderr,
+               "hybrid shallow vs integrator: %d rows, max position diff %.3e m, max time diff "
+               "%.3e ns\n",
+               rows, worst_x, worst_t);
+  CHECK(rows >= 40);
   CHECK(worst_x <= 1e-4);
   CHECK(worst_t <= 1e-4);
 }
@@ -693,6 +763,65 @@ void test_validation() {
 
 } // namespace
 
+// Spherical straight rule (sky_to_sphere, no refraction): a straight segment from an emission with
+// z >= 0 to its entry point stays above the observation level. z is linear along the segment and
+// the spherical altitude is at least obs + z (sqrt(rho^2 + (R + a)^2) >= R + a), so the segment
+// cannot dip below the ground between its ends. Random grazing downward chords: every accepted row
+// is checked by sampling the altitude along its segment from the emission to the entry point.
+void test_straight_chords_stay_above_ground() {
+  SkyPlane plane;
+  plane.telescope_x_m = 0.0;
+  plane.telescope_y_m = 0.0;
+  plane.telescope_z_m = 5.0;
+  plane.observation_m = kObs;
+  plane.earth_radius_m = kR;
+  plane.telescope_altitude_m = kObs + 5.0;
+  const double radius = 12.0;
+  std::mt19937_64 rng(20261123);
+  std::uniform_real_distribution<double> uniform(0.0, 1.0);
+  const double pi = std::acos(-1.0);
+  std::vector<std::array<double, 7>> rows;
+  for (std::size_t i = 0; i < 6000; ++i) {
+    const double phi = 2.0 * pi * uniform(rng);
+    const double rho = 20000.0 * uniform(rng);
+    const double cz = 0.02 + 0.18 * uniform(rng);
+    const double c_xy = std::sqrt(1.0 - cz * cz);
+    // Emission above the line to the telescope height at its horizontal distance: the line passes
+    // near the sphere and stays at z >= 0 for the emission.
+    const double z = 5.0 + rho * cz / c_xy + 8.0 * (uniform(rng) - 0.5);
+    // Towards the telescope axis, with a random offset in azimuth.
+    const double azimuth =
+        std::atan2(-std::sin(phi), -std::cos(phi)) + 1.0e-3 * (uniform(rng) - 0.5);
+    rows.push_back({static_cast<float>(rho * std::cos(phi)),
+                    static_cast<float>(rho * std::sin(phi)), static_cast<float>(z),
+                    static_cast<float>(c_xy * std::cos(azimuth)),
+                    static_cast<float>(c_xy * std::sin(azimuth)), static_cast<float>(-cz), 0.0});
+  }
+  PhotonChunk chunk = sky_chunk(rows);
+  sky_to_sphere(chunk, plane, radius, false);
+  std::size_t accepted = 0;
+  for (std::size_t r = 0; r < rows.size(); ++r) {
+    if (chunk[Column::w][r] == 0.0F) {
+      continue;
+    }
+    ++accepted;
+    const double ex = plane.telescope_x_m + chunk[Column::x][r];
+    const double ey = plane.telescope_y_m + chunk[Column::y][r];
+    const double ez = plane.telescope_z_m + chunk[Column::z][r];
+    double min_altitude = 1e300;
+    for (int k = 0; k <= 4000; ++k) {
+      const double t = static_cast<double>(k) / 4000.0;
+      const double x = rows[r][0] + t * (ex - rows[r][0]);
+      const double y = rows[r][1] + t * (ey - rows[r][1]);
+      const double zz = rows[r][2] + t * (ez - rows[r][2]);
+      const double a = kObs + zz;
+      min_altitude = std::min(min_altitude, std::sqrt(x * x + y * y + (kR + a) * (kR + a)) - kR);
+    }
+    CHECK(min_altitude >= kObs - 1e-2);
+  }
+  CHECK(accepted > 500);
+}
+
 int main() {
   return run_checks([] {
     test_profile_slope();
@@ -701,6 +830,7 @@ int main() {
     test_horizontal_and_upward_entry();
     test_inside_below_and_missed();
     test_validation();
+    test_straight_chords_stay_above_ground();
     test_integrator_constant_index();
     test_integrator_matches_downward_bending();
     test_integrator_matches_upward_bending();
@@ -708,6 +838,7 @@ int main() {
     test_horizontal_sagitta();
     test_spherical_horizontal_vacuum();
     test_hybrid_against_integrator();
+    test_hybrid_shallow_against_integrator();
     test_chunk_and_order_invariance();
     test_plane_arrival_matches_plane_mode();
     test_ground_to_sky_round_trip();

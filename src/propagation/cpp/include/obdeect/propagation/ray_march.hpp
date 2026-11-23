@@ -185,4 +185,54 @@ inline MarchEnd march_to_sphere(const RayMedium &medium, RayState &state,
   }
 }
 
+// Integrates the ray backwards from state (sky frame, forward direction d as in RayState) until it
+// meets the sphere (centre C, radius R): the first point on the backward ray at which |x - C| = R,
+// from either side of the sphere (the state may be inside it). Backward steps of -step_m; each step
+// is checked on its straight segment for the two roots of |x - sigma d - C| = R, 0 < sigma <= step.
+// On a hit, state holds the crossing (absolute sky position), the forward direction there, the time
+// (decreased along the ray: dT/ds = n_g / c with s running backwards) and the path (decreased).
+// Stops with the reason otherwise: below_ground, escaped (above the table top moving upwards) or
+// step_limit.
+inline MarchEnd march_back_to_sphere(const RayMedium &medium, RayState &state,
+                                     const std::array<double, 3> &centre, double radius_m,
+                                     double step_m = 50.0, std::size_t max_steps = 200000) {
+  const double top_m = medium.profile != nullptr ? medium.profile->top_m() : 0.0;
+  for (std::size_t steps = 0;; ++steps) {
+    const std::array<double, 3> q{state.x[0] - centre[0], state.x[1] - centre[1],
+                                  state.x[2] - centre[2]};
+    const double q2 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2];
+    const double altitude = ray_altitude_m(medium, state.x);
+    if (altitude < medium.observation_m) {
+      return MarchEnd::below_ground;
+    }
+    if (medium.profile != nullptr && altitude > top_m && state.d[2] < 0.0) {
+      return MarchEnd::escaped;
+    }
+    if (steps >= max_steps) {
+      return MarchEnd::step_limit;
+    }
+    // Roots sigma of |q - sigma d|^2 = R^2 (distance along -d). The point q - sigma d is an entry
+    // of the forward ray when its radial direction is inward for d: (q - sigma d) . d < 0, i.e.
+    // sigma > q . d. That is the larger root only (the smaller one is the exit of the forward ray).
+    const double qd = q[0] * state.d[0] + q[1] * state.d[1] + q[2] * state.d[2];
+    const double disc = qd * qd - (q2 - radius_m * radius_m);
+    if (disc >= 0.0) {
+      const double sigma = qd + std::sqrt(disc);
+      if (sigma > 0.0 && sigma <= step_m) {
+        const double ng =
+            1.0 + medium.k_group * (medium.profile != nullptr
+                                        ? medium.profile->refractive_index_minus_one(altitude)
+                                        : 0.0);
+        for (std::size_t i = 0; i < 3; ++i) {
+          state.x[i] -= sigma * state.d[i];
+        }
+        state.t -= sigma * ng / speed_of_light_m_per_ns;
+        state.path -= sigma;
+        return MarchEnd::entered;
+      }
+    }
+    ray_rk4_step(medium, state, -step_m);
+  }
+}
+
 } // namespace obdeect::propagation

@@ -147,7 +147,8 @@ struct PropagatorConfig {
   double earth_radius_m{obdeect::stream::earth_radius_m};
   // Ground representation of the output (see parse_ground_representation). Sphere needs the run key
   // telescope_r_m (one radius per telescope). Input sphere runs are kept as sphere rows and need
-  // this setting too; sphere rows need extinction, which is not implemented yet (geometry only).
+  // this setting too. Sphere rows take extinction and scattering (docs/propagation/extinction.md,
+  // "Sphere rows"; docs/propagation/scattering.md, "Sphere runs").
   obdeect::stream::GroundRepresentation ground_representation{
       obdeect::stream::GroundRepresentation::plane};
   // Threads for the extinction of each chunk (1: in place). The output does not depend on it.
@@ -684,6 +685,7 @@ private:
                               obdeect::stream::GroundRepresentation::sphere;
     const bool sphere =
         config_.ground_representation == obdeect::stream::GroundRepresentation::sphere;
+    config_.scattering.sphere_geometry = sphere;
     if (sphere_input && !sphere) {
       throw std::invalid_argument(
           "input run is in the sphere representation (ground_representation "
@@ -1157,9 +1159,6 @@ private:
       list.clear();
       return;
     }
-    if (!list.empty() && run_->sphere) {
-      reject_sphere_extinction();
-    }
     const bool weighted = config_.mode == OutputMode::weighted;
     for (const auto &scattered : list) {
       obdeect::stream::PhotonChunk plane_input = scattered;
@@ -1237,13 +1236,6 @@ private:
     }
   }
 
-  // Extinction and thinning of sphere rows: not implemented yet (phase 5b-2). Rejected with an
-  // explicit error rather than computed with plane-mode geometry; geometry_only runs are fine.
-  [[noreturn]] static void reject_sphere_extinction() {
-    throw std::invalid_argument("sphere representation: extinction and thinning of sphere rows are "
-                                "not implemented yet (phase 5b-2); run with extinction=False");
-  }
-
   template <class Sink> void photons(const obdeect::stream::PhotonChunk &input, Sink &sink) {
     if (!run_ || !telescope_.open) {
       throw std::invalid_argument("photons outside a telescope record");
@@ -1296,9 +1288,6 @@ private:
       return;
     }
 
-    if (run_->sphere) {
-      reject_sphere_extinction();
-    }
     // Ground steps (see the header comment). Wavelength assignment, extinction and
     // envelope thinning are one kernel call; sky steps came before.
     ExtinctionSettings settings;
@@ -1311,7 +1300,12 @@ private:
     settings.telescope = telescope_.id;
     settings.threads = config_.threads;
     settings.weighted = config_.mode == OutputMode::weighted;
-    if (config_.curvature != Curvature::none) {
+    if (run_->sphere) {
+      settings.sphere =
+          SphereGeometry{run_->observation_m,
+                         config_.curvature == Curvature::spherical ? config_.earth_radius_m : 0.0,
+                         telescope_.x_m, telescope_.y_m, telescope_.z_m};
+    } else if (config_.curvature != Curvature::none) {
       settings.curved = curved_path(telescope_);
     }
     std::vector<obdeect::stream::PhotonChunk> outputs =

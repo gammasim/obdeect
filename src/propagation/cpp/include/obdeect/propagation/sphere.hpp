@@ -171,12 +171,21 @@ inline Drop integrate_sphere_row(const SkyPlane &plane, double radius_m, const R
   return Drop::misses_sphere;
 }
 
-// Hybrid rule (step 4d): the tangent line from the plane-mode crossing Q (relative to the
-// telescope, in the telescope plane) with the bent direction there, the smaller root of |Q + s u -
-// C| = R (s may be negative). Output: entry relative to C, direction u, time and the chord path
-// from the emission P (absolute). Returns misses_sphere if the line does not meet the sphere.
+// Hybrid rule (step 4d). The plane-mode state at the telescope plane, Q (relative to the telescope,
+// in the plane through C), with the bent direction (cx_out, cy_out, +-cz) and time t_cross, is the
+// starting point of the 3D ray integrator (ray_march.hpp), not a straight tangent line: a straight
+// line from Q is off by up to tens of metres for shallow rays (|cz| about 0.16, Q far from C).
+// The straight line through Q decides the side of the entry: its smaller root s (entry at Q + s u,
+// |Q + s u - C| = R; s < 0: before Q). Before Q (s < 0) the ray is integrated backwards from Q
+// (reverse direction, time decreasing with n_g), otherwise forwards; the sphere is met with the
+// straight finish of the last step (march_to_sphere / march_back_to_sphere). Output: the entry
+// relative to C, the bent direction there, the time, and the path = the distance from the emission
+// to the entry (the chord, as the straight rule). Misses: the straight line does not meet the
+// sphere (misses_sphere), or the integration reaches the ground first (below_ground) or stops
+// (misses_sphere). k and k_group: the refractivity ratios of the photon's wavelength (as
+// integrate_sphere_row).
 inline Drop hybrid_sphere_row(const SkyPlane &plane, double radius_m, double x_out, double y_out,
-                              double cx_out, double cy_out, bool upward, double t_cross,
+                              double cx_out, double cy_out, bool upward, double t_cross, double k,
                               double k_group, const std::array<double, 3> &emission,
                               std::array<double, 3> &entry_rel, std::array<double, 3> &u,
                               double &t_out, double &path_out) {
@@ -191,22 +200,27 @@ inline Drop hybrid_sphere_row(const SkyPlane &plane, double radius_m, double x_o
     return Drop::misses_sphere;
   }
   const double s = -qd - std::sqrt(disc);
-  entry_rel = {q[0] + s * u[0], q[1] + s * u[1], q[2] + s * u[2]};
-  // Group index at the telescope altitude: flat, observation level + z_t; spherical, the true
-  // altitude of the telescope (SkyPlane::telescope_altitude_m).
-  const double altitude_t = plane.earth_radius_m > 0.0 ? plane.telescope_altitude_m
-                                                       : plane.observation_m + plane.telescope_z_m;
-  double nu_t = 0.0;
-  if (plane.profile != nullptr) {
-    nu_t = plane.profile->refractive_index_minus_one(altitude_t);
+  const std::array<double, 3> centre{plane.telescope_x_m, plane.telescope_y_m, plane.telescope_z_m};
+  const RayMedium medium{plane.profile, k, k_group, plane.observation_m, plane.earth_radius_m};
+  RayState state;
+  state.x = {x_out + plane.telescope_x_m, y_out + plane.telescope_y_m, plane.telescope_z_m};
+  state.d = u;
+  state.t = t_cross;
+  state.path = 0.0;
+  const MarchEnd end = s < 0.0 ? march_back_to_sphere(medium, state, centre, radius_m)
+                               : march_to_sphere(medium, state, centre, radius_m);
+  if (end == MarchEnd::below_ground) {
+    return Drop::below_ground;
   }
-  t_out = t_cross + s * (1.0 + k_group * nu_t) / speed_of_light_m_per_ns;
-  const std::array<double, 3> entry_abs{entry_rel[0] + plane.telescope_x_m,
-                                        entry_rel[1] + plane.telescope_y_m,
-                                        entry_rel[2] + plane.telescope_z_m};
-  const double dx = entry_abs[0] - emission[0];
-  const double dy = entry_abs[1] - emission[1];
-  const double dz = entry_abs[2] - emission[2];
+  if (end != MarchEnd::entered) {
+    return Drop::misses_sphere;
+  }
+  entry_rel = {state.x[0] - centre[0], state.x[1] - centre[1], state.x[2] - centre[2]};
+  u = state.d;
+  t_out = state.t;
+  const double dx = state.x[0] - emission[0];
+  const double dy = state.x[1] - emission[1];
+  const double dz = state.x[2] - emission[2];
   path_out = std::sqrt(dx * dx + dy * dy + dz * dz);
   return Drop::none;
 }
@@ -393,7 +407,7 @@ inline DropCounts sky_to_sphere(obdeect::stream::PhotonChunk &chunk, const SkyPl
       if (plane_reason == Drop::none && cz_at_plane >= hybrid_min_abs_cz &&
           std::abs(pz - plane.telescope_z_m) > sphere_radius_m) {
         std::array<double, 3> u_t{};
-        reason = hybrid_sphere_row(plane, sphere_radius_m, x_p, y_p, cx_p, cy_p, upward, t_p,
+        reason = hybrid_sphere_row(plane, sphere_radius_m, x_p, y_p, cx_p, cy_p, upward, t_p, k,
                                    k_group, p, row_rel, u_t, t_out, path_out);
         cx_out = u_t[0];
         cy_out = u_t[1];
