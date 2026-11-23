@@ -151,7 +151,8 @@ struct PropagatorConfig {
   // "Sphere rows"; docs/propagation/scattering.md, "Sphere runs").
   obdeect::stream::GroundRepresentation ground_representation{
       obdeect::stream::GroundRepresentation::plane};
-  // Threads for the extinction of each chunk (1: in place). The output does not depend on it.
+  // Threads for the extinction of each chunk and for the curved tables (1: in place). The output
+  // does not depend on it.
   unsigned threads{1};
   // Telescopes to keep (1-based ids). Blocks of other telescopes (telescope, photons,
   // telescope_end and their efficiency status) are dropped; their photons are not decoded when the
@@ -1008,7 +1009,9 @@ private:
     if (found != cache.end()) {
       return found->second;
     }
-    return cache.try_emplace(level_m, *config_.profile, config_.earth_radius_m, level_m, accurate)
+    return cache
+        .try_emplace(level_m, *config_.profile, config_.earth_radius_m, level_m, accurate,
+                     config_.threads)
         .first->second;
   }
 

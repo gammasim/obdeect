@@ -289,7 +289,7 @@ CurvedRayIntegrals reference_scaled(const AtmosphereProfile &profile, double h_t
 }
 
 void test_spherical_scaled(const AtmosphereProfile &profile) {
-  const CurvedRefractionTables tables(profile, kEarthRadius, kObservation);
+  const CurvedRefractionTables tables(profile, kEarthRadius, kObservation, false, 2);
 
   // The reference against the kernel on the same profile (k = 1): validates the quadrature.
   for (const double theta_deg : {0., 45., 85.}) {
@@ -415,7 +415,7 @@ void test_spherical_scaled(const AtmosphereProfile &profile) {
     constexpr double h_e = 60000.;
     const CurvedRayIntegrals ref =
         reference_scaled(profile, kObservation, theta, h_e, k, k_group, 40000);
-    const CurvedRefractionTables accurate_tables(profile, kEarthRadius, kObservation, true);
+    const CurvedRefractionTables accurate_tables(profile, kEarthRadius, kObservation, true, 2);
     CurvedRayIntegrals approx{};
     CHECK(accurate_tables.lookup_scaled(theta, h_e, k, k_group, approx));
     CHECK(std::abs(approx.shift_m - ref.shift_m) / std::abs(ref.shift_m) <= 1e-3);
