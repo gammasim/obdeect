@@ -72,7 +72,7 @@ Keys per kind:
 | | `distance_m` | number > 0 | absent (infinite) |
 | | `disc_radius_m` | number > 0 | required |
 | | `disc_z_m` | number | 0 |
-| | `start_z_m` | number | 0 (on the source side of `disc_z_m`; not for horizontal directions). At most one of `start_z_m` and `start_distance_m` |
+| | `start_z_m` | number | absent (the start plane is z = 0 when neither start key is given; on the source side of `disc_z_m`; not for horizontal directions). At most one of `start_z_m` and `start_distance_m` |
 | | `start_distance_m` | number >= 0 | absent. Optional alternative to `start_z_m`; required for a horizontal `towards_source` |
 | `sky_background` | `radius_m` | number > 0 | required |
 | | `centre_m` | 3 numbers | `[0, 0, 0]` |

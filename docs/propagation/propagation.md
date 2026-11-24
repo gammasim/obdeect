@@ -37,6 +37,12 @@ factor is 1). The primaries are scattered before their own extinction and are ot
 An event is held until its `event_end` record, because the scattered photons of a telescope come
 from the primaries of all telescopes of the event. Memory: one event of the input.
 
+Threads (`--threads N`, Python `threads`): the extinction of each chunk of primaries (wavelength
+assignment, acceptance, envelope, thinning or weighting) and the construction of the curved
+refraction tables run on N threads. Serial: the sky-to-G conversion (step 1), the sphere conversion,
+the scattering kernel, the envelope of the scattered photons and `propagation to-sky`. The output
+does not depend on N.
+
 To add an effect, add a step in `Propagator::photons` (`cpp/include/obdeect/propagation/propagator.hpp`)
 and an entry in the list of efficiency factors built there.
 
@@ -75,7 +81,36 @@ The stage counts the dropped photons by reason. Each dropped photon has exactly 
 
 The summary of a run has `dropped` (the total) and `dropped_by_reason`, a dict with these seven keys.
 The sum of the values equals `dropped`. The efficiency status does not record the dropped count; it
-is in the summary only (and in the output of the executable as its `dropped` total).
+is in the summary only (and in the output of the executable as its `dropped` total). `dropped` counts
+the primaries only. The scattered photons that miss the telescope are counted separately, with the
+same reasons, in `scattered_dropped_by_reason` (`scattered_dropped` is their total).
+
+## Accounting
+
+Every photon of the input has one fate, and the summary shows it:
+
+| Photons | Summary |
+| --- | --- |
+| input rows (selected telescopes) | `photons_in` |
+| rows written (thinned: surviving photons; weighted: w > 0) | `photons_out`, `weight_out` (sum of w) |
+| primaries that do not reach the telescope | `dropped`, `dropped_by_reason` |
+| primaries removed by the acceptance draw | `thinned_out` |
+| scattered photons that do not reach the telescope | `scattered_dropped`, `scattered_dropped_by_reason` |
+| scattered photons removed by the acceptance draw | `scattered_thinned_out` |
+
+`thinned_out` is the photons removed by the thinning draw: for every reaching row, its bunch
+weight minus its surviving photons. In thinned mode with rows of w = 1, `photons_in = photons_out +
+dropped + thinned_out` exactly. In weighted mode it is the weight w (1 - p) removed by the acceptance
+(a row with p = 0 is removed from the output). `scattered_thinned_out` is the same for the scattered
+photons (weighted: the weight removed). The scattered photons that are generated but have w = 0 carry
+no weight and are not counted.
+
+Thinned output keeps one row of w = 1 per surviving photon, so the fraction f = w - floor(w) of a
+bunch becomes a whole photon with probability f p (an unbiased stochastic rounding, mean w p). For
+fractional weights, as the scattered photons have, `scattered_thinned_out` (input weight minus
+output photons) is therefore a draw: its mean is the removed weight w (1 - p), and a single run can
+give a small negative value when more fractions round up than down. It is negative only for
+fractional weights; for integer weights it is the count of removed photons.
 
 Time: without a profile, t + s/c. With a profile and no refraction in the stream, the air delay
 `straight_path_air_delay_ns` is added. With refraction (`refraction_applied` = 0 and a profile),
@@ -109,6 +144,8 @@ qe.value                [0.9, 0.5]
   in telescope_id order (entry 0 is telescope 1).
 - `atmosphere.wavelength_interpolation`: `linear` (default) or `floor`, the mode of the table
   ([](extinction.md)). Not written for geometry-only runs.
+- `atmosphere.profile_source`: only with `--profile`; the path of the profile file (Python:
+  the `profile` argument).
 - `atmosphere.dispersion_reference_nm`: only with `--dispersion-reference-nm`; the wavelength [nm]
   of the profile's n-1 ([](refraction.md#dispersion)).
 - `atmosphere.geometry`, `atmosphere.earth_radius_m`: only with `--curvature corsika` or
@@ -122,9 +159,12 @@ qe.value                [0.9, 0.5]
   with its table.
 
 The stage refuses an input stream whose efficiency status shows `atmosphere`, `scattering` or an
-efficiency bound as applied (`pending` or absent is fine). Input records are passed through before
-the stage's own record. Readers merge the efficiency-status records of a stream in order. The
-record format is described in [](../stream/efficiency-status.md).
+efficiency bound as applied (`pending` or absent is fine). The run status records of the input
+are merged with the stage's own factors into one `efficiency_status` record, written before the
+first event: a factor that the input already has in the same state is not written again, a factor
+that advances takes the stage's keys, and a factor in a backward state is an error. Telescope
+status records are passed through unchanged. The record format and the state transitions are defined in
+[](../stream/efficiency-status.md), which the stream readers check.
 
 ## Output
 
@@ -148,14 +188,19 @@ record format is described in [](../stream/efficiency-status.md).
 - With scattering, the blocks of other telescopes are still read for primaries (when they are
   primaries) but not written, and they are not scattering targets. The summary counts only the
   written photons.
+- The photon blocks of a telescope in an event must not repeat a photon index: a block's rows have
+  the indices `first_index` to `first_index + rows - 1`, and the random draws are keyed on them. A
+  block that restarts at 0 or overlaps an earlier block of the telescope is rejected; blocks may come
+  in any order and leave gaps. With scattering, a telescope has one block per event (its
+  scattered photons are written in that block): a second block is rejected.
 
 ## Command line
 
 ```console
 $ obdeect propagation run --transmission atm_trans_2000_1_10_0_0_2000.dat --site-altitude 2000 \
-    --profile atmprof.dat --envelope qe=qe.dat --envelope mirror=mirror.dat \
+    --pathlen 0 --profile atmprof.dat --envelope qe=qe.dat --envelope mirror=mirror.dat \
     --wavelength-range 250 700 --seed 1 -i in.pst -o out.pst
-obdeect propagation run: photons in <n>, out <m> (weight <w>), dropped <d>
+obdeect propagation run: photons in <n>, out <m> (weight <w>), dropped <d>, thinned out <t>, scattered dropped <s>, scattered thinned out <st>
 ```
 
 | Option | Meaning |
@@ -176,9 +221,9 @@ obdeect propagation run: photons in <n>, out <m> (weight <w>), dropped <d>
 | `--curvature none\|corsika\|spherical` | Earth curvature of the atmosphere (default none), see [](curvature.md) |
 | `--earth-radius-m M` | Earth radius for the curved modes [m] (default 6371315, the CORSIKA CURVED radius) |
 | `--ground-representation plane\|sphere` | output representation of frame G (default plane); `sphere` rows are points on the telescope sphere ([](#sphere-representation)); needs `telescope_r_m`; extinction, thinning and scattering apply to the sphere rows ([](extinction.md#sphere-rows), [](scattering.md#sphere-runs)) |
-| `--pathlen M` | path inside each telescope [m], finite and ≥ 0 (default 0) |
+| `--pathlen M` | path inside each telescope [m], finite and ≥ 0; required with extinction |
 | `--telescope-pathlen ID=M` | path inside telescope ID (1-based) [m]; overrides `--pathlen`; repeatable |
-| `--threads N` | threads for the rows of each chunk, 1 to 256 (default 1); the output does not depend on N |
+| `--threads N` | threads for the extinction of each chunk, 1 to 256 (default 1); the sky-to-G, sphere and scattering stages are serial ([Threads](#stages)); the output does not depend on N |
 | `--scattering-primaries ID[,ID...]` | only the photons of these telescopes (1-based ids) are scattered; default all blocks; needs `--scattering`; ids must exist in the run |
 | `--telescopes ID[,ID...]` | keep only these telescopes (1-based ids); other telescope blocks are dropped and not decoded (with `--scattering`: the kept telescopes are the scattering targets) (default all) |
 | `-i FILE\|-`, `-o FILE\|-` | input and output stream (default stdin, stdout) |
@@ -238,7 +283,9 @@ summary = obdeect.propagation.propagate(
 ```
 
 `summary` is a dict with `photons_in`, `photons_out`, `dropped`, `dropped_by_reason` (a dict of the
-reasons of [Dropped photons](#dropped-photons)) and `weight_out`. Files are paths only (no `-`).
+reasons of [Dropped photons](#dropped-photons)), `weight_out`, `thinned_out`, `scattered_dropped`,
+`scattered_dropped_by_reason` and `scattered_thinned_out` (see [Accounting](#accounting)). Files are
+paths only (no `-`).
 
 ## Geometry only
 
@@ -265,8 +312,10 @@ $ obdeect propagation run --no-extinction --site-altitude 2000 --profile atmprof
 The extinction inside the telescope covers the path from the telescope sphere plane to the focus.
 With path length l (`pathlen_m`), the optical depth is tau(h_T + l) − tau(h_T), with h_T the
 telescope altitude. `--pathlen` sets l for all telescopes; `--telescope-pathlen`
-(`telescope_pathlen_m`, 1-based ids) overrides it for single telescopes. Default 0, so existing runs
-keep their result. An id that the run does not have is an error.
+(`telescope_pathlen_m`, 1-based ids) overrides it for single telescopes. Neither the command line
+nor the Python API has a default: `--pathlen` (`pathlen_m`) is required with extinction (pass `0`
+or `0.0` for no in-telescope path), because a silent 0 drops the in-telescope extinction. An id
+that the run does not have is an error.
 
 The path follows from the optical model (`obdeect.propagation.in_telescope_path_m`, from
 `obdeect.ray_tracing`): the focal length for a single mirror, `|p0-s0|+|s0-f0|` for a dual mirror
@@ -291,7 +340,8 @@ The default frame G representation is the plane: a row is the photon's position 
 plane (z = 0 relative to the telescope), and the telescope sphere is not used. The representation
 `sphere` (`--ground-representation sphere`, Python `ground_representation="sphere"`, run key
 `ground_representation = "sphere"`, format 1.2) keeps the three-dimensional position where the
-photon's path inside the telescope sphere begins. The sphere has the centre C = (telescope x, y, z)
+photon's path inside the telescope sphere begins; the row definition is that of the
+[format](../stream/format.md#photon-chunk). The sphere has the centre C = (telescope x, y, z)
 of the sky frame and the radius R = `telescope_r_m` of the run:
 
 - emitted outside the sphere: the entry point, |r| = R (r is relative to C);

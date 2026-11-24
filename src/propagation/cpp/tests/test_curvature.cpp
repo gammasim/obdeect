@@ -1,6 +1,7 @@
 // Spherical-atmosphere extinction: slant optical depth, its flat-atmosphere limit, a brute-force
 // midpoint integration of the same piecewise integrand, and the per-row kernels.
 #include "check.hpp"
+#include "stream_fixtures.hpp"
 
 #include "obdeect/propagation/extinction.hpp"
 #include "obdeect/propagation/pipeline.hpp"
@@ -29,6 +30,8 @@
 
 namespace {
 
+using namespace obdeect_test;
+
 using obdeect::stream::Column;
 
 constexpr double kEarthRadius = obdeect::stream::earth_radius_m;
@@ -39,15 +42,6 @@ const double kPi = obdeect::stream::pi;
 
 const std::string kFixture =
     std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/atm_trans_2000_1_10_0_0_2000.dat";
-
-template <class Function> bool throws_invalid(Function function) {
-  try {
-    function();
-  } catch (const std::invalid_argument &) {
-    return true;
-  }
-  return false;
-}
 
 double relative(double value, double reference) {
   return std::abs(value - reference) / std::abs(reference);
@@ -222,44 +216,65 @@ void test_monotone_zero_and_validation() {
   CHECK(table.slant_optical_depth<double>(400.0, kTelescope, kTelescope - 1000.0, cos_t,
                                           kEarthRadius) == 0.0);
 
-  const double nan = std::numeric_limits<double>::quiet_NaN();
-  const double inf = std::numeric_limits<double>::infinity();
-  CHECK(throws_invalid(
-      [&] { (void)table.slant_optical_depth<double>(400.0, kTelescope, 30000.0, cos_t, 0.0); }));
-  CHECK(throws_invalid([&] {
-    (void)table.slant_optical_depth<double>(400.0, kTelescope, 30000.0, cos_t, -kEarthRadius);
-  }));
-  CHECK(throws_invalid(
-      [&] { (void)table.slant_optical_depth<double>(400.0, kTelescope, 30000.0, cos_t, nan); }));
-  CHECK(throws_invalid(
-      [&] { (void)table.slant_optical_depth<double>(400.0, kTelescope, 30000.0, cos_t, inf); }));
-  CHECK(throws_invalid([&] {
-    (void)table.slant_optical_depth<double>(400.0, kTelescope, 30000.0, -0.1, kEarthRadius);
-  }));
-  CHECK(throws_invalid([&] {
-    (void)table.slant_optical_depth<double>(400.0, kTelescope, 30000.0, 1.0 + 1e-6, kEarthRadius);
-  }));
-  CHECK(throws_invalid([&] {
-    (void)table.slant_optical_depth<double>(400.0, kTelescope, 30000.0, nan, kEarthRadius);
-  }));
-  CHECK(throws_invalid(
-      [&] { (void)table.slant_optical_depth<double>(400.0, nan, 30000.0, cos_t, kEarthRadius); }));
-  CHECK(throws_invalid([&] {
-    (void)table.slant_optical_depth<double>(400.0, kTelescope, nan, cos_t, kEarthRadius);
-  }));
-  CHECK(throws_invalid([&] {
-    (void)table.slant_optical_depth<double>(nan, kTelescope, 30000.0, cos_t, kEarthRadius);
-  }));
+  const double nan = obdeect_test::kNan;
+  const double inf = obdeect_test::kInf;
+  CHECK(throws_with(
+      [&] { (void)table.slant_optical_depth<double>(400.0, kTelescope, 30000.0, cos_t, 0.0); },
+      "earth radius must be finite and positive"));
+  CHECK(throws_with(
+      [&] {
+        (void)table.slant_optical_depth<double>(400.0, kTelescope, 30000.0, cos_t, -kEarthRadius);
+      },
+      "earth radius must be finite and positive"));
+  CHECK(throws_with(
+      [&] { (void)table.slant_optical_depth<double>(400.0, kTelescope, 30000.0, cos_t, nan); },
+      "earth radius must be finite and positive"));
+  CHECK(throws_with(
+      [&] { (void)table.slant_optical_depth<double>(400.0, kTelescope, 30000.0, cos_t, inf); },
+      "earth radius must be finite and positive"));
+  CHECK(throws_with(
+      [&] {
+        (void)table.slant_optical_depth<double>(400.0, kTelescope, 30000.0, -0.1, kEarthRadius);
+      },
+      "cos_zenith must be finite and within [0, 1]"));
+  CHECK(throws_with(
+      [&] {
+        (void)table.slant_optical_depth<double>(400.0, kTelescope, 30000.0, 1.0 + 1e-6,
+                                                kEarthRadius);
+      },
+      "cos_zenith must be finite and within [0, 1]"));
+  CHECK(throws_with(
+      [&] {
+        (void)table.slant_optical_depth<double>(400.0, kTelescope, 30000.0, nan, kEarthRadius);
+      },
+      "cos_zenith must be finite and within [0, 1]"));
+  CHECK(throws_with(
+      [&] { (void)table.slant_optical_depth<double>(400.0, nan, 30000.0, cos_t, kEarthRadius); },
+      "altitudes must be finite"));
+  CHECK(throws_with(
+      [&] { (void)table.slant_optical_depth<double>(400.0, kTelescope, nan, cos_t, kEarthRadius); },
+      "altitudes must be finite"));
+  CHECK(throws_with(
+      [&] {
+        (void)table.slant_optical_depth<double>(nan, kTelescope, 30000.0, cos_t, kEarthRadius);
+      },
+      "wavelength must be finite"));
   // Rounding-size excess over 1 is accepted.
-  CHECK(!throws_invalid([&] {
+  CHECK(accepts([&] {
     (void)table.slant_optical_depth<double>(400.0, kTelescope, 30000.0, 1.0 + 1e-12, kEarthRadius);
   }));
-  CHECK(throws_invalid([&] {
-    (void)table.transmission_curved<double>(400.0, 30000.0, cos_t, kTelescope, -1.0, kEarthRadius);
-  }));
-  CHECK(throws_invalid([&] {
-    (void)table.transmission_curved<double>(400.0, 30000.0, cos_t, kTelescope, nan, kEarthRadius);
-  }));
+  CHECK(throws_with(
+      [&] {
+        (void)table.transmission_curved<double>(400.0, 30000.0, cos_t, kTelescope, -1.0,
+                                                kEarthRadius);
+      },
+      "must be finite and non-negative"));
+  CHECK(throws_with(
+      [&] {
+        (void)table.transmission_curved<double>(400.0, 30000.0, cos_t, kTelescope, nan,
+                                                kEarthRadius);
+      },
+      "must be finite and non-negative"));
 }
 
 void test_transmission_curved() {
@@ -404,16 +419,24 @@ void test_acceptance_kernel() {
 
   // Invalid paths and sizes.
   std::vector<double> wrong(n + 1);
-  CHECK(throws_invalid([&] {
-    obdeect::propagation::atmospheric_acceptance_curved<double>(chunk, table, depths, path, wrong);
-  }));
+  CHECK(throws_with(
+      [&] {
+        obdeect::propagation::atmospheric_acceptance_curved<double>(chunk, table, depths, path,
+                                                                    wrong);
+      },
+      "acceptance vector must have one entry per row"));
   const obdeect::propagation::CurvedPath not_unit{kEarthRadius, kTelescope, 1.0, 0.0, 0.1};
-  CHECK(throws_invalid([&] { obdeect::propagation::validate(not_unit); }));
-  CHECK(throws_invalid([&] {
-    obdeect::propagation::atmospheric_acceptance_curved<double>(chunk, table, depths, not_unit, p);
-  }));
+  CHECK(throws_with([&] { obdeect::propagation::validate(not_unit); },
+                    "local vertical must be a unit vector"));
+  CHECK(throws_with(
+      [&] {
+        obdeect::propagation::atmospheric_acceptance_curved<double>(chunk, table, depths, not_unit,
+                                                                    p);
+      },
+      "local vertical must be a unit vector"));
   const obdeect::propagation::CurvedPath no_radius{0.0, kTelescope, 0.0, 0.0, 1.0};
-  CHECK(throws_invalid([&] { obdeect::propagation::validate(no_radius); }));
+  CHECK(throws_with([&] { obdeect::propagation::validate(no_radius); },
+                    "earth radius must be finite and positive"));
   obdeect::propagation::validate(path);
   obdeect::propagation::validate(tilted);
 }
@@ -533,10 +556,12 @@ void test_linear_curved() {
       linear_table.transmission_curved<double>(150.0, zem, cos_t, kTelescope, focus, kEarthRadius),
       floor_table.transmission_curved<double>(200.0, zem, cos_t, kTelescope, focus, kEarthRadius),
       1e-14);
-  CHECK(throws_invalid([&] {
-    (void)linear_table.slant_optical_depth<double>(std::nan(""), kTelescope, zem, cos_t,
-                                                   kEarthRadius);
-  }));
+  CHECK(throws_with(
+      [&] {
+        (void)linear_table.slant_optical_depth<double>(std::nan(""), kTelescope, zem, cos_t,
+                                                       kEarthRadius);
+      },
+      "wavelength must be finite"));
 }
 
 } // namespace

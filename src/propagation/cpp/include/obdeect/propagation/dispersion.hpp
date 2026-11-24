@@ -34,27 +34,31 @@ inline constexpr double dispersion_max_nm = 2000.;
 inline constexpr double refractivity_min_nm = detail::dispersion_min_nm;
 inline constexpr double refractivity_max_nm = detail::dispersion_max_nm;
 
-// (n - 1) 1e8 of standard dry air at vacuum wavelength lambda_nm [nm]. Throws std::invalid_argument
-// outside 200 to 2000 nm or for non-finite input.
-[[nodiscard]] inline double refractivity_e8(double lambda_nm) {
-  if (!std::isfinite(lambda_nm) || lambda_nm < detail::dispersion_min_nm ||
-      lambda_nm > detail::dispersion_max_nm) {
+namespace detail {
+
+// s^2 = 1 / lambda^2 [um^-2] of the Ciddor terms at vacuum wavelength lambda_nm [nm]. Throws
+// std::invalid_argument outside 200 to 2000 nm or for non-finite input.
+[[nodiscard]] inline double wavenumber_squared_um(double lambda_nm) {
+  if (!std::isfinite(lambda_nm) || lambda_nm < dispersion_min_nm || lambda_nm > dispersion_max_nm) {
     throw std::invalid_argument("wavelength must be finite and within 200 to 2000 nm");
   }
   const double lambda_um = 1e-3 * lambda_nm;
-  const double s2 = 1. / (lambda_um * lambda_um);
+  return 1. / (lambda_um * lambda_um);
+}
+
+} // namespace detail
+
+// (n - 1) 1e8 of standard dry air at vacuum wavelength lambda_nm [nm]. Throws std::invalid_argument
+// outside 200 to 2000 nm or for non-finite input.
+[[nodiscard]] inline double refractivity_e8(double lambda_nm) {
+  const double s2 = detail::wavenumber_squared_um(lambda_nm);
   return detail::ciddor_k1 / (detail::ciddor_k0 - s2) +
          detail::ciddor_k3 / (detail::ciddor_k2 - s2);
 }
 
 // (n_g - 1) 1e8 of standard dry air at vacuum wavelength lambda_nm [nm]; same validation.
 [[nodiscard]] inline double group_refractivity_e8(double lambda_nm) {
-  if (!std::isfinite(lambda_nm) || lambda_nm < detail::dispersion_min_nm ||
-      lambda_nm > detail::dispersion_max_nm) {
-    throw std::invalid_argument("wavelength must be finite and within 200 to 2000 nm");
-  }
-  const double lambda_um = 1e-3 * lambda_nm;
-  const double s2 = 1. / (lambda_um * lambda_um);
+  const double s2 = detail::wavenumber_squared_um(lambda_nm);
   const double a = 1. / (detail::ciddor_k0 - s2);
   const double b = 1. / (detail::ciddor_k2 - s2);
   const double n_minus_one = detail::ciddor_k1 * a + detail::ciddor_k3 * b;

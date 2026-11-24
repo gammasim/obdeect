@@ -6,7 +6,7 @@ run file (TOML or JSON) is converted to a `Run` by the Python layer ([run file](
 
 ## Types
 
-- `Telescope{id, position, radius_m}`.
+- `Telescope{id, position, radius_m}` (the run-file keys are `id`, `position_m`, `radius_m`).
 - `Emission{source, bunch_size (default 1), time_offset_ns (0), to_plane_z0 (false)}`.
 - `Event{repeat (default 1), emissions, metadata}`.
 - `Run{number (1), seed (1), observation_level_m, atmosphere_id (-1), frame (sky), telescopes,
@@ -83,8 +83,8 @@ Then, per row:
 
 ## Ground runs (sphere rows)
 
-A run with `frame = ground` writes the sphere representation of docs/stream/format.md (run key
-`ground_representation = "sphere"`). Requirements: exactly one telescope (its sphere is the
+A run with `frame = ground` writes the sphere representation of [format](../../stream/format.md)
+(run key `ground_representation = "sphere"`). Requirements: exactly one telescope (its sphere is the
 origin of the frame) and no `to_plane_z0` emission (error otherwise).
 
 - Source positions and directions are relative to the telescope sphere centre (x, y, z up, sky-frame
@@ -112,7 +112,8 @@ origin of the frame) and no `to_plane_z0` emission (error otherwise).
 `auto` is resolved per emission from the telescopes (`resolve_auto_target`, `fiducial_sphere`). The
 fiducial sphere has centre `C`, the mean telescope position, and radius `R` = the largest
 `|position - C| + radius` over the telescopes. Rule: see [source model](../sources.md#targets).
-Summary: point within `1.02 R` of `C` none; isotropic point sphere `(C, R)`; fixed-angle point none;
+Summary: point inside the sphere `(C, R)` none; isotropic point outside it sphere `(C, R)`;
+fixed-angle point none;
 other points disc of radius `R` centred on `C` in the plane z = `C.z` (error if the point is in that
 plane). Lines with fixed or isotropic profile get the sphere `(C, R)`; other lines none; plane waves
 and sky backgrounds none.
@@ -127,6 +128,7 @@ telescope. The output is the same.
 ## Summary values
 
 - `expected` = `expected_weight(run)`: expected sum of weights, all events and telescopes. Disc
-  targets use a 2000 x 2000 midpoint grid; line sphere targets use 20000 steps along the line.
+  targets have weight 1 per hit (the expected count); line sphere targets use 20000 steps along the
+  line.
 - `weight` = sum of the written weights; for a run with targets this approaches `expected`.
   Dropped photons (`not_on_plane`, `misses_sphere`) are in `expected` but not in `weight`.

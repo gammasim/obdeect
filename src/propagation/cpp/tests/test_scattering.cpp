@@ -1,4 +1,5 @@
 #include "check.hpp"
+#include "stream_fixtures.hpp"
 
 #include "obdeect/propagation/profile.hpp"
 #include "obdeect/propagation/scattering.hpp"
@@ -24,6 +25,8 @@
 #include <vector>
 
 namespace {
+
+using namespace obdeect_test;
 
 using obdeect::stream::Column;
 
@@ -224,7 +227,8 @@ void test_phase_functions() {
   CHECK_NEAR(mean_r, 0.0, 1e-8);
   CHECK_NEAR(mean_hg, g, 1e-5);
   // Mean cosine of the mixed phase with only aerosol scattering equals g.
-  CHECK_NEAR(obdeect::propagation::mixed_phase(0.3, 0.0, 1.0, 1.0, g),
+  CHECK_NEAR(obdeect::propagation::mixed_phase_with_aerosol<double>(
+                 0.3, 0.0, 1.0, 1.0, 0.0, obdeect::propagation::henyey_greenstein_phase(0.3, g)),
              obdeect::propagation::henyey_greenstein_phase(0.3, g), 1e-15);
 }
 
@@ -480,6 +484,75 @@ void test_scattered_time_is_at_scattering_point() {
 
 // The state lookup rejects altitudes that are not finite and positive, and wavelengths that are
 // not finite; far out-of-range wavelengths are clamped to the table edges.
+std::string read_text(const std::string &path);
+std::string data_path(const std::string &name);
+
+// The closed-form altitude solve (ScatteringTable::altitude_at_depth) agrees with the 64-step
+// bisection it replaced to 1e-9 relative, over both fixture tables, several wavelengths, ranges
+// and targets (depths of known altitudes and interpolations between them).
+double bisection_altitude(const obdeect::propagation::ScatteringTable &table, double lambda,
+                          double target, double lo, double hi) {
+  for (int step = 0; step < 64; ++step) {
+    const double mid = 0.5 * (lo + hi);
+    const auto s = table.state<double>(lambda, mid);
+    if (s.tau_mol + s.tau_aer > target) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  return 0.5 * (lo + hi);
+}
+
+void test_altitude_at_depth_against_bisection() {
+  double worst = 0.0;
+  std::size_t cases = 0;
+  for (const char *name : {"scattering_exponential.dat", "scattering_tabulated.dat"}) {
+    const obdeect::propagation::ScatteringTable table(read_text(data_path(name)));
+    const double bottom = table.min_altitude_m();
+    const double top = table.max_altitude_m();
+    const double first = table.first_wavelength_nm();
+    const double last = table.last_wavelength_nm();
+    const auto depth = [&](double lambda, double h) {
+      const auto s = table.state<double>(lambda, h);
+      return s.tau_mol + s.tau_aer;
+    };
+    for (double lambda : {first, first + 0.37, 0.5 * (first + last), last}) {
+      for (double lo : {bottom, 1500.0, 7000.0, 12000.0}) {
+        for (double hi : {12000.0, 25000.0, top}) {
+          if (!(hi > lo) || hi <= lo + 1.0) {
+            continue;
+          }
+          for (int i = 0; i <= 40; ++i) {
+            // Targets between the depths at the two ends, with a few exactly at known altitudes.
+            const double f = i / 40.0;
+            const double altitude = lo + f * (hi - lo);
+            for (double target :
+                 {depth(lambda, altitude), depth(lambda, lo) * (1.0 - f) + depth(lambda, hi) * f}) {
+              if (!(target < depth(lambda, lo) && target > depth(lambda, hi))) {
+                continue;
+              }
+              const double closed = table.altitude_at_depth(lambda, target, lo, hi);
+              const double reference = bisection_altitude(table, lambda, target, lo, hi);
+              worst = std::max(worst, std::fabs(closed - reference) / reference);
+              ++cases;
+            }
+          }
+        }
+      }
+    }
+  }
+  std::printf("altitude_at_depth vs bisection: %zu cases, max relative difference %.3g\n", cases,
+              worst);
+  CHECK(cases > 1000);
+  CHECK(worst <= 1e-9);
+  // Outside the range the nearer end is returned, as the bisection does.
+  const obdeect::propagation::ScatteringTable table(
+      read_text(data_path("scattering_exponential.dat")));
+  CHECK(table.altitude_at_depth(355.0, 1e9, 2000.0, 9000.0) == 2000.0);
+  CHECK(table.altitude_at_depth(355.0, 0.0, 2000.0, 9000.0) == 9000.0);
+}
+
 void test_state_rejects_bad_arguments() {
   const obdeect::propagation::ScatteringTable table(exponential_table_text(0.05, 7500.0));
   const auto throws = [](auto &&f) {
@@ -490,8 +563,8 @@ void test_state_rejects_bad_arguments() {
     }
     return false;
   };
-  const double nan = std::numeric_limits<double>::quiet_NaN();
-  const double inf = std::numeric_limits<double>::infinity();
+  const double nan = obdeect_test::kNan;
+  const double inf = obdeect_test::kInf;
   CHECK(throws([&] { (void)table.state<double>(lambda_nm, -1000.0); }));
   CHECK(throws([&] { (void)table.state<double>(lambda_nm, 0.0); }));
   CHECK(throws([&] { (void)table.state<double>(lambda_nm, nan); }));
@@ -563,8 +636,8 @@ void test_rejects_missing_and_non_finite_columns() {
     }
     CHECK(rejected);
   }
-  const double nan = std::numeric_limits<double>::quiet_NaN();
-  const double inf = std::numeric_limits<double>::infinity();
+  const double nan = obdeect_test::kNan;
+  const double inf = obdeect_test::kInf;
   CHECK(run(all, Column::x, nan));
   CHECK(run(all, Column::y, inf));
   CHECK(run(all, Column::t, nan));
@@ -595,8 +668,8 @@ void test_rejects_infinite_radius_and_nan_columns() {
   const obdeect::propagation::TransmissionTable tr = site_transmission();
   obdeect::propagation::ScatteringConfig config;
   config.enabled = true;
-  const double inf = std::numeric_limits<double>::infinity();
-  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double inf = obdeect_test::kInf;
+  const double nan = obdeect_test::kNan;
   const std::initializer_list<Column> base = {Column::x,  Column::y, Column::z, Column::cx,
                                               Column::cy, Column::t, Column::w, Column::wavelength};
   // One photon at z = 5 km with the given extra column set to value (if it is not zero-size).
@@ -610,33 +683,31 @@ void test_rejects_infinite_radius_and_nan_columns() {
     chunk[extra][0] = static_cast<float>(value);
     return chunk;
   };
-  const auto throws_invalid = [](auto &&f) {
-    try {
-      f();
-    } catch (const std::invalid_argument &) {
-      return true;
-    }
-    return false;
-  };
   std::vector<std::vector<obdeect::stream::PhotonChunk>> lists;
 
   const std::vector<obdeect::propagation::ScatterTelescope> infinite = {
       {1, distance_m, 0.0, 0.0, inf}};
   const obdeect::stream::PhotonChunk plain = make_chunk(Column::cz, -1.0);
-  CHECK(throws_invalid([&] {
-    obdeect::propagation::scatter_chunk(config, table, tr, infinite, plain, seed, 1, 0, lists);
-  }));
+  CHECK(throws_with(
+      [&] {
+        obdeect::propagation::scatter_chunk(config, table, tr, infinite, plain, seed, 1, 0, lists);
+      },
+      "telescope needs finite"));
 
   const std::vector<obdeect::propagation::ScatterTelescope> sphere = {
       {1, distance_m, 0.0, 0.0, radius_m}};
-  CHECK(throws_invalid([&] {
-    obdeect::propagation::scatter_chunk(config, table, tr, sphere, make_chunk(Column::cz, nan),
-                                        seed, 1, 0, lists);
-  }));
-  CHECK(throws_invalid([&] {
-    obdeect::propagation::scatter_chunk(config, table, tr, sphere, make_chunk(Column::zem, nan),
-                                        seed, 1, 0, lists);
-  }));
+  CHECK(throws_with(
+      [&] {
+        obdeect::propagation::scatter_chunk(config, table, tr, sphere, make_chunk(Column::cz, nan),
+                                            seed, 1, 0, lists);
+      },
+      "cz column must be finite"));
+  CHECK(throws_with(
+      [&] {
+        obdeect::propagation::scatter_chunk(config, table, tr, sphere, make_chunk(Column::zem, nan),
+                                            seed, 1, 0, lists);
+      },
+      "zem column must be finite"));
 }
 
 std::string read_text(const std::string &path) {
@@ -1561,6 +1632,7 @@ int main() {
     test_determinism_across_chunk_splits();
     test_rejects_invalid_input();
     test_scattered_time_is_at_scattering_point();
+    test_altitude_at_depth_against_bisection();
     test_state_rejects_bad_arguments();
     test_rejects_missing_and_non_finite_columns();
     test_rejects_huge_table_wavelength();

@@ -1,18 +1,10 @@
 """Run description: loading, normalization, defaults and error paths (pure Python)."""
 
 import copy
-import importlib.util
 import json
-from pathlib import Path
 
 import pytest
-
-# Load config.py by file path: `python -I` ignores PYTHONPATH, so the installed
-# obdeect package (not this checkout) would otherwise be imported.
-_CONFIG_PATH = Path(__file__).resolve().parents[1] / "obdeect" / "sources" / "config.py"
-_SPEC = importlib.util.spec_from_file_location("obdeect_sources_config", _CONFIG_PATH)
-config = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(config)
+from obdeect.sources import config, run
 
 FULL_TOML = """
 [run]
@@ -288,8 +280,8 @@ ERROR_CASES = [
     (_set("run", "number", 1.0), "run.number: expected an int, got float"),
     (_set("run", "number", True), "run.number: expected an int, got bool"),
     (_set("run", "number", 0), "run.number: must be >= 1"),
-    (_set("run", "seed", -1), "run.seed: must be in 0..18446744073709551615"),
-    (_set("run", "seed", 2**64), "run.seed: must be in 0..18446744073709551615"),
+    (_set("run", "seed", -1), "run.seed: must be in 0..9223372036854775807"),
+    (_set("run", "seed", 2**63), "run.seed: must be in 0..9223372036854775807"),
     (_set("run", "frame", "earth"), "run.frame: must be one of sky, telescope, camera, ground"),
     (_set("run", "observation_level_m", float("nan")), "run.observation_level_m: must be finite"),
     (
@@ -453,16 +445,17 @@ def test_ground_frame_and_exactly_one_start_key():
     emission = normalized["events"][0]["emissions"][0]
     assert emission["start_distance_m"] == 30.0
     assert "start_z_m" not in emission
+    # The start-key rules are the core's (checked when the run is checked, not normalized).
     both = copy.deepcopy(description)
     both["events"][0]["emissions"][0]["start_z_m"] = 30.0
     with pytest.raises(ValueError, match="not both"):
-        config.normalize(both)
-    # Neither key: start_z_m = 0 as before (vertical directions); horizontal needs start_distance_m.
+        run.check(both)
+    # Neither key: the start plane is z = 0 (vertical directions); horizontal needs the distance.
     neither = copy.deepcopy(description)
     del neither["events"][0]["emissions"][0]["start_distance_m"]
     neither["events"][0]["emissions"][0]["towards_source"] = [0.0, 0.0, 1.0]
-    assert config.normalize(neither)["events"][0]["emissions"][0]["start_z_m"] == 0.0
+    assert "start_z_m" not in config.normalize(neither)["events"][0]["emissions"][0]
     horizontal = copy.deepcopy(neither)
     horizontal["events"][0]["emissions"][0]["towards_source"] = [1.0, 0.0, 0.0]
-    with pytest.raises(ValueError, match="needs start_distance_m"):
-        config.normalize(horizontal)
+    with pytest.raises(ValueError, match="start_distance_m"):
+        run.check(horizontal)

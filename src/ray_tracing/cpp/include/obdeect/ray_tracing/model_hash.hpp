@@ -1,11 +1,14 @@
 #pragma once
 
-// SHA-256 of an optical-model document, as compiler.model_hash in Python: the hash of the
-// canonical JSON of the top-level object without its "sha256" entry. Canonical JSON is what
-// Python's json.dumps(..., ensure_ascii=False, sort_keys=True, separators=(",", ":")) writes for
-// the parsed document: keys sorted by code point, no spaces, integers as written, floats as
-// Python's repr, strings with Python's escapes. Standard library only.
+// SHA-256 of an optical-model document, as obdeect.ray_tracing.hashing.model_hash in Python: the
+// hash of the canonical JSON of the top-level object without its "sha256" entry. Canonical JSON is
+// what Python's json.dumps(..., ensure_ascii=False, sort_keys=True, separators=(",", ":")) writes
+// for the parsed document: keys sorted by code point, no spaces, integers as written, floats as
+// Python's repr, strings with Python's escapes. The documents accepted here are exactly those
+// that obdeect::ray_tracing::json::Parser accepts (same white space, escapes and depth limit).
+// Standard library only.
 
+#include "obdeect/ray_tracing/json.hpp"
 #include "obdeect/ray_tracing/model.hpp"
 #include "obdeect/stream/parse.hpp"
 
@@ -210,8 +213,7 @@ private:
   }
 
   void space() {
-    while (at_ < text_.size() &&
-           (text_[at_] == ' ' || text_[at_] == '\n' || text_[at_] == '\r' || text_[at_] == '\t'))
+    while (at_ < text_.size() && json::is_space(text_[at_]))
       ++at_;
   }
 
@@ -224,7 +226,7 @@ private:
   }
 
   std::string value(int depth, std::string_view drop_key = {}) {
-    if (depth > 256)
+    if (depth > json::max_depth)
       fail("nested too deeply");
     const char c = peek();
     if (c == '{')
@@ -360,24 +362,6 @@ private:
     return python_float_repr(value);
   }
 
-  void append_utf8(std::string &out, std::uint32_t code) {
-    if (code < 0x80) {
-      out += static_cast<char>(code);
-    } else if (code < 0x800) {
-      out += static_cast<char>(0xC0 | (code >> 6));
-      out += static_cast<char>(0x80 | (code & 0x3F));
-    } else if (code < 0x10000) {
-      out += static_cast<char>(0xE0 | (code >> 12));
-      out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
-      out += static_cast<char>(0x80 | (code & 0x3F));
-    } else {
-      out += static_cast<char>(0xF0 | (code >> 18));
-      out += static_cast<char>(0x80 | ((code >> 12) & 0x3F));
-      out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
-      out += static_cast<char>(0x80 | (code & 0x3F));
-    }
-  }
-
   std::uint32_t hex4() {
     if (at_ + 4 > text_.size())
       fail("truncated \\u escape");
@@ -439,7 +423,7 @@ private:
         } else if (code >= 0xDC00 && code < 0xE000) {
           fail("unpaired surrogate");
         }
-        append_utf8(out, code);
+        json::append_utf8(out, code);
         break;
       }
       default:

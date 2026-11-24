@@ -6,17 +6,46 @@
 #include <charconv>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <locale>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <variant>
 #include <vector>
 #include <version>
 
 namespace obdeect::ray_tracing::json {
+
+// Nesting limit of optical-model documents: the parser and the canonical hash reject deeper input.
+inline constexpr int max_depth = 64;
+
+// JSON white space: exactly these four characters (std::isspace also takes \f and \v).
+[[nodiscard]] constexpr bool is_space(char c) {
+  return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+// Appends the UTF-8 encoding of a code point.
+inline void append_utf8(std::string &out, std::uint32_t code) {
+  if (code < 0x80) {
+    out += static_cast<char>(code);
+  } else if (code < 0x800) {
+    out += static_cast<char>(0xC0 | (code >> 6));
+    out += static_cast<char>(0x80 | (code & 0x3F));
+  } else if (code < 0x10000) {
+    out += static_cast<char>(0xE0 | (code >> 12));
+    out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+    out += static_cast<char>(0x80 | (code & 0x3F));
+  } else {
+    out += static_cast<char>(0xF0 | (code >> 18));
+    out += static_cast<char>(0x80 | ((code >> 12) & 0x3F));
+    out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+    out += static_cast<char>(0x80 | (code & 0x3F));
+  }
+}
 
 // Minimal strict JSON document model for optical-model files.
 struct Value {
@@ -62,7 +91,7 @@ private:
     throw std::runtime_error("JSON syntax error at byte " + std::to_string(at_) + ": " + what);
   }
   void space() {
-    while (at_ < text_.size() && std::isspace(static_cast<unsigned char>(text_[at_])))
+    while (at_ < text_.size() && is_space(text_[at_]))
       ++at_;
   }
   bool take(char c) {
@@ -78,7 +107,7 @@ private:
   }
 
   Value value(int depth) {
-    if (depth > 64)
+    if (depth > max_depth)
       fail("nesting too deep");
     if (at_ == text_.size())
       fail("unexpected end of input");
@@ -107,6 +136,19 @@ private:
     return result;
   }
 
+  std::uint32_t hex4() {
+    if (at_ + 4 > text_.size())
+      fail("truncated \\u escape");
+    std::uint32_t code = 0;
+    const auto result = std::from_chars(text_.data() + at_, text_.data() + at_ + 4, code, 16);
+    if (result.ec != std::errc{} || result.ptr != text_.data() + at_ + 4)
+      fail("invalid \\u escape");
+    at_ += 4;
+    return code;
+  }
+
+  // The decoded UTF-8 string at the cursor. Surrogate pairs decode to one code point; a lone
+  // surrogate is rejected (as the canonical form of the hash does).
   std::string string() {
     expect('"');
     std::string result;
@@ -124,12 +166,27 @@ private:
         break;
       const char e = text_[at_++];
       const std::string_view plain = "\"\\/", escaped = "bfnrt", decoded = "\b\f\n\r\t";
-      if (plain.find(e) != std::string_view::npos)
+      if (plain.find(e) != std::string_view::npos) {
         result.push_back(e);
-      else if (const auto i = escaped.find(e); i != std::string_view::npos)
+      } else if (const auto i = escaped.find(e); i != std::string_view::npos) {
         result.push_back(decoded[i]);
-      else
+      } else if (e == 'u') {
+        std::uint32_t code = hex4();
+        if (code >= 0xD800 && code < 0xDC00) {
+          if (text_.substr(at_, 2) != "\\u")
+            fail("unpaired surrogate");
+          at_ += 2;
+          const std::uint32_t low = hex4();
+          if (!(low >= 0xDC00 && low < 0xE000))
+            fail("unpaired surrogate");
+          code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+        } else if (code >= 0xDC00 && code < 0xE000) {
+          fail("unpaired surrogate");
+        }
+        append_utf8(result, code);
+      } else {
         fail("unsupported escape sequence");
+      }
     }
     fail("unterminated string");
   }

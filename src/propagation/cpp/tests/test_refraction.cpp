@@ -1,4 +1,5 @@
 #include "check.hpp"
+#include "stream_fixtures.hpp"
 
 #include "obdeect/propagation/profile.hpp"
 #include "obdeect/propagation/refraction.hpp"
@@ -17,21 +18,14 @@
 
 namespace {
 
+using namespace obdeect_test;
+
 constexpr double kPi = obdeect::stream::pi;
 constexpr double kObservationM = 2180.;
 
 struct Photon {
   double cx, cy, x, y, t;
 };
-
-bool throws_invalid(auto &&action) {
-  try {
-    action();
-  } catch (const std::invalid_argument &) {
-    return true;
-  }
-  return false;
-}
 
 // Photon emitted at height h with zenith angle theta (degrees) in the x-z plane.
 Photon start(double zenith_deg) {
@@ -58,11 +52,12 @@ int main() {
     CHECK(rejected);
 
     // Non-finite observation levels are rejected as well.
-    const double nan = std::numeric_limits<double>::quiet_NaN();
-    const double inf = std::numeric_limits<double>::infinity();
+    const double nan = obdeect_test::kNan;
+    const double inf = obdeect_test::kInf;
     for (double bad : {nan, inf, -inf}) {
-      CHECK(throws_invalid([&] { obdeect::propagation::RefractionTables t(profile, bad); }));
-      CHECK(throws_invalid([&] { tables.vertical_time0_cm(bad); }));
+      CHECK(throws_with([&] { obdeect::propagation::RefractionTables t(profile, bad); },
+                        "observation level must lie inside the atmospheric profile"));
+      CHECK(throws_with([&] { (void)tables.moment(bad, 1); }, "height must be finite"));
     }
 
     // Non-finite photon inputs (height, direction, position, time) are rejected per photon: bend()

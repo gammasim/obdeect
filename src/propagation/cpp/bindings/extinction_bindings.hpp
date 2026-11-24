@@ -127,7 +127,7 @@ inline void bind_table(nb::module_ &module) {
                 to_numpy(std::vector<double>(depths.od_tel.begin(), depths.od_tel.end())),
                 to_numpy(std::vector<double>(depths.od_focus.begin(), depths.od_focus.end())));
           },
-          nb::arg("telescope_altitude_m"), nb::arg("pathlen_m") = 0.0);
+          nb::arg("telescope_altitude_m"), nb::arg("pathlen_m"));
 }
 
 // Map a column name of the Python API to its obdeect stream column.
@@ -209,6 +209,11 @@ inline void bind_apply(nb::module_ &module) {
             input.mask | obdeect::stream::column_bit(obdeect::stream::Column::wavelength) |
             obdeect::stream::column_bit(obdeect::stream::Column::p);
         std::vector<std::vector<float>> out(obdeect::stream::n_columns);
+        for (std::uint32_t c = 0; c < obdeect::stream::n_columns; ++c) {
+          if ((output_mask >> c) & 1U) {
+            out[c].reserve(input.rows); // a hint: a thinned output can be larger (w > 1)
+          }
+        }
         std::uint64_t out_index = 0;
         for (std::size_t offset = 0; offset < input.rows;
              offset += obdeect::stream::max_chunk_rows) {
@@ -238,7 +243,7 @@ inline void bind_apply(nb::module_ &module) {
       nb::arg("columns"), nb::arg("table"), nb::arg("telescope_altitude_m"),
       nb::arg("envelope_wavelength"), nb::arg("envelope_value"), nb::arg("seed"), nb::arg("event"),
       nb::arg("telescope"), nb::arg("first_index"), nb::arg("weighted"),
-      nb::arg("wavelength_range"), nb::arg("pathlen_m") = 0.0);
+      nb::arg("wavelength_range"), nb::arg("pathlen_m"));
 }
 
 } // namespace obdeect_propagation_bindings

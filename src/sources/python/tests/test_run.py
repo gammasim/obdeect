@@ -239,3 +239,30 @@ def test_ground_run_needs_one_telescope_and_no_plane_move(tmp_path):
     )
     with pytest.raises(ValueError, match="to_plane_z0"):
         run.write(plane, tmp_path / "plane.pst")
+
+
+def test_seed_above_the_signed_64_bit_range_is_rejected(tmp_path):
+    # The stream stores the seed as a signed 64-bit integer: 2^63 - 1 is the largest seed.
+    with pytest.raises(ValueError, match="0\\.\\.9223372036854775807"):
+        run.write(RUN, tmp_path / "x.pst", seed=2**63)
+    with pytest.raises(ValueError, match="9223372036854775807"):
+        run.write(dict(RUN, run=dict(RUN["run"], seed=2**63)), tmp_path / "y.pst")
+    run.write(RUN, tmp_path / "z.pst", seed=2**63 - 1)
+    assert run_record(tmp_path / "z.pst")["metadata"]["seed"] == 2**63 - 1
+
+
+def test_event_metadata_names_the_emissions_with_a_target(tmp_path):
+    # An isotropic point outside the telescope sphere aims at it (target "0:sphere"); one inside
+    # the sphere has no target and no record.
+    outside = dict(EMISSIONS[0], position_m=[0.0, 0.0, 50.0], target={"kind": "auto"})
+    inside = dict(EMISSIONS[0], position_m=[0.0, 0.0, 5.0], target={"kind": "auto"})
+    description = {
+        "run": {"seed": 3, "observation_level_m": 2150.0, "frame": "sky"},
+        "telescopes": [{"id": 1, "position_m": [0.0, 0.0, 0.0], "radius_m": 10.0}],
+        "events": [
+            {"emissions": [outside, inside]},
+        ],
+    }
+    run.write(description, tmp_path / "targets.pst")
+    events = [r for r in records(tmp_path / "targets.pst") if r["type"] == "event"]
+    assert events[0]["metadata"]["targets"] == "0:sphere"

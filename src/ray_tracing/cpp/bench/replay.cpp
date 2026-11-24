@@ -88,8 +88,7 @@ int write_command(const char *model_path, const char *out_path) {
       buffer.clear();
       for (std::size_t k = 0; k < kPhotonsPerSet; ++k, ++next_id) {
         const auto photon = sample_source(source, next_id, kSeed);
-        const auto r =
-            trace_photon(model, photon.ray, 400.0, photon.time_ns, 1.0, next_id, kSeed, true);
+        const auto r = trace_photon(model, photon.ray, 400.0, photon.time_ns, 1.0, next_id, kSeed);
         const auto status = static_cast<std::uint8_t>(r.status);
         put(buffer, &status, 1);
         put(buffer, &r.terminal_surface, 4);

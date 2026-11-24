@@ -6,8 +6,8 @@ single event, at ``--height``. The beam points downwards by default; ``--beam-ze
 > 90 down, < 90 up) and ``--beam-azimuth`` set another direction. A horizontal beam (zenith 90)
 is allowed: its photons move at the scan height, so they reach the telescope sphere only if that
 height lies within it, and they are cz = 0 sky-frame rows (consumers need the sphere
-representation of docs/stream/format.md). Old program:
-``beam-scan.hpp`` (its extents and step were fractions of the radius).
+representation of docs/stream/format.md). Its extents and step are
+in metres (the former C++ program used fractions of the radius).
 """
 
 import argparse
@@ -50,14 +50,16 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         type=float,
         default=_DOWNWARD_ZENITH,
         metavar="DEG",
-        help="zenith of the beam: 180 (default) points down, 0 up, 90 horizontal [deg]",
+        help="zenith of the direction the beam points to: 180 (default) points down, 0 up, 90 "
+        "horizontal [deg]",
     )
     beam.add_argument(
         "--beam-azimuth",
         type=float,
         default=0.0,
         metavar="DEG",
-        help="astronomical azimuth of the beam: clockwise from north (default 0) [deg]",
+        help="astronomical azimuth of the direction the beam points to: clockwise from north, "
+        "east is 90 (default 0) [deg]",
     )
     scan = parser.add_argument_group("scan")
     scan.add_argument(
@@ -124,23 +126,20 @@ def build(args: argparse.Namespace) -> dict:
     spectrum = _common.profile(args.spectrum, "spectrum")
     pulse = _common.profile(args.pulse, "pulse")
     emissions = [
-        {
-            "kind": "point",
-            "photons": args.photons_per_position,
-            "bunch_size": args.bunch_size,
-            "time_offset_ns": 0.0,
-            "to_plane_z0": False,
-            "position_m": [x, y, args.height],
-            "axis": axis,
-            "angular": _PARALLEL,
-            "spectrum": spectrum,
-            "pulse": pulse,
-            "target": "none",
-        }
+        _common.point_emission(
+            photons=args.photons_per_position,
+            bunch_size=args.bunch_size,
+            position_m=[x, y, args.height],
+            axis=axis,
+            angular=_PARALLEL,
+            spectrum=spectrum,
+            pulse=pulse,
+            target="none",
+        )
         for x, y in positions
     ]
     return {
         "run": _common.run_section(args, frame="sky"),
-        "telescopes": [{"id": 1, "position_m": [0.0, 0.0, 0.0], "radius_m": args.camera_radius}],
+        "telescopes": _common.single_telescope(args.camera_radius),
         "events": [{"repeat": args.events, "emissions": emissions}],
     }

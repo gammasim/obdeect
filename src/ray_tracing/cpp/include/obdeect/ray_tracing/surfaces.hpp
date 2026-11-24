@@ -5,13 +5,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <optional>
 #include <vector>
-#ifdef OBDEECT_RAY_TRACING_BENCH_COUNTERS
-#include <string>
-#endif
 
 namespace obdeect::ray_tracing {
 
@@ -150,33 +148,44 @@ struct Facet {
 // highest facet heights; near-horizontal rays test all facets.
 class FacetGrid {
 public:
-  // Cell size as a fraction of the smallest facet diameter.
+  // Cell size as a fraction of the median facet diameter.
   static constexpr double kCellScale = 0.25;
+  // Cap on the number of cells (the grid is widened beyond it).
+  static constexpr std::size_t kMaxCells = std::size_t{1} << 20;
+  // Facets with a smaller index are visited once per candidates() call (a bit mask on the stack).
+  static constexpr std::size_t kMaskFacets = 1024;
 
   FacetGrid() = default;
   explicit FacetGrid(const std::vector<Facet> &facets) {
     if (facets.empty())
       return;
-    double reach = 0.0, cell = std::numeric_limits<double>::infinity();
+    std::vector<double> diameters;
+    diameters.reserve(facets.size());
     z_low_ = std::numeric_limits<double>::infinity();
     z_high_ = -z_low_;
     x0_ = y0_ = std::numeric_limits<double>::infinity();
     double x1 = -x0_, y1 = -y0_;
     for (const auto &f : facets) {
       const double r = circumradius(f.shape, f.half_width);
-      // The facet's sag over its footprint bounds its height range.
-      const double sag =
-          f.radius > 0.0 ? f.radius - std::sqrt(std::max(0.0, f.radius * f.radius - r * r)) : 0.0;
-      z_low_ = std::min(z_low_, f.centre.z - r - sag);
-      z_high_ = std::max(z_high_, f.centre.z + r + sag);
-      reach = std::max(reach, r);
-      cell = std::min(cell, 2.0 * r);
+      // The footprint lies within r of the centre in the plane perpendicular to the (unit)
+      // normal: its height along z is at most r sqrt(1 - n_z^2). The cap adds its sag.
+      const double height =
+          r * std::sqrt(std::max(0.0, 1.0 - f.normal.z * f.normal.z)) + cap_sag(f.radius, r);
+      z_low_ = std::min(z_low_, f.centre.z - height);
+      z_high_ = std::max(z_high_, f.centre.z + height);
+      diameters.push_back(2.0 * r);
       x0_ = std::min(x0_, f.centre.x - r);
       y0_ = std::min(y0_, f.centre.y - r);
       x1 = std::max(x1, f.centre.x + r);
       y1 = std::max(y1, f.centre.y + r);
     }
-    cell_ = std::max(cell * kCellScale, 1e-3);
+    // The median rather than the smallest facet: one tiny facet must not make the grid huge.
+    const auto middle = diameters.begin() + static_cast<std::ptrdiff_t>(diameters.size() / 2);
+    std::nth_element(diameters.begin(), middle, diameters.end());
+    cell_ = std::max(*middle * kCellScale, 1e-3);
+    while (std::ceil((x1 - x0_) / cell_) * std::ceil((y1 - y0_) / cell_) >
+           static_cast<double>(kMaxCells))
+      cell_ *= 2.0;
     nx_ = std::max<std::size_t>(1, static_cast<std::size_t>(std::ceil((x1 - x0_) / cell_)));
     ny_ = std::max<std::size_t>(1, static_cast<std::size_t>(std::ceil((y1 - y0_) / cell_)));
     std::vector<std::vector<std::uint32_t>> cells(nx_ * ny_);
@@ -186,9 +195,7 @@ public:
       // The footprint lies within the circle of radius r (plus the sag of a
       // curved facet) around the centre: skip the cells of the bounding square
       // that this circle does not reach.
-      const double sag =
-          f.radius > 0.0 ? f.radius - std::sqrt(std::max(0.0, f.radius * f.radius - r * r)) : 0.0;
-      const double reach = r + sag;
+      const double reach = r + cap_sag(f.radius, r);
       for (std::size_t ix = index(f.centre.x - r, x0_, nx_); ix <= index(f.centre.x + r, x0_, nx_);
            ++ix)
         for (std::size_t iy = index(f.centre.y - r, y0_, ny_);
@@ -208,7 +215,9 @@ public:
     }
   }
 
-  // Calls `visit(facet_index)` for every candidate facet (possibly twice).
+  // Calls `visit(facet_index)` for every candidate facet. A facet listed in several
+  // cells is visited once (facets below kMaskFacets; the others may be visited more than
+  // once, which does not change a nearest-hit result).
   template <class Visit>
   void candidates(const Ray &ray, std::size_t facet_count, Visit visit) const {
     const double dz = ray.direction.z;
@@ -225,13 +234,27 @@ public:
     if (std::max(a.x, b.x) < x0_ || std::min(a.x, b.x) > x0_ + cell_ * nx_ ||
         std::max(a.y, b.y) < y0_ || std::min(a.y, b.y) > y0_ + cell_ * ny_)
       return;
+    std::array<std::uint64_t, kMaskFacets / 64> seen{};
     for (std::size_t ix = ix0; ix <= ix1; ++ix)
       for (std::size_t iy = iy0; iy <= iy1; ++iy)
-        for (std::size_t k = offsets_[ix * ny_ + iy]; k < offsets_[ix * ny_ + iy + 1]; ++k)
-          visit(members_[k]);
+        for (std::size_t k = offsets_[ix * ny_ + iy]; k < offsets_[ix * ny_ + iy + 1]; ++k) {
+          const std::uint32_t i = members_[k];
+          if (i < kMaskFacets) {
+            const std::uint64_t bit = std::uint64_t{1} << (i & 63U);
+            if (seen[i >> 6U] & bit)
+              continue;
+            seen[i >> 6U] |= bit;
+          }
+          visit(i);
+        }
   }
 
 private:
+  // Sag of a cap of radius of curvature `radius` at distance r from its vertex (0 if flat).
+  [[nodiscard]] static double cap_sag(double radius, double r) {
+    return radius > 0.0 ? radius - std::sqrt(std::max(0.0, radius * radius - r * r)) : 0.0;
+  }
+
   [[nodiscard]] std::size_t index(double value, double origin, std::size_t count) const {
     const double cell = (value - origin) / cell_;
     if (!(cell > 0.0))
@@ -281,17 +304,6 @@ struct Asphere {
     guess_z0 = sag(0.0);
     guess_k = (sag(outer_radius) - guess_z0) / (outer_radius * outer_radius);
   }
-
-#ifdef OBDEECT_RAY_TRACING_BENCH_COUNTERS
-  // Benchmark-only counters (single thread); never compiled into the library.
-  struct Counters {
-    std::uint64_t calls{}, newton_steps{};
-  };
-  static Counters &counters() {
-    static Counters c;
-    return c;
-  }
-#endif
 
   // Rigorous bound sum_i 2 i |c_i| rho^(2i-1) / scale, rho = outer_radius / scale.
   // Every term grows with r, so the value at the outer radius bounds |slope(r)|
@@ -400,9 +412,6 @@ struct Asphere {
   [[nodiscard]] std::optional<SurfaceHit> intersect(const Ray &ray, double t_min, Accept accept,
                                                     bool &failed) const {
     failed = false;
-#ifdef OBDEECT_RAY_TRACING_BENCH_COUNTERS
-    ++counters().calls;
-#endif
     // Work from a point near the vertex plane: distant sources otherwise
     // lose precision in every residual.
     const double shift = std::max(0.0, dot(Vec3{0.0, 0.0, vertex_z} - ray.origin, ray.direction));
@@ -442,9 +451,6 @@ struct Asphere {
     };
     const auto newton = [&](double t, double lo, double hi) -> std::optional<Root> {
       for (int iteration = 0; iteration < 50; ++iteration) {
-#ifdef OBDEECT_RAY_TRACING_BENCH_COUNTERS
-        ++counters().newton_steps;
-#endif
         const Vec3 p = local.at(t);
         const double rr = p.x * p.x + p.y * p.y;
         const double g = residual_at(p, rr);
@@ -661,26 +667,6 @@ class SegmentGrid {
 public:
   static constexpr std::size_t kCells = 128; // Cells per side.
 
-#ifdef OBDEECT_RAY_TRACING_BENCH_COUNTERS
-  // Benchmark-only counters (single thread); never compiled into the library.
-  struct Counters {
-    std::uint64_t calls{}, contains_calls{}, decided{};
-  };
-  static Counters &counters() {
-    static Counters c;
-    return c;
-  }
-  static std::string counter_report(std::size_t hits) {
-    const auto &c = counters();
-    return "segment find calls " + std::to_string(static_cast<double>(c.calls) / hits) +
-           ", segment contains calls " +
-           std::to_string(static_cast<double>(c.contains_calls) / hits) +
-           " (per primary hit, all runs), decided by a verdict " +
-           std::to_string(c.calls ? static_cast<double>(c.decided) / c.calls : 0.0) +
-           " of the find calls";
-  }
-#endif
-
   SegmentGrid() = default;
   SegmentGrid(const std::vector<Segment> &segments,
               const std::vector<Segment::TangentFrame> &frames, const Asphere &mirror)
@@ -692,7 +678,7 @@ public:
     std::sort(by_id.begin(), by_id.end(), [&](std::uint32_t a, std::uint32_t b) {
       return segments[a].id < segments[b].id || (segments[a].id == segments[b].id && a < b);
     });
-    std::array<std::vector<std::uint32_t>, kCells * kCells> cells;
+    std::vector<std::vector<std::uint32_t>> cells(kCells * kCells);
     for (const std::uint32_t i : by_id) {
       const auto box = bounding_box(segments[i], frames[i]);
       // Hexagon, square and circle accept only points within sqrt(reach2) of
@@ -731,26 +717,17 @@ public:
   [[nodiscard]] std::optional<std::uint32_t> find(const std::vector<Segment> &segments,
                                                   const std::vector<Segment::TangentFrame> &frames,
                                                   const Vec3 &p) const {
-#ifdef OBDEECT_RAY_TRACING_BENCH_COUNTERS
-    ++counters().calls;
-#endif
     if (members_.empty() || !(std::abs(p.x) <= outer_ && std::abs(p.y) <= outer_))
       return std::nullopt;
     const std::size_t cell = index(p.x) * kCells + index(p.y);
     const Verdict &verdict = verdicts_[cell];
     if (verdict.kind != Kind::undecided && p.z >= verdict.z_low && p.z <= verdict.z_high) {
-#ifdef OBDEECT_RAY_TRACING_BENCH_COUNTERS
-      ++counters().decided;
-#endif
       if (verdict.kind == Kind::none)
         return std::nullopt;
       return verdict.id;
     }
     for (std::uint32_t k = offsets_[cell]; k < offsets_[cell + 1]; ++k) {
       const std::uint32_t i = members_[k];
-#ifdef OBDEECT_RAY_TRACING_BENCH_COUNTERS
-      ++counters().contains_calls;
-#endif
       if (segments[i].contains(frames[i], p))
         return segments[i].id;
     }

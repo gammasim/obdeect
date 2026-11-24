@@ -1,6 +1,6 @@
 """Single scattering of light-source photons (Rayleigh and Henyey-Greenstein).
 
-See docs/scattering.md.
+See docs/propagation/scattering.md.
 
 Arrays are float64 for the table lookups and float32 for photon columns, as in the photon stream.
 """
@@ -9,14 +9,7 @@ from collections.abc import Mapping, Sequence
 
 import numpy as np
 from obdeect.propagation import _core
-
-
-def _vectorized(function, *arguments):
-    """Broadcast float64 arguments to a common shape and apply function to flat arrays."""
-    arrays = np.broadcast_arrays(*(np.asarray(a, dtype=np.float64) for a in arguments))
-    shape = arrays[0].shape
-    flat = [np.ascontiguousarray(a).reshape(-1) for a in arrays]
-    return tuple(np.asarray(r).reshape(shape) for r in function(*flat))
+from obdeect.propagation._arrays import broadcast_call, float32_columns, integer
 
 
 class ScatteringTable(_core.ScatteringTable):
@@ -26,9 +19,9 @@ class ScatteringTable(_core.ScatteringTable):
         path: scattering table file (columns: wavelength_nm altitude_km tau_mol tau_aer ssa g).
     """
 
-    def profile(self, wavelength_nm, altitude_m):
+    def profile(self, wavelength_nm, altitude_m) -> tuple[np.ndarray, ...]:
         """Return (tau_mol, tau_aer, ssa, g) at wavelength [nm] and altitude [m a.s.l.]."""
-        return _vectorized(super().profile, wavelength_nm, altitude_m)
+        return broadcast_call(super().profile, wavelength_nm, altitude_m)
 
 
 def scatter(
@@ -53,9 +46,10 @@ def scatter(
     to the telescope plane (the atmosphere stage adds it).
 
     Columns (float32, equal length): x, y, z (z above the observation level, m), cx, cy, t, w,
-    wavelength (integer nm, > 0); optional cz (either sign) and zem (consistency checked).
-    The primary photons are not changed; their extinction is applied by the extinction step.
-    Scattered photons carry T in their weight: do not apply the atmospheric acceptance to them.
+    wavelength (integer nm, > 0); optional cz (either sign) and zem (consistency checked). Other
+    dtypes are rejected. The primary photons are not changed; their extinction is applied by the
+    extinction step. Scattered photons carry T in their weight: do not apply the atmospheric
+    acceptance to them.
 
     Args:
         columns: primary photon columns by name.
@@ -64,25 +58,25 @@ def scatter(
             and T).
         telescopes: (telescope_id, x_m, y_m, z_m, radius_m) per telescope sphere; z above the
             observation level, z_m >= 0.
-        seed, event: Philox key of the draws.
-        first_index: index of the first primary photon of the event.
-        n_points: scattering points per primary photon (1 to 1024).
+        seed, event: Philox key of the draws (integers).
+        first_index: index of the first primary photon of the event (integer).
+        n_points: scattering points per primary photon (1 to 1024, integer).
 
     Returns:
         Dict keyed by telescope_id of dicts of float32 arrays (x, y, z, cx, cy, cz, t, zem, w,
         wavelength), one row per scattered photon.
     """
-    float_columns = {
-        name: np.ascontiguousarray(value, dtype=np.float32) for name, value in columns.items()
-    }
-    sphere = [(int(i), float(x), float(y), float(z), float(r)) for i, x, y, z, r in telescopes]
+    sphere = [
+        (integer(i, "telescope_id"), float(x), float(y), float(z), float(r))
+        for i, x, y, z, r in telescopes
+    ]
     return _core.scatter(
-        float_columns,
+        float32_columns(columns),
         table,
         transmission,
         sphere,
-        int(seed),
-        int(event),
-        int(first_index),
-        int(n_points),
+        integer(seed, "seed"),
+        integer(event, "event"),
+        integer(first_index, "first_index"),
+        integer(n_points, "n_points"),
     )

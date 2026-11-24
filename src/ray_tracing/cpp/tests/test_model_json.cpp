@@ -2,6 +2,7 @@
 #include "check.hpp"
 
 #include "obdeect/ray_tracing/bunches.hpp"
+#include "obdeect/ray_tracing/model_hash.hpp"
 #include "obdeect/ray_tracing/model_json.hpp"
 
 #include <algorithm>
@@ -24,6 +25,7 @@ const std::string kValid = R"({
   "sha256": "ignored by the loader",
   "provenance": {"model": "test"},
   "notes": [],
+  "sampling": {"disk_radius_m": 1.2, "disk_z_m": 0.0, "start_z_m": 17.0},
   "optics": {
     "propagation_group_index": 1.0003,
     "telescope_transmission": {"on_axis": 0.9, "amplitude": 0.0, "angular_scale_rad": 0.1,
@@ -54,19 +56,42 @@ const std::string kValid = R"({
   }
 })";
 
-// Load `text` with `from` replaced by `to`; return the error message, if any.
-std::string error_after(const std::string &from, const std::string &to) {
-  std::string text = kValid;
-  const auto at = text.find(from);
+// The document with its sha256 entry set to the hash of its canonical text. The entry is left out
+// of that hash, so its old value does not matter. Text that is not JSON is returned unchanged.
+std::string signed_text(std::string text) {
+  const std::string key = "\"sha256\": \"";
+  const auto at = text.find(key);
   if (at == std::string::npos)
-    return "test error: '" + from + "' not found";
-  text.replace(at, from.size(), to);
+    return text;
+  const auto start = at + key.size();
+  const auto end = text.find('"', start);
+  try {
+    const std::string hash = model_hash(text);
+    text.replace(start, end - start, hash);
+  } catch (const ModelError &) {
+    return text; // Not hashable: returned unchanged, load_model reports the error.
+  }
+  return text;
+}
+
+// The error of loading `text` as it is (no hash fix-up), or "" if it loads.
+std::string load_error(const std::string &text) {
   try {
     (void)load_model(text);
   } catch (const ModelError &error) {
     return error.what();
   }
   return "";
+}
+
+// Load `text` with `from` replaced by `to` (and its hash fixed); return the error message, if any.
+std::string error_after(const std::string &from, const std::string &to) {
+  std::string text = kValid;
+  const auto at = text.find(from);
+  if (at == std::string::npos)
+    return "test error: '" + from + "' not found";
+  text.replace(at, from.size(), to);
+  return load_error(signed_text(text));
 }
 
 bool contains(const std::string &text, const std::string &part) {
@@ -106,8 +131,8 @@ void axes_offset_is_applied_by_the_tracer() {
   const std::string key = "\"optics\": {";
   std::string text = kValid;
   text.insert(text.find(key) + key.size(), "\n    \"axes_offset_m\": [0.5, -0.2, 0.1],");
-  auto shifted = load_model(text);
-  auto plain = load_model(kValid);
+  auto shifted = load_model(signed_text(text));
+  auto plain = load_model(signed_text(kValid));
   CHECK((shifted.axes_offset_m == std::array<double, 3>{0.5, -0.2, 0.1}));
   CHECK((plain.axes_offset_m == std::array<double, 3>{}));
   // Without the obscurers, which would shadow the photons, the photons reach the primary.
@@ -185,7 +210,7 @@ void duplicate_keys_keep_the_last_value() {
 void all_tests() {
   decimal_comma_locale();
   duplicate_keys_keep_the_last_value();
-  const auto model = load_model(kValid);
+  const auto model = load_model(signed_text(kValid));
   CHECK(model.primary.facets.size() == 1);
   CHECK_NEAR(model.primary.facets[0].half_width, 0.6, 0.0);
   CHECK(model.primary.reflectivity && model.primary.reflectivity->wavelength_count == 2);
@@ -219,12 +244,34 @@ void all_tests() {
     std::string text = kValid;
     const std::string key = R"("reflectivity": {"wavelength_min_nm")";
     text.replace(text.find(key), key.size(), R"("vertex_z_m": -0.25, )" + key);
-    const auto with_vertex = load_model(text);
+    const auto with_vertex = load_model(signed_text(text));
     CHECK(with_vertex.primary.vertex_z_m && *with_vertex.primary.vertex_z_m == -0.25);
   }
   CHECK(contains(error_after(R"("reflectivity": {"wavelength_min_nm")",
                              R"("vertex_z_m": "low", "reflectivity": {"wavelength_min_nm")"),
                  "vertex_z_m"));
+  // The sha256 entry must be the hash of the canonical text (the placeholder is not).
+  CHECK(contains(load_error(kValid), "model.sha256: does not match the document"));
+  CHECK(contains(error_after(R"("disk_radius_m": 1.2)", R"("disk_radius_m": -1.2)"),
+                 "model.sampling.disk_radius_m: expected a positive number"));
+  CHECK(contains(error_after(R"("start_z_m": 17.0)", R"("start_z_m": 17.0, "x": 1)"),
+                 "model.sampling: unknown key 'x'"));
+  CHECK(contains(error_after(R"("provenance": {"model": "test"})", R"("provenance": 3)"),
+                 "model.provenance: expected an object"));
+  CHECK(contains(error_after(R"("notes": [],)", R"("notes": [1],)"),
+                 "model.notes[0]: expected a string"));
+  // Escapes: \u with a surrogate pair is accepted; a lone surrogate, a form feed as white space
+  // and nesting beyond the depth limit are rejected (as by the canonical hash).
+  CHECK(error_after(R"("model": "test")", R"("model": "\u00e9\ud83d\ude00")").empty());
+  CHECK(contains(error_after(R"("model": "test")", R"("model": "\ud800")"), "unpaired surrogate"));
+  CHECK(contains(error_after(R"("notes": [],)", "\"notes\":\f[],"), "JSON syntax error"));
+  std::string nested;
+  for (int i = 0; i < 70; ++i)
+    nested += "[";
+  nested += std::string(70, ']');
+  CHECK(contains(error_after(R"("provenance": {"model": "test"})",
+                             R"("provenance": {"model": "test", "deep": )" + nested + "}"),
+                 "nesting too deep"));
   axes_offset_is_applied_by_the_tracer();
 }
 

@@ -3,7 +3,8 @@
 Model (the spirit of the ``showermodel`` package, without its shower generation):
 
 - One straight shower axis from the start height down to the core (core_x, core_y, 0). The
-  direction is ``(-sin z cos a, -sin z sin a, -cos z)`` for zenith z and azimuth a.
+  light comes from the direction of ``--zenith`` and ``--azimuth`` (astronomical, sky frame; see
+  presets.md), so the axis runs along their reverse.
 - Longitudinal profile, Gaisser-Hillas in slant depth X [g/cm^2]:
   ``N(X) = Nmax ((X - X0)/(Xmax - X0))^((Xmax - X0)/lambda) exp((Xmax - X)/lambda)`` for X > X0,
   zero otherwise. X0 is the first-interaction depth, so a start height above it is allowed.
@@ -39,6 +40,7 @@ import math
 from collections.abc import Callable
 
 from obdeect.sources.presets import _cherenkov, _common
+from obdeect.sources.presets._beam import travel_from_source
 
 NAME = "shower"
 HELP = "Cherenkov and fluorescence light of a straight air shower (simple model, sky frame)"
@@ -68,24 +70,24 @@ def _positive(value: float, name: str) -> None:
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
-    _common.add_run_arguments(parser)
-    _cherenkov.add_wavelength_arguments(parser)
-    _cherenkov.add_index_arguments(parser)
-
-    telescope = parser.add_argument_group("telescope")
-    telescope.add_argument("--telescope-radius", type=float, required=True, metavar="M")
-    telescope.add_argument(
-        "--telescope-position",
-        type=_common.vector,
-        default="0,0,0",
-        metavar="X,Y,Z",
-        help="sphere centre [m] (default: origin)",
-    )
+    _cherenkov.add_shared_arguments(parser)
 
     axis = parser.add_argument_group("shower axis")
     axis.add_argument("--start-height", type=float, required=True, metavar="M")
-    axis.add_argument("--zenith", type=float, required=True, metavar="DEG")
-    axis.add_argument("--azimuth", type=float, required=True, metavar="DEG")
+    axis.add_argument(
+        "--zenith",
+        type=float,
+        required=True,
+        metavar="DEG",
+        help="zenith of the direction the light comes from (the shower runs the other way)",
+    )
+    axis.add_argument(
+        "--azimuth",
+        type=float,
+        required=True,
+        metavar="DEG",
+        help="astronomical azimuth of the light source (clockwise from north)",
+    )
     axis.add_argument("--core-x", type=float, default=0.0, metavar="M")
     axis.add_argument("--core-y", type=float, default=0.0, metavar="M")
     axis.add_argument("--step", type=float, required=True, metavar="M", help="step length")
@@ -191,14 +193,8 @@ def build(args: argparse.Namespace) -> dict:
     """Run description of the simple shower (see the module docstring)."""
     _check(args)
     index = _cherenkov.index_from_args(args)
-    zenith = math.radians(args.zenith)
-    azimuth = math.radians(args.azimuth)
-    direction = [
-        -math.sin(zenith) * math.cos(azimuth),
-        -math.sin(zenith) * math.sin(azimuth),
-        -math.cos(zenith),
-    ]
-    length_m = args.start_height / math.cos(zenith)
+    direction = list(travel_from_source(args.zenith, args.azimuth))
+    length_m = args.start_height / math.cos(math.radians(args.zenith))
     end = [args.core_x, args.core_y, 0.0]
 
     def particles(altitude_m: float) -> float:
@@ -232,13 +228,7 @@ def build(args: argparse.Namespace) -> dict:
 
     return {
         "run": _common.run_section(args, frame="sky", preset=NAME),
-        "telescopes": [
-            {
-                "id": 1,
-                "position_m": list(args.telescope_position),
-                "radius_m": args.telescope_radius,
-            }
-        ],
+        "telescopes": _common.single_telescope(args.telescope_radius, args.telescope_position),
         "events": [
             {
                 "repeat": args.events,

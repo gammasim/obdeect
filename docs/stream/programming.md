@@ -11,12 +11,19 @@ The format is available in C++, Python and C. Record types and fields are in [](
 
 std::ofstream file("run.pst", std::ios::binary);
 obdeect::stream::Writer writer(file, "my-module");           // writes the stream record
+writer.write_metadata(obdeect::stream::RecordType::run, {});
+writer.write_metadata(obdeect::stream::RecordType::event, {});
+writer.write_metadata(obdeect::stream::RecordType::telescope,
+                      {{"telescope_id", std::int64_t{1}}, {"frame", std::int64_t{2}}});
 obdeect::stream::PhotonChunk chunk;
 chunk.telescope_id = 1;
 chunk.frame = obdeect::stream::Frame::telescope;
 chunk.resize(3, obdeect::stream::required_columns);          // x y cx cy t w
 chunk[obdeect::stream::Column::x] = {0.0F, 1.0F, 2.0F};      // fill the columns, then:
-writer.write_chunk(chunk);
+writer.write_chunk(chunk);                                   // photons go in a telescope block
+writer.write_metadata(obdeect::stream::RecordType::telescope_end, {{"photons", 3.0}});
+writer.write_metadata(obdeect::stream::RecordType::event_end, {});
+writer.write_metadata(obdeect::stream::RecordType::run_end, {});
 writer.finish();                                      // writes stream_end
 
 std::ifstream in("run.pst", std::ios::binary);
@@ -37,9 +44,11 @@ import obdeect.stream
 
 with obdeect.stream.Writer("run.pst", "my-module") as writer:
     writer.write("run", {"run_number": 1, "telescope_x_m": [0.0, 10.0]})
+    writer.write("event", {"event_number": 1})
+    writer.write("telescope", {"telescope_id": 1, "frame": 2})  # 2 = telescope frame
     writer.write_photons(
         1,
-        "telescope",  # or 2
+        "telescope",
         0,
         {
             "x": np.zeros(3, np.float32),
@@ -50,9 +59,14 @@ with obdeect.stream.Writer("run.pst", "my-module") as writer:
             "w": np.ones(3, np.float32),
         },
     )
-    writer.write_blob(1204, 0, b"...")  # raw EventIO block
+    writer.write("telescope_end", {"telescope_id": 1, "photons": 3.0})
+    writer.write_blob(1204, 0, b"...")  # raw EventIO block (between run and run_end)
+    writer.write("event_end", {})
+    writer.write("run_end", {})
 
-for record in obdeect.stream.Reader("run.pst"):
+with obdeect.stream.Reader("run.pst") as reader:  # a path or os.PathLike; close() is optional
+    records = list(reader)
+for record in records:
     print(record["type"])  # stream, run, photons, blob, ...
     if record["type"] == "photons":
         w = record["columns"]["w"]  # numpy float32 array
@@ -100,8 +114,9 @@ columns, belong to the reader and are valid until the next `obdeect_stream_reade
 is copied. Errors are negative codes with a message in `obdeect_stream_last_error()`.
 
 The optics step, which turns ground-frame photons into camera-frame photons, is
-`obdeect ray-tracing trace-stream` ([](../ray-tracing/photon-stream.md)). A Python ray tracer
-uses the same stage interface:
+`obdeect ray-tracing trace-stream` ([](../ray-tracing/photon-stream.md)); the Python function
+`obdeect.ray_tracing.stream.trace_stream` runs the same native code. A custom Python stage uses
+the stage interface of `obdeect.stream.stage`:
 
 ```python
 import numpy as np

@@ -1,4 +1,5 @@
 #include "check.hpp"
+#include "stream_fixtures.hpp"
 
 #include "obdeect/propagation/ground_to_sky.hpp"
 #include "obdeect/propagation/profile.hpp"
@@ -28,6 +29,8 @@
 #endif
 
 namespace {
+
+using namespace obdeect_test;
 
 using obdeect::propagation::AtmosphereProfile;
 using obdeect::propagation::ground_slice;
@@ -65,7 +68,7 @@ obdeect::stream::Metadata run_keys(int refraction) {
   return m;
 }
 
-// One photon. Sky photons use z; G photons use zem. cz < -2 means "no cz column".
+// One photon. Photons in the sky frame use z; G photons use zem. cz < -2 means "no cz column".
 struct Row {
   double x = 0.0, y = 0.0, z = 0.0, cx = 0.0, cy = 0.0, cz = -2.0, t = 0.0, zem = 0.0, w = 1.0;
 };
@@ -107,7 +110,7 @@ PhotonChunk make_chunk(Frame frame, std::uint32_t telescope, std::uint64_t first
   return chunk;
 }
 
-// Sky photons 3 to 23 km above the observation level, all moving downwards.
+// Photons in the sky frame 3 to 23 km above the observation level, all moving downwards.
 Row sky_row(std::size_t i) {
   Row row;
   row.x = 500.0 * std::sin(0.1 * static_cast<double>(i));
@@ -172,30 +175,6 @@ std::string build_stream(const obdeect::stream::Metadata &run,
   return out.str();
 }
 
-std::vector<obdeect::stream::Record> records_of(const std::string &bytes) {
-  std::istringstream in(bytes);
-  obdeect::stream::Reader reader(in);
-  std::vector<obdeect::stream::Record> records;
-  obdeect::stream::Record record;
-  while (reader.next(record)) {
-    records.push_back(record);
-  }
-  CHECK(reader.ended());
-  return records;
-}
-
-std::vector<float> photon_column(const std::vector<obdeect::stream::Record> &records,
-                                 std::uint32_t telescope, Column c) {
-  std::vector<float> values;
-  for (const auto &record : records) {
-    if (record.type == RecordType::photons && record.chunk.telescope_id == telescope &&
-        record.chunk.has(c)) {
-      values.insert(values.end(), record.chunk[c].begin(), record.chunk[c].end());
-    }
-  }
-  return values;
-}
-
 std::size_t photon_rows(const std::vector<obdeect::stream::Record> &records,
                         std::uint32_t telescope) {
   std::size_t rows = 0;
@@ -205,18 +184,6 @@ std::size_t photon_rows(const std::vector<obdeect::stream::Record> &records,
     }
   }
   return rows;
-}
-
-// True if f throws std::invalid_argument.
-template <class F> bool rejects(F f) {
-  try {
-    f();
-  } catch (const std::invalid_argument &) {
-    return true;
-  } catch (...) {
-    return false;
-  }
-  return false;
 }
 
 // Output of the stage (geometry only, no extinction) for a sky stream.
@@ -264,8 +231,9 @@ void analytic_cases() {
   CHECK(!ground_to_sky_row(raised, 1.0, 2.0, 0.0, 0.0, 2025.0, 0.0, x, y, z, t));
   CHECK(!ground_to_sky_row(plane, 1.0, 2.0, 1.0, 0.0, site_m + 500.0, 0.0, x, y, z, t));
   CHECK(!ground_to_sky_row(plane, std::nan(""), 2.0, 0.0, 0.0, site_m + 5.0, 0.0, x, y, z, t));
-  CHECK(rejects(
-      [&] { ground_to_sky_row(plane, 1.0, 2.0, 0.9, 0.9, site_m + 5.0, 0.0, x, y, z, t); }));
+  CHECK(throws_with(
+      [&] { ground_to_sky_row(plane, 1.0, 2.0, 0.9, 0.9, site_m + 5.0, 0.0, x, y, z, t); },
+      "direction cosines must satisfy"));
 }
 
 // Time inversion with a profile: the stage's straight-path air delay is subtracted.
@@ -425,64 +393,75 @@ void rejected_inputs() {
   // Curved input.
   obdeect::stream::Metadata curved = run_keys(0);
   curved["curvature_applied"] = std::int64_t{1};
-  CHECK(rejects([&] { convert(ok_stream(curved), std::nullopt); }));
+  CHECK(throws_with([&] { convert(ok_stream(curved), std::nullopt); }, "CORSIKA CURVED geometry"));
 
   // Missing observation level.
   obdeect::stream::Metadata no_level = run_keys(0);
   no_level.erase("observation_level_m");
-  CHECK(rejects([&] { convert(ok_stream(no_level), std::nullopt); }));
+  CHECK(throws_with([&] { convert(ok_stream(no_level), std::nullopt); }, "lacks the key"));
 
   // Missing telescope positions.
   obdeect::stream::Metadata no_positions = run_keys(0);
   no_positions.erase("telescope_y_m");
-  CHECK(rejects([&] { convert(ok_stream(no_positions), std::nullopt); }));
+  CHECK(throws_with([&] { convert(ok_stream(no_positions), std::nullopt); }, "lacks the key"));
 
   // Telescope record in frame sky (or T): not G.
-  CHECK(rejects([&] {
-    convert(build_stream(run_keys(0), {TelescopeData{1, Frame::sky, {}, {good}}}), std::nullopt);
-  }));
+  CHECK(throws_with(
+      [&] {
+        convert(build_stream(run_keys(0), {TelescopeData{1, Frame::sky, {}, {good}}}),
+                std::nullopt);
+      },
+      "frame G"));
 
   // Telescope record position that differs from the run's position.
   obdeect::stream::Metadata wrong_position;
   wrong_position["x_m"] = 999.0;
-  CHECK(rejects([&] {
-    convert(build_stream(run_keys(0), {TelescopeData{1, Frame::ground, wrong_position, {good}}}),
+  CHECK(throws_with(
+      [&] {
+        convert(
+            build_stream(run_keys(0), {TelescopeData{1, Frame::ground, wrong_position, {good}}}),
             std::nullopt);
-  }));
+      },
+      "differs from the run"));
   // Telescope record whose position agrees is accepted.
   obdeect::stream::Metadata right_position;
   right_position["x_m"] = 100.0;
-  CHECK(!rejects([&] {
+  CHECK(accepts([&] {
     convert(build_stream(run_keys(0), {TelescopeData{1, Frame::ground, right_position, {good}}}),
             std::nullopt);
   }));
 
   // Telescope id outside the run.
-  CHECK(rejects([&] {
-    convert(build_stream(run_keys(0), {TelescopeData{3, Frame::ground, {}, {good}}}), std::nullopt);
-  }));
+  CHECK(throws_with(
+      [&] {
+        convert(build_stream(run_keys(0), {TelescopeData{3, Frame::ground, {}, {good}}}),
+                std::nullopt);
+      },
+      "outside the run"));
 
   // A profile needs refraction_applied = 1 in the run.
   const auto profile = ecmwf_profile();
-  CHECK(rejects([&] { convert(ok_stream(run_keys(0)), profile); }));
-  CHECK(rejects([&] { convert(ok_stream(run_keys(-1)), profile); }));
-  CHECK(!rejects([&] { convert(ok_stream(run_keys(1)), profile); }));
-  CHECK(!rejects([&] { convert(ok_stream(run_keys(0)), std::nullopt); }));
+  CHECK(throws_with([&] { convert(ok_stream(run_keys(0)), profile); }, "is not inverted"));
+  CHECK(throws_with([&] { convert(ok_stream(run_keys(-1)), profile); },
+                    "run lacks refraction_applied"));
+  CHECK(accepts([&] { convert(ok_stream(run_keys(1)), profile); }));
+  CHECK(accepts([&] { convert(ok_stream(run_keys(0)), std::nullopt); }));
 
   // Sky-frame photons and photons without zem are rejected at chunk level.
   std::uint64_t dropped = 0;
   const GroundPlane plane{100.0, -50.0, 0.0, site_m, nullptr};
   const PhotonChunk sky = make_chunk(Frame::sky, 1, 0, 2, sky_row, true);
-  CHECK(rejects([&] { ground_to_sky(sky, plane, dropped); }));
+  CHECK(throws_with([&] { ground_to_sky(sky, plane, dropped); },
+                    "ground_to_sky needs photons in frame G"));
   PhotonChunk no_zem = make_chunk(Frame::ground, 1, 0, 2, ground_row, false);
   no_zem[Column::zem].clear();
-  CHECK(rejects([&] { ground_to_sky(no_zem, plane, dropped); }));
+  CHECK(throws_with([&] { ground_to_sky(no_zem, plane, dropped); }, "need the zem column"));
   // A cz column that does not match the direction is rejected.
   Row inconsistent = ground_row(0);
   inconsistent.cz = -0.1;
   const PhotonChunk bad_cz =
       make_chunk(Frame::ground, 1, 0, 1, [&](std::size_t) { return inconsistent; }, true);
-  CHECK(rejects([&] { ground_to_sky(bad_cz, plane, dropped); }));
+  CHECK(throws_with([&] { ground_to_sky(bad_cz, plane, dropped); }, "cz column does not match"));
   CHECK(dropped == 0);
 }
 
@@ -538,7 +517,8 @@ void round_trip(bool with_profile) {
       CHECK(worst <= tolerance);
     }
     CHECK(photon_column(g1, id, Column::w) == photon_column(g2, id, Column::w));
-    // The back-converted sky photons are the stage's sky input (x, y, z to 1e-3 m, cx, cy to 1e-6).
+    // The back-converted photons in the sky frame are the stage's sky input (x, y, z to 1e-3 m, cx,
+    // cy to 1e-6).
     const PhotonChunk &original = sky_telescopes[id - 1].chunks[0];
     for (const Column c : {Column::x, Column::y, Column::z, Column::cx, Column::cy}) {
       const auto a = photon_column(s2, id, c);
@@ -557,26 +537,36 @@ void round_trip(bool with_profile) {
 }
 
 void telescope_end_validation() {
+  // A telescope_end must close the open telescope: with none open the reader rejects it, with
+  // telescope 1 open a telescope_end of telescope 2 is rejected by the converter.
   for (bool opened : {false, true}) {
-    std::ostringstream bytes;
-    obdeect::stream::Writer writer(bytes, "test");
-    writer.write_metadata(RecordType::run, run_keys(0));
+    obdeect::stream::Metadata header{{"format_major", std::int64_t{obdeect::stream::format_major}},
+                                     {"format_minor", std::int64_t{obdeect::stream::format_minor}},
+                                     {"producer", std::string("test")}};
+    obdeect::stream::Metadata end;
+    end["telescope_id"] = std::int64_t{2};
+    end["photons"] = 0.0;
+    std::string bytes = raw_metadata(RecordType::stream, header) +
+                        raw_metadata(RecordType::run, run_keys(0)) +
+                        raw_metadata(RecordType::event, obdeect_test::event_keys());
     if (opened) {
       obdeect::stream::Metadata telescope;
       telescope["telescope_id"] = std::int64_t{1};
       telescope["frame"] = std::int64_t{1};
-      writer.write_metadata(RecordType::telescope, telescope);
+      bytes += raw_metadata(RecordType::telescope, telescope);
     }
-    obdeect::stream::Metadata end;
-    end["telescope_id"] = std::int64_t{2};
-    end["photons"] = 0.0;
-    writer.write_metadata(RecordType::telescope_end, end);
-    writer.finish();
-    CHECK(rejects([&] {
-      std::istringstream in(bytes.str());
+    bytes += raw_metadata(RecordType::telescope_end, end);
+    bytes += raw_record(RecordType::stream_end, "");
+    const auto convert_bytes = [&] {
+      std::istringstream in(bytes);
       std::ostringstream out;
       ground_to_sky_stream(in, out, std::nullopt);
-    }));
+    };
+    if (opened) {
+      CHECK(throws_with(convert_bytes, "does not match an open telescope"));
+    } else {
+      CHECK(throws_with<std::runtime_error>(convert_bytes, "telescope_end without telescope"));
+    }
   }
 }
 

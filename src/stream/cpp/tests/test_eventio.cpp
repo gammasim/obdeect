@@ -1,9 +1,12 @@
 #include "check.hpp"
 
 #include "obdeect/stream/eventio.hpp"
+#include "obdeect/stream/stdin_buffer.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <istream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -441,8 +444,96 @@ void atmprof_round_trip() {
   CHECK(throws([&] { decode_atmprof(make_block(iact::atmprof, 0, 99, layers)); }));
 }
 
+// Little-endian loads of 1 to 8 bytes; more than 8 is refused.
+void little_endian_loads() {
+  const Bytes bytes{1, 2, 3, 4, 5, 6, 7, 8, 9};
+  ByteReader in{bytes};
+  CHECK(in.take(1) == 0x01);
+  CHECK(in.take(2) == 0x0302);
+  CHECK(in.take(6) == 0x090807060504ULL);
+  CHECK(in.remaining() == 0);
+  CHECK(throws([&] {
+    ByteReader r{bytes};
+    (void)r.take(9);
+  }));
+}
+
+// A float block, TELPOS or TELOFF payload is exactly its size: trailing bytes are rejected.
+void trailing_payload_bytes_rejected() {
+  std::vector<float> values{1.0F, 2.0F};
+  EventioBlock block = make_float_block(iact::runh, 1, values);
+  block.body.push_back(0);
+  block.body.push_back(0);
+  block.body.push_back(0);
+  block.body.push_back(0); // one word more than the count says
+  CHECK(throws([&] { (void)decode_float_block(block); }));
+  CHECK(decode_float_block(make_float_block(iact::runh, 1, values)).size() == 2);
+
+  EventioBlock telpos = make_telpos_block(TelPos{{1.0}, {2.0}, {3.0}, {4.0}});
+  telpos.body.insert(telpos.body.end(), {0, 0, 0, 0});
+  CHECK(throws([&] { (void)decode_telpos(telpos); }));
+
+  TelOffset off;
+  off.toff = 1.0;
+  off.xoff = {1.0};
+  off.yoff = {2.0};
+  EventioBlock teloff = make_teloff_block(off);
+  teloff.body.insert(teloff.body.end(), {0, 0, 0, 0});
+  CHECK(throws([&] { (void)decode_teloff(teloff); }));
+
+  TelPhotons photons;
+  photons.bunches = {Bunch{1.0F, 2.0F, 0.0F, 0.0F, 3.0F, 4.0F, 1.0F, 500.0F}};
+  EventioBlock long_block = make_photons_block(photons);
+  long_block.body.insert(long_block.body.end(), {0, 0, 0, 0});
+  CHECK(throws([&] { (void)decode_photons(long_block); }));
+  CHECK(decode_photons(make_photons_block(photons)).bunches.size() == 1);
+}
+
+// Read errors of the input are errors, not the end of the stream.
+void read_errors_are_not_end_of_stream() {
+  std::istringstream bad_stream{std::string(8, '\0')};
+  bad_stream.setstate(std::ios::badbit);
+  EventioBlock block;
+  CHECK(throws([&] {
+    EventioReader reader{bad_stream};
+    (void)reader.next(block);
+  }));
+  // A descriptor that cannot be read (EBADF) fails the read with InputReadError, not as an end.
+  StdinBuffer broken{4096, -1};
+  std::istream in(&broken);
+  in.exceptions(std::ios::badbit);
+  CHECK(throws_with<InputReadError>([&] {
+    EventioReader reader{in};
+    (void)reader.next(block);
+  }));
+}
+
+// Sub-block views point into the container; their copies match subblocks().
+void subblock_views_point_into_the_container() {
+  const EventioBlock container = make_container(iact::telarray, 0, 0,
+                                                {make_block(iact::photons, 0, 1, Bytes(8, 7)),
+                                                 make_block(iact::photons3d, 0, 2, Bytes(4, 9))});
+  const std::vector<SubblockView> views = subblock_views(container);
+  const std::vector<EventioBlock> copies = subblocks(container);
+  CHECK(views.size() == 2 && copies.size() == 2);
+  for (std::size_t i = 0; i < views.size() && i < copies.size(); ++i) {
+    CHECK(views[i].type == copies[i].type);
+    CHECK(views[i].ident == copies[i].ident);
+    CHECK(views[i].body_size == copies[i].body.size());
+    CHECK(std::equal(copies[i].body.begin(), copies[i].body.end(), views[i].body));
+    CHECK(views[i].body >= container.body.data() &&
+          views[i].body + views[i].body_size <= container.body.data() + container.body.size());
+    CHECK(views[i].header_size == copies[i].header.size());
+    CHECK(std::equal(copies[i].header.begin(), copies[i].header.end(), views[i].header));
+  }
+}
+
 int main() {
   return run_checks([] {
+    little_endian_loads();
+    trailing_payload_bytes_rejected();
+    read_errors_are_not_end_of_stream();
+    subblock_views_point_into_the_container();
     header_round_trip();
     user_flag_and_version_round_trip();
     extended_length_is_read();

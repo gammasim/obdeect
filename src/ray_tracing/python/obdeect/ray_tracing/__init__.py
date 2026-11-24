@@ -12,7 +12,7 @@ _EXPORTS = {
     "ThreadPool": "obdeect.ray_tracing.model",
     "trace_many": "obdeect.ray_tracing.model",
     "ModelError": "obdeect.ray_tracing.errors",
-    "compile_model": "obdeect.ray_tracing.compiler",
+    "compile_model": "obdeect.ray_tracing.importers.simulation_models",
 }
 __all__ = list(_EXPORTS)
 

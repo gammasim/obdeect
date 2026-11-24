@@ -6,6 +6,7 @@
 // chords), sphere rows against the plane rows (flat and spherical, same photon: Q at the telescope
 // centre), zero-path rows, input checks, and independence of row order and ranges.
 #include "check.hpp"
+#include "stream_fixtures.hpp"
 
 #include "obdeect/propagation/chord.hpp"
 #include "obdeect/propagation/extinction.hpp"
@@ -32,6 +33,8 @@
 
 namespace {
 
+using namespace obdeect_test;
+
 using obdeect::propagation::TelescopeDepths;
 using obdeect::propagation::TransmissionTable;
 using obdeect::propagation::WavelengthInterpolation;
@@ -42,10 +45,6 @@ constexpr double kObs = 2000.0;                        // observation level [m a
 constexpr double kR = obdeect::stream::earth_radius_m; // Earth radius [m]
 constexpr double kLambda = 355.0;                      // [nm]
 constexpr double kTelescopeZ = 30.0;                   // telescope centre above H2 [m]
-
-std::string data_file(const std::string &name) {
-  return std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/" + name;
-}
 
 TransmissionTable site_table(WavelengthInterpolation mode) {
   return TransmissionTable::from_file(data_file("atm_trans_2000_1_10_0_0_2000.dat"), kObs, mode);
@@ -110,20 +109,6 @@ Row direction_row(double cos_n, bool upward, double x, double y, double z, doubl
 // step of the chord, path * cos (downward: E above Q).
 double flat_emission(double h_q, double path, double cos_n, bool upward) {
   return upward ? h_q - path * cos_n : h_q + path * cos_n;
-}
-
-template <class F> void expect_invalid(F &&f, const char *what) {
-  try {
-    f();
-  } catch (const std::invalid_argument &) {
-    return;
-  } catch (...) {
-    std::fprintf(stderr, "%s: unexpected exception type\n", what);
-    ++check_failures;
-    return;
-  }
-  std::fprintf(stderr, "%s: no exception\n", what);
-  ++check_failures;
 }
 
 // Closed forms of the chord quadrature.
@@ -485,56 +470,56 @@ void test_sphere_input_checks(const TransmissionTable &table) {
   {
     PhotonChunk no_cz = good;
     no_cz.columns[static_cast<std::size_t>(Column::cz)].clear();
-    expect_invalid(
+    CHECK(throws_with(
         [&] {
           obdeect::propagation::atmospheric_acceptance_sphere<double>(no_cz, table, depths,
                                                                       geometry, p);
         },
-        "missing cz");
+        "need the z, cz and path columns"));
   }
   {
     PhotonChunk no_z = good;
     no_z.columns[static_cast<std::size_t>(Column::z)].clear();
-    expect_invalid(
+    CHECK(throws_with(
         [&] {
           obdeect::propagation::atmospheric_acceptance_sphere<double>(no_z, table, depths, geometry,
                                                                       p);
         },
-        "missing z");
+        "need the z, cz and path columns"));
   }
   {
     PhotonChunk negative = sphere_chunk({direction_row(0.5, false, 0.0, 0.0, 0.0, -5.0, kLambda)});
-    expect_invalid(
+    CHECK(throws_with(
         [&] {
           obdeect::propagation::atmospheric_acceptance_sphere<double>(negative, table, depths,
                                                                       geometry, p);
         },
-        "negative path");
+        "need finite zem and path >= 0"));
   }
   {
     Row bad = direction_row(0.5, false, 0.0, 0.0, 0.0, 1000.0, kLambda);
     bad.cz = -0.9; // not a unit vector with cx
-    expect_invalid(
+    CHECK(throws_with(
         [&] {
           obdeect::propagation::atmospheric_acceptance_sphere<double>(sphere_chunk({bad}), table,
                                                                       depths, geometry, p);
         },
-        "inconsistent cz");
+        "must be a unit vector"));
   }
-  expect_invalid(
+  CHECK(throws_with(
       [&] {
         obdeect::propagation::atmospheric_acceptance_sphere<double>(
             good, table, depths, obdeect::propagation::SphereGeometry{kObs, -1.0, 0.0, 0.0, 0.0},
             p);
       },
-      "negative Earth radius");
-  expect_invalid(
+      "sphere geometry must be finite"));
+  CHECK(throws_with(
       [&] {
         std::vector<double> short_p;
         obdeect::propagation::atmospheric_acceptance_sphere<double>(good, table, depths, geometry,
                                                                     short_p);
       },
-      "acceptance size");
+      "one entry per row"));
 }
 
 } // namespace

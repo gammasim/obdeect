@@ -7,12 +7,21 @@
 
 #include <cerrno>
 #include <cstddef>
+#include <cstring>
+#include <stdexcept>
 #include <streambuf>
+#include <string>
 #include <vector>
 
 #include <unistd.h>
 
 namespace obdeect::stream {
+
+// A read error of the input (not the end of the input): the C API maps it to an I/O error.
+class InputReadError : public std::runtime_error {
+public:
+  using std::runtime_error::runtime_error;
+};
 
 class StdinBuffer : public std::streambuf {
 public:
@@ -23,6 +32,9 @@ public:
   }
 
 protected:
+  // Returns eof at the end of the input. A read error throws: the std::istream reading from this
+  // buffer turns the exception into its bad state, which the readers report as an error (not as
+  // a truncated or complete stream). Only EINTR is retried.
   int_type underflow() override {
     if (gptr() < egptr()) {
       return traits_type::to_int_type(*gptr());
@@ -33,10 +45,11 @@ protected:
         setg(buffer_.data(), buffer_.data(), buffer_.data() + n);
         return traits_type::to_int_type(*gptr());
       }
-      // End of input or a read error: the caller sees the end, and a truncated stream fails
-      // its stream_end check.
-      if (n == 0 || errno != EINTR) {
+      if (n == 0) {
         return traits_type::eof();
+      }
+      if (errno != EINTR) {
+        throw InputReadError(std::string("read error on the input: ") + std::strerror(errno));
       }
     }
   }

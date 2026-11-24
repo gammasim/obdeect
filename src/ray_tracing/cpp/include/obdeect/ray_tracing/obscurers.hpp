@@ -9,7 +9,6 @@
 #include <limits>
 #include <optional>
 #include <stdexcept>
-#include <string>
 #include <vector>
 
 namespace obdeect::ray_tracing {
@@ -237,23 +236,6 @@ public:
       build_grid(leg);
   }
 
-#ifdef OBDEECT_RAY_TRACING_BENCH_COUNTERS
-  // Benchmark-only counters (single thread); never compiled into the library.
-  struct Counters {
-    std::uint64_t node_visits{}, exact_tests{};
-  };
-  static Counters &counters() {
-    static Counters c;
-    return c;
-  }
-  static std::string counter_report(std::size_t photons) {
-    const auto &c = counters();
-    return "node visits " + std::to_string(static_cast<double>(c.node_visits) / photons) +
-           ", exact tests " + std::to_string(static_cast<double>(c.exact_tests) / photons) +
-           " (per nearest() call, all runs)";
-  }
-#endif
-
   [[nodiscard]] const std::vector<Obscurer> &items() const { return items_; }
   [[nodiscard]] const std::vector<Plane> &planes() const { return planes_; }
 
@@ -294,9 +276,6 @@ public:
     std::size_t next_slot = 0;
     while (top > 0) {
       const Node &node = tree.nodes[stack[--top]];
-#ifdef OBDEECT_RAY_TRACING_BENCH_COUNTERS
-      ++counters().node_visits;
-#endif
       if (!enters(node.low, node.high, ray, inverse, best ? best->t : t_max))
         continue;
       if (node.count == 0) {
@@ -315,9 +294,6 @@ public:
           continue;
         tested[next_slot] = piece.item;
         next_slot = (next_slot + 1) % kMailbox;
-#ifdef OBDEECT_RAY_TRACING_BENCH_COUNTERS
-        ++counters().exact_tests;
-#endif
         const Obscurer &o = items_[piece.item];
         if (const auto t = o.intersect(ray, planes_, kMinDistanceM))
           if (*t < t_max && (!best || *t < best->t || (*t == best->t && o.id < best->id)))
@@ -576,9 +552,6 @@ private:
   void visit_cell(const Grid &g, std::size_t cell, const Ray &ray, const Vec3 &inverse,
                   double t_max, double z_low, double z_high, std::optional<Hit> &best,
                   std::array<std::uint32_t, kMailbox> &tested, std::size_t &next_slot) const {
-#ifdef OBDEECT_RAY_TRACING_BENCH_COUNTERS
-    ++counters().node_visits;
-#endif
     for (std::uint32_t k = g.offsets[cell]; k < g.offsets[cell + 1]; ++k) {
       const Piece &piece = g.members[k];
       if (kHeightWindow && (piece.high.z < z_low || piece.low.z > z_high))
@@ -590,9 +563,6 @@ private:
       const std::uint32_t item = piece.item;
       tested[next_slot] = item;
       next_slot = (next_slot + 1) % kMailbox;
-#ifdef OBDEECT_RAY_TRACING_BENCH_COUNTERS
-      ++counters().exact_tests;
-#endif
       const Obscurer &o = items_[item];
       if (const auto t = o.intersect(ray, planes_, kMinDistanceM))
         if (*t < t_max && (!best || *t < best->t || (*t == best->t && o.id < best->id)))

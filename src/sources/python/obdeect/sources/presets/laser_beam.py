@@ -8,7 +8,8 @@ energy ``E`` (``--pulse-energy``) and wavelength ``--wavelength-nm``. It starts 
 Chain::
 
     obdeect sources run laser-beam ... -o primaries.pst
-    obdeect propagation run --transmission T --site-altitude H --seed N --mode weighted \\
+    obdeect propagation run --transmission T --site-altitude H --pathlen P --seed N \\
+        --mode weighted \\
         --scattering S --scattering-points 64 -i primaries.pst -o scattered.pst
 
 t = 0 is the laser firing. Limits: a non-horizontal beam's tilt from the vertical (nadir for a

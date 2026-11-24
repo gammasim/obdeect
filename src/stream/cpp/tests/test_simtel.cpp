@@ -136,7 +136,7 @@ std::string corsika_file(int events) {
   }
   std::string bytes;
   const auto add = [&bytes](const EventioBlock &block) {
-    const std::vector<std::uint8_t> raw = simtel_detail::block_bytes(block);
+    const std::vector<std::uint8_t> raw = block.raw();
     bytes.append(raw.begin(), raw.end());
   };
   add(runh_block());
@@ -205,7 +205,7 @@ Record blob_of(const EventioBlock &block) {
   record.type = RecordType::blob;
   record.blob_eventio_type = block.type;
   record.blob_eventio_id = block.ident;
-  record.blob = simtel_detail::block_bytes(block);
+  record.blob = block.raw();
   return record;
 }
 
@@ -770,8 +770,8 @@ void test_telescope_frame_rejected() {
   }));
 }
 
-// Sphere runs (ground_representation "sphere", docs/format.md). Telescope 1 is at the origin with
-// radius 12 m (light_source_run).
+// Sphere runs (ground_representation "sphere", docs/stream/format.md). Telescope 1 is at the origin
+// with radius 12 m (light_source_run).
 Metadata sphere_run() {
   Metadata m = light_source_run();
   m["ground_representation"] = std::string("sphere");
@@ -1547,10 +1547,71 @@ void test_round_trip_byte_identical() {
               100.0 * survived / trials, trials);
 }
 
+// Camera-frame photons without the wavelength column are refused (sim_telarray would sample a
+// Cherenkov spectrum); the zero column is accepted.
+void test_missing_wavelength_rejected() {
+  const CameraMap camera{{1, CameraTelescope{1, 0.0}}};
+  const auto records_with = [](const PhotonChunk &chunk) {
+    return std::vector<Record>{
+        record_of(RecordType::run, light_source_run()),
+        record_of(RecordType::event, Metadata{{"event_number", std::int64_t{1}}}),
+        record_of(RecordType::telescope,
+                  Metadata{{"telescope_id", std::int64_t{1}}, {"array_index", std::int64_t{0}}}),
+        photons_of(chunk),
+        record_of(RecordType::telescope_end, Metadata{{"telescope_id", std::int64_t{1}}}),
+        record_of(RecordType::event_end),
+        record_of(RecordType::run_end)};
+  };
+  PhotonChunk missing = chunk_of(1, Frame::camera, {0.5}, {0.2}, {0.1}, {-0.2});
+  missing[Column::wavelength].clear();
+  CHECK(throws_error([&] { run_adapter(records_with(missing), camera); }));
+  PhotonChunk zeros = chunk_of(1, Frame::camera, {0.5}, {0.2}, {0.1}, {-0.2});
+  zeros[Column::wavelength][0] = 0.0F;
+  CHECK(!throws_error([&] { run_adapter(records_with(zeros), camera); }));
+}
+
+// The efficiency status of a telescope is checked in every event: when its own records change
+// between events, the second check runs and refuses the factor that sim_telarray applies twice.
+void test_efficiency_checked_in_every_event() {
+  const CameraMap camera{{1, CameraTelescope{1, 0.0}}};
+  const auto status = [](const std::string &state) {
+    return record_of(RecordType::efficiency_status,
+                     Metadata{{"factors", std::string("qe")}, {"qe.state", state}});
+  };
+  const auto event = [&](std::int64_t number, const std::string &state) {
+    return std::vector<Record>{
+        record_of(RecordType::event, Metadata{{"event_number", number}}),
+        record_of(RecordType::telescope,
+                  Metadata{{"telescope_id", std::int64_t{1}}, {"array_index", std::int64_t{0}}}),
+        status(state),
+        photons_of(chunk_of(1, Frame::camera, {0.5}, {0.2}, {0.1}, {-0.2})),
+        record_of(RecordType::telescope_end, Metadata{{"telescope_id", std::int64_t{1}}}),
+        record_of(RecordType::event_end)};
+  };
+  const auto stream_with = [&](const std::string &second_state) {
+    std::vector<Record> records{record_of(RecordType::run, light_source_run()),
+                                record_of(RecordType::efficiency_status,
+                                          Metadata{{"factors", std::string("atmosphere")},
+                                                   {"atmosphere.state", std::string("applied")}})};
+    for (const Record &r : event(1, "pending")) {
+      records.push_back(r);
+    }
+    for (const Record &r : event(2, second_state)) {
+      records.push_back(r);
+    }
+    records.push_back(record_of(RecordType::run_end));
+    return records;
+  };
+  CHECK(!throws_error([&] { run_adapter(stream_with("pending"), camera); }));
+  CHECK(throws_error([&] { run_adapter(stream_with("applied"), camera); }));
+}
+
 } // namespace
 
 int main() {
   return run_checks([] {
+    test_missing_wavelength_rejected();
+    test_efficiency_checked_in_every_event();
     test_camera_map_parsing();
     test_invalid_camera_map();
     test_camera_conversion();

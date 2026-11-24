@@ -36,7 +36,8 @@ It needs an atmospheric transmission table for the observation level (2150 m, th
 level of the example above):
 
 ```console
-$ obdeect propagation run --transmission atm_trans.dat --site-altitude 2150 --seed 1 \
+$ obdeect propagation run --transmission atm_trans.dat --site-altitude 2150 --pathlen 0 \
+    --seed 1 \
     -i point-source.pst -o ground.pst
 ```
 

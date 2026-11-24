@@ -1,0 +1,1 @@
+Faster ray-tracing kernels with bit-identical results: facet candidates are visited once and bounded by the facet height, the facet grid cell follows the median facet size, and the bunch bound caches the degradation maxima. `trace_photon` takes a `TraceOptions` struct instead of trailing flags, and the Newton-step counters are removed from the library headers.

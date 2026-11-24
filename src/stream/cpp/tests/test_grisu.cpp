@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <random>
 #include <sstream>
@@ -170,7 +171,7 @@ void transform_round_trips() {
     const auto [gx, gy] = corsika_to_grisu_position(x, y);
     CHECK_NEAR(gx, -y, 0.0);
     CHECK_NEAR(gy, -x, 0.0);
-    const auto [bx, by] = grisu_to_corsika_position(gx, gy);
+    const auto [bx, by] = corsika_to_grisu_position(gx, gy);
     CHECK_NEAR(bx, x, 0.0);
     CHECK_NEAR(by, y, 0.0);
     const double cx = cosine(rng);
@@ -244,6 +245,71 @@ void bunches() {
   }
   CHECK(copies == 3);
   CHECK(throws_error([&] { convert(stream_records(0.5F), options); })); // still below 1
+}
+
+// Copies of a bunch are whole photons: a fractional weight is an error with --expand-bunches.
+void fractional_weights_are_rejected() {
+  GrisuOptions options;
+  options.expand_bunches = true;
+  CHECK(throws_error([&] { convert(stream_records(2.5F), options); }));
+  CHECK(throws_error([&] { convert(stream_records(3.25F), options); }));
+  const std::string text = convert(stream_records(2.0F), options);
+  std::size_t copies = 0;
+  for (std::size_t at = text.find(" 500 3 2\n"); at != std::string::npos;
+       at = text.find(" 500 3 2\n", at + 1)) {
+    ++copies;
+  }
+  CHECK(copies == 2);
+}
+
+// A wavelength beyond the integer range is an error (the rounding of it is not defined).
+void wavelength_must_be_in_range() {
+  GrisuOptions options;
+  std::vector<Record> huge = stream_records();
+  huge[5].chunk[Column::wavelength][0] = 1e30F;
+  CHECK(throws_error([&] { convert(huge, options); }));
+}
+
+// The `P` line numbers are those of printf "%+.9g" (the output is byte-identical to it).
+void g9_fields_match_printf() {
+  std::vector<double> values{0.0,
+                             -0.0,
+                             1.0,
+                             -1.0,
+                             0.1,
+                             1.0 / 3.0,
+                             1e-5,
+                             1.23456789e-7,
+                             123456789.0,
+                             9.9999999995e8,
+                             1e21,
+                             -2.5e-300,
+                             5e-324,
+                             std::numeric_limits<double>::max(),
+                             std::nan(""),
+                             std::numeric_limits<double>::infinity(),
+                             -std::numeric_limits<double>::infinity()};
+  std::mt19937 rng{20261123};
+  std::uniform_real_distribution<double> exponent(-30.0, 30.0);
+  std::uniform_real_distribution<double> mantissa(-1.0, 1.0);
+  for (int i = 0; i < 20000; ++i) {
+    values.push_back(std::pow(10.0, exponent(rng)) * (i % 3 == 0 ? mantissa(rng) : 1.0));
+    values.push_back(static_cast<double>(static_cast<float>(mantissa(rng) * 1e4)));
+  }
+  int mismatches = 0;
+  for (const double value : values) {
+    char expected[64];
+    std::snprintf(expected, sizeof expected, " %+.9g", value);
+    std::string got;
+    grisu_detail::append_g9_field(got, value);
+    if (got != expected) {
+      if (mismatches < 5) {
+        std::fprintf(stderr, "g9 mismatch: printf '%s', to_chars '%s'\n", expected, got.c_str());
+      }
+      ++mismatches;
+    }
+  }
+  CHECK(mismatches == 0);
 }
 
 void tlloc_matching() {
@@ -336,6 +402,9 @@ int main() {
     without_config_the_stream_id_is_used();
     event_details_line();
     bunches();
+    fractional_weights_are_rejected();
+    wavelength_must_be_in_range();
+    g9_fields_match_printf();
     tlloc_matching();
     error_cases();
   });

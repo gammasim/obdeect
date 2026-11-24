@@ -20,7 +20,9 @@ TRACE_COLUMNS = ("position_m", "direction", "time_ns", "weight")
 
 def compiled(**changes):
     records, files = segmented(**changes)
-    return OpticalModel.from_records(records, files.__getitem__, configuration_seed=1)
+    return OpticalModel.from_records(
+        records, files.__getitem__, configuration_seed=1, propagation_group_index=1.0
+    )
 
 
 def edited(model, change):
@@ -322,18 +324,35 @@ def test_invalid_input_is_rejected_before_tracing():
         )
     with pytest.raises(ValueError, match="wavelength"):
         trace_bunches(model, unsampled, plane_z)
-    for name, bad in (("size", 0.0), ("size", np.nan), ("x", np.inf), ("cx", 1.5)):
-        broken = {key: values.copy() for key, values in bunches.items()}
-        broken[name][50] = bad
-        with pytest.raises(ValueError):
-            trace_bunches(model, broken, plane_z)
     with pytest.raises(ValueError, match="same length"):
         trace_bunches(model, {**bunches, "y": bunches["y"][:-1]}, plane_z)
+
+
+# The bunch-row check reports one message for every bad row (the wavelength clause is the text of
+# the C++ error, not the cause of the row): the tests match the message they get.
+BAD_ROW_MESSAGE = "invalid size, position, direction, time or wavelength"
+
+
+@pytest.mark.parametrize(
+    ("name", "bad"), [("size", 0.0), ("size", np.nan), ("x", np.inf), ("cx", 1.5)]
+)
+def test_non_finite_or_out_of_range_bunch_row_is_rejected(name, bad):
+    model = compiled(telescope_transmission=None)
+    bunches, plane_z = star_bunches(model, 100)
+    bunches[name] = bunches[name].copy()
+    bunches[name][50] = bad
+    with pytest.raises(ValueError, match=BAD_ROW_MESSAGE):
+        trace_bunches(model, bunches, plane_z)
+
+
+def test_horizontal_bunch_without_cz_is_rejected():
     # Without cz the direction is derived: a horizontal bunch (cx^2 + cy^2 = 1) is rejected.
-    horizontal = {key: values.copy() for key, values in bunches.items()}
-    horizontal["cx"][50], horizontal["cy"][50] = 1.0, 0.0
-    with pytest.raises(ValueError):
-        trace_bunches(model, horizontal, plane_z)
+    model = compiled(telescope_transmission=None)
+    bunches, plane_z = star_bunches(model, 100)
+    bunches["cx"], bunches["cy"] = bunches["cx"].copy(), bunches["cy"].copy()
+    bunches["cx"][50], bunches["cy"][50] = 1.0, 0.0
+    with pytest.raises(ValueError, match=BAD_ROW_MESSAGE):
+        trace_bunches(model, bunches, plane_z)
 
 
 def test_sampled_wavelengths_follow_the_density():
@@ -700,7 +719,9 @@ def without_obscurers(model):
 def dual_without_obscurers():
     records, files = telescopes_dual()
     return without_obscurers(
-        OpticalModel.from_records(records, files.__getitem__, configuration_seed=1)
+        OpticalModel.from_records(
+            records, files.__getitem__, configuration_seed=1, propagation_group_index=1.0
+        )
     )
 
 

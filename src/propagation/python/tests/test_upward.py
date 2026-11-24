@@ -13,6 +13,8 @@ TABLE_PATH = DATA / "atm_trans_2000_1_10_0_0_2000.dat"
 PROFILE_PATH = DATA / "atmprof_ecmwf_north_winter_fixed.dat"
 SITE_M = 2000.0
 PLANE_Z_M = 50.0
+# Spherical runs with a profile: the curved tables are built per run (see test_propagate.py).
+SPHERICAL_THREADS = 4
 
 
 class StreamWriter:
@@ -128,7 +130,7 @@ def test_loss_categories_are_counted_by_reason(tmp_path):
 
 
 def test_chunk_size_and_threads_do_not_change_the_output(tmp_path):
-    options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 9}
+    options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 9, "pathlen_m": 0.0}
     whole = _write_mixed(tmp_path / "whole.pst")
     small = _write_mixed(tmp_path / "small.pst", chunk_rows=7)
     out_whole = tmp_path / "out_whole.pst"
@@ -209,7 +211,10 @@ def test_upward_round_trip_through_to_sky(tmp_path):
     assert summary["photons_out"] == n
     obdeect_propagation.to_sky(ground, back, profile=PROFILE_PATH)
     x_back = _column(list(obdeect_stream.Reader(str(back))), "x")
-    assert np.allclose(x_back, columns["x"], atol=1e-2)
+    # float32 positions up to 2 km: two float32 roundings in the chain (measured worst case 1.4
+    # spacings at 2 km), so the bound is two spacings there.
+    x_atol = 2 * np.spacing(np.float32(2000.0))
+    assert np.allclose(x_back, columns["x"], rtol=0.0, atol=x_atol)
 
 
 def test_curved_mixed_directions_run_and_count(tmp_path):
@@ -222,6 +227,7 @@ def test_curved_mixed_directions_run_and_count(tmp_path):
         seed=1,
         curvature="spherical",
         profile=PROFILE_PATH,
+        threads=SPHERICAL_THREADS,
     )
     assert summary["photons_in"] == 70
     assert summary["dropped"] == sum(summary["dropped_by_reason"].values())
@@ -230,7 +236,7 @@ def test_curved_mixed_directions_run_and_count(tmp_path):
 @pytest.mark.parametrize("threads", [1, 3])
 def test_threads_keep_the_mixed_output(tmp_path, threads):
     source = _write_mixed(tmp_path / "in.pst")
-    options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 2}
+    options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 2, "pathlen_m": 0.0}
     reference = tmp_path / "reference.pst"
     obdeect_propagation.propagate(source, reference, **options)
     out = tmp_path / f"out_{threads}.pst"

@@ -76,7 +76,7 @@ route multiplies each weight by the ratio of the native transmission to the tran
 sim_telarray applies, computed with sim_telarray's formula at the ground airmass and the
 bypass airmass. sim_telarray then applies the rest (bypass transmission and quantum
 efficiency). The total equals the native chain. See
-[Validation](VALIDATION.md#air-shower-photons-phase-3).
+[Validation](VALIDATION.md#air-shower-photons).
 
 ## Input plane
 

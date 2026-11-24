@@ -81,7 +81,10 @@ def test_output_structure_and_bounds(table, transmission):
     assert np.allclose(photons["cx"] ** 2 + photons["cy"] ** 2 + photons["cz"] ** 2, 1.0, atol=1e-5)
     assert np.all(photons["cz"] < 0.0)  # downward towards the telescope
     # zem is the absolute altitude of the scattering point: z plus the observation level.
-    assert np.allclose(photons["zem"], photons["z"] + OBSERVATION_LEVEL_M, atol=0.01)
+    # zem and z are float32: the sum is exact to one float32 spacing at the largest zem (measured
+    # worst case: half a spacing).
+    zem_atol = np.spacing(np.float32(np.max(photons["zem"])))
+    assert np.allclose(photons["zem"], photons["z"] + OBSERVATION_LEVEL_M, rtol=0.0, atol=zem_atol)
     assert np.all(photons["wavelength"] == np.float32(LAMBDA_NM))
 
 
@@ -223,28 +226,31 @@ def test_time_is_at_scattering_point(table, transmission):
     expected = (
         5.0 + (48000.0 + OBSERVATION_LEVEL_M - photons["zem"].astype(np.float64)) / 0.299792458
     )
-    assert np.allclose(photons["t"], expected, rtol=0.0, atol=0.05)
+    # t is float32 and about 1.6e5 ns here: one float32 spacing there (measured worst case about
+    # half a spacing, from the rounding of t and zem).
+    t_atol = np.spacing(np.float32(np.max(np.abs(expected))))
+    assert np.allclose(photons["t"], expected, rtol=0.0, atol=t_atol)
 
 
 def test_rejects_missing_columns_and_non_finite_values(table, transmission):
     for name in ("x", "y", "cx", "cy", "t", "w"):
         primaries = _primaries(5)
         del primaries[name]
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="lacks a required column"):
             scatter(primaries, table, transmission, [TELESCOPE], 1, 1, 0, 8)
     for name, value in (("x", np.nan), ("y", np.inf), ("t", np.nan)):
         primaries = _primaries(5)
         primaries[name][2] = value
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="weights, positions and times must be finite"):
             scatter(primaries, table, transmission, [TELESCOPE], 1, 1, 0, 8)
 
 
 def test_profile_rejects_bad_altitude_and_wavelength(table):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="altitude must be finite and positive"):
         table.profile(np.array([LAMBDA_NM]), np.array([-100.0]))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="altitude must be finite and positive"):
         table.profile(np.array([LAMBDA_NM]), np.array([0.0]))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="wavelength must be finite"):
         table.profile(np.array([np.nan]), np.array([2000.0]))
     # Huge wavelengths are clamped to the table edges (no integer overflow).
     edge = table.profile(np.array([1e300, -1e300]), np.array([2000.0, 2000.0]))

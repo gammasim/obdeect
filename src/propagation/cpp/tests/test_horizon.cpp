@@ -1,4 +1,5 @@
 #include "check.hpp"
+#include "stream_fixtures.hpp"
 
 #include "obdeect/propagation/profile.hpp"
 #include "obdeect/propagation/refraction.hpp"
@@ -19,6 +20,8 @@
 
 namespace {
 
+using namespace obdeect_test;
+
 using obdeect::propagation::bend;
 using obdeect::propagation::bend_quadrature;
 using obdeect::propagation::bend_quadrature_pieces;
@@ -34,15 +37,6 @@ struct Photon {
 
 // Photon with zenith angle theta (degrees) in the x-z plane, at the origin, time zero.
 Photon start(double zenith_deg) { return {std::sin(zenith_deg * kPi / 180.), 0., 0., 0., 0.}; }
-
-bool throws_invalid(auto &&action) {
-  try {
-    action();
-  } catch (const std::invalid_argument &) {
-    return true;
-  }
-  return false;
-}
 
 } // namespace
 
@@ -167,6 +161,53 @@ int main() {
                 "125->62.5 m max |dx| = %.3g m, |dt| = %.3g ns\n",
                 conv_dx, conv_dt, conv_dx_fine, conv_dt_fine);
 
+    // Series limit (s_e |nu_obs - nu_e| <= 0.03 (1 - s_e)): wherever bend() is accepted, up to 87
+    // degrees, it agrees with the quadrature to 1e-6 m and 1e-6 ns. Beyond 84 degrees at 20 km the
+    // quadrature with 250 m pieces is converged to 1e-5 m and 3e-5 ns (62.5 m pieces), and bend()
+    // accepts exactly the photons that bend_series_limit_exceeded() does not flag.
+    {
+      std::size_t accepted = 0;
+      double series_dx = 0., series_dt = 0.;
+      for (double h : {5000., 10000., 20000., 40000.}) {
+        for (double zenith = 0.; zenith <= 87.; zenith += 0.25) {
+          Photon a = start(zenith), b = start(zenith);
+          if (!bend(tables, h, a.cx, a.cy, a.x, a.y, a.t)) {
+            continue;
+          }
+          ++accepted;
+          CHECK(bend_quadrature(tables, h, b.cx, b.cy, b.x, b.y, b.t));
+          series_dx = std::max(series_dx, std::fabs(a.x - b.x));
+          series_dt = std::max(series_dt, std::fabs(a.t - b.t));
+        }
+      }
+      CHECK(accepted > 0);
+      CHECK(series_dx < 1e-6);
+      CHECK(series_dt < 1e-6);
+      std::printf("series accepted (0..87 deg, 5/10/20/40 km, %zu photons): max |dx| = %.3g m, "
+                  "|dt| = %.3g ns vs quadrature\n",
+                  accepted, series_dx, series_dt);
+
+      double quad_dx = 0., quad_dt = 0.;
+      for (double zenith = 84.; zenith <= 87.; zenith += 0.5) {
+        for (double h : {5000., 10000., 20000.}) {
+          Photon coarse = start(zenith), fine = start(zenith);
+          Photon probe = start(zenith);
+          CHECK(bend(tables, h, probe.cx, probe.cy, probe.x, probe.y, probe.t) ==
+                !bend_series_limit_exceeded(tables, h, start(zenith).cx, 0.));
+          CHECK(bend_quadrature_pieces(tables, 250., h, coarse.cx, coarse.cy, coarse.x, coarse.y,
+                                       coarse.t));
+          CHECK(bend_quadrature_pieces(tables, 62.5, h, fine.cx, fine.cy, fine.x, fine.y, fine.t));
+          quad_dx = std::max(quad_dx, std::fabs(coarse.x - fine.x));
+          quad_dt = std::max(quad_dt, std::fabs(coarse.t - fine.t));
+        }
+      }
+      CHECK(quad_dx < 1e-5);
+      CHECK(quad_dt < 3e-5);
+      std::printf("quadrature 84..87 deg, 5/10/20 km: 250 m vs 62.5 m max |dx| = %.3g m, "
+                  "|dt| = %.3g ns\n",
+                  quad_dx, quad_dt);
+    }
+
     // Photons beyond the series limit: bend() rejects them, bend_quadrature() bends them. Zenith
     // 84..89 degrees; the predicate decides which case applies, and bend() must reject exactly
     // the photons it flags.
@@ -210,8 +251,8 @@ int main() {
     }
 
     // Invalid inputs are rejected, and the photon is left unchanged, as in bend().
-    const double nan = std::numeric_limits<double>::quiet_NaN();
-    const double inf = std::numeric_limits<double>::infinity();
+    const double nan = obdeect_test::kNan;
+    const double inf = obdeect_test::kInf;
     for (double bad : {nan, inf, -inf}) {
       for (std::size_t field = 0; field < 6; ++field) {
         std::array<double, 6> v{20000., std::sin(0.7), 0., 1., 2., 3.}; // h, cx, cy, x, y, t
@@ -247,12 +288,18 @@ int main() {
     // Invalid piece sizes are rejected.
     {
       Photon p = start(88.);
-      CHECK(throws_invalid([&] {
-        static_cast<void>(bend_quadrature_pieces(tables, 0., 20000., p.cx, p.cy, p.x, p.y, p.t));
-      }));
-      CHECK(throws_invalid([&] {
-        static_cast<void>(bend_quadrature_pieces(tables, nan, 20000., p.cx, p.cy, p.x, p.y, p.t));
-      }));
+      CHECK(throws_with(
+          [&] {
+            static_cast<void>(
+                bend_quadrature_pieces(tables, 0., 20000., p.cx, p.cy, p.x, p.y, p.t));
+          },
+          "quadrature piece size must be finite and positive"));
+      CHECK(throws_with(
+          [&] {
+            static_cast<void>(
+                bend_quadrature_pieces(tables, nan, 20000., p.cx, p.cy, p.x, p.y, p.t));
+          },
+          "quadrature piece size must be finite and positive"));
     }
   });
 }

@@ -8,7 +8,8 @@ horizontal one. The scattered light is not generated here; it is computed by pro
 scattering, Rayleigh and Mie, beam extinction, transmission)::
 
     obdeect sources run lidar ... -o primaries.pst
-    obdeect propagation run --transmission T --site-altitude H --seed N --mode weighted \\
+    obdeect propagation run --transmission T --site-altitude H --pathlen P --seed N \\
+        --mode weighted \\
         --scattering S --scattering-points 64 -i primaries.pst -o scattered.pst
 
 ``--mode weighted`` is needed because the primary weights exceed 2048.
@@ -41,10 +42,10 @@ import math
 from obdeect.sources.presets import _common
 from obdeect.sources.presets._beam import non_negative, positive, unit_vector
 
-#: Planck constant [J s] and speed of light [m/s], exact SI values.
+#: Planck constant [J s], exact SI value; the speed of light is shared with the other presets.
 PLANCK_J_S = 6.62607015e-34
-SPEED_OF_LIGHT_M_S = 299792458.0
-SPEED_OF_LIGHT_M_NS = SPEED_OF_LIGHT_M_S * 1e-9
+SPEED_OF_LIGHT_M_S = _common.SPEED_OF_LIGHT_M_S
+SPEED_OF_LIGHT_M_NS = _common.SPEED_OF_LIGHT_M_PER_NS
 
 Vector = tuple[float, float, float]
 
@@ -62,14 +63,16 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         type=float,
         required=True,
         metavar="DEG",
-        help="zenith of the beam direction: > 90 points down, < 90 up, 90 is horizontal [deg]",
+        help="zenith of the direction the beam points to: > 90 points down, < 90 up, 90 is "
+        "horizontal [deg]",
     )
     group.add_argument(
         "--beam-azimuth",
         type=float,
         required=True,
         metavar="DEG",
-        help="astronomical azimuth of the beam: clockwise from north [deg]",
+        help="astronomical azimuth of the direction the beam points to: clockwise from north, "
+        "east is 90 [deg]",
     )
     group.add_argument(
         "--max-tilt",
@@ -133,7 +136,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     )
     where.add_argument(
         "--telescope",
-        type=_telescope,
+        type=_common.parse_telescope,
         action="append",
         metavar="X,Y,Z,R",
         help="telescope position and radius in the sky frame [m]; repeatable (ids 1, 2, ...)",
@@ -143,15 +146,6 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="keep the run when the direct laser beam hits a telescope sphere",
     )
-
-
-def _telescope(text: str) -> dict:
-    items = text.split(",")
-    try:
-        x, y, z, r = (float(v) for v in items)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"'{text}' needs four numbers X,Y,Z,R") from None
-    return {"position_m": [x, y, z], "radius_m": r}
 
 
 def direct_hit(
@@ -270,19 +264,17 @@ def build(args: argparse.Namespace, position) -> dict:
         angular = {"kind": "cone", "angle_deg": 0.0}
     else:
         angular = {"kind": "filled_cone", "angle_deg": 0.5 * divergence}
-    emission = {
-        "kind": "point",
-        "position_m": list(start),
-        "axis": list(beam),
-        "angular": angular,
-        "photons": per_pulse,
-        "bunch_size": max(1.0, per_pulse / rows),
-        "time_offset_ns": time_offset_ns,
-        "to_plane_z0": False,
-        "spectrum": {"kind": "fixed", "wavelength_nm": wavelength},
-        "pulse": _common.profile(args.pulse, "pulse"),
-        "target": "none",
-    }
+    emission = _common.point_emission(
+        photons=per_pulse,
+        bunch_size=max(1.0, per_pulse / rows),
+        position_m=start,
+        axis=beam,
+        angular=angular,
+        spectrum={"kind": "fixed", "wavelength_nm": wavelength},
+        pulse=_common.profile(args.pulse, "pulse"),
+        target="none",
+        time_offset_ns=time_offset_ns,
+    )
     metadata = {
         "pulse_energy_j": energy,
         "wavelength_nm": wavelength,

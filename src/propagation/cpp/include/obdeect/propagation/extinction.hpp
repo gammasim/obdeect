@@ -19,10 +19,10 @@
 
 namespace obdeect::propagation {
 
-// Spherical atmosphere seen from one telescope (see docs/extinction.md). The local vertical of
-// the telescope is the unit vector n = (nx, ny, nz) in frame ground; earth_radius_m is the Earth
-// radius R and telescope_altitude_m the altitude of the telescope [m a.s.l.]. The default n is
-// the vertical of a flat ground frame.
+// Spherical atmosphere seen from one telescope (see docs/propagation/extinction.md). The local
+// vertical of the telescope is the unit vector n = (nx, ny, nz) in frame ground; earth_radius_m is
+// the Earth radius R and telescope_altitude_m the altitude of the telescope [m a.s.l.]. The default
+// n is the vertical of a flat ground frame.
 struct CurvedPath {
   double earth_radius_m{};
   double telescope_altitude_m{};
@@ -46,12 +46,15 @@ inline void validate(const CurvedPath &path) {
 }
 
 // Plane-parallel airmass 1 / |cz| of a downward photon; unlimited_airmass for a horizontal one.
+// cz^2 is formed in double: for float cosines 1 - cx^2 - cy^2 near the horizon would lose the
+// digits that set the airmass.
 template <class T> [[nodiscard]] T airmass(T cx, T cy) {
-  const T cz2 = T(1) - cx * cx - cy * cy;
-  if (!std::isfinite(cz2) || cz2 < -static_cast<T>(obdeect::stream::direction_norm_tolerance)) {
+  const double x = static_cast<double>(cx), y = static_cast<double>(cy);
+  const double cz2 = 1.0 - x * x - y * y;
+  if (!std::isfinite(cz2) || cz2 < -obdeect::stream::direction_norm_tolerance) {
     throw std::invalid_argument("direction cosines must satisfy cx^2 + cy^2 <= 1");
   }
-  return cz2 > T(0) ? T(1) / std::sqrt(cz2) : static_cast<T>(unlimited_airmass);
+  return cz2 > 0.0 ? static_cast<T>(1.0 / std::sqrt(cz2)) : static_cast<T>(unlimited_airmass);
 }
 
 // p[row] = atmospheric transmission of every row; 0 for wavelengths at or above max_lambda.

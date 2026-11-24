@@ -19,7 +19,8 @@
 ``normalize`` returns a new dict with every default filled in (see
 docs/sources/spec/run-file.md). Errors are ``ValueError`` whose message starts
 with the key path, e.g. ``events[0].emissions[1].angular.kind: unknown kind 'cones' ...``.
-Physics range checks are left to the C++ core.
+Physics range checks and the errors of the core (plane waves, spectra, ...) are left to the C++
+core; its messages start with the key path of the emission where it is known.
 """
 
 import json
@@ -29,11 +30,17 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from obdeect.sources import _core
+
 # Sentinels: a key that must be given, and an optional key without default (omitted).
 REQUIRED = object()
 ABSENT = object()
 
-_FRAMES = ("sky", "telescope", "camera", "ground")
+#: Frames of the photon stream (from the compiled stream contract).
+_FRAMES = tuple(_core.stream_contract()["frames"])
+
+#: Largest run seed: the seed is stored as a signed 64-bit integer in the stream.
+MAX_SEED = 2**63 - 1
 
 
 # Pairs of arrays that must have equal length (checked wherever both keys are present).
@@ -57,6 +64,11 @@ def load(path: str | Path) -> dict[str, Any]:
 def normalize(config: Mapping[str, Any]) -> dict[str, Any]:
     """Validate a run description and return its normalized form (input is not changed)."""
     return _section(_TOP)(config, "")
+
+
+def normalize_emission(spec: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate one emission (keys as in an event's emissions) and return its normalized form."""
+    return _kinded(_EMISSION)(spec, "emission")
 
 
 # --- checkers: each takes (value, path) and returns the normalized value -------------------
@@ -211,18 +223,6 @@ def _fields(section: Mapping[str, Any], path: str, schema: dict) -> dict[str, An
         if isinstance(out.get(x), list) and isinstance(out.get(y), list):
             if len(out[x]) != len(out[y]):
                 _fail(path, f"{x} and {y} differ in length")
-    if "start_z_m" in schema and "start_distance_m" in schema:
-        # A plane wave: at most one start key; a horizontal direction needs start_distance_m.
-        if "start_z_m" in section and "start_distance_m" in section:
-            _fail(path, "give start_z_m or start_distance_m, not both")
-        if "start_distance_m" in out and "start_z_m" not in section:
-            del out[
-                "start_z_m"
-            ]  # the default start_z_m = 0 is not given alongside start_distance_m
-        direction = out.get("towards_source")
-        horizontal = isinstance(direction, list) and direction[2] == 0.0 and any(direction)
-        if "start_distance_m" not in out and horizontal:
-            _fail(path, "a horizontal towards_source (z = 0) needs start_distance_m")
     return out
 
 
@@ -271,7 +271,7 @@ _ANGULAR = {
     "cone": {"angle_deg": (_any_num, REQUIRED)},
     "filled_cone": {"angle_deg": (_any_num, REQUIRED)},
     "lambertian": {},
-    "gauss": {"sigma_deg": (_any_num, REQUIRED)},
+    "gauss": {"sigma_deg": (_num(0, strict=True), REQUIRED)},
     "rayleigh": {},
     "table": {"angle_deg": (_column, REQUIRED), "value": (_column, REQUIRED)},
 }
@@ -319,7 +319,7 @@ _EMISSION = {
         "distance_m": (_any_num, ABSENT),
         "disc_radius_m": (_num(0, strict=True), REQUIRED),
         "disc_z_m": (_any_num, 0.0),
-        "start_z_m": (_any_num, 0.0),
+        "start_z_m": (_any_num, ABSENT),
         "start_distance_m": (_num(0), ABSENT),
     },
     "sky_background": {
@@ -333,7 +333,7 @@ _EMISSION = {kind: {**_COMMON, **geometry} for kind, geometry in _EMISSION.items
 
 _RUN = {
     "number": (_int(1), 1),
-    "seed": (_int(0, 2**64 - 1), 1),
+    "seed": (_int(0, MAX_SEED), 1),
     "observation_level_m": (_any_num, REQUIRED),
     "atmosphere_id": (_int(), -1),
     "frame": (_choice(_FRAMES), "sky"),

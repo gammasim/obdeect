@@ -3,7 +3,7 @@
 import bisect
 import math
 
-from obdeect.ray_tracing.simtel_tables import interval_coefficients
+from obdeect.ray_tracing.importers.sim_telarray import interval_coefficients
 
 
 def ambient_group_index(contents: str, observation_level_m: float) -> float:

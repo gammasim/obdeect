@@ -2,6 +2,7 @@
 // The ray integrals are checked against a direct numerical integration of the exact integrands
 // tan(theta(h)) and n(h)/cos(theta(h)) with Snell's law, using only the profile lookups.
 #include "check.hpp"
+#include "stream_fixtures.hpp"
 
 #include "obdeect/propagation/extinction.hpp"
 #include "obdeect/propagation/profile.hpp"
@@ -22,6 +23,8 @@
 #endif
 
 namespace {
+
+using namespace obdeect_test;
 
 constexpr double kPi = obdeect::stream::pi;
 constexpr double kScaleHeightKm = 8.0;
@@ -277,27 +280,22 @@ void test_extinction_gradient() {
         table.transmission<double>(400., 4000., 1.0));
 }
 
-bool throws_invalid(const std::function<void()> &action) {
-  try {
-    action();
-  } catch (const std::invalid_argument &) {
-    return true;
-  }
-  return false;
-}
-
 void test_overflow_and_reflection() {
   // Absurd altitudes are rejected, not converted to a cell count.
-  CHECK(throws_invalid([] {
-    obdeect::propagation::AtmosphereProfile(
-        "0 1e-3 100 2e-4\n1e304 9e-4 90 2e-4\n1e305 8e-4 80 2e-4\n"
-        "1e306 7e-4 70 2e-4\n1e307 6e-4 60 2e-4\n");
-  }));
+  CHECK(throws_with(
+      [] {
+        obdeect::propagation::AtmosphereProfile(
+            "0 1e-3 100 2e-4\n1e304 9e-4 90 2e-4\n1e305 8e-4 80 2e-4\n"
+            "1e306 7e-4 70 2e-4\n1e307 6e-4 60 2e-4\n");
+      },
+      "altitude beyond"));
   // Altitudes beyond 1000 km would make the fine grid unbounded.
-  CHECK(throws_invalid([] {
-    obdeect::propagation::AtmosphereProfile("0 1e-3 100 2e-4\n1 9e-4 90 2e-4\n2 8e-4 80 2e-4\n"
-                                            "3 7e-4 70 2e-4\n2000 6e-4 60 2e-4\n");
-  }));
+  CHECK(throws_with(
+      [] {
+        obdeect::propagation::AtmosphereProfile("0 1e-3 100 2e-4\n1 9e-4 90 2e-4\n2 8e-4 80 2e-4\n"
+                                                "3 7e-4 70 2e-4\n2000 6e-4 60 2e-4\n");
+      },
+      "beyond"));
   // n-1 rising with height (valid table, unphysical): a ray from the layer above the denser
   // ground would need sin(theta_obs) > 1 and is not bent.
   std::ostringstream text;
@@ -317,22 +315,26 @@ void test_overflow_and_reflection() {
 void test_public_argument_validation() {
   const obdeect::propagation::AtmosphereProfile profile(exponential_text());
   const obdeect::propagation::RefractionTables tables(profile, 2000.);
-  const double nan = std::numeric_limits<double>::quiet_NaN();
-  CHECK(throws_invalid([&] { (void)profile.index_moment_cm(nan, 1); }));
-  CHECK(throws_invalid([&] { (void)profile.index_moment_cm(1e5, -1); }));
-  CHECK(throws_invalid([&] { (void)profile.index_moment_cm(1e5, 7); }));
-  CHECK(throws_invalid([&] { (void)tables.moment(1e5, -1); }));
-  CHECK(throws_invalid([&] { (void)tables.moment(1e5, 7); }));
-  CHECK(throws_invalid([&] { (void)tables.moment(nan, 1); }));
-  CHECK(throws_invalid([&] { (void)obdeect::propagation::airmass<double>(1.1, 0.); }));
-  CHECK(throws_invalid([&] { (void)obdeect::propagation::airmass<double>(nan, 0.); }));
+  const double nan = obdeect_test::kNan;
+  CHECK(throws_with([&] { (void)profile.index_moment_cm(nan, 1); }, "height must be finite"));
+  CHECK(throws_with([&] { (void)profile.index_moment_cm(1e5, -1); }, "moment order must be in"));
+  CHECK(throws_with([&] { (void)profile.index_moment_cm(1e5, 7); }, "moment order must be in"));
+  CHECK(throws_with([&] { (void)tables.moment(1e5, -1); }, "moment order must be in"));
+  CHECK(throws_with([&] { (void)tables.moment(1e5, 7); }, "moment order must be in"));
+  CHECK(throws_with([&] { (void)tables.moment(nan, 1); }, "height must be finite"));
+  CHECK(throws_with([&] { (void)obdeect::propagation::airmass<double>(1.1, 0.); },
+                    "direction cosines"));
+  CHECK(throws_with([&] { (void)obdeect::propagation::airmass<double>(nan, 0.); },
+                    "direction cosines"));
   CHECK(obdeect::propagation::airmass<double>(1., 0.) == obdeect::propagation::unlimited_airmass);
   const obdeect::propagation::TransmissionTable open(
       "# H2= 2.000, H1= 3.000\n400 0.5\n", 2000.,
       obdeect::propagation::WavelengthInterpolation::floor);
-  CHECK(throws_invalid([&] { (void)open.transmission<double>(1500., nan, 1.); }));
+  CHECK(throws_with([&] { (void)open.transmission<double>(1500., nan, 1.); },
+                    "height must be finite"));
   CHECK(obdeect::propagation::table_wavelength(400.5) == 400); // floor
-  CHECK(throws_invalid([&] { (void)obdeect::propagation::table_wavelength(-1.); }));
+  CHECK(throws_with([&] { (void)obdeect::propagation::table_wavelength(-1.); },
+                    "wavelength must be finite and non-negative"));
   CHECK(obdeect::propagation::table_wavelength(1e10) == -1);
   CHECK(obdeect::propagation::table_wavelength(400.) == 400);
 }
@@ -358,10 +360,13 @@ void test_table_header_comments() {
     header += " " + std::to_string(2.0 + 0.1 * i);
     row += " 0.5";
   }
-  CHECK(throws_invalid([&] {
-    obdeect::propagation::TransmissionTable(header + "\n" + row + "\n", 2000.0,
-                                            obdeect::propagation::WavelengthInterpolation::floor);
-  }));
+  CHECK(throws_with(
+      [&] {
+        obdeect::propagation::TransmissionTable(
+            header + "\n" + row + "\n", 2000.0,
+            obdeect::propagation::WavelengthInterpolation::floor);
+      },
+      "at most 100 heights"));
   CHECK_NEAR(table.optical_depth<double>(400., 4000.), 0.2, 1e-14);
 }
 

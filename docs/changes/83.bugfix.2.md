@@ -1,0 +1,1 @@
+`obdeect propagation run` requires `--pathlen` with extinction, as the Python API does; it has no default any more. Runs that relied on the implicit 0 must pass `--pathlen 0`. The propagation kernels share one Gauss-Legendre table and one piecewise integral (results are bit-identical).

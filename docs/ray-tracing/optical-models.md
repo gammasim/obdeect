@@ -9,15 +9,20 @@ telescope points above the horizon, x points down.
 
 `star_photons` samples a disk centred on the dish vertex, perpendicular to the optical
 axis, with radius 1.2 times the dish radius. `sampling_area_m2` is its area. The distance
-of a point source is measured from the disk centre.
+of a point source is measured from the disk centre. Star photons start on a plane `start_z_m`,
+1 m above the highest optical element: the larger of the vertex and facet heights used before,
+and the bound of the optics (asphere rims and obscurer walls included, as `trace_bunches` checks
+its input planes). Light is unchanged by the start height; the photon times are referenced to
+the start plane.
 
 ## File format
 
 An optical model (`obdeect.optical-model.v2`) is one JSON document:
 
 - `format`, `sha256` (of the document without it), `provenance` (parameter versions,
-  file hashes, seed, zenith angle, structure flag), `notes`;
-- `sampling`: the star-light disk;
+  file hashes, seed, zenith angle, structure flag; its keys `configuration_seed`, `zenith_deg`,
+  `structure`, `parameters` and `files_sha256` belong to the compiler), `notes`;
+- `sampling`: the star-light disk (`disk_radius_m` > 0, `disk_z_m`, `start_z_m`);
 - `optics`: `primary`, optional `secondary` (each `facets` or an `asphere` with
   `segments`, a `reflectivity` table, `scatter`, optional `degradation` map; facets may store the
   dish vertex `vertex_z_m` = -`mirror_offset` in metres, written by the compiler for segmented
@@ -28,7 +33,33 @@ An optical model (`obdeect.optical-model.v2`) is one JSON document:
 
 The C++ loader accepts either a structured JSON-compatible Python object or JSON text. It accepts
 only known keys, checks every value and reports the path of the first error. Surface and obscurer
-ids are unique.
+ids are unique. The `sampling`, `provenance` and `notes` blocks are validated too.
+
+Text is checked against `sha256`: `load_model(text)` compares the entry with the canonical hash
+(see `obdeect/ray_tracing/model_hash.hpp`), and so does the Python loader (`OpticalModel`, through
+`obdeect.ray_tracing.hashing`). A structured object has no canonical text in C++, so the Python
+caller checks it. The text parser and the canonical hash accept the same documents: the four JSON
+white-space characters, `\uXXXX` escapes (surrogate pairs decoded, lone surrogates rejected) and a
+nesting depth of 64.
+
+## Compiling from simulation-models
+
+`obdeect.ray_tracing.importers.simulation_models` is the only code that knows simulation-models
+parameter names and sim_telarray conventions; the core model does not depend on it.
+
+- The air group index comes from the telescope's site (its atmosphere at the observation level).
+  A telescope without a site (for example `MSTx-FlashCam`) needs `propagation_group_index`
+  (`obdeect ray-tracing compile --propagation-group-index`); `compile_model` has no default.
+- Values with no optical effect are accepted exactly: a zero shadow offset selects the automatic
+  position of the secondary shadow, a zero outer power of the telescope transmission means 1, a
+  zero mirror-list height or focal length is the automatic prescription, and the panel id (the
+  seventh mirror-list column) labels a mirror without acting on it. Every other value the tracer
+  cannot use is rejected: a method-0 transmission amplitude, a dual-mirror outer power other than
+  0 or 1, a negative shadow offset, a single zenith term of the focus offset, an overshooting
+  reflectivity, a zero dish length, and an RPOL table with a 2-D scheme other than 1, a zero scale
+  or a z limit.
+- Parameters without a no-op default (`mirror_class`, `camera_body_shape`, `dish_shape_length`)
+  are required.
 
 ## Axes offset
 
@@ -49,7 +80,7 @@ For mirrors, obscurers and the telescope-structure table, see
 
 ## Reflecting sides and photons from below
 
-The tracer follows every photon through one loop (ray tracing phase 2): after each reflection it
+The tracer follows every photon through one loop: after each reflection it
 searches the surfaces again until the photon is detected, absorbed or escapes. Photons from
 above (downward, the usual case) meet the primary on its reflecting face first; photons from
 below (upward, `cz > 0` in the input frame) meet the back of the primary and, if the light passes

@@ -1,8 +1,8 @@
 # CMake and native build products
 build/
+build-*/
 out/
 /compile_commands.json
-/tmp_planning/
 *.o
 *.obj
 *.a
@@ -31,5 +31,9 @@ dist/
 # Documentation build
 docs/_build/
 
-# Stream sources staged into component sdists at release time
+# Sources staged into component sdists at release time (stream-src, shared-cmake)
 /src/*/stream-src/
+/src/*/shared-cmake/
+
+# Local agent worktrees
+.claude/worktrees/

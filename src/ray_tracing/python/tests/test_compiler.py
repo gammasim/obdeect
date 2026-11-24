@@ -13,6 +13,7 @@ from telescopes import STRUCTURE, dual, record, segmented
 def build(records_files, **options):
     records, files = records_files
     options.setdefault("configuration_seed", 1)
+    options.setdefault("propagation_group_index", 1.0)
     return compile_model(records, files.__getitem__, **options)
 
 
@@ -121,9 +122,12 @@ def test_camera_window_requires_response_tables(missing):
 
 
 def test_no_camera_window_preserves_model_hash():
+    # Without window parameters the model is the one of the compiler on main (hash of this
+    # fixture since main e3ec3fe, which changed how test fixtures compile; production models kept
+    # their hashes there).
     model = build(segmented())
     assert "camera_window" not in model["optics"]
-    assert model["sha256"] == "ebd56b8945f4bcf5e7d2bffc8c9cbb9374d35af13455b91ec6457784853e739c"
+    assert model["sha256"] == "3d8036d24c6c6a9dd74812c9db8e5cb9ef78bc95190b9ce013a266c1615f6d6d"
 
 
 def test_random_errors_follow_the_seed():
@@ -151,7 +155,8 @@ def test_focus_offset_zenith_terms_need_both_components():
         ]
 
     assert plane([2.0, 20.0, 0.0, 0.0]) == pytest.approx(8.52)
-    assert plane([2.0, 20.0, 3.0, 0.0]) == pytest.approx(8.52)  # Both zenith terms are required.
+    with pytest.raises(ModelError, match="zenith"):  # Both zenith terms are required.
+        plane([2.0, 20.0, 3.0, 0.0])
     expected = 8.52 + 0.01 * (
         3.0 * (math.cos(math.radians(60)) - math.cos(math.radians(20)))
         + 4.0 * (math.sin(math.radians(60)) - math.sin(math.radians(20)))

@@ -8,14 +8,7 @@ from collections.abc import Mapping, Sequence
 
 import numpy as np
 from obdeect.propagation import _core
-
-
-def _vectorized(function, *arguments):
-    """Broadcast float64 arguments to a common shape and apply function to flat arrays."""
-    arrays = np.broadcast_arrays(*(np.asarray(a, dtype=np.float64) for a in arguments))
-    shape = arrays[0].shape
-    flat = [np.ascontiguousarray(a).reshape(-1) for a in arrays]
-    return np.asarray(function(*flat)).reshape(shape)
+from obdeect.propagation._arrays import broadcast_call, float32_columns, float_pair, integer
 
 
 class TransmissionTable(_core.TransmissionTable):
@@ -29,28 +22,32 @@ class TransmissionTable(_core.TransmissionTable):
             lookup of this object follows the mode, including :func:`apply_extinction`.
     """
 
-    def optical_depth(self, wavelength_nm, height_m):
+    def optical_depth(self, wavelength_nm, height_m) -> np.ndarray:
         """Optical depth of a vertical path from the observation level to height_m."""
-        return _vectorized(super().optical_depth, wavelength_nm, height_m)
+        return broadcast_call(super().optical_depth, wavelength_nm, height_m)
 
-    def transmission(self, wavelength_nm, zem_m, airmass):
+    def transmission(self, wavelength_nm, zem_m, airmass) -> np.ndarray:
         """Direct transmission exp(-od * airmass)."""
-        return _vectorized(super().transmission, wavelength_nm, zem_m, airmass)
+        return broadcast_call(super().transmission, wavelength_nm, zem_m, airmass)
 
-    def transmission2(self, wavelength_nm, zem_m, airmass, od_tel, od_focus):
+    def transmission2(self, wavelength_nm, zem_m, airmass, od_tel, od_focus) -> np.ndarray:
         """Transmission exp(-od) with the telescope optical depths od_tel and od_focus.
 
         od = |tau(wavelength, zem) - od_tel| * airmass + od_focus, with tau the optical depth of
         the table at the emission height. od_focus is not multiplied by the airmass.
         """
-        return _vectorized(super().transmission2, wavelength_nm, zem_m, airmass, od_tel, od_focus)
+        return broadcast_call(
+            super().transmission2, wavelength_nm, zem_m, airmass, od_tel, od_focus
+        )
 
-    def telescope_depths(self, telescope_altitude_m, pathlen_m=0.0):
+    def telescope_depths(
+        self, telescope_altitude_m: float, pathlen_m: float
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Telescope optical depths (od_tel, od_focus), indexed by integer wavelength 0..999 nm.
 
         Args:
             telescope_altitude_m: telescope altitude a.s.l. [m].
-            pathlen_m: optical path inside the telescope [m].
+            pathlen_m: optical path inside the telescope [m] (0 for none).
         """
         return super().telescope_depths(float(telescope_altitude_m), float(pathlen_m))
 
@@ -67,12 +64,12 @@ def apply_extinction(
     first_index: int,
     weighted: bool,
     wavelength_range: tuple[float, float],
-    pathlen_m: float = 0.0,
+    pathlen_m: float,
 ) -> dict[str, np.ndarray]:
     """Extinction, wavelength assignment and envelope thinning of photons in frame ground.
 
     Columns (float32, equal length): x, y, cx, cy, t, zem, w; optional z, cz, wavelength
-    (0 = assign from 1/lambda^2 on wavelength_range; nm, integer).
+    (0 = assign from 1/lambda^2 on wavelength_range; nm, integer). Other dtypes are rejected.
 
     The acceptance is p = p_atm(lambda) * E(lambda), with E the envelope (linear in lambda,
     values in [0, 1]). Thinned mode (weighted=False) returns one row per surviving photon
@@ -83,34 +80,33 @@ def apply_extinction(
         columns: photon columns by name.
         table: transmission table of the site.
         telescope_altitude_m: telescope altitude a.s.l. [m].
-        envelope_wavelength, envelope_value: envelope table (strictly increasing wavelength).
-        seed, event, telescope, first_index: Philox key of the draws.
+        envelope_wavelength, envelope_value: efficiency bound table (strictly increasing
+            wavelength).
+        seed, event, telescope, first_index: Philox key of the draws (integers).
         weighted: weighted (True) or thinned (False) output.
         wavelength_range: (lo, hi) [nm] for wavelengths drawn from 1/lambda^2, lo >= 1.
-        pathlen_m: optical path inside the telescope [m].
+        pathlen_m: optical path inside the telescope [m] (0 for none).
 
     Returns:
         Dict of float32 arrays, one per output column.
 
     Raises:
+        TypeError: a photon column is not float32, or an id is not an integer.
         ValueError: invalid input (e.g. non-finite cz or cz inconsistent with cx, cy; weights
             above 2048; wavelengths that are not finite non-negative integers; wavelength outside
-            the envelope table).
+            the efficiency bound table).
     """
-    float_columns = {
-        name: np.ascontiguousarray(value, dtype=np.float32) for name, value in columns.items()
-    }
     return _core.apply_extinction(
-        float_columns,
+        float32_columns(columns),
         table,
         float(telescope_altitude_m),
         np.ascontiguousarray(envelope_wavelength, dtype=np.float64),
         np.ascontiguousarray(envelope_value, dtype=np.float64),
-        int(seed),
-        int(event),
-        int(telescope),
-        int(first_index),
+        integer(seed, "seed"),
+        integer(event, "event"),
+        integer(telescope, "telescope"),
+        integer(first_index, "first_index"),
         bool(weighted),
-        (float(wavelength_range[0]), float(wavelength_range[1])),
+        float_pair(wavelength_range, "wavelength_range"),
         float(pathlen_m),
     )

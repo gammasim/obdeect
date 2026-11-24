@@ -4,6 +4,7 @@
 // dropped photons above the telescope level, and independence of chunk size and row order in the
 // curved modes.
 #include "check.hpp"
+#include "stream_fixtures.hpp"
 
 #include "obdeect/propagation/curved_refraction.hpp"
 #include "obdeect/propagation/profile.hpp"
@@ -29,6 +30,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <variant>
 #include <vector>
 
@@ -37,6 +39,8 @@
 #endif
 
 namespace {
+
+using namespace obdeect_test;
 
 using obdeect::propagation::Curvature;
 using obdeect::propagation::OutputMode;
@@ -49,10 +53,6 @@ constexpr double site_m = 2000.0;
 constexpr double kEarthRadius = obdeect::stream::earth_radius_m;
 constexpr std::int64_t no_key = -1; // run key curvature_applied absent
 const double kPi = obdeect::stream::pi;
-
-std::string data_file(const std::string &name) {
-  return std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/" + name;
-}
 
 obdeect::propagation::TransmissionTable real_table() {
   return obdeect::propagation::TransmissionTable::from_file(
@@ -74,26 +74,6 @@ obdeect::stream::Metadata run_keys(std::int64_t curvature_applied) {
   }
   m["wavelength_min_nm"] = 250.0;
   m["wavelength_max_nm"] = 700.0;
-  return m;
-}
-
-obdeect::stream::Metadata event_keys() {
-  obdeect::stream::Metadata m;
-  m["event_number"] = std::int64_t{7};
-  return m;
-}
-
-obdeect::stream::Metadata telescope_keys(std::uint32_t id, Frame frame) {
-  obdeect::stream::Metadata m;
-  m["telescope_id"] = static_cast<std::int64_t>(id);
-  m["frame"] = static_cast<std::int64_t>(frame);
-  return m;
-}
-
-obdeect::stream::Metadata telescope_end_keys(std::uint32_t id) {
-  obdeect::stream::Metadata m;
-  m["telescope_id"] = static_cast<std::int64_t>(id);
-  m["photons"] = 0.0;
   return m;
 }
 
@@ -252,31 +232,6 @@ std::string sky_stream(const obdeect::stream::Metadata &run, const std::vector<S
   return out.str();
 }
 
-std::vector<obdeect::stream::Record> records_of(const std::string &bytes) {
-  std::istringstream in(bytes);
-  obdeect::stream::Reader reader(in);
-  std::vector<obdeect::stream::Record> records;
-  obdeect::stream::Record record;
-  while (reader.next(record)) {
-    records.push_back(record);
-  }
-  CHECK(reader.ended());
-  return records;
-}
-
-// Values of column c over all photon records of one telescope.
-std::vector<float> photon_column(const std::vector<obdeect::stream::Record> &records,
-                                 std::uint32_t telescope, Column c) {
-  std::vector<float> values;
-  for (const auto &record : records) {
-    if (record.type == RecordType::photons && record.chunk.telescope_id == telescope &&
-        record.chunk.has(c)) {
-      values.insert(values.end(), record.chunk[c].begin(), record.chunk[c].end());
-    }
-  }
-  return values;
-}
-
 // Column c keyed by the column x of the same rows (telescope of the output).
 std::map<float, float> value_by_x(const std::vector<obdeect::stream::Record> &records,
                                   std::uint32_t telescope, Column c) {
@@ -370,11 +325,15 @@ obdeect::propagation::AtmosphereProfile ecmwf_profile() {
       data_file("atmprof_ecmwf_north_winter_fixed.dat"));
 }
 
+// Threads of the propagator and of its curved tables: the output does not depend on the count.
+unsigned build_threads() { return std::max(2U, std::thread::hardware_concurrency()); }
+
 // Weighted output with the acceptance column and the profile (spherical or CORSIKA curved runs).
 PropagatorConfig profile_config(Curvature curvature, double earth_radius_m) {
   PropagatorConfig config = config_of(curvature, earth_radius_m);
   config.profile.emplace(ecmwf_profile());
   config.profile_source = "ecmwf";
+  config.threads = build_threads();
   return config;
 }
 
@@ -464,15 +423,6 @@ SkyPhoton sky_at(double x, double y, double z_m, double zenith_deg, double phi_r
   return photon;
 }
 
-bool throws_invalid(const std::function<void()> &fn) {
-  try {
-    fn();
-  } catch (const std::invalid_argument &) {
-    return true;
-  }
-  return false;
-}
-
 // Input checks and config checks of the curvature modes.
 void test_rejections() {
   const auto ground_in = [](std::int64_t key) {
@@ -484,21 +434,25 @@ void test_rejections() {
   const double R = kEarthRadius;
 
   // none: CORSIKA CURVED input is refused; a missing key and 0 are accepted.
-  CHECK(throws_invalid([&] { propagate(ground_in(1), config_of(Curvature::none, R)); }));
-  CHECK(!throws_invalid([&] { propagate(ground_in(no_key), config_of(Curvature::none, R)); }));
-  CHECK(!throws_invalid([&] { propagate(ground_in(0), config_of(Curvature::none, R)); }));
+  CHECK(throws_with([&] { propagate(ground_in(1), config_of(Curvature::none, R)); },
+                    "CORSIKA CURVED"));
+  CHECK(accepts([&] { propagate(ground_in(no_key), config_of(Curvature::none, R)); }));
+  CHECK(accepts([&] { propagate(ground_in(0), config_of(Curvature::none, R)); }));
 
   // corsika: the key must be present and 1.
-  CHECK(throws_invalid([&] { propagate(ground_in(no_key), config_of(Curvature::corsika, R)); }));
-  CHECK(throws_invalid([&] { propagate(ground_in(0), config_of(Curvature::corsika, R)); }));
-  CHECK(!throws_invalid([&] { propagate(ground_in(1), config_of(Curvature::corsika, R)); }));
+  CHECK(throws_with([&] { propagate(ground_in(no_key), config_of(Curvature::corsika, R)); },
+                    "curvature_applied"));
+  CHECK(throws_with([&] { propagate(ground_in(0), config_of(Curvature::corsika, R)); }, "CORSIKA"));
+  CHECK(accepts([&] { propagate(ground_in(1), config_of(Curvature::corsika, R)); }));
   // corsika: sky-frame telescopes have no CORSIKA CURVED geometry.
-  CHECK(throws_invalid([&] { propagate(sky_in(1), config_of(Curvature::corsika, R)); }));
+  CHECK(throws_with([&] { propagate(sky_in(1), config_of(Curvature::corsika, R)); }, "sky"));
 
   // spherical: the key must be present and 0.
-  CHECK(throws_invalid([&] { propagate(ground_in(no_key), config_of(Curvature::spherical, R)); }));
-  CHECK(throws_invalid([&] { propagate(ground_in(1), config_of(Curvature::spherical, R)); }));
-  CHECK(!throws_invalid([&] { propagate(sky_in(0), config_of(Curvature::spherical, R)); }));
+  CHECK(throws_with([&] { propagate(ground_in(no_key), config_of(Curvature::spherical, R)); },
+                    "curvature_applied"));
+  CHECK(throws_with([&] { propagate(ground_in(1), config_of(Curvature::spherical, R)); },
+                    "already applied"));
+  CHECK(accepts([&] { propagate(sky_in(0), config_of(Curvature::spherical, R)); }));
 
   // Scattering and a profile are not combined with the curved modes (checked at construction).
   for (const Curvature curvature : {Curvature::corsika, Curvature::spherical}) {
@@ -507,34 +461,40 @@ void test_rejections() {
     scattering.scattering.points_per_photon = 8;
     scattering.scattering_table.emplace(
         obdeect::propagation::ScatteringTable::from_file(data_file("scattering_exponential.dat")));
-    CHECK(throws_invalid([&] {
-      obdeect::propagation::Propagator propagator(scattering);
-      (void)propagator;
-    }));
+    CHECK(throws_with(
+        [&] {
+          obdeect::propagation::Propagator propagator(scattering);
+          (void)propagator;
+        },
+        "curved atmosphere cannot be combined"));
   }
   // A profile is accepted in the spherical and the CORSIKA curved modes (refraction and air delay
   // of the spherical mode: test_profile_* below). A spherical run without refraction_applied is
   // refused when the run record is read.
   for (const Curvature curvature : {Curvature::corsika, Curvature::spherical}) {
     auto with_profile = profile_config(curvature, R);
-    CHECK(!throws_invalid([&] {
+    CHECK(accepts([&] {
       obdeect::propagation::Propagator propagator(with_profile);
       (void)propagator;
     }));
   }
-  CHECK(throws_invalid([&] {
-    propagate(sky_stream(run_keys(0), sky_photons(10), 10),
-              profile_config(Curvature::spherical, R));
-  }));
+  CHECK(throws_with(
+      [&] {
+        propagate(sky_stream(run_keys(0), sky_photons(10), 10),
+                  profile_config(Curvature::spherical, R));
+      },
+      "profile"));
 
   // Earth radius: finite and above 1e6 m, in every mode.
   for (const Curvature curvature : {Curvature::none, Curvature::corsika, Curvature::spherical}) {
     for (const double radius : {0.0, -1.0, 1e6, std::numeric_limits<double>::quiet_NaN(),
                                 std::numeric_limits<double>::infinity()}) {
-      CHECK(throws_invalid([&] {
-        obdeect::propagation::Propagator propagator(config_of(curvature, radius));
-        (void)propagator;
-      }));
+      CHECK(throws_with(
+          [&] {
+            obdeect::propagation::Propagator propagator(config_of(curvature, radius));
+            (void)propagator;
+          },
+          "earth radius must be finite"));
     }
   }
 
@@ -543,7 +503,7 @@ void test_rejections() {
   CHECK(obdeect::propagation::parse_curvature("corsika") == Curvature::corsika);
   CHECK(obdeect::propagation::parse_curvature("spherical") == Curvature::spherical);
   for (const char *name : {"", "Corsika", "curved", "flat"}) {
-    CHECK(throws_invalid([&] { obdeect::propagation::parse_curvature(name); }));
+    CHECK(throws_with([&] { obdeect::propagation::parse_curvature(name); }, "curvature"));
   }
 
   // Geometry only: the curved geometry is allowed (no extinction).
@@ -551,12 +511,12 @@ void test_rejections() {
   geometry_spherical.geometry_only = true;
   geometry_spherical.transmission.reset();
   geometry_spherical.store_p = false;
-  CHECK(!throws_invalid([&] { propagate(sky_in(0), geometry_spherical); }));
+  CHECK(accepts([&] { propagate(sky_in(0), geometry_spherical); }));
   auto geometry_corsika = config_of(Curvature::corsika, R);
   geometry_corsika.geometry_only = true;
   geometry_corsika.transmission.reset();
   geometry_corsika.store_p = false;
-  CHECK(!throws_invalid([&] { propagate(ground_in(1), geometry_corsika); }));
+  CHECK(accepts([&] { propagate(ground_in(1), geometry_corsika); }));
 }
 
 // Efficiency status keys per mode; the run record of the spherical output says the curvature is
@@ -672,8 +632,8 @@ void test_spherical_limit_matches_none() {
   }
 }
 
-// Emission altitude of a sky photon at lateral distance d: |p - C| - R with C = (0, 0, -(R + h)).
-// For d^2 << R^2 the shift against the flat value a = h + z is d^2 / (2 (R + a)).
+// Emission altitude of a photon in the sky frame at lateral distance d: |p - C| - R with C = (0, 0,
+// -(R + h)). For d^2 << R^2 the shift against the flat value a = h + z is d^2 / (2 (R + a)).
 void test_sky_emission_altitude() {
   const double R = kEarthRadius;
   const std::vector<SkyPhoton> photon{{1500.0, 1500.0, 5000.0, 0.0, 0.0, 1.0, false}};
@@ -1006,8 +966,10 @@ void test_sky_plane_validation() {
   const double R = kEarthRadius;
   const auto profile = ecmwf_profile();
   const obdeect::propagation::RefractionTables flat(profile, site_m);
-  const obdeect::propagation::CurvedRefractionTables lower(profile, R, site_m, false, 2);
-  const obdeect::propagation::CurvedRefractionTables upper(profile, R, site_m + 10.0, false, 2);
+  const obdeect::propagation::CurvedRefractionTables lower(profile, R, site_m, false,
+                                                           build_threads());
+  const obdeect::propagation::CurvedRefractionTables upper(profile, R, site_m + 10.0, false,
+                                                           build_threads());
   const auto sky_one = [] {
     return sky_chunk(1, 0, {SkyPhoton{0.0, 0.0, 5000.0, 0.0, 0.0, 1.0, false, 0.0}}, 1);
   };
@@ -1023,27 +985,28 @@ void test_sky_plane_validation() {
   };
   const auto convert = [&](const obdeect::propagation::SkyPlane &p) {
     auto chunk = sky_one();
-    obdeect::propagation::sky_to_ground(chunk, p);
+    (void)obdeect::propagation::sky_to_ground(chunk, p);
   };
 
-  CHECK(throws_invalid([&] { convert(plane(true)); })); // profile without curved tables
+  CHECK(throws_with([&] { convert(plane(true)); },
+                    "lower curved table")); // profile without curved tables
   auto with_tables = plane(true);
   with_tables.curved_tables = &lower;
   with_tables.curved_tables_upper = &upper;
   with_tables.curved_bending = true;
-  CHECK(!throws_invalid([&] { convert(with_tables); }));
+  CHECK(accepts([&] { convert(with_tables); }));
   // The lower table alone is valid with weight 0 (telescope on the lower level, or no upper level
   // inside the profile) and invalid with a weight above 0.
   auto one_table = with_tables;
   one_table.curved_tables_upper = nullptr;
-  CHECK(!throws_invalid([&] { convert(one_table); }));
+  CHECK(accepts([&] { convert(one_table); }));
   auto one_table_weighted = one_table;
   one_table_weighted.telescope_altitude_m = site_m + 3.0;
   one_table_weighted.curved_weight = 0.3;
-  CHECK(throws_invalid([&] { convert(one_table_weighted); }));
+  CHECK(throws_with([&] { convert(one_table_weighted); }, "bracket"));
   auto upper_only = with_tables;
   upper_only.curved_tables = nullptr;
-  CHECK(throws_invalid([&] { convert(upper_only); }));
+  CHECK(throws_with([&] { convert(upper_only); }, "lower curved table"));
   // A photon emitted above the telescope but below the upper table level is kept: the lower table
   // alone serves it (the upper lookup starts at its own level), with zero or positive weight.
   const auto between_levels = [&](const obdeect::propagation::SkyPlane &p, double z_m) {
@@ -1079,22 +1042,22 @@ void test_sky_plane_validation() {
   expect_direct(off_level, 8.0); // emitted 5 m above the telescope, below site + 10
   auto flat_tables = plane(true);
   flat_tables.tables = &flat;
-  CHECK(throws_invalid([&] { convert(flat_tables); }));
+  CHECK(throws_with([&] { convert(flat_tables); }, "curved geometry takes curved tables"));
   auto wrong_altitude = with_tables;
   wrong_altitude.telescope_altitude_m = site_m + 100.0; // outside [lower, upper)
-  CHECK(throws_invalid([&] { convert(wrong_altitude); }));
+  CHECK(throws_with([&] { convert(wrong_altitude); }, "bracket"));
   auto wrong_weight = with_tables;
   wrong_weight.telescope_altitude_m = site_m + 3.0; // weight must be 0.3
-  CHECK(throws_invalid([&] { convert(wrong_weight); }));
+  CHECK(throws_with([&] { convert(wrong_weight); }, "bracket"));
   auto no_profile = plane(false);
   no_profile.curved_tables = &lower;
   no_profile.curved_tables_upper = &upper;
-  CHECK(throws_invalid([&] { convert(no_profile); }));
+  CHECK(throws_with([&] { convert(no_profile); }, "needs a profile"));
   auto flat_radius = plane(true);
   flat_radius.earth_radius_m = 0.0;
   flat_radius.curved_tables = &lower;
   flat_radius.curved_tables_upper = &upper;
-  CHECK(throws_invalid([&] { convert(flat_radius); }));
+  CHECK(throws_with([&] { convert(flat_radius); }, "Earth radius"));
 }
 
 // Telescope altitudes that are not on the 10 m grid (observation level 2000 m, telescope z = 3.7

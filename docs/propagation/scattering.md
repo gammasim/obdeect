@@ -133,7 +133,14 @@ $\cos\theta = c_x n_x + c_y n_y + c_z n_z$ with the signed $c_z$.
 The sum over $j$ of $w_s$ is the expected scattered weight, unbiased for $N_s \to \infty$. Approximations:
 
 - the aim-point disc sampling and the exact sphere solid angle differ at order $(R/D)^2$;
-- the segment depths and $\omega$, g are taken from the segment ends and the sampled point;
+- the segment depths and $\omega$, g are taken from the segment ends and the sampled point. In plane
+  runs the mix $\omega_{mix}$ of the segment is the segment-averaged one (the depth differences of
+  the segment) and only $\omega$ is local; in horizontal runs (sphere runs) the mix is the local
+  extinction slope at the middle of the segment, because a horizontal path has zero vertical depth
+  per segment. The two are the same to first order in the segment length; they differ where the
+  aerosol fraction changes strongly within one segment (the segment mean is the value that makes
+  the segment's scattering probability and its mix consistent). A plane run with a local mix would
+  change the plane results; this was not done.
 - the tabulated aerosol phase is linear in $\cos\theta$ between the angle nodes (test table: 4e-4
   relative to Henyey-Greenstein at worst, 1 degree nodes), and linear in log altitude and wavelength
   between the table rows; its normalisation is the trapezoid rule in $\cos\theta$;
@@ -153,14 +160,13 @@ $t_{in} + s / c$, plus the air delay of the straight path from $h_0$ to $h_P$ wi
 The scattered light from a point below the telescope centre travels upwards to the sphere; this is
 the only way light from a source below the telescope reaches it.
 
-### Scattering below the telescope (changed behaviour)
+### Scattering below the telescope
 
-Before this change, a scattering point at or below the telescope centre gave nothing (the scattered
-photon had to travel downwards). Now the scattered photon travels upwards to the sphere when
-$h_P < h_C$, with the transmission and airmass of the path between the two heights. Light is added,
-nothing is removed: for downward primaries the scattered weight of a run with telescopes above the
-observation level grows by the upward part of the path. Telescopes on the ground (telescope_z_m = 0
-for the centre at the observation level) are not changed, since no point lies below their centre.
+A scattering point below the telescope centre ($h_P < h_C$) sends its scattered photon upwards to the
+sphere, with the transmission and airmass of the path between the two heights. For downward
+primaries, the scattered weight of a run with telescopes above the observation level therefore
+includes the upward part of the path. Telescopes on the ground (telescope_z_m = 0 for the centre at
+the observation level) are not affected, since no point lies below their centre.
 
 The photons that point to a part of the sphere below the telescope centre travel downwards at a
 point below the centre; in the plane representation they never reach the telescope plane, and the

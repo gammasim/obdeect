@@ -75,7 +75,13 @@ inline float header_word(const std::vector<float> &words, std::size_t index, con
   return words[index];
 }
 
-inline std::int64_t round_to_int(double value) {
+// Rounds a value read from a file to the nearest integer. std::llround is undefined for NaN,
+// infinities and values outside the 64-bit range, so those throw std::runtime_error naming `what`.
+inline std::int64_t round_to_int(double value, const char *what) {
+  constexpr double limit = 9.0e18; // below 2^63; NaN fails the comparison as well
+  if (!(std::abs(value) < limit)) {
+    throw std::runtime_error(std::string(what) + " is not a finite integer in range");
+  }
   return static_cast<std::int64_t>(std::llround(value));
 }
 
@@ -91,12 +97,39 @@ inline std::int64_t metadata_int(const Metadata &metadata, const std::string &ke
   return *value;
 }
 
+// A numeric metadata value (int or double) as a double; throws when the key is absent or not a
+// number.
+inline double metadata_number(const Metadata &metadata, const std::string &key) {
+  const auto it = metadata.find(key);
+  if (it == metadata.end()) {
+    throw std::runtime_error("record lacks metadata key " + key);
+  }
+  if (const auto *real = std::get_if<double>(&it->second)) {
+    return *real;
+  }
+  if (const auto *integer = std::get_if<std::int64_t>(&it->second)) {
+    return static_cast<double>(*integer);
+  }
+  throw std::runtime_error("metadata key " + key + " is not a number");
+}
+
+// Word 77 of an EVTH block (integer flags, see corsika_word) as an integer.
+inline std::int64_t evth_flags_value(const std::vector<float> &evth) {
+  return round_to_int(header_word(evth, corsika_word::evth_flags, "EVTH"), "EVTH word 77");
+}
+
+// Atmospheric profile number named by the flags of an EVTH block (bits 11-20).
+inline std::uint32_t evth_profile_number(std::int64_t flags) {
+  return static_cast<std::uint32_t>((flags >> corsika_word::evth_flag_atmosphere_shift) &
+                                    corsika_word::evth_flag_atmosphere_mask);
+}
+
 // Geometry of one 3D photon bunch (1217) of a sphere run, in m and ns. The bunch gives the arrival
 // point A (x, y, z, relative to the telescope sphere centre) and the direction d = (cx, cy, cz);
-// the emission point is E = A - dist d. The G sphere row (docs/format.md) is E itself if |E| <= R
-// (path 0), else the entry point E + s d with the smallest s >= 0 where |E + s d| = R (path s). A
-// bunch without such s misses the sphere. The time at the row is ctime + (s - dist) / c, with the
-// vacuum speed of light: ctime refers to the arrival point, at s = dist.
+// the emission point is E = A - dist d. The G sphere row (docs/stream/format.md) is E itself if |E|
+// <= R (path 0), else the entry point E + s d with the smallest s >= 0 where |E + s d| = R (path
+// s). A bunch without such s misses the sphere. The time at the row is ctime + (s - dist) / c, with
+// the vacuum speed of light: ctime refers to the arrival point, at s = dist.
 struct SphereBunch {
   bool hits{};
   double x{}, y{}, z{}; // row [m], relative to the sphere centre
@@ -165,7 +198,7 @@ struct SphereRowValues {
 };
 
 // Converts one CORSIKA IACT run (blocks in file order) into stream records.
-// Order of records follows docs/format.md: run, then per event: event, blobs
+// Order of records follows docs/stream/format.md: run, then per event: event, blobs
 // and telescopes in file order, event_end; then run_end. The run record is
 // written at the first event header, so the blocks before it (RUNH, INPUTCFG,
 // TELPOS, ...) are held back and written after it.
@@ -175,9 +208,18 @@ public:
       : reader_{in}, sink_{sink} {}
 
   void run() {
+    bool any_block = false;
     while (std::optional<EventioBlock> block = pop()) {
+      any_block = true;
       switch (block->type) {
       case iact::runh:
+        // A run ends with its RUNE block. A new RUNH while a run is still open (no RUNE)
+        // would close it silently, so it is an error.
+        if (run_started_) {
+          throw std::runtime_error("CORSIKA RUNH while the previous run is open (no RUNE block "
+                                   "before it)");
+        }
+        run_started_ = true;
         close_run();
         rune_seen_ = false;
         runh_ = decode_float_block(*block);
@@ -205,11 +247,16 @@ public:
       }
       case iact::telarray:
         require_event("array container");
-        for (const EventioBlock &child : subblocks(*block)) {
+        for (const SubblockView &child : subblock_views(*block)) {
           if (child.type == iact::photons) {
-            emit_photons(decode_photons(child));
+            const TelPhotons photons = decode_photons(child.version, child.body, child.body_size);
+            if (photons.array == 999 && photons.tel == 999) {
+              throw std::runtime_error("particle block (999, 999) inside an array container");
+            }
+            emit_photons(photons);
           } else if (child.type == iact::photons3d) {
-            const TelPhotons3d photons = decode_photons3d(child);
+            const TelPhotons3d photons =
+                decode_photons3d(child.version, child.body, child.body_size);
             if (photons.array == 999 && photons.tel == 999) {
               throw std::runtime_error("particle block (999, 999) inside an array container");
             }
@@ -240,12 +287,16 @@ public:
       case iact::rune:
         blob(std::move(*block));
         rune_seen_ = true;
+        run_started_ = false;
         close_run();
         break;
       default:
         blob(std::move(*block));
         break;
       }
+    }
+    if (!any_block) {
+      throw std::runtime_error("CORSIKA input is empty (no EventIO block)");
     }
     check_complete();
   }
@@ -374,9 +425,10 @@ private:
     const std::optional<TelOffset> teloff = find_teloff();
 
     Metadata metadata;
-    metadata["event_number"] =
-        round_to_int(header_word(evth, corsika_word::evth_event_number, "EVTH"));
-    metadata["primary_id"] = round_to_int(header_word(evth, corsika_word::evth_particle, "EVTH"));
+    metadata["event_number"] = round_to_int(
+        header_word(evth, corsika_word::evth_event_number, "EVTH"), "EVTH event number");
+    metadata["primary_id"] =
+        round_to_int(header_word(evth, corsika_word::evth_particle, "EVTH"), "EVTH particle id");
     metadata["energy_gev"] =
         static_cast<double>(header_word(evth, corsika_word::evth_energy, "EVTH"));
     metadata["zenith_rad"] =
@@ -428,7 +480,7 @@ private:
     if (runh_) {
       const std::vector<float> &runh = *runh_;
       metadata["run_number"] =
-          round_to_int(header_word(runh, corsika_word::runh_run_number, "RUNH"));
+          round_to_int(header_word(runh, corsika_word::runh_run_number, "RUNH"), "RUNH run number");
       metadata["observation_level_m"] =
           static_cast<double>(header_word(runh, corsika_word::runh_level_1, "RUNH")) / 100.0;
       metadata["spectral_index"] =
@@ -454,12 +506,12 @@ private:
       metadata["telescope_r_m"] = std::move(r);
     }
     if (evth != nullptr) {
-      const auto flags = round_to_int(header_word(*evth, corsika_word::evth_flags, "EVTH"));
-      metadata["atmosphere_id"] = (flags >> corsika_word::evth_flag_atmosphere_shift) &
-                                  corsika_word::evth_flag_atmosphere_mask;
+      const std::int64_t flags = evth_flags_value(*evth);
+      metadata["atmosphere_id"] = static_cast<std::int64_t>(evth_profile_number(flags));
       metadata["refraction_applied"] = (flags >> corsika_word::evth_flag_refraction_bit) & 1;
       // CURVED: 1 = downgoing primaries, 2 = upgoing primaries also allowed.
-      const int curved = round_to_int(header_word(*evth, corsika_word::evth_curved_flag, "EVTH"));
+      const std::int64_t curved =
+          round_to_int(header_word(*evth, corsika_word::evth_curved_flag, "EVTH"), "EVTH CURVED");
       metadata["curvature_applied"] =
           (curved == 1 || curved == 2) ? std::int64_t{1} : std::int64_t{0};
       metadata["wavelength_min_nm"] =
@@ -513,14 +565,22 @@ private:
     }
   }
 
-  // Telescope record of the current event; returns the telescope id (1-based).
+  // Telescope record of the current event; returns the telescope id (1-based). The position comes
+  // from TELPOS when the run has one; a telescope index outside it is an error. The array index is
+  // written as given (CORSIKA always has it); a record of another producer without array_index is
+  // read as array 0 by the consumers (documented in docs/stream/format.md).
   std::int64_t begin_telescope(int array, int tel) {
     const auto telescope_id = static_cast<std::int64_t>(tel) + 1;
     Metadata tel_meta;
     tel_meta["telescope_id"] = telescope_id;
     tel_meta["frame"] = static_cast<std::int64_t>(Frame::ground);
     tel_meta["array_index"] = static_cast<std::int64_t>(array);
-    if (telpos_ && tel >= 0 && static_cast<std::size_t>(tel) < telpos_->x.size()) {
+    if (telpos_) {
+      if (static_cast<std::size_t>(tel) >= telpos_->x.size()) {
+        throw std::runtime_error("photon block of telescope " + std::to_string(telescope_id) +
+                                 " is outside TELPOS (" + std::to_string(telpos_->x.size()) +
+                                 " telescopes)");
+      }
       const auto i = static_cast<std::size_t>(tel);
       tel_meta["x_m"] = cm_to_m(telpos_->x[i]);
       tel_meta["y_m"] = cm_to_m(telpos_->y[i]);
@@ -651,6 +711,7 @@ private:
   bool event_open_{};
   std::map<int, std::uint64_t> next_photon_index_;     // per telescope, reset at each event
   bool rune_seen_{};                                   // a RUNE block was read since the last RUNH
+  bool run_started_{};                                 // a RUNH was read and no RUNE yet
   std::optional<GroundRepresentation> representation_; // of the open run, once known
   std::vector<Record> held_;                           // run records waiting for representation_
   std::uint64_t misses_sphere_{}; // 1217 bunches of the open run that miss their sphere
@@ -784,20 +845,19 @@ private:
     if (n > 0 && zem.empty()) {
       throw std::runtime_error("sim_telarray input needs the zem column");
     }
-    // Each bunch is encoded in place as its 1205 record (32 bytes):
-    // x y cx cy t zem photons lambda, float32 little-endian, cm and ns as CORSIKA.
+    // A wavelength of 0 means "not sampled": sim_telarray then draws a Cherenkov spectrum, which
+    // is wrong for light sources. The column must be present; its zero values are kept.
+    if (n > 0 && lambda.empty()) {
+      throw std::runtime_error("sim_telarray input needs the wavelength column (sim_telarray "
+                               "samples a Cherenkov spectrum for wavelength 0)");
+    }
+    // Each bunch is encoded in place as its 1205 record (32 bytes, detail::store_bunch_long).
     const std::size_t at = bunch_bytes_.size();
     bunch_bytes_.resize(at + n * photon_bunch_size);
     std::uint8_t *dst = bunch_bytes_.data() + at;
     for (std::size_t i = 0; i < n; ++i, dst += photon_bunch_size) {
-      detail::store_f32_le(dst, corsika_m_to_cm(x[i]));
-      detail::store_f32_le(dst + 4, corsika_m_to_cm(y[i]));
-      detail::store_f32_le(dst + 8, cx[i]);
-      detail::store_f32_le(dst + 12, cy[i]);
-      detail::store_f32_le(dst + 16, t[i]);
-      detail::store_f32_le(dst + 20, corsika_m_to_cm(zem[i]));
-      detail::store_f32_le(dst + 24, w[i]);
-      detail::store_f32_le(dst + 28, lambda.empty() ? 0.0F : lambda[i]);
+      detail::store_bunch_long(dst, corsika_m_to_cm(x[i]), corsika_m_to_cm(y[i]), cx[i], cy[i],
+                               t[i], corsika_m_to_cm(zem[i]), w[i], lambda[i]);
       photon_sum_ += w[i];
     }
     next_index += n;
@@ -813,28 +873,22 @@ private:
                                " while telescope " + std::to_string(telescope_id_) + " is open");
     }
     float photons = 0.0F;
-    const auto it = metadata.find("photons");
-    if (it != metadata.end()) {
-      photons = static_cast<float>(std::get<double>(it->second));
+    if (metadata.find("photons") != metadata.end()) {
+      photons = static_cast<float>(detail::metadata_number(metadata, "photons"));
     } else {
       photons = static_cast<float>(photon_sum_);
     }
-    // Header of the 1205 block (make_photons_block layout): array and telescope as int16,
-    // photon sum as float32, bunch count as int32; the bunches follow.
-    const auto count =
-        static_cast<std::int32_t>((bunch_bytes_.size() - photons_header_size) / photon_bunch_size);
-    std::uint8_t *head = bunch_bytes_.data();
-    const auto array16 = static_cast<std::uint16_t>(array_);
-    const auto tel16 = static_cast<std::uint16_t>(telescope_id_ - 1);
-    const auto count32 = static_cast<std::uint32_t>(count);
-    for (std::size_t i = 0; i < 2; ++i) {
-      head[i] = static_cast<std::uint8_t>(array16 >> (8 * i));
-      head[2 + i] = static_cast<std::uint8_t>(tel16 >> (8 * i));
+    const std::size_t bunches = (bunch_bytes_.size() - photons_header_size) / photon_bunch_size;
+    if (bunches > static_cast<std::size_t>(INT32_MAX)) {
+      throw std::out_of_range("telescope " + std::to_string(telescope_id_) +
+                              " has more than 2^31 - 1 photon bunches");
     }
-    detail::store_f32_le(head + 4, photons);
-    for (std::size_t i = 0; i < 4; ++i) {
-      head[8 + i] = static_cast<std::uint8_t>(count32 >> (8 * i));
-    }
+    // Header of the 1205 block, written in place (same layout as put_photons_header).
+    std::vector<std::uint8_t> head_bytes;
+    ByteWriter head_writer{head_bytes};
+    put_photons_header(head_writer, array_, telescope_id_ - 1, photons,
+                       static_cast<std::int32_t>(bunches));
+    std::copy(head_bytes.begin(), head_bytes.end(), bunch_bytes_.begin());
     children_.push_back(make_block(iact::photons, 0,
                                    static_cast<std::uint32_t>(1000 * array_ + telescope_id_ - 1),
                                    std::move(bunch_bytes_)));
@@ -853,8 +907,7 @@ private:
     children_.clear();
   }
 
-  static constexpr std::size_t photons_header_size = 12; // int16, int16, float32, int32
-  static constexpr std::size_t photon_bunch_size = 32;   // 8 float32 (long format)
+  static constexpr std::size_t photon_bunch_size = 32; // 8 float32 (long format)
 
   std::ostream &out_;
   int array_{};

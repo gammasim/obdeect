@@ -162,7 +162,13 @@ float32 components are normalised in double before E = Q - L d is formed (their 
 about 6e-8, which would move a spherical chord by about 0.3 m in altitude, a depth error of 3e-5
 for a horizontal chord at 2 km).
 
-- $h_E = z_{em}$ (the emission altitude as written).
+- $h_E$: in the flat and the slant (|u| >= 0.1) branches the emission altitude as written, $z_{em}$.
+  In the chord branch (|u| < 0.1) the chord is integrated along the straight segment from Q to the
+  geometric point E = Q - L d, so the altitude of E is the geometric one. For rows that are
+  consistent (the emission altitude is the altitude of E) the two agree; a row whose $z_{em}$ differs
+  from the altitude of E by $\delta$ gets a depth error of about $k\,\delta/|u|$ between the two
+  branches at |u| = 0.1 (k the extinction coefficient at the emission). The chord branch does not
+  use $z_{em}$ beyond the `zem >= H2` test.
 - $h_Q$: the altitude of Q. Flat: observation level + $Q_z$ (sky frame, z above the observation
   level, $Q_z = z_C + r_z$). Spherical: $|Q - \text{Earth centre}| - R$, from the sky position with
   the Earth centre at $(0, 0, -(R + H_2))$.

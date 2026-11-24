@@ -221,6 +221,7 @@ def test_extinction_of_sphere_rows_is_applied(tmp_path):
         summary[threads] = obdeect_propagation.propagate(
             source,
             output,
+            pathlen_m=0.0,
             transmission=TRANSMISSION,
             site_altitude_m=SITE_M,
             seed=1,
@@ -244,6 +245,7 @@ def test_extinction_of_sphere_rows_is_applied(tmp_path):
     obdeect_propagation.propagate(
         source,
         weighted,
+        pathlen_m=0.0,
         transmission=TRANSMISSION,
         site_altitude_m=SITE_M,
         seed=1,
@@ -264,6 +266,7 @@ def test_horizontal_primaries_scatter_in_sphere_runs(tmp_path):
     summary = obdeect_propagation.propagate(
         source,
         output,
+        pathlen_m=0.0,
         transmission=TRANSMISSION,
         scattering=SCATTERING,
         scattering_points=4,
@@ -287,6 +290,7 @@ def test_horizontal_primaries_scatter_in_sphere_runs(tmp_path):
     obdeect_propagation.propagate(
         source,
         output2,
+        pathlen_m=0.0,
         transmission=TRANSMISSION,
         scattering=SCATTERING,
         scattering_points=4,
@@ -303,7 +307,7 @@ def test_horizontal_primaries_scatter_in_sphere_runs(tmp_path):
 
 
 def test_invalid_ground_representation_and_missing_radius(tmp_path):
-    with pytest.raises(ValueError, match="ground_representation"):
+    with pytest.raises(ValueError, match="ground representation must be plane or sphere"):
         _run(tmp_path, _sky_stream(), ground_representation="cube")
     stream = _sky_stream()
     source = tmp_path / "in.pst"
@@ -323,7 +327,6 @@ def test_invalid_ground_representation_and_missing_radius(tmp_path):
             "wavelength_max_nm": 700.0,
         },
     )
-    writer.metadata("event_end")
     writer.metadata("run_end")
     no_radius = tmp_path / "no_radius.pst"
     no_radius.write_bytes(writer.getvalue())

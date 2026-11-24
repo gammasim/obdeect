@@ -6,7 +6,7 @@
 // Input: ground-frame photons (frame G, CORSIKA axes: x north, y west) with
 // the zem and wavelength columns, atmosphere applied upstream (efficiency status factor
 // `atmosphere` in state `applied`). Output: a header block, then per event
-// `S` lines and per photon `P` lines (docs/usage.md, "obdeect stream to-grisu").
+// `S` lines and per photon `P` lines (docs/stream/grisu.md).
 //
 // Frames: x_g = -y_c, y_g = -x_c for positions. Azimuths: az_g = (3 pi / 2 -
 // az_c) mod 2 pi, with az_c = atan2(cy, cx) for photons. The direction cosines
@@ -17,6 +17,7 @@
 #include "obdeect/stream/stream.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -56,8 +57,28 @@ inline constexpr double two_pi = 2.0 * std::numbers::pi;
 inline constexpr double tiny = 1e-8;
 inline constexpr double match_distance_m = 0.5;
 inline constexpr double unit_weight_tolerance = 1e-6;
+inline constexpr double integer_weight_tolerance = 1e-6; // relative to the rounded weight
 
 inline double zero_tiny(double value) { return std::abs(value) < tiny ? 0.0 : value; }
+
+// Appends " " and the value as printf "%+.9g" writes it (a sign, nine significant digits, no
+// trailing zeros). std::to_chars with the same precision gives the same digits and exponent
+// form; non-finite values are left to printf.
+inline void append_g9_field(std::string &out, double value) {
+  out += ' ';
+  char buffer[64];
+  if (!std::isfinite(value)) {
+    const int n = std::snprintf(buffer, sizeof buffer, "%+.9g", value);
+    out.append(buffer, static_cast<std::size_t>(n));
+    return;
+  }
+  if (!std::signbit(value)) {
+    out += '+';
+  }
+  const auto end =
+      std::to_chars(buffer, buffer + sizeof buffer, value, std::chars_format::general, 9);
+  out.append(buffer, end.ptr);
+}
 
 inline double wrap_two_pi(double angle) {
   double wrapped = std::fmod(angle, two_pi);
@@ -69,14 +90,9 @@ inline double wrap_two_pi(double angle) {
 
 } // namespace grisu_detail
 
-// CORSIKA ground position (x north, y west) to GrISU (x east, y north).
+// CORSIKA ground position (x north, y west) to GrISU (x east, y north). The mapping is its own
+// inverse: GrISU position to the CORSIKA ground frame is the same function.
 [[nodiscard]] inline std::pair<double, double> corsika_to_grisu_position(double x, double y) {
-  return {-y, -x};
-}
-
-// GrISU position to the CORSIKA ground frame (the same mapping is its own inverse up to
-// the exchange of the roles of the two axes).
-[[nodiscard]] inline std::pair<double, double> grisu_to_corsika_position(double x, double y) {
   return {-y, -x};
 }
 
@@ -211,33 +227,11 @@ public:
   }
 
 private:
-  static double number(const Metadata &metadata, const char *key, const char *what) {
-    const auto it = metadata.find(key);
-    if (it == metadata.end()) {
-      throw std::runtime_error(std::string("obdeect stream to-grisu: stream lacks '") + key +
-                               "' (" + what + ")");
-    }
-    if (const auto *integer = std::get_if<std::int64_t>(&it->second)) {
-      return static_cast<double>(*integer);
-    }
-    if (const auto *real = std::get_if<double>(&it->second)) {
-      return *real;
-    }
-    throw std::runtime_error(std::string("obdeect stream to-grisu: stream key '") + key +
-                             "' is not a number");
-  }
-
   static std::optional<double> optional_number(const Metadata &metadata, const char *key) {
-    const auto it = metadata.find(key);
-    if (it == metadata.end()) {
+    if (metadata.find(key) == metadata.end()) {
       return std::nullopt;
     }
-    return number(metadata, key, "");
-  }
-
-  static const std::vector<double> *array(const Metadata &metadata, const char *key) {
-    const auto it = metadata.find(key);
-    return it == metadata.end() ? nullptr : std::get_if<std::vector<double>>(&it->second);
+    return simtel_detail::number_field(metadata, key);
   }
 
   void put(const char *format, auto... values) {
@@ -270,7 +264,7 @@ private:
       return;
     }
     header_done_ = true;
-    const double height = number(run_metadata_, "observation_level_m", "observation height");
+    const double height = simtel_detail::number_field(run_metadata_, "observation_level_m");
     out_ << "* HEADF  <-- Start of header flag\n";
     out_ << "* Produced by " << options_.producer;
     if (!stream_producer_.empty()) {
@@ -323,11 +317,12 @@ private:
     event_ = metadata;
     event_open_ = true;
     last_array_ = -1;
-    event_energy_tev_ = number(metadata, "energy_gev", "primary energy") * 1e-3;
-    event_zenith_ = number(metadata, "zenith_rad", "primary zenith");
-    event_azimuth_ = number(metadata, "azimuth_rad", "primary azimuth");
-    event_first_interaction_ = number(metadata, "first_interaction_m", "first interaction height");
-    event_number_ = static_cast<std::int64_t>(number(metadata, "event_number", "event number"));
+    event_energy_tev_ = simtel_detail::number_field(metadata, "energy_gev") * 1e-3;
+    event_zenith_ = simtel_detail::number_field(metadata, "zenith_rad");
+    event_azimuth_ = simtel_detail::number_field(metadata, "azimuth_rad");
+    event_first_interaction_ = simtel_detail::number_field(metadata, "first_interaction_m");
+    event_number_ =
+        static_cast<std::int64_t>(simtel_detail::number_field(metadata, "event_number"));
   }
 
   void begin_telescope(const Metadata &metadata) {
@@ -353,8 +348,8 @@ private:
       x = *px;
       y = *py;
     } else {
-      const auto *xs = array(run_metadata_, "telescope_x_m");
-      const auto *ys = array(run_metadata_, "telescope_y_m");
+      const auto *xs = simtel_detail::find_array(run_metadata_, "telescope_x_m");
+      const auto *ys = simtel_detail::find_array(run_metadata_, "telescope_y_m");
       if (xs == nullptr || ys == nullptr || telescope_id_ == 0 || telescope_id_ > xs->size() ||
           telescope_id_ > ys->size()) {
         throw std::runtime_error("obdeect stream to-grisu: no position for telescope " +
@@ -384,6 +379,7 @@ private:
       grisu_id_ = *match;
     }
     mapped_ = true;
+    // A telescope record without array_index belongs to array 0 (docs/stream/format.md).
     const auto array_it = metadata.find("array_index");
     const std::int64_t array_index =
         array_it != metadata.end() && std::holds_alternative<std::int64_t>(array_it->second)
@@ -399,8 +395,8 @@ private:
   void write_shower(std::int64_t array_index) {
     double core_x = 0.0;
     double core_y = 0.0;
-    const auto *xs = array(event_, "core_x_m");
-    const auto *ys = array(event_, "core_y_m");
+    const auto *xs = simtel_detail::find_array(event_, "core_x_m");
+    const auto *ys = simtel_detail::find_array(event_, "core_y_m");
     if (xs != nullptr && ys != nullptr) {
       if (array_index < 0 || static_cast<std::size_t>(array_index) >= xs->size() ||
           static_cast<std::size_t>(array_index) >= ys->size()) {
@@ -478,9 +474,9 @@ private:
     const auto &zem = chunk[Column::zem];
     const auto &lambda = chunk[Column::wavelength];
     std::string text;
-    char buffer[256];
+    std::string line;
     for (std::size_t i = 0; i < chunk.rows(); ++i) {
-      if (!(lambda[i] >= 0.5F) || !std::isfinite(lambda[i])) {
+      if (!std::isfinite(lambda[i]) || !(lambda[i] >= 0.5F)) {
         throw std::runtime_error("obdeect stream to-grisu: wavelength is not assigned (value " +
                                  std::to_string(lambda[i]) + " nm)");
       }
@@ -502,21 +498,36 @@ private:
           throw std::runtime_error("obdeect stream to-grisu: photon weight " +
                                    std::to_string(w[i]) + " is too large to expand");
         }
-        copies = std::llround(static_cast<double>(w[i]));
+        // Copies are whole photons: a fractional weight cannot be written exactly.
+        const double rounded = std::round(static_cast<double>(w[i]));
+        if (std::abs(static_cast<double>(w[i]) - rounded) >
+            grisu_detail::integer_weight_tolerance * rounded) {
+          throw std::runtime_error("obdeect stream to-grisu: photon weight " +
+                                   std::to_string(w[i]) +
+                                   " is not an integer; --expand-bunches needs integer weights");
+        }
+        copies = static_cast<long long>(rounded);
       }
       const auto [gx, gy] = corsika_to_grisu_position(telescope_x_ + static_cast<double>(x[i]),
                                                       telescope_y_ + static_cast<double>(y[i]));
       const auto [dcx, dcy] = corsika_to_grisu_direction(cx[i], cy[i]);
-      const int n = std::snprintf(
-          buffer, sizeof buffer, "P %+.9g %+.9g %+.9g %+.9g %+.9g %+.9g %lld 3 %u\n",
-          grisu_detail::zero_tiny(gx), grisu_detail::zero_tiny(gy), grisu_detail::zero_tiny(dcx),
-          grisu_detail::zero_tiny(dcy), static_cast<double>(zem[i]), static_cast<double>(t[i]),
-          std::llround(static_cast<double>(lambda[i])), grisu_id_);
-      if (n < 0 || static_cast<std::size_t>(n) >= sizeof buffer) {
-        throw std::runtime_error("obdeect stream to-grisu: output line too long");
-      }
+      const std::int64_t wavelength = detail::round_to_int(static_cast<double>(lambda[i]),
+                                                           "obdeect stream to-grisu: wavelength");
+      line.clear();
+      line += 'P';
+      grisu_detail::append_g9_field(line, grisu_detail::zero_tiny(gx));
+      grisu_detail::append_g9_field(line, grisu_detail::zero_tiny(gy));
+      grisu_detail::append_g9_field(line, grisu_detail::zero_tiny(dcx));
+      grisu_detail::append_g9_field(line, grisu_detail::zero_tiny(dcy));
+      grisu_detail::append_g9_field(line, static_cast<double>(zem[i]));
+      grisu_detail::append_g9_field(line, static_cast<double>(t[i]));
+      line += ' ';
+      line += std::to_string(wavelength);
+      line += " 3 ";
+      line += std::to_string(grisu_id_);
+      line += '\n';
       for (long long k = 0; k < copies; ++k) {
-        text.append(buffer, static_cast<std::size_t>(n));
+        text += line;
       }
     }
     out_.write(text.data(), static_cast<std::streamsize>(text.size()));

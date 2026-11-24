@@ -116,7 +116,7 @@ def test_camera_frame_conversion(tmp_path, camera_map):
 
 
 def _write_flasher_stream(path, frame="telescope", cz=-0.8):
-    """One photon: emission point (0.1, 0.2, 0.5) m, direction (0.6, 0, cz)."""
+    """One photon: emission point (0.1, 0.2, 0.5) m, unit direction (sqrt(1 - cz^2), 0, cz)."""
 
     def column(value):
         return np.array([value], dtype=np.float32)
@@ -139,11 +139,12 @@ def _write_flasher_stream(path, frame="telescope", cz=-0.8):
             "x": column(0.1),
             "y": column(0.2),
             "z": column(0.5),
-            "cx": column(0.6),
+            "cx": column(np.sqrt(1.0 - cz * cz)),  # 0.6 for cz = -0.8: a unit direction
             "cy": column(0.0),
             "cz": column(cz),
             "t": column(3.0),
             "w": column(1.0),
+            "wavelength": column(400.0),  # sim_telarray input needs the wavelength column
         }
         if frame == "ground":
             photons["zem"] = column(2200.5)  # sim_telarray input needs zem

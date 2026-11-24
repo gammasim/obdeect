@@ -2,6 +2,7 @@
 // straight_path_air_delay_ns, an independent Simpson reference on the real Earth radius, physics
 // sanity, the interpolated tables against direct integration, and input rejection.
 #include "check.hpp"
+#include "stream_fixtures.hpp"
 
 #include "obdeect/propagation/curved_refraction.hpp"
 #include "obdeect/propagation/profile.hpp"
@@ -27,6 +28,9 @@
 
 namespace {
 
+using obdeect_test::kInf;
+using obdeect_test::kNan;
+
 using obdeect::propagation::AtmosphereProfile;
 using obdeect::propagation::curved_ray_integrals;
 using obdeect::propagation::CurvedRayIntegrals;
@@ -39,22 +43,11 @@ constexpr double kPi = obdeect::stream::pi;
 constexpr double kEarthRadius = obdeect::stream::earth_radius_m;
 constexpr double kFlatRadius = 1e12; // plane-parallel limit
 constexpr double kTelescope = 2180.; // observation level of the fixture [m a.s.l.]
-constexpr double kInf = std::numeric_limits<double>::infinity();
-constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
 
 const std::string kFixture =
     std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/atmprof_ecmwf_north_winter_fixed.dat";
 
 double radians(double degrees) { return degrees * kPi / 180.; }
-
-template <class Function> bool throws_invalid(Function function) {
-  try {
-    function();
-  } catch (const std::invalid_argument &) {
-    return true;
-  }
-  return false;
-}
 
 // Test-local integrals: composite Simpson in u = sqrt(x), x = r - r_t, with n intervals. The
 // integrand has a limit (not a sample) at u = 0 for theta_s = 90 degrees, so the first node is
@@ -286,38 +279,34 @@ void test_tables_against_direct(const AtmosphereProfile &profile) {
 
 void test_rejections(const AtmosphereProfile &profile) {
   const double theta = 0.5, h_e = 20000.;
-  CHECK(throws_invalid(
-      [&] { static_cast<void>(curved_ray_integrals(profile, 0., kTelescope, theta, h_e)); }));
-  CHECK(throws_invalid([&] {
-    static_cast<void>(curved_ray_integrals(profile, -kEarthRadius, kTelescope, theta, h_e));
-  }));
-  CHECK(throws_invalid(
-      [&] { static_cast<void>(curved_ray_integrals(profile, kNan, kTelescope, theta, h_e)); }));
-  CHECK(throws_invalid(
-      [&] { static_cast<void>(curved_ray_integrals(profile, kInf, kTelescope, theta, h_e)); }));
-  CHECK(throws_invalid([&] {
-    static_cast<void>(curved_ray_integrals(profile, kEarthRadius, kTelescope, -0.1, h_e));
-  }));
-  CHECK(throws_invalid([&] {
-    static_cast<void>(
-        curved_ray_integrals(profile, kEarthRadius, kTelescope, kPi / 2. + 0.01, h_e));
-  }));
-  CHECK(throws_invalid([&] {
-    static_cast<void>(curved_ray_integrals(profile, kEarthRadius, kTelescope, kNan, h_e));
-  }));
-  CHECK(throws_invalid([&] {
-    static_cast<void>(
-        curved_ray_integrals(profile, kEarthRadius, kTelescope, theta, kTelescope - 1.));
-  }));
-  CHECK(throws_invalid([&] {
-    static_cast<void>(curved_ray_integrals(profile, kEarthRadius, kTelescope, theta, kNan));
-  }));
-  CHECK(throws_invalid(
-      [&] { static_cast<void>(curved_ray_integrals(profile, kEarthRadius, kNan, theta, h_e)); }));
-  CHECK(throws_invalid(
-      [&] { static_cast<void>(curved_ray_integrals(profile, kEarthRadius, -1., theta, h_e)); }));
-  CHECK(throws_invalid([&] { CurvedRefractionTables bad(profile, 0., kTelescope); }));
-  CHECK(throws_invalid([&] { CurvedRefractionTables bad(profile, kEarthRadius, kNan); }));
+  const auto ray = [&](double R, double h_t, double zenith, double h) {
+    return [&, R, h_t, zenith, h] {
+      static_cast<void>(curved_ray_integrals(profile, R, h_t, zenith, h));
+    };
+  };
+  CHECK(throws_with(ray(0., kTelescope, theta, h_e), "earth radius must be finite and positive"));
+  CHECK(throws_with(ray(-kEarthRadius, kTelescope, theta, h_e),
+                    "earth radius must be finite and positive"));
+  CHECK(throws_with(ray(kNan, kTelescope, theta, h_e), "earth radius must be finite and positive"));
+  CHECK(throws_with(ray(kInf, kTelescope, theta, h_e), "earth radius must be finite and positive"));
+  CHECK(throws_with(ray(kEarthRadius, kTelescope, -0.1, h_e),
+                    "zenith angle at the telescope must lie in [0, pi/2]"));
+  CHECK(throws_with(ray(kEarthRadius, kTelescope, kPi / 2. + 0.01, h_e),
+                    "zenith angle at the telescope must lie in [0, pi/2]"));
+  CHECK(throws_with(ray(kEarthRadius, kTelescope, kNan, h_e),
+                    "zenith angle at the telescope must lie in [0, pi/2]"));
+  CHECK(throws_with(ray(kEarthRadius, kTelescope, theta, kTelescope - 1.),
+                    "emission altitude must not lie below the telescope"));
+  CHECK(
+      throws_with(ray(kEarthRadius, kTelescope, theta, kNan), "emission altitude must be finite"));
+  CHECK(throws_with(ray(kEarthRadius, kNan, theta, h_e),
+                    "telescope altitude must lie inside the atmospheric profile"));
+  CHECK(throws_with(ray(kEarthRadius, -1., theta, h_e),
+                    "telescope altitude must lie inside the atmospheric profile"));
+  CHECK(throws_with([&] { CurvedRefractionTables bad(profile, 0., kTelescope); },
+                    "earth radius must be finite and positive"));
+  CHECK(throws_with([&] { CurvedRefractionTables bad(profile, kEarthRadius, kNan); },
+                    "telescope altitude must lie inside the atmospheric profile"));
 }
 
 } // namespace

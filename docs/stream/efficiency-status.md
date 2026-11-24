@@ -22,6 +22,12 @@ status per factor. Within either scope, a factor may only advance `pending` → 
 `applied`; a repeated or backward state is invalid. Telescope updates are checked separately from
 run updates before the telescope status overrides the run status.
 
+Every reader checks these transitions when it reads the record: the C++ `Reader` (so `obdeect
+stream cat`, the converters and the Python `Reader` reject them), and the Python `transform` stage
+also checks that a factor it writes advances from the state the input has in run scope. Writers
+do not check them. Each `efficiency_status` record must name its factors in `factors` and give
+`<name>.state` for each one, with a state of the three; a factor listed twice is an error.
+
 `obdeect stream to-simtel` checks the efficiency status of each telescope against the frame of
 its photons. It accepts a factor that is `applied` upstream unless sim_telarray applies it again
 in that frame. It accepts `pending` only for factors that sim_telarray applies in that frame.

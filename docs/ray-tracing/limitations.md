@@ -56,7 +56,7 @@ LST-scale values; the actual result depends on the window shape and ray incidenc
 - **Diffraction and polarisation:** irrelevant at the size of IACT mirrors and for unpolarised
   Cherenkov light.
 
-## Non-sequential tracing (ray tracing phase 2)
+## Non-sequential tracing
 
 Every photon is traced until it is detected, absorbed, or escapes, after up to 16 reflections
 (`bounce_limit` beyond). Remaining limits:

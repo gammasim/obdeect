@@ -23,7 +23,10 @@ $ obdeect stream from-corsika < run.iact | obdeect stream to-simtel > sim.simtel
 - `cat` writes one stream with a single `stream_end` record. `--summary` prints the records per
   type and the photons and weight per telescope instead.
 - `tee` writes the same records to standard output and to each file.
-- `obdeect stream --version` prints the package version and the photon-stream format version.
+- Errors of the output (a full disk, a closed pipe) end the command with exit status 1, also
+  when they come at the final flush or the close of a file.
+- `obdeect --version` (the top-level command) prints the installed component versions and the
+  photon-stream format version.
 
 Every command accepts `--help`. For complete pipelines see [](../user-guide/pipelines.md).
 
@@ -56,6 +59,11 @@ $ obdeect stream to-simtel --camera-map cam.txt --keep-telpos-height run.pst > s
 n-1 per line, `#` comments). It is written as ATMPROF (1216) before the first event, with the
 profile number that EVTH names (99 for synthesised headers). A stream with its own ATMPROF block
 rejects the option.
+
+Photons for sim_telarray need the wavelength column: sim_telarray samples a Cherenkov spectrum for
+wavelength 0, so a stream without that column is rejected (a column of zeros is written as it is).
+A CORSIKA run must end with its RUNE block before the next RUNH; a file that ends inside a run, or
+is empty, is rejected.
 
 A stream without CORSIKA blocks gets synthesised headers. The run end (RUNE) carries the number of
 events written, so sim_telarray reports the run as complete. The input block (INPUTCFG, one line
@@ -111,7 +119,7 @@ checked as for camera frame.
 IACT library, `write_tel_photons3d` in `io_simtel.c`) to a sphere run. A bunch gives the arrival
 point A = (x, y, z) relative to the telescope sphere centre (cm), the direction d = (cx, cy, cz)
 and the distance `dist` of the emission point from A. The emission point is E = A - dist d, and the
-bunch becomes its G sphere row (docs/format.md, "Ground frame"), with R the telescope radius from
+bunch becomes its G sphere row ([format](format.md), "Photon chunk"), with R the telescope radius from
 TELPOS:
 
 - E on or inside the sphere (|E| <= R): the row is E, path 0.
@@ -161,9 +169,9 @@ the telescope's sphere radius.
 
 ## Efficiency checks
 
-`obdeect stream to-simtel` refuses a stream whose [efficiency status](efficiency-status.md) says
-that a factor is still to be applied when sim_telarray does not apply it in that frame. The
-error names the factor and exits with status 1:
+`obdeect stream to-simtel` checks each telescope's [efficiency status](efficiency-status.md)
+against the frame of its photons (the rules are there). A violation names the factor and exits
+with status 1:
 
 ```text
 obdeect stream to-simtel: efficiency status of telescope 2 (camera frame): factor

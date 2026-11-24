@@ -7,6 +7,9 @@
 #include "obdeect/stream/obdeect_stream.h"
 #include "obdeect/stream/stream.hpp"
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -95,7 +98,7 @@ void compare_with_c_reader(const std::string &path) {
   }
   int type = 0;
   CHECK(obdeect_stream_reader_next(c, &type) == OBDEECT_STREAM_END);
-  CHECK(n_records == 9);
+  CHECK(n_records == 10); // the records of write_stream in test_capi.c, stream record included
   obdeect_stream_reader_close(c);
 }
 
@@ -165,6 +168,54 @@ void check_conformance(const std::string &directory) {
 
 } // namespace
 
+// A write_record call with a type that is not a metadata record is refused before the pending
+// metadata is taken: the next valid call writes the metadata set before the refused one.
+void refused_record_type_keeps_pending_metadata(const std::string &base) {
+  const std::string path = base + ".pending.pst";
+  obdeect_stream_writer *writer = nullptr;
+  CHECK(obdeect_stream_writer_open(path.c_str(), "test", &writer) == OBDEECT_STREAM_OK);
+  if (writer == nullptr) {
+    return;
+  }
+  CHECK(obdeect_stream_writer_set_int(writer, "run_number", 42) == OBDEECT_STREAM_OK);
+  CHECK(obdeect_stream_writer_write_record(writer, static_cast<int>(RecordType::photons)) ==
+        OBDEECT_STREAM_ERROR_ARGUMENT);
+  CHECK(obdeect_stream_writer_write_record(writer, static_cast<int>(RecordType::run)) ==
+        OBDEECT_STREAM_OK);
+  CHECK(obdeect_stream_writer_write_record(writer, static_cast<int>(RecordType::run_end)) ==
+        OBDEECT_STREAM_OK);
+  CHECK(obdeect_stream_writer_close(writer) == OBDEECT_STREAM_OK);
+
+  std::ifstream in(path, std::ios::binary);
+  Reader reader(in);
+  Record record;
+  bool found = false;
+  while (reader.next(record)) {
+    if (record.type == RecordType::run) {
+      const auto it = record.metadata.find("run_number");
+      found = it != record.metadata.end() && std::get_if<std::int64_t>(&it->second) != nullptr &&
+              std::get<std::int64_t>(it->second) == 42;
+    }
+  }
+  CHECK(found);
+}
+
+// A descriptor that cannot be read fails with the I/O error code (not a format error).
+void unreadable_descriptor_is_an_io_error() {
+  const int fd = open("/dev/null", O_WRONLY);
+  if (fd < 0) {
+    return; // no /dev/null: nothing to test
+  }
+  obdeect_stream_reader *reader = nullptr;
+  CHECK(obdeect_stream_reader_open_fd(fd, &reader) == OBDEECT_STREAM_OK);
+  if (reader != nullptr) {
+    int type = 0;
+    CHECK(obdeect_stream_reader_next(reader, &type) == OBDEECT_STREAM_ERROR_IO);
+    obdeect_stream_reader_close(reader);
+  }
+  close(fd);
+}
+
 int main(int argc, char **argv) {
   if (argc != 3) {
     std::fprintf(stderr, "usage: test_capi_cpp <stream> <conformance dir>\n");
@@ -173,5 +224,7 @@ int main(int argc, char **argv) {
   return run_checks([&] {
     compare_with_c_reader(argv[1]);
     check_conformance(argv[2]);
+    refused_record_type_keeps_pending_metadata(argv[1]);
+    unreadable_descriptor_is_an_io_error();
   });
 }
