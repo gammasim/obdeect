@@ -425,19 +425,36 @@ private:
     }
   }
 
-  // The photon blocks of a telescope in an event continue the index: first_index counts the
-  // photons of the telescope in the event, and the random keys of the stages use it. A block must
-  // start where the previous one of the telescope ended (in_index_ is reset at each event).
+  // The random keys of the stages use first_index + row, so within an event the photon blocks of a
+  // telescope must not share an index: a block whose rows [first_index, first_index + rows) overlap
+  // an earlier block of the telescope is rejected. Order and gaps are allowed (a stream may hold
+  // the photons in any order; results do not depend on it). in_index_ is reset at each event.
   void check_first_index(const obdeect::stream::PhotonChunk &input) {
-    std::uint64_t &next = in_index_[telescope_.id];
-    if (input.first_index != next) {
-      throw std::invalid_argument("photon block of telescope " + std::to_string(telescope_.id) +
-                                  " in event " + std::to_string(event_number_) +
-                                  " starts at first_index " + std::to_string(input.first_index) +
-                                  ", expected " + std::to_string(next) +
-                                  " (the blocks of a telescope must continue the index)");
+    const std::uint64_t first = input.first_index;
+    const std::uint64_t end = first + input.rows();
+    if (first == end) {
+      return;
     }
-    next += input.rows();
+    auto &ranges = in_index_[telescope_.id]; // start -> end, disjoint, adjacent ones merged
+    auto next = ranges.lower_bound(first);
+    const bool overlaps_next = next != ranges.end() && next->first < end;
+    const bool overlaps_previous = next != ranges.begin() && std::prev(next)->second > first;
+    if (overlaps_next || overlaps_previous) {
+      throw std::invalid_argument(
+          "photon block of telescope " + std::to_string(telescope_.id) + " in event " +
+          std::to_string(event_number_) + " repeats photon indices from first_index " +
+          std::to_string(first) + " (each index of a telescope may occur once per event)");
+    }
+    std::uint64_t start = first, stop = end;
+    if (next != ranges.begin() && std::prev(next)->second == first) {
+      start = std::prev(next)->first;
+      ranges.erase(std::prev(next));
+    }
+    if (next != ranges.end() && next->first == end) {
+      stop = next->second;
+      ranges.erase(next);
+    }
+    ranges[start] = stop;
   }
 
   static constexpr std::int64_t max_u32 = 0xFFFFFFFFLL;
@@ -1515,7 +1532,8 @@ private:
   Telescope telescope_;
   bool have_event_{};
   std::map<std::uint32_t, std::uint64_t> out_index_; // per telescope, reset at each event
-  std::map<std::uint32_t, std::uint64_t> in_index_;  // per telescope: first_index of the next block
+  // Per telescope: the photon index ranges of the event so far (start -> end, disjoint).
+  std::map<std::uint32_t, std::map<std::uint64_t, std::uint64_t>> in_index_;
   std::uint32_t event_number_{};
   bool efficiency_status_pending_{};
   obdeect::stream::Metadata incoming_run_status_; // run status records of the input, before flush

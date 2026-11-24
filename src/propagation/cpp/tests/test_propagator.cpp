@@ -1852,10 +1852,10 @@ void test_upward_scattering_end_to_end() {
 
 // ---- Accounting and input checks of the run ---------------------------------------------
 
-// Photon blocks of a telescope continue the index within an event (first_index is the index of
-// the first photon of the block among the telescope's photons of the event). A block that restarts
-// at 0 would repeat the random keys of the earlier photons, so it is rejected.
-void test_first_index_must_continue() {
+// Photon blocks of a telescope must not repeat an index within an event (first_index + row keys the
+// random draws): a block that restarts at 0 or overlaps an earlier one is rejected. Any order and
+// gaps are allowed, and the result does not depend on the order of the blocks.
+void test_first_index_must_not_repeat() {
   const std::size_t n = 10;
   const auto sky_unit = [](std::size_t i) {
     Row row = sky_row(i);
@@ -1876,11 +1876,15 @@ void test_first_index_must_continue() {
     });
   };
   const auto config = config_for(zero_table());
-  const std::string message = message_of([&] { propagate(stream_of({0, 0}), config); });
-  CHECK(message.find("first_index") != std::string::npos);
-  CHECK(throws_with([&] { propagate(stream_of({0, n + 1}), config); }, "telescope"));
+  CHECK(throws_with([&] { propagate(stream_of({0, 0}), config); }, "repeats photon indices"));
+  CHECK(throws_with([&] { propagate(stream_of({0, n / 2}), config); }, "repeats photon indices"));
+  CHECK(
+      throws_with([&] { propagate(stream_of({n, 0, n / 2}), config); }, "repeats photon indices"));
   const auto result = propagate(stream_of({0, n}), config);
   CHECK(result.summary.photons_in == 2 * n);
+  CHECK(propagate(stream_of({0, n + 1}), config).summary.photons_in == 2 * n); // a gap
+  // The same photons in the other block order give the same summary.
+  CHECK(propagate(stream_of({n, 0}), config).summary.photons_out == result.summary.photons_out);
 }
 
 // With scattering, one telescope block per telescope and event: the scattered photons of a
@@ -2005,7 +2009,7 @@ int main() {
     test_scattering_telescope_selection();
     test_scattering_array_index();
     test_scattering_primaries_rejects();
-    test_first_index_must_continue();
+    test_first_index_must_not_repeat();
     test_scattering_rejects_repeated_block();
     test_propagator_not_copyable();
     test_thinned_summary_closes();

@@ -188,10 +188,10 @@ status records are passed through unchanged. The record format and the state tra
 - With scattering, the blocks of other telescopes are still read for primaries (when they are
   primaries) but not written, and they are not scattering targets. The summary counts only the
   written photons.
-- The photon blocks of a telescope in an event continue the index: a block's `first_index` is the
-  index of its first photon among the telescope's photons of the event, and it must equal the number
-  of photons of the telescope before it (the random draws are keyed on it). A block that restarts at
-  0, or that leaves a gap, is rejected. With scattering, a telescope has one block per event (its
+- The photon blocks of a telescope in an event must not repeat a photon index: a block's rows have
+  the indices `first_index` to `first_index + rows - 1`, and the random draws are keyed on them. A
+  block that restarts at 0 or overlaps an earlier block of the telescope is rejected; blocks may come
+  in any order and leave gaps. With scattering, a telescope has one block per event (its
   scattered photons are written in that block): a second block is rejected.
 
 ## Command line
