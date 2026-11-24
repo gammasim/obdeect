@@ -429,13 +429,41 @@ inline void gauss_legendre(int n, std::vector<double> &x, std::vector<double> &w
   }
 }
 
+// Where the photons of a point with a disc target are drawn: in the profile's own cone (support
+// u <= u_profile about the axis) or in the cone that encloses the disc as seen from the point
+// (half angle asin(R / D) about the direction to the disc centre, D its distance; the whole sphere
+// when the point lies within R of the centre). The smaller of the two is used, so the attempts per
+// photon stay small for a narrow beam (the profile cone) as for a small, distant disc (the disc
+// cone): sampling in the larger one could need ~1 / (solid-angle ratio) attempts per photon.
+struct DiscRegion {
+  bool disc_cone{}; // true: draw in the disc cone (intensity rejection); false: profile cone
+  Vec3 axis{};      // axis of the disc cone (unit, towards the disc centre)
+  double u_cone{};  // 1 - cos(half angle) of the disc cone
+};
+
+inline DiscRegion disc_region(const Point &p, const DiscTarget &disc) {
+  const Vec3 to_centre = disc.centre - p.position;
+  const double distance = std::hypot(to_centre.x, to_centre.y, to_centre.z);
+  DiscRegion region;
+  region.axis = distance > 0.0 ? to_centre * (1.0 / distance) : p.axis;
+  if (distance > disc.radius_m) {
+    const double s = disc.radius_m / distance;
+    region.u_cone = s * s / (1.0 + std::sqrt((1.0 - s) * (1.0 + s))); // 1 - sqrt(1 - s^2)
+  } else {
+    region.u_cone = 2.0;
+  }
+  region.disc_cone = region.u_cone <= angle_support(p.angular);
+  return region;
+}
+
 // Fraction of the light of a point that reaches a disc target: the integral of the normalised
-// profile over the solid angle of the disc, 1/(2 pi I) int_disc I(u) h / d^3 dA with I the
-// integral of the profile over u = 1 - cos(theta) (an isotropic point gives its solid angle over
-// 4 pi). A disc centred on the profile axis (the disc seen as a cap about the axis, half angle
-// atan(R / h)) is exact: the cdf of the profile at u = 1 - h / sqrt(h^2 + R^2). Otherwise a
-// 256 x 256 Gauss-Legendre (radius) x trapezoid (azimuth) quadrature of the disc area. (64 x 64
-// missed a narrow Gaussian seen off the axis: its footprint covers only a few nodes.)
+// profile over the solid angle of the disc, 1/(2 pi I) int_disc I dOmega, with I the integral of
+// the profile over u = 1 - cos(theta) (an isotropic point gives its solid angle over 4 pi). A disc
+// centred on the profile axis (a cap about the axis, half angle atan(R / h)) is exact: the cdf of
+// the profile at u = 1 - h / sqrt(h^2 + R^2). Otherwise a quadrature over the smaller region
+// (disc_region): over the disc area when the disc cone is the smaller one (the profile varies
+// slowly across it), or over the profile cone (Gauss-Legendre in u, uniform in azimuth, each node
+// tested against the disc) when the beam is the smaller one, so a narrow beam is always resolved.
 inline double disc_fraction(const Point &p, const DiscTarget &disc) {
   const Vec3 to_centre = disc.centre - p.position;
   // hypot, not norm: a point 1e-170 m from the centre has a zero square (h of the plane is kept).
@@ -453,6 +481,78 @@ inline double disc_fraction(const Point &p, const DiscTarget &disc) {
   constexpr int n = 256;
   std::vector<double> nodes, weights;
   gauss_legendre(n, nodes, weights);
+  const double u_max = angle_support(p.angular);
+  if (u_max < disc_region(p, disc).u_cone) {
+    // A beam narrower than the disc cone: over the profile cone, the fraction of each ring u
+    // (azimuth about the axis) whose rays hit the disc. Each ring is sampled at n_azimuth
+    // azimuths and every hit/miss transition is located by bisection, so the arcs are exact.
+    constexpr int n_azimuth = 512;
+    const Basis basis = orthonormal_basis(p.axis);
+    const double plane = dot(to_centre, disc.normal);
+    // Pieces in u: between the nodes of a tabulated profile (its intensity is linear there, so the
+    // kinks do not limit the accuracy), else 64 equal pieces; 4-point Gauss-Legendre in each.
+    std::vector<double> breaks;
+    if (const auto *table = std::get_if<TabulatedAngular>(&p.angular)) {
+      for (const double x : table->density.nodes_x())
+        if (x > 0.0 && x < u_max)
+          breaks.push_back(x);
+    } else {
+      for (int k = 1; k < 64; ++k)
+        breaks.push_back(u_max * k / 64.0);
+    }
+    breaks.insert(breaks.begin(), 0.0);
+    breaks.push_back(u_max);
+    std::vector<double> piece_nodes, piece_weights;
+    gauss_legendre(4, piece_nodes, piece_weights);
+    std::vector<std::pair<double, double>> rings; // (u, weight)
+    for (std::size_t b = 0; b + 1 < breaks.size(); ++b) {
+      const double lo = breaks[b], hi = breaks[b + 1];
+      for (std::size_t q = 0; q < piece_nodes.size(); ++q)
+        rings.emplace_back(0.5 * (lo + hi) + 0.5 * (hi - lo) * piece_nodes[q],
+                           0.5 * (hi - lo) * piece_weights[q]);
+    }
+    double sum = 0.0;
+    for (const auto &[u, wu] : rings) {
+      const double intensity = angle_intensity(p.angular, u);
+      if (!(intensity > 0.0))
+        continue;
+      const double cos_theta = 1.0 - u;
+      const double sin_theta = std::sqrt(std::max(0.0, u * (2.0 - u)));
+      const auto hits = [&](double phi) {
+        const Vec3 direction = p.axis * cos_theta + basis.e1 * (sin_theta * std::cos(phi)) +
+                               basis.e2 * (sin_theta * std::sin(phi));
+        const double denominator = dot(direction, disc.normal);
+        if (denominator == 0.0)
+          return false;
+        const double t = plane / denominator;
+        if (!(t > 0.0))
+          return false;
+        const Vec3 offset = p.position + direction * t - disc.centre;
+        return dot(offset, offset) <= r * r;
+      };
+      const double step = two_pi / n_azimuth;
+      double arc = 0.0;
+      bool previous = hits(0.0);
+      for (int k = 0; k < n_azimuth; ++k) {
+        const double a = k * step, b = a + step;
+        const bool current = hits(b);
+        if (previous == current) {
+          arc += current ? step : 0.0;
+        } else {
+          double lo = a, hi = b; // hits(lo) == previous, hits(hi) == current
+          for (int iteration = 0; iteration < 60; ++iteration) {
+            const double mid = 0.5 * (lo + hi);
+            (hits(mid) == previous ? lo : hi) = mid;
+          }
+          arc += previous ? lo - a : b - hi;
+        }
+        previous = current;
+      }
+      sum += wu * intensity * arc / two_pi;
+    }
+    return sum / total;
+  }
+  // Over the disc area: 256 x 256 Gauss-Legendre (radius) x trapezoid (azimuth).
   const Basis basis = orthonormal_basis(disc.normal);
   double sum = 0.0;
   for (int i = 0; i < n; ++i) {
@@ -465,9 +565,7 @@ inline double disc_fraction(const Point &p, const DiscTarget &disc) {
       const Vec3 v = point - p.position;
       const double d = norm(v);
       const double cosine = std::clamp(dot(v, p.axis) / d, -1.0, 1.0);
-      const double intensity =
-          std::visit([&](const auto &a) { return a.intensity(1.0 - cosine); }, p.angular);
-      sum += wr * intensity * h / (d * d * d);
+      sum += wr * angle_intensity(p.angular, 1.0 - cosine) * h / (d * d * d);
     }
   }
   return sum * (two_pi / n) / (two_pi * total);

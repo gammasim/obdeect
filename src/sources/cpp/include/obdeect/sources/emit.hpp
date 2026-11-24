@@ -55,19 +55,34 @@ inline bool hits_disc(const Vec3 &origin, const Vec3 &direction, const DiscTarge
   return dot(offset, offset) <= disc.radius_m * disc.radius_m;
 }
 
-// A point with a disc target: the photons are the directions of the profile that reach the disc.
-// Each attempt draws a direction from the profile (attempt 0 uses the direction draws ud; later
-// attempts their own draws) and keeps it when it hits the disc, so every candidate is a hit with
-// weight 1 and the candidate count is the expected number of hits (expected_count).
+// A point with a disc target: the photons are the directions of the profile that reach the disc,
+// each with weight 1, so the candidate count is the expected number of hits (expected_count).
+// The directions are drawn in the smaller of two regions (disc_region): in the profile's cone
+// (from the profile; kept when they hit the disc), or in the cone enclosing the disc (uniform in
+// solid angle; kept when they hit the disc and u[2] < I / I_max, a rejection on the profile). Both
+// give the profile's distribution over the disc. Attempt 0 uses the direction draws ud; later
+// attempts their own draws.
 inline void sample_point_disc(const Point &e, const Basis &basis, const DiscTarget &disc,
                               const Uniforms &ud, std::uint64_t seed, std::uint32_t event,
                               std::uint32_t telescope, std::uint64_t index, Photon &p) {
+  const DiscRegion region = disc_region(e, disc);
+  const Basis cone_basis = region.disc_cone ? orthonormal_basis(region.axis) : basis;
+  const double maximum = intensity_maximum(e.angular);
   for (std::uint32_t attempt = 0; attempt < max_disc_attempts; ++attempt) {
     const Uniforms u = attempt == 0 ? ud
                                     : philox_draw_attempt(seed, event, telescope, index,
                                                           Stream::direction, attempt);
-    const Vec3 direction =
-        cone_direction_about(e.axis, basis, 1.0 - angle_quantile(e.angular, u[0]), two_pi * u[1]);
+    Vec3 direction;
+    if (region.disc_cone) {
+      direction =
+          cone_direction_about(region.axis, cone_basis, 1.0 - u[0] * region.u_cone, two_pi * u[1]);
+      const double cosine = std::clamp(dot(direction, e.axis), -1.0, 1.0);
+      if (!(u[2] * maximum < angle_intensity(e.angular, 1.0 - cosine)))
+        continue;
+    } else {
+      direction =
+          cone_direction_about(e.axis, basis, 1.0 - angle_quantile(e.angular, u[0]), two_pi * u[1]);
+    }
     if (hits_disc(e.position, direction, disc)) {
       p.direction = direction;
       return;

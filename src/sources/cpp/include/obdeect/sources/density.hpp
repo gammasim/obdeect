@@ -243,6 +243,7 @@ struct Isotropic {
   [[nodiscard]] double integral() const { return 2.0; }
   [[nodiscard]] double cdf(double u) const { return std::clamp(u / 2.0, 0.0, 1.0); }
   [[nodiscard]] double quantile(double p) const { return 2.0 * p; }
+  [[nodiscard]] double support() const { return 2.0; }
 };
 
 // All photons at exactly one angle: no density.
@@ -253,6 +254,7 @@ struct FixedAngle {
   [[nodiscard]] double integral() const { return 0.0; }
   [[nodiscard]] double cdf(double u) const { return u >= u0 ? 1.0 : 0.0; }
   [[nodiscard]] double quantile(double) const { return u0; }
+  [[nodiscard]] double support() const { return u0; }
 };
 
 struct FilledCone {
@@ -262,6 +264,7 @@ struct FilledCone {
   [[nodiscard]] double integral() const { return u0; }
   [[nodiscard]] double cdf(double u) const { return std::clamp(u / u0, 0.0, 1.0); }
   [[nodiscard]] double quantile(double p) const { return p * u0; }
+  [[nodiscard]] double support() const { return u0; }
 };
 
 // Intensity proportional to cos(theta) = 1 - u.
@@ -274,6 +277,7 @@ struct Lambertian {
     return 2.0 * v - v * v;
   }
   [[nodiscard]] double quantile(double p) const { return 1.0 - std::sqrt(1.0 - p); }
+  [[nodiscard]] double support() const { return 1.0; }
 };
 
 struct TabulatedAngular {
@@ -283,6 +287,7 @@ struct TabulatedAngular {
   [[nodiscard]] double integral() const { return density.integral(); }
   [[nodiscard]] double cdf(double u) const { return density.cdf(u) / density.integral(); }
   [[nodiscard]] double quantile(double p) const { return density.sample(p); }
+  [[nodiscard]] double support() const { return density.upper(); }
 };
 
 using Angular = std::variant<Isotropic, FixedAngle, FilledCone, Lambertian, TabulatedAngular>;
@@ -292,6 +297,13 @@ inline double intensity_maximum(const Angular &a) {
 }
 inline double integral(const Angular &a) {
   return std::visit([](const auto &x) { return x.integral(); }, a);
+}
+// Largest u = 1 - cos(theta) with intensity (the profile emits into u in [0, support]).
+inline double angle_support(const Angular &a) {
+  return std::visit([](const auto &x) { return x.support(); }, a);
+}
+inline double angle_intensity(const Angular &a, double u) {
+  return std::visit([u](const auto &x) { return x.intensity(u); }, a);
 }
 inline double angle_quantile(const Angular &a, double p) {
   return std::visit([p](const auto &x) { return x.quantile(p); }, a);

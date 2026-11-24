@@ -233,6 +233,47 @@ void disc_target_angular_profile() {
   }
 }
 
+// A narrow beam seen off the disc axis: the acceptance is integrated over the beam, not over a
+// fixed grid of the disc area that could miss its footprint (review of PR 83: the whole 1e-8 cone
+// reaches the radius-2 disc, but a disc-area grid gave 0 and the emission was empty).
+void disc_target_narrow_off_axis_beam() {
+  Source s = lamp_source(1000);
+  s.geometry = Point{{0.0, 0.0, 10.0}, normalised({0.1, 0.0, -1.0}), FilledCone{1e-8}};
+  s.target = DiscTarget{{0.0, 0.0, 0.0}, {0.0, 0.0, 1.0}, 2.0};
+  CHECK_NEAR(disc_fraction(std::get<Point>(s.geometry), std::get<DiscTarget>(s.target)), 1.0, 1e-9);
+  CHECK_NEAR(expected_count(s), 1000.0, 1e-6);
+  const auto c = emit_all(s, 3, 1000);
+  CHECK(c.rows() == 1000);
+  for (std::size_t i = 0; i < c.rows(); ++i)
+    CHECK(c[Column::w][i] == 1.0f);
+}
+
+// A broad profile and a small, distant disc: the directions are drawn in the cone enclosing the
+// disc (rejection on the profile), so a valid run needs few attempts per photon (review of PR 83:
+// drawing from the full Lambertian profile needed ~1e8 attempts per row and aborted). The disc is
+// off the axis (quadrature branch): F = cos^2(theta) R^2 / d^2 for a small disc facing up.
+void disc_target_small_distant_disc() {
+  const double h = 10000.0, x0 = 50.0, r = 1.0;
+  Source s = lamp_source(1.0);
+  s.geometry = Point{{0.0, 0.0, h}, {0.0, 0.0, -1.0}, Lambertian{}};
+  s.target = DiscTarget{{x0, 0.0, 0.0}, {0.0, 0.0, 1.0}, r};
+  const double d2 = h * h + x0 * x0, cos_theta = h / std::sqrt(d2);
+  const double expected = cos_theta * cos_theta * r * r / d2;
+  const double fraction =
+      disc_fraction(std::get<Point>(s.geometry), std::get<DiscTarget>(s.target));
+  CHECK(std::abs(fraction / expected - 1.0) < 1e-4);
+  s.photons = 1000.0 / fraction; // about 1e11 photons for 1000 rows
+  const auto c = emit_all(s, 1, static_cast<std::uint64_t>(std::llround(expected_count(s))));
+  CHECK(c.rows() >= 990);
+  // Every photon reaches the disc.
+  std::size_t outside = 0;
+  for (std::size_t i = 0; i < c.rows(); ++i) {
+    const Vec3 q = at_plane(c, i, 0.0);
+    outside += (q.x - x0) * (q.x - x0) + q.y * q.y > r * r * (1.0 + 1e-6) ? 1 : 0;
+  }
+  CHECK(outside == 0);
+}
+
 void chunks_and_determinism() {
   Source s = lamp_source(1e6);
   s.pulse = ComplexPulse{1.0, 0.5, 0.5, 2.0};
@@ -524,6 +565,8 @@ int main() {
     disc_fraction_closed_forms();
     disc_fraction_quadrature();
     disc_target_angular_profile();
+    disc_target_narrow_off_axis_beam();
+    disc_target_small_distant_disc();
     chunks_and_determinism();
     directions_and_angles();
     counts();

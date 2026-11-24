@@ -34,7 +34,8 @@ Root `docs/changes/` is the Towncrier input for all components.
 
 ## Design rules
 
-- Never modify the main `README.md`. Suggest changes instead, do not apply them.
+- Do not modify the main `README.md` unless the maintainers ask for it; otherwise suggest changes
+  instead of applying them.
 - Terminology: call a compiled telescope geometry and optical-response artifact an "optical model".
   In documentation, say "efficiency status", never "ledger"; say "photons in the sky frame", not
   "sky photons"; call the `--envelope` tables "efficiency bounds". Photon-stream files use `.pst`,
