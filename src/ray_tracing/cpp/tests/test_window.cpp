@@ -156,8 +156,11 @@ void json_window_round_trip() {
 } // namespace
 
 int main() {
-  flat_plate_shift_and_weight();
-  fresnel_at_sixty_degrees_and_total_reflection();
-  rim_and_concentric_sphere();
-  json_window_round_trip();
+  // run_checks reports CHECK failures in the exit status (and catches an escaping exception).
+  return run_checks([] {
+    flat_plate_shift_and_weight();
+    fresnel_at_sixty_degrees_and_total_reflection();
+    rim_and_concentric_sphere();
+    json_window_round_trip();
+  });
 }
