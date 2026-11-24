@@ -315,6 +315,8 @@ int obdeect_stream_reader_open_fd(int fd, obdeect_stream_reader **out) {
 void obdeect_stream_reader_close(obdeect_stream_reader *reader) {
   try {
     delete reader;
+    // No exception may cross the C API, and close has no status to report it in.
+    // NOLINTNEXTLINE(bugprone-empty-catch)
   } catch (...) {
   }
 }
@@ -701,6 +703,8 @@ int obdeect_stream_writer_close(obdeect_stream_writer *writer) {
   }
   try {
     delete writer;
+    // No exception may cross the C API; the result is already in code.
+    // NOLINTNEXTLINE(bugprone-empty-catch)
   } catch (...) {
   }
   return code;

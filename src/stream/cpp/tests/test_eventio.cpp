@@ -502,15 +502,10 @@ void read_errors_are_not_end_of_stream() {
   StdinBuffer broken{4096, -1};
   std::istream in(&broken);
   in.exceptions(std::ios::badbit);
-  bool typed = false;
-  try {
+  CHECK(throws_with<InputReadError>([&] {
     EventioReader reader{in};
     (void)reader.next(block);
-  } catch (const InputReadError &) {
-    typed = true;
-  } catch (...) {
-  }
-  CHECK(typed);
+  }));
 }
 
 // Sub-block views point into the container; their copies match subblocks().
