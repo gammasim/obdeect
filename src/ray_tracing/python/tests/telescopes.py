@@ -185,3 +185,31 @@ def write_simulation_models(
         )
         if rec.get("file"):
             (directory / rec["value"]).write_text(files[name])
+
+
+def window_records(**parameter_changes):
+    parameters = {
+        "shape": "sphere",
+        "radius_of_curvature_cm": 350.0,
+        "thickness_cm": 0.5,
+        "aperture_diameter_cm": 235.15,
+        "outer_diameter_cm": 250.34,
+        "flange_offset_cm": 2.0,
+    }
+    parameters.update(parameter_changes)
+    records, files = segmented(
+        camera_window_parameters=record("camera_window_parameters", parameters),
+        camera_window_refractive_index=record(
+            "camera_window_refractive_index", "window-index.ecsv", file=True
+        ),
+        camera_window_internal_transmittance=record(
+            "camera_window_internal_transmittance", "window-transmission.ecsv", file=True
+        ),
+    )
+    files["camera_window_refractive_index"] = (
+        "# %ECSV 1.0\n# ---\nwavelength refractive_index\n400 1.5\n700 1.48\n"
+    )
+    files["camera_window_internal_transmittance"] = (
+        "# %ECSV 1.0\n# ---\nwavelength transmittance\n400 0.91\n700 0.94\n"
+    )
+    return records, files

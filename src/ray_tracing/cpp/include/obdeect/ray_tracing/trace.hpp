@@ -295,10 +295,12 @@ struct TraceOptions {
   // through the outer surface, crosses the glass and refracts out at the inner surface.
   // Returns the terminal outcome when the photon is lost in the window. Otherwise it returns
   // nullopt with `ray` set to the emerged direction (or, outside the footprint, unchanged).
-  const auto through_window = [&]() -> std::optional<TraceResult> {
+  // `t_max` is the distance to the focal surface on the current ray: a window hit beyond it
+  // (e.g. the far side of the sphere for a photon between window and focal surface) is ignored.
+  const auto through_window = [&](double t_max) -> std::optional<TraceResult> {
     const Window &window = *model.camera_window;
     const auto outer = intersect_window_surface(window, ray, false, kMinDistanceM);
-    if (!outer)
+    if (!outer || !(outer->t < t_max))
       return std::nullopt;
     const double radius = std::hypot(outer->point.x, outer->point.y);
     // Outside the modeled window footprint, the path remains in air.
@@ -522,7 +524,7 @@ struct TraceOptions {
         // The window lies between the last mirror and the focal surface. The focal surface
         // is then met again on the photon's refracted ray (the nearest obscurer before the
         // window was already taken above).
-        if (auto lost = through_window())
+        if (auto lost = through_window(focal->t))
           return *lost;
         focal = focal_hit();
         if (failed)

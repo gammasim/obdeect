@@ -7,7 +7,7 @@ import pytest
 from obdeect.ray_tracing.compiler import compile_model, convex_hull, response_grid
 from obdeect.ray_tracing.formats import ModelError
 from obdeect.ray_tracing.hashing import model_hash
-from telescopes import STRUCTURE, dual, record, segmented
+from telescopes import STRUCTURE, dual, record, segmented, window_records
 
 
 def build(records_files, **options):
@@ -36,36 +36,8 @@ def test_segmented_telescope_without_mirror_offset_has_no_offset():
     assert optics["focal_surface"]["plane_z_m"] == pytest.approx(8.0)
 
 
-def window_records(**parameter_changes):
-    parameters = {
-        "shape": "sphere",
-        "radius_of_curvature_cm": 350.0,
-        "thickness_cm": 0.5,
-        "aperture_diameter_cm": 235.15,
-        "outer_diameter_cm": 250.34,
-        "flange_offset_cm": 2.0,
-    }
-    parameters.update(parameter_changes)
-    records, files = segmented(
-        camera_window_parameters=record("camera_window_parameters", parameters),
-        camera_window_refractive_index=record(
-            "camera_window_refractive_index", "window-index.ecsv", file=True
-        ),
-        camera_window_internal_transmittance=record(
-            "camera_window_internal_transmittance", "window-transmission.ecsv", file=True
-        ),
-    )
-    files["camera_window_refractive_index"] = (
-        "# %ECSV 1.0\n# ---\nwavelength refractive_index\n400 1.5\n700 1.48\n"
-    )
-    files["camera_window_internal_transmittance"] = (
-        "# %ECSV 1.0\n# ---\nwavelength transmittance\n400 0.91\n700 0.94\n"
-    )
-    return records, files
-
-
 def test_camera_window_compilation_and_surface_id():
-    model = build(window_records())
+    model = build(window_records(), camera_window="sphere")
     optics = model["optics"]
     window = optics["camera_window"]
     focal_z = optics["focal_surface"]["plane_z_m"]
@@ -85,7 +57,7 @@ def test_camera_window_compilation_and_surface_id():
 
 
 def test_flat_camera_window_has_zero_sag_and_no_curvature_key():
-    model = build(window_records(shape="flat", radius_of_curvature_cm=None))
+    model = build(window_records(shape="flat", radius_of_curvature_cm=None), camera_window="sphere")
     window = model["optics"]["camera_window"]
     assert window["shape"] == "flat"
     assert window["outer_apex_z_m"] == pytest.approx(
@@ -106,7 +78,7 @@ def test_flat_camera_window_has_zero_sag_and_no_curvature_key():
 )
 def test_camera_window_invalid_geometry_is_rejected(changes, message):
     with pytest.raises(ModelError, match=message):
-        build(window_records(**changes))
+        build(window_records(**changes), camera_window="sphere")
 
 
 @pytest.mark.parametrize(
@@ -118,7 +90,76 @@ def test_camera_window_requires_response_tables(missing):
     records.pop(missing)
     files.pop(missing)
     with pytest.raises(ModelError, match=f"requires {missing} table"):
+        build((records, files), camera_window="sphere")
+
+
+def test_camera_window_is_rejected_for_dual_mirror_telescopes():
+    window, files = window_records()
+    window_changes = {name: window[name] for name in window if name.startswith("camera_window")}
+    records, _ = dual(**window_changes)
+    with pytest.raises(ModelError, match="single-mirror"):
+        build((records, files), zenith_deg=20.0, camera_window="sphere")
+
+
+def test_camera_window_tables_need_window_parameters():
+    records, files = window_records()
+    records.pop("camera_window_parameters")
+    with pytest.raises(ModelError, match="without camera_window_parameters"):
         build((records, files))
+
+
+def test_dual_mirror_window_in_flat_mode_compiles_without_tracing_it():
+    window, files = window_records()
+    window_changes = {name: window[name] for name in window if name.startswith("camera_window")}
+    records, _ = dual(**window_changes)
+    model = build((records, files), zenith_deg=20.0, camera_window="flat")
+    assert "camera_window" not in model["optics"]
+    assert model["provenance"]["camera_window"] == "flat"
+
+
+def test_camera_window_records_need_an_explicit_treatment():
+    with pytest.raises(ModelError, match="choose its treatment"):
+        build(window_records())
+    with pytest.raises(ModelError, match="must be one of"):
+        build(window_records(), camera_window="curved")
+
+
+def test_flat_window_approximation_does_not_trace_the_window():
+    records, files = window_records()
+    records["camera_filter"] = record("camera_filter", "some_filter.ecsv", file=True)
+    model = build((records, files), camera_window="flat")
+    assert "camera_window" not in model["optics"]
+    assert model["provenance"]["camera_window"] == "flat"
+    # The window records are reported (their versions in the provenance), never dropped silently.
+    assert "camera_window_parameters" in model["provenance"]["parameters"]
+    assert any("flat-window approximation" in note for note in model["notes"])
+    # Same optics as the model without the window records.
+    bare = build(segmented())
+    assert model["optics"] == bare["optics"]
+
+
+def test_sphere_mode_needs_window_records():
+    with pytest.raises(ModelError, match="needs camera_window_parameters"):
+        build(segmented(), camera_window="sphere")
+    # Flat mode without a window is the plain model (same hash).
+    assert build(segmented(), camera_window="flat")["sha256"] == build(segmented())["sha256"]
+
+
+@pytest.mark.parametrize("value", ["some_filter.ecsv", "camera_filter-1.0.0.ecsv"])
+def test_traced_window_with_camera_filter_is_an_error(value):
+    records, files = window_records()
+    records["camera_filter"] = record("camera_filter", value, file=True)
+    with pytest.raises(ModelError, match="counted twice"):
+        build((records, files), camera_window="sphere")
+
+
+@pytest.mark.parametrize("value", ["none", "None", ""])
+def test_traced_window_with_camera_filter_none_compiles(value):
+    records, files = window_records()
+    records["camera_filter"] = record("camera_filter", value, file=True)
+    model = build((records, files), camera_window="sphere")
+    assert "camera_window" in model["optics"]
+    assert model["provenance"]["camera_window"] == "sphere"
 
 
 def test_no_camera_window_preserves_model_hash():

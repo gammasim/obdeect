@@ -290,6 +290,7 @@ struct StreamModel {
   Value document;
   std::string sha256;
   bool has_structure{};
+  bool has_camera_window{};                   // optics.camera_window: the window is traced
   std::optional<double> transmission_on_axis; // optics.telescope_transmission.on_axis
 
   [[nodiscard]] const Value &optics() const { return at(document, "optics"); }
@@ -404,6 +405,7 @@ enclosure_distances(const StreamModel &model) {
   out->sha256 = std::get<std::string>(sha->data);
   out->model = load_model(text);
   out->has_structure = truthy(&at(at(out->document, "provenance"), "structure"));
+  out->has_camera_window = out->model.camera_window.has_value();
   if (const Value *transmission = out->optics().find("telescope_transmission");
       transmission != nullptr && transmission->kind() != Value::Kind::null)
     out->transmission_on_axis = number(at(*transmission, "on_axis"));
@@ -662,9 +664,13 @@ struct Optics {
   [[nodiscard]] bool normalise() const { return part == TransmissionPart::angular; }
 
   [[nodiscard]] std::vector<std::string> own_factors() const {
+    std::vector<std::string> factors{"mirror_reflectivity"};
     if (model->has_structure || model->transmission_on_axis)
-      return {"mirror_reflectivity", "telescope_transmission"};
-    return {"mirror_reflectivity"};
+      factors.emplace_back("telescope_transmission");
+    // A traced camera window (Fresnel and bulk loss); sim_telarray never applies it.
+    if (model->has_camera_window)
+      factors.emplace_back("camera_window");
+    return factors;
   }
 };
 

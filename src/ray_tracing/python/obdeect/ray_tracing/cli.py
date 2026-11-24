@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 from obdeect.ray_tracing import __version__
 from obdeect.ray_tracing.errors import ModelError
+from obdeect.ray_tracing.importers.simulation_models import CAMERA_WINDOW_MODES
 from obdeect.ray_tracing.model import STATUS_NAMES, OpticalModel
 from obdeect.ray_tracing.psf import summary
 from obdeect.stream.cli import Command, Group
@@ -42,6 +43,7 @@ def _compile(args: argparse.Namespace) -> None:
         configuration_seed=args.seed,
         zenith_deg=args.zenith_deg,
         propagation_group_index=args.propagation_group_index,
+        camera_window=args.camera_window,
     )
     model.save(args.output)
     print(
@@ -148,6 +150,13 @@ def main(argv: list[str] | None = None, prog: str = "obdeect ray-tracing") -> in
         type=float,
         help="group index of air at the telescope (default: the site's, from its atmosphere; "
         "required for a telescope without a site)",
+    )
+    c.add_argument(
+        "--camera-window",
+        choices=CAMERA_WINDOW_MODES,
+        help="treatment of a camera window in the model (required if it has one): 'flat', the "
+        "flat-window approximation (not traced; camera_filter holds the window transmission), "
+        "or 'sphere' (the window is traced; camera_filter must be 'none')",
     )
     c.add_argument("--output", type=Path, required=True)
     c.set_defaults(run=_compile)

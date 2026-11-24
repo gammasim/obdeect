@@ -116,6 +116,104 @@ void rim_and_concentric_sphere() {
   CHECK_NEAR(radial.direction.z, 1.0, 1e-12);
 }
 
+// LST-like camera window: spherical outer surface (R = 3.5 m, 5 mm glass, n = 1.5, tau = 1),
+// focal plane at z = 28 m, 20 mm flange between the window apex and the focal plane.
+OpticalModel lst_like_model() {
+  constexpr double radius = 3.5;
+  constexpr double aperture = 1.17575;
+  constexpr double focal_z = 28.0;
+  constexpr double flange = 0.02;
+  const double sag = radius - std::sqrt(radius * radius - aperture * aperture);
+  auto model = direct_model(focal_z - flange - sag, 0.005, 1.5, 1.0);
+  model.focal_surface = {1, focal_z, std::nullopt};
+  Window &window = *model.camera_window;
+  window.shape = Window::Shape::sphere;
+  window.radius_of_curvature = radius;
+  window.aperture_radius = aperture;
+  window.outer_radius = 1.2517;
+  return model;
+}
+
+// A photon between the window and the focal plane is inside the outer sphere. Its first
+// window root is behind it (the far side of the sphere), so it must not be refracted there.
+void photon_behind_window_is_not_refracted() {
+  const auto model = lst_like_model();
+  const auto behind = trace_photon(model, {{0.1, 0.0, 27.95}, {0.0, 0.0, 1.0}}, 400.0, 0.0, 1.0, 0,
+                                   1, {.apply_responses = true, .direct = true});
+  CHECK(behind.status == Status::detected);
+  CHECK_NEAR(behind.position.z, 28.0, 1e-12);
+  CHECK_NEAR(behind.position.x, 0.1, 1e-12);
+  CHECK_NEAR(behind.weight, 1.0, 1e-12);
+
+  // The same direction from in front of the window does cross it (refraction lowers the weight).
+  const auto front = trace_photon(model, {{0.1, 0.0, 27.0}, {0.0, 0.0, 1.0}}, 400.0, 0.0, 1.0, 0, 1,
+                                  {.apply_responses = true, .direct = true});
+  CHECK(front.status == Status::detected);
+  CHECK(front.weight < 1.0);
+}
+
+// Flat plate: a parallel plate keeps the direction and shifts the axial crossing of the
+// focus by dz = t * (1 - cos(theta) / sqrt(n^2 - sin^2(theta))).
+void flat_plate_focus_shift() {
+  constexpr double n = 1.5;
+  constexpr double thickness = 0.005;
+  auto model = direct_model(0.0, thickness, n, 1.0);
+  model.camera_window->aperture_radius = 10.0;
+  model.camera_window->outer_radius = 11.0;
+  const auto shift_at = [&model](double theta) {
+    const double s = std::sin(theta);
+    const double c = std::cos(theta);
+    const Ray ray{{-2.0 * std::tan(theta), 0.0, -1.0}, {s, 0.0, c}};
+    const auto result =
+        trace_photon(model, ray, 400.0, 0.0, 1.0, 0, 1, {.apply_responses = true, .direct = true});
+    CHECK(result.status == Status::detected);
+    // Without the plate the ray would reach x = 0 on the focal plane (z = 1 m).
+    return -result.position.x / std::tan(theta);
+  };
+  for (const double theta : {0.05, 0.2, 0.35}) {
+    const double s = std::sin(theta);
+    const double c = std::cos(theta);
+    CHECK_NEAR(shift_at(theta), thickness * (1.0 - c / std::sqrt(n * n - s * s)), 1e-12);
+  }
+  CHECK_NEAR(shift_at(1e-4), thickness * (1.0 - 1.0 / n), 1e-9);
+}
+
+// Rays aimed at the focal point through the LST-like shell. Reference arrival x on the focal
+// plane (m) from an independent numpy vector ray trace (sphere intersections and vector Snell,
+// written separately from this code, 2026-11-24).
+void curved_shell_focus_shift_lst_geometry() {
+  const auto model = lst_like_model();
+  constexpr double reference[][2] = {
+      {0.05, -0.07327860303215673e-3},
+      {0.2, -0.30159248778743875e-3},
+      {0.35, -0.5619972912839222e-3},
+  };
+  for (const auto &[theta, expected_x] : reference) {
+    const Ray ray{{-std::tan(theta), 0.0, 27.0}, {std::sin(theta), 0.0, std::cos(theta)}};
+    const auto result =
+        trace_photon(model, ray, 400.0, 0.0, 1.0, 0, 1, {.apply_responses = true, .direct = true});
+    CHECK(result.status == Status::detected);
+    CHECK_NEAR(result.position.z, 28.0, 1e-12);
+    CHECK_NEAR(result.position.x, expected_x, 1e-12);
+  }
+
+  // A ray aimed at the common centre of curvature meets both surfaces at normal incidence.
+  const double sag = 3.5 - std::sqrt(3.5 * 3.5 - 1.17575 * 1.17575);
+  const double centre_z = 28.0 - 0.02 - sag + 3.5;
+  const Vec3 origin{0.5, 0.0, 27.0};
+  const Vec3 toward{0.0 - origin.x, 0.0, centre_z - origin.z};
+  const double length = std::sqrt(dot(toward, toward));
+  const Vec3 direction{toward.x / length, 0.0, toward.z / length};
+  const auto radial = trace_photon(model, {origin, direction}, 400.0, 0.0, 1.0, 0, 1,
+                                   {.apply_responses = true, .direct = true});
+  const double n = 1.5;
+  const double t0 = 1.0 - std::pow((n - 1.0) / (n + 1.0), 2);
+  CHECK(radial.status == Status::detected);
+  CHECK_NEAR(radial.direction.x, direction.x, 1e-12);
+  CHECK_NEAR(radial.direction.z, direction.z, 1e-12);
+  CHECK_NEAR(radial.weight, t0 * t0, 1e-12);
+}
+
 // The document with its sha256 entry set to the hash of its content (load_model checks it).
 std::string signed_document(std::string text) {
   const std::string placeholder = "\"sha256\":\"ignored\"";
@@ -161,6 +259,9 @@ int main() {
     flat_plate_shift_and_weight();
     fresnel_at_sixty_degrees_and_total_reflection();
     rim_and_concentric_sphere();
+    photon_behind_window_is_not_refracted();
+    flat_plate_focus_shift();
+    curved_shell_focus_shift_lst_geometry();
     json_window_round_trip();
   });
 }

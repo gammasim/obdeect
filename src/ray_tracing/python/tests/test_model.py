@@ -14,7 +14,14 @@ from obdeect.ray_tracing.hashing import model_hash
 from obdeect.ray_tracing.model import DETECTED, STATUS_NAMES
 from obdeect.ray_tracing.psf import containment, summary
 from obdeect.ray_tracing.repository import read_telescope
-from telescopes import STRUCTURE, dual, record, segmented, write_simulation_models
+from telescopes import (
+    STRUCTURE,
+    dual,
+    record,
+    segmented,
+    window_records,
+    write_simulation_models,
+)
 
 
 def test_cli_version(capsys):
@@ -56,7 +63,7 @@ def test_repository_compile_command(tmp_path, capsys):
     assert compiled.document["optics"]["primary"]["vertex_z_m"] == 0.5
 
 
-def model_of(records_files, *, seed=1, zenith_deg=None):
+def model_of(records_files, *, seed=1, zenith_deg=None, camera_window=None):
     records, files = records_files
     return OpticalModel.from_records(
         records,
@@ -64,6 +71,7 @@ def model_of(records_files, *, seed=1, zenith_deg=None):
         configuration_seed=seed,
         zenith_deg=zenith_deg,
         propagation_group_index=1.0,
+        camera_window=camera_window,
     )
 
 
@@ -167,6 +175,69 @@ def test_on_axis_star():
     # Optical responses: the telescope transmission is 0.9 on axis.
     weighted = model.trace(photons, seed=4)
     assert weighted["weight"][detected] == pytest.approx(0.9)
+
+
+def _unpolarised_transmission(cos_in, n_in, n_out):
+    """Fresnel transmission of unpolarised light through one interface (no absorption)."""
+    sin_t = n_in / n_out * math.sqrt(max(0.0, 1.0 - cos_in * cos_in))
+    cos_t = math.sqrt(1.0 - sin_t * sin_t)
+    rs = (n_in * cos_in - n_out * cos_t) / (n_in * cos_in + n_out * cos_t)
+    rp = (n_out * cos_in - n_in * cos_t) / (n_out * cos_in + n_in * cos_t)
+    return 1.0 - 0.5 * (rs * rs + rp * rp)
+
+
+def test_camera_window_weights_and_geometry_through_the_mirrors():
+    bare = model_of(segmented())
+    windowed = model_of(window_records(), camera_window="sphere")
+    photons = bare.star_photons(200000, seed=6)
+    wavelengths = np.unique(photons["wavelength_nm"])
+    assert wavelengths.size == 1  # One wavelength: the window tables are evaluated there.
+    wavelength = float(wavelengths[0])
+    without = bare.trace(photons, seed=6, apply_responses=True)
+    with_window = windowed.trace(photons, seed=6, apply_responses=True)
+    detected = without["status"] == DETECTED
+
+    # Same photons detected: the window removes none here (no rim losses, no blocking).
+    assert not np.any(with_window["status"] == STATUS_NAMES.index("blocked_camera_window"))
+    assert np.array_equal(with_window["status"], without["status"])
+    assert np.count_nonzero(detected) > 10000  # Enough photons for the checks below.
+
+    # Window tables are linear between 400 nm and 700 nm (see window_records).
+    n = float(np.interp(wavelength, [400.0, 700.0], [1.5, 1.48]))
+    tau = float(np.interp(wavelength, [400.0, 700.0], [0.91, 0.94]))
+    # Normal incidence: two Fresnel interfaces and one thickness of glass. Oblique incidence
+    # lowers both the Fresnel transmission and tau**(path / thickness), so this is an upper bound.
+    upper = (1.0 - ((n - 1.0) / (n + 1.0)) ** 2) ** 2 * tau
+    # Lower bound at the largest incidence angle on the window. Rays from the mirror discs
+    # (centres within 1.25 m, radius 0.5 m) reach the window (aperture radius 1.18 m) at a
+    # distance of about 7 m, so their angle to the axis is below atan(2.93 / 7) = 23 deg; the
+    # window normal tilts by at most asin(1.18 / 3.5) = 20 deg. 45 deg is a generous limit.
+    theta = math.radians(45.0)
+    cos_out = math.cos(theta)
+    sin_glass = math.sin(theta) / n
+    cos_glass = math.sqrt(1.0 - sin_glass * sin_glass)
+    # Shell path inside the glass is thickness / cos(theta_glass), curvature adds ~0.2 %.
+    lower = (
+        _unpolarised_transmission(cos_out, 1.0, n)
+        * _unpolarised_transmission(cos_glass, n, 1.0)
+        * tau ** (1.01 / cos_glass)
+    )
+    ratio = with_window["weight"][detected] / without["weight"][detected]
+    assert np.all(ratio <= upper * (1 + 1e-9))
+    assert np.all(ratio >= lower)
+    assert ratio.max() == pytest.approx(upper, rel=2e-3)
+
+    # The image stays on the axis, on the focal plane.
+    result = summary(with_window, windowed.sampling_area_m2)
+    assert abs(result["centroid_x_m"]) < 1e-4 and abs(result["centroid_y_m"]) < 1e-4
+    assert np.allclose(with_window["position_m"][detected, 2], windowed.focal_surface_z_m)
+
+    # Thread count does not change the result.
+    one = windowed.trace(photons, seed=6, threads=1)
+    four = windowed.trace(photons, seed=6, threads=4)
+    for name in one:
+        assert np.array_equal(one[name], four[name], equal_nan=True), name
+    assert np.array_equal(one["weight"], with_window["weight"], equal_nan=True)
 
 
 def test_results_do_not_depend_on_threads_or_order():

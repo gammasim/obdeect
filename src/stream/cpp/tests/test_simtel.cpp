@@ -1277,6 +1277,20 @@ void test_efficiency_status_rules() {
         efficiency_status_run(Frame::ground, {efficiency_status_of(constant, "pending")}, {}), {});
   }));
 
+  // A traced camera window: sim_telarray has no traced window, so it must be applied upstream.
+  CHECK(!throws_error([&] {
+    run_adapter(
+        efficiency_status_run(Frame::camera,
+                              {efficiency_status_of("camera_window", "applied"), atmosphere}, {}),
+        camera);
+  }));
+  CHECK(throws_error([&] {
+    run_adapter(
+        efficiency_status_run(Frame::camera,
+                              {efficiency_status_of("camera_window", "pending"), atmosphere}, {}),
+        camera);
+  }));
+
   // sim_telarray applies the camera efficiencies in camera frame: pending is accepted.
   CHECK(!throws_error([&] {
     run_adapter(efficiency_status_run(Frame::camera,

@@ -88,7 +88,19 @@ class _Parameters:
 
 
 # Keys the compiler writes to the provenance block; the caller's provenance must not use them.
-PROVENANCE_KEYS = ("configuration_seed", "zenith_deg", "structure", "parameters", "files_sha256")
+PROVENANCE_KEYS = (
+    "configuration_seed",
+    "zenith_deg",
+    "structure",
+    "parameters",
+    "files_sha256",
+    "camera_window",
+)
+# How a camera window given by its records is treated: "flat" does not trace it (the flat-window
+# approximation: camera_filter, measured at normal incidence, holds the window transmission
+# downstream); "sphere" traces it (refraction, Fresnel and bulk loss) and requires camera_filter
+# to be "none". There is no default: a model with window records must choose.
+CAMERA_WINDOW_MODES = ("flat", "sphere")
 
 
 def compile_model(
@@ -99,6 +111,7 @@ def compile_model(
     propagation_group_index: float,
     zenith_deg: float | None = None,
     provenance: dict[str, Any] | None = None,
+    camera_window: str | None = None,
 ) -> dict[str, Any]:
     """Return the optical model as a JSON-serialisable dictionary.
 
@@ -120,6 +133,10 @@ def compile_model(
     provenance
         Identity of the model (name, version, site), stored unchanged. Its keys must not be
         one of PROVENANCE_KEYS, which the compiler writes.
+    camera_window
+        Treatment of a camera window given by its records (see CAMERA_WINDOW_MODES): "flat"
+        (not traced; camera_filter applies) or "sphere" (traced; camera_filter must be "none").
+        Required when the records contain a camera window, which is recorded in the provenance.
     """
     if isinstance(configuration_seed, bool) or not isinstance(configuration_seed, int):
         raise ModelError("configuration seed must be an integer")
@@ -131,8 +148,16 @@ def compile_model(
     p = _Parameters(records, read_file)
     notes: list[str] = []
     mirror_class = p.require("mirror_class")
+    window_present = _check_camera_window_records(p, mirror_class, camera_window)
+    trace_window = window_present and camera_window == "sphere"
+    if window_present and not trace_window:
+        p.used.update(name for name in CAMERA_WINDOW_NAMES if name in p)
+        notes.append(
+            "camera window not traced (camera_window 'flat', the flat-window approximation): "
+            "camera_filter holds its transmission"
+        )
     if mirror_class == 0:
-        optics = _segmented_telescope(p, configuration_seed, zenith_deg)
+        optics = _segmented_telescope(p, configuration_seed, zenith_deg, trace_window=trace_window)
     elif mirror_class == 2:
         optics = _dual_mirror_telescope(p, zenith_deg)
     else:
@@ -175,6 +200,7 @@ def compile_model(
             "structure": bool(structure),
             "parameters": {name: records[name].get("parameter_version") for name in sorted(p.used)},
             "files_sha256": dict(sorted(p.files.items())),
+            **({"camera_window": camera_window} if window_present else {}),
         },
         "notes": notes,
         "optics": optics,
@@ -282,7 +308,9 @@ def _surface_ids(optics: dict[str, Any]) -> list[int]:
 # --- Segmented single-mirror telescopes ---
 
 
-def _segmented_telescope(p: _Parameters, seed: int, zenith_deg: float | None) -> dict[str, Any]:
+def _segmented_telescope(
+    p: _Parameters, seed: int, zenith_deg: float | None, *, trace_window: bool
+) -> dict[str, Any]:
     focal_length = length_m(p.record("focal_length"), "focal_length")
     overall_offset = (
         signed_length_m(p.record("mirror_offset"), "mirror_offset") if "mirror_offset" in p else 0.0
@@ -323,11 +351,15 @@ def _segmented_telescope(p: _Parameters, seed: int, zenith_deg: float | None) ->
             primary["degradation"] = read_spatial_map(contents, filename, filename_options=options)
     focus = _focus_offset(p, zenith_deg)
     focal_plane_z = focal_length + focus - overall_offset
-    camera_window = _camera_window(
-        p,
-        surface_id=len(facets) + 1,
-        focal_plane_z_m=focal_plane_z,
-        highest_primary_z_m=max(f["centre_m"][2] for f in facets),
+    camera_window = (
+        _camera_window(
+            p,
+            surface_id=len(facets) + 1,
+            focal_plane_z_m=focal_plane_z,
+            highest_primary_z_m=max(f["centre_m"][2] for f in facets),
+        )
+        if trace_window
+        else None
     )
     obscurers = _camera_body(p, focal_length - overall_offset, after_primary=False)
     optics = {
@@ -340,6 +372,56 @@ def _segmented_telescope(p: _Parameters, seed: int, zenith_deg: float | None) ->
     if camera_window is not None:
         optics["camera_window"] = camera_window
     return optics
+
+
+CAMERA_WINDOW_NAMES = (
+    "camera_window_parameters",
+    "camera_window_refractive_index",
+    "camera_window_internal_transmittance",
+)
+
+
+def _check_camera_window_records(
+    p: _Parameters, mirror_class: int, camera_window: str | None
+) -> bool:
+    """Check the camera-window records against the chosen treatment; True if a window is given.
+
+    Window records are never ignored silently: they need an explicit treatment, and a traced
+    window must not be counted twice through camera_filter.
+    """
+    if camera_window is not None and camera_window not in CAMERA_WINDOW_MODES:
+        raise ModelError(
+            f"camera_window must be one of {', '.join(CAMERA_WINDOW_MODES)}, not {camera_window!r}"
+        )
+    tables = [name for name in CAMERA_WINDOW_NAMES[1:] if name in p]
+    if tables and "camera_window_parameters" not in p:
+        raise ModelError(
+            f"{', '.join(tables)} without camera_window_parameters (no window geometry)"
+        )
+    present = "camera_window_parameters" in p
+    if not present:
+        if camera_window == "sphere":
+            raise ModelError("camera_window 'sphere' needs camera_window_parameters")
+        return False
+    if camera_window is None:
+        raise ModelError(
+            "the model has a camera window (camera_window_parameters): choose its treatment, "
+            "camera_window 'flat' (not traced; camera_filter applies) or 'sphere' (traced)"
+        )
+    if camera_window == "sphere":
+        if mirror_class == 2:
+            raise ModelError(
+                "camera_window 'sphere': a traced camera window is supported for single-mirror "
+                "(segmented) telescopes only"
+            )
+        filter_value = p.value("camera_filter")
+        if isinstance(filter_value, str) and filter_value.strip().lower() not in ("", "none"):
+            raise ModelError(
+                f"camera_window 'sphere' traces the window, but camera_filter is {filter_value!r}: "
+                "the window transmission would be counted twice (set camera_filter to 'none', "
+                "or use camera_window 'flat')"
+            )
+    return True
 
 
 def _camera_window(
@@ -1291,6 +1373,7 @@ def compile_telescope(
     configuration_seed: int,
     zenith_deg: float | None = None,
     propagation_group_index: float | None = None,
+    camera_window: str | None = None,
 ) -> dict[str, Any]:
     """Compile a telescope model of a simulation-models checkout into an optical model document.
 
@@ -1309,4 +1392,5 @@ def compile_telescope(
         zenith_deg=zenith_deg,
         propagation_group_index=propagation_group_index,
         provenance=telescope.provenance,
+        camera_window=camera_window,
     )
