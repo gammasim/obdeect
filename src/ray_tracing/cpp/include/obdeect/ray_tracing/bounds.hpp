@@ -83,6 +83,8 @@ public:
       bound *= detail::response_bound(*model_.secondary, wavelength_nm, secondary_degradation_);
     if (const auto &t = model_.telescope_transmission)
       bound *= t->on_axis;
+    if (model_.camera_window)
+      bound *= detail::response_bound(model_.camera_window->internal_transmittance, wavelength_nm);
     return bound * (1.0 + 1e-12);
   }
 

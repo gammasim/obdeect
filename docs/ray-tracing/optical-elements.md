@@ -25,10 +25,29 @@ design positions.
 
 ## Refracting elements
 
-Refracting elements, such as lenses and camera windows, are not traced. The optical path
-ends at the camera entrance; camera-window transmission belongs to the downstream camera
-simulation. Refraction in air is omitted. The model's `propagation_group_index` sets
-photon flight times; it does not bend rays. See [Scope and limitations](limitations.md).
+An optional camera window can be traced as a flat plate or spherical shell. The tracer
+refracts rays at both surfaces with Snell's law, applies Fresnel transmission at each
+surface, and counts reflected photons as lost. Bulk transmittance is
+`tau(lambda)^(L/t)`, where `L` is the path through the window and `t` its thickness;
+flight time through the window uses its refractive index. The rim and flange absorb
+photons, recorded with `blocked_camera_window`; total internal reflection has the
+`camera_window_total_reflection` status.
+
+Configure the window with `camera_window_parameters`,
+`camera_window_refractive_index` and `camera_window_internal_transmittance`. A model with
+these records must state how the window is treated; there is no default. Choose with
+`obdeect ray-tracing compile --camera-window` (`camera_window` in `OpticalModel.from_records`
+and `from_simulation_models`):
+
+- `flat`: the flat-window approximation. The window is not traced; `camera_filter`, measured
+  at normal incidence, holds its transmission downstream. The compiler records the choice in
+  the provenance and a note.
+- `sphere`: the window is traced from its records. `camera_filter` must then be `none`,
+  otherwise compiling fails, because the window transmission would be counted twice. A traced
+  window is supported for single-mirror (segmented) telescopes only.
+
+Refraction in air is omitted. The model's `propagation_group_index` sets photon flight times
+outside the window; it does not bend rays. See [Scope and limitations](limitations.md).
 
 ## Obscuring elements
 

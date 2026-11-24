@@ -64,6 +64,7 @@ class OpticalModel:
         propagation_group_index: float | None = None,
         zenith_deg: float | None = None,
         provenance: dict[str, Any] | None = None,
+        camera_window: str | None = None,
     ) -> OpticalModel:
         """Compile structured simulation-model parameter records into an optical model.
 
@@ -88,6 +89,7 @@ class OpticalModel:
             zenith_deg=zenith_deg,
             propagation_group_index=propagation_group_index,
             provenance=provenance,
+            camera_window=camera_window,
         )
         return cls(document)
 
@@ -101,6 +103,7 @@ class OpticalModel:
         configuration_seed: int,
         zenith_deg: float | None = None,
         propagation_group_index: float | None = None,
+        camera_window: str | None = None,
     ) -> OpticalModel:
         """Compile an optical model from a simulation-models checkout (see `compile_telescope`)."""
         return cls(
@@ -111,6 +114,7 @@ class OpticalModel:
                 configuration_seed=configuration_seed,
                 zenith_deg=zenith_deg,
                 propagation_group_index=propagation_group_index,
+                camera_window=camera_window,
             )
         )
 

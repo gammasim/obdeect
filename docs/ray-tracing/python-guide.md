@@ -20,7 +20,7 @@ random numbers depend only on the seed and its id). It returns, per photon:
 
 | Array | Meaning |
 | --- | --- |
-| `status` | index into `STATUS_NAMES`: detected, missed_primary, missed_secondary, missed_focal_surface, blocked, invalid_input, numerical_failure, non_sequential (no longer produced), direct_focal (a plane focal surface from its receiving side before the last mirror), bounce_limit (16 reflections); see [Optical models](optical-models.md#reflecting-sides-and-photons-from-below) |
+| `status` | index into `STATUS_NAMES`: detected, missed_primary, missed_secondary, missed_focal_surface, blocked, invalid_input, numerical_failure, non_sequential (no longer produced), direct_focal (a plane focal surface from its receiving side before the last mirror), bounce_limit (16 reflections), blocked_camera_window (lost at the camera window rim), camera_window_total_reflection (total internal reflection at the camera window); see [Optical models](optical-models.md#reflecting-sides-and-photons-from-below) |
 | `terminal_surface` | id of the surface the photon ended on (focal surface, obscurer, mirror) |
 | `position_m`, `direction` | at the focal surface, or where the photon was lost |
 | `path_length_m`, `time_ns` | geometric path; time with the model's group index |

@@ -81,8 +81,8 @@ Random numbers: [](../stream/random-numbers.md).
 
 ## Efficiency status
 
-The optical model applies `mirror_reflectivity` and, when present, `telescope_transmission` (or
-structure shadowing). Their states are carried in `efficiency_status` records. The stage reads
+The optical model applies `mirror_reflectivity`, when present `telescope_transmission` (or
+structure shadowing), and `camera_window` when it traces a camera window. Their states are carried in `efficiency_status` records. The stage reads
 each factor's state from the run level or the telescope level; the telescope level overrides the
 run level.
 

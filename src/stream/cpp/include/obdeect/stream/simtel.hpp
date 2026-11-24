@@ -488,8 +488,8 @@ inline bool sim_telarray_applies(const std::string &factor, bool camera_frame) {
 // unknown.
 inline bool known_factor(const std::string &factor) {
   return sim_telarray_applies(factor, false) || factor == "atmosphere" ||
-         factor == "telescope_transmission_constant" || factor == "wavelength" ||
-         factor == "scattering";
+         factor == "telescope_transmission_constant" || factor == "camera_window" ||
+         factor == "wavelength" || factor == "scattering";
 }
 
 // Factor -> state of one efficiency status record.

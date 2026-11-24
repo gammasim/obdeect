@@ -19,7 +19,7 @@ from obdeect.ray_tracing.importers.sim_telarray import (
     read_segmentation,
 )
 from obdeect.ray_tracing.importers.simulation_models import (
-    _fraction,
+    _in_range,
     compile_model,
     convex_hull,
 )
@@ -134,11 +134,11 @@ def test_star_start_height_keeps_the_old_heights_as_a_floor():
 
 
 def test_reflectivity_rounding_is_clamped_and_overshoot_is_rejected():
-    assert _fraction(1.0 + 1e-12) == 1.0
-    assert _fraction(-1e-12) == 0.0
-    assert _fraction(0.25) == 0.25
+    assert _in_range(1.0 + 1e-12) == 1.0
+    assert _in_range(-1e-12) == 0.0
+    assert _in_range(0.25) == 0.25
     with pytest.raises(ModelError, match="outside"):
-        _fraction(1.01)
+        _in_range(1.01)
 
 
 def reference_hull(vertices):

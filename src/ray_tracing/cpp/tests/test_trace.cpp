@@ -1039,7 +1039,7 @@ void from_below_obscurers() {
   CHECK(to_string(Status::non_sequential) == "non_sequential");
   CHECK(to_string(Status::direct_focal) == "direct_focal");
   CHECK(to_string(Status::bounce_limit) == "bounce_limit");
-  CHECK(kStatusCount == 10);
+  CHECK(kStatusCount == 12);
 }
 
 // Bunches moving up and down in one block: the downward bunches give the same photons as without

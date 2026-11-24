@@ -45,6 +45,7 @@ MODEL_FORMAT = "obdeect.optical-model.v2"
 # docs/ray-tracing/optical-elements.md#telescope-structure.
 STRUCTURE_PARAMETER = "telescope_structure"
 ALL_LEGS = ["incoming", "after_primary", "after_secondary"]
+REFRACTIVE_INDEX_RANGE = (1.0, 3.0)  # Plausible bounds for a window material.
 
 
 class _Parameters:
@@ -87,7 +88,19 @@ class _Parameters:
 
 
 # Keys the compiler writes to the provenance block; the caller's provenance must not use them.
-PROVENANCE_KEYS = ("configuration_seed", "zenith_deg", "structure", "parameters", "files_sha256")
+PROVENANCE_KEYS = (
+    "configuration_seed",
+    "zenith_deg",
+    "structure",
+    "parameters",
+    "files_sha256",
+    "camera_window",
+)
+# How a camera window given by its records is treated: "flat" does not trace it (the flat-window
+# approximation: camera_filter, measured at normal incidence, holds the window transmission
+# downstream); "sphere" traces it (refraction, Fresnel and bulk loss) and requires camera_filter
+# to be "none". There is no default: a model with window records must choose.
+CAMERA_WINDOW_MODES = ("flat", "sphere")
 
 
 def compile_model(
@@ -98,6 +111,7 @@ def compile_model(
     propagation_group_index: float,
     zenith_deg: float | None = None,
     provenance: dict[str, Any] | None = None,
+    camera_window: str | None = None,
 ) -> dict[str, Any]:
     """Return the optical model as a JSON-serialisable dictionary.
 
@@ -119,6 +133,10 @@ def compile_model(
     provenance
         Identity of the model (name, version, site), stored unchanged. Its keys must not be
         one of PROVENANCE_KEYS, which the compiler writes.
+    camera_window
+        Treatment of a camera window given by its records (see CAMERA_WINDOW_MODES): "flat"
+        (not traced; camera_filter applies) or "sphere" (traced; camera_filter must be "none").
+        Required when the records contain a camera window, which is recorded in the provenance.
     """
     if isinstance(configuration_seed, bool) or not isinstance(configuration_seed, int):
         raise ModelError("configuration seed must be an integer")
@@ -130,8 +148,16 @@ def compile_model(
     p = _Parameters(records, read_file)
     notes: list[str] = []
     mirror_class = p.require("mirror_class")
+    window_present = _check_camera_window_records(p, mirror_class, camera_window)
+    trace_window = window_present and camera_window == "sphere"
+    if window_present and not trace_window:
+        p.used.update(name for name in CAMERA_WINDOW_NAMES if name in p)
+        notes.append(
+            "camera window not traced (camera_window 'flat', the flat-window approximation): "
+            "camera_filter holds its transmission"
+        )
     if mirror_class == 0:
-        optics = _segmented_telescope(p, configuration_seed, zenith_deg)
+        optics = _segmented_telescope(p, configuration_seed, zenith_deg, trace_window=trace_window)
     elif mirror_class == 2:
         optics = _dual_mirror_telescope(p, zenith_deg)
     else:
@@ -174,6 +200,7 @@ def compile_model(
             "structure": bool(structure),
             "parameters": {name: records[name].get("parameter_version") for name in sorted(p.used)},
             "files_sha256": dict(sorted(p.files.items())),
+            **({"camera_window": camera_window} if window_present else {}),
         },
         "notes": notes,
         "optics": optics,
@@ -238,6 +265,18 @@ def _sampling(p: _Parameters, optics: dict[str, Any]) -> dict[str, float]:
             heights.append(mirror["asphere"]["vertex_z_m"])
     if "asphere" in optics["focal_surface"]:
         heights.append(optics["focal_surface"]["asphere"]["vertex_z_m"])
+    if "camera_window" in optics:
+        window = optics["camera_window"]
+        heights.append(window["outer_apex_z_m"])
+        if window["shape"] == "flat":
+            heights.append(window["outer_apex_z_m"] + window["thickness_m"])
+        else:
+            radius = window["radius_of_curvature_m"]
+            aperture = window["aperture_radius_m"]
+            centre_z = window["outer_apex_z_m"] + radius
+            heights.append(centre_z - math.sqrt(radius**2 - aperture**2))
+            inner_radius = radius - window["thickness_m"]
+            heights.append(centre_z - math.sqrt(inner_radius**2 - aperture**2))
     for obscurer in optics["obscurers"]:
         for key in ("start_m", "end_m", "centre_m"):
             if key in obscurer:
@@ -253,6 +292,8 @@ def _sampling(p: _Parameters, optics: dict[str, Any]) -> dict[str, float]:
 
 def _surface_ids(optics: dict[str, Any]) -> list[int]:
     ids = [optics["focal_surface"]["id"]]
+    if "camera_window" in optics:
+        ids.append(optics["camera_window"]["id"])
     for role in ("primary", "secondary"):
         mirror = optics.get(role)
         if not mirror:
@@ -267,7 +308,9 @@ def _surface_ids(optics: dict[str, Any]) -> list[int]:
 # --- Segmented single-mirror telescopes ---
 
 
-def _segmented_telescope(p: _Parameters, seed: int, zenith_deg: float | None) -> dict[str, Any]:
+def _segmented_telescope(
+    p: _Parameters, seed: int, zenith_deg: float | None, *, trace_window: bool
+) -> dict[str, Any]:
     focal_length = length_m(p.record("focal_length"), "focal_length")
     overall_offset = (
         signed_length_m(p.record("mirror_offset"), "mirror_offset") if "mirror_offset" in p else 0.0
@@ -307,14 +350,166 @@ def _segmented_telescope(p: _Parameters, seed: int, zenith_deg: float | None) ->
             contents, filename, options = _file_args(p, name)
             primary["degradation"] = read_spatial_map(contents, filename, filename_options=options)
     focus = _focus_offset(p, zenith_deg)
+    focal_plane_z = focal_length + focus - overall_offset
+    camera_window = (
+        _camera_window(
+            p,
+            surface_id=len(facets) + 1,
+            focal_plane_z_m=focal_plane_z,
+            highest_primary_z_m=max(f["centre_m"][2] for f in facets),
+        )
+        if trace_window
+        else None
+    )
     obscurers = _camera_body(p, focal_length - overall_offset, after_primary=False)
-    return {
+    optics = {
         "primary": primary,
         "secondary": None,
         "secondary_blocks_incoming": False,
-        "focal_surface": {"id": len(facets), "plane_z_m": focal_length + focus - overall_offset},
+        "focal_surface": {"id": len(facets), "plane_z_m": focal_plane_z},
         "obscurers": obscurers,
     }
+    if camera_window is not None:
+        optics["camera_window"] = camera_window
+    return optics
+
+
+CAMERA_WINDOW_NAMES = (
+    "camera_window_parameters",
+    "camera_window_refractive_index",
+    "camera_window_internal_transmittance",
+)
+
+
+def _check_camera_window_records(
+    p: _Parameters, mirror_class: int, camera_window: str | None
+) -> bool:
+    """Check the camera-window records against the chosen treatment; True if a window is given.
+
+    Window records are never ignored silently: they need an explicit treatment, and a traced
+    window must not be counted twice through camera_filter.
+    """
+    if camera_window is not None and camera_window not in CAMERA_WINDOW_MODES:
+        raise ModelError(
+            f"camera_window must be one of {', '.join(CAMERA_WINDOW_MODES)}, not {camera_window!r}"
+        )
+    tables = [name for name in CAMERA_WINDOW_NAMES[1:] if name in p]
+    if tables and "camera_window_parameters" not in p:
+        raise ModelError(
+            f"{', '.join(tables)} without camera_window_parameters (no window geometry)"
+        )
+    present = "camera_window_parameters" in p
+    if not present:
+        if camera_window == "sphere":
+            raise ModelError("camera_window 'sphere' needs camera_window_parameters")
+        return False
+    if camera_window is None:
+        raise ModelError(
+            "the model has a camera window (camera_window_parameters): choose its treatment, "
+            "camera_window 'flat' (not traced; camera_filter applies) or 'sphere' (traced)"
+        )
+    if camera_window == "sphere":
+        if mirror_class == 2:
+            raise ModelError(
+                "camera_window 'sphere': a traced camera window is supported for single-mirror "
+                "(segmented) telescopes only"
+            )
+        filter_value = p.value("camera_filter")
+        if isinstance(filter_value, str) and filter_value.strip().lower() not in ("", "none"):
+            raise ModelError(
+                f"camera_window 'sphere' traces the window, but camera_filter is {filter_value!r}: "
+                "the window transmission would be counted twice (set camera_filter to 'none', "
+                "or use camera_window 'flat')"
+            )
+    return True
+
+
+def _camera_window(
+    p: _Parameters, *, surface_id: int, focal_plane_z_m: float, highest_primary_z_m: float
+) -> dict[str, Any] | None:
+    """Compile optional camera-window parameters and optical response tables."""
+    name = "camera_window_parameters"
+    if name not in p:
+        return None
+    parameters = p.value(name)
+    if not isinstance(parameters, dict):
+        raise ModelError(f"{name} must be a mapping")
+    p.used.add(name)
+
+    shape = parameters.get("shape")
+    if shape not in ("flat", "sphere"):
+        raise ModelError(f"{name}: unsupported shape {shape!r}")
+
+    def positive(key: str) -> float:
+        value = number(parameters.get(key), f"{name}.{key}")
+        if value <= 0.0:
+            raise ModelError(f"{name}.{key} must be positive")
+        return value * 0.01  # Input lengths are cm.
+
+    thickness_m = positive("thickness_cm")
+    aperture_diameter_m = positive("aperture_diameter_cm")
+    outer_diameter_m = positive("outer_diameter_cm")
+    flange_offset_m = number(parameters.get("flange_offset_cm"), f"{name}.flange_offset_cm") * 0.01
+    if flange_offset_m < 0.0:
+        raise ModelError(f"{name}.flange_offset_cm must be non-negative")
+    aperture_radius_m = aperture_diameter_m / 2.0
+    outer_radius_m = outer_diameter_m / 2.0
+    if aperture_diameter_m > outer_diameter_m:
+        raise ModelError(f"{name}: aperture diameter exceeds outer diameter")
+
+    window: dict[str, Any] = {
+        "id": surface_id,
+        "shape": shape,
+        "thickness_m": thickness_m,
+        "aperture_radius_m": aperture_radius_m,
+        "outer_radius_m": outer_radius_m,
+    }
+    sag_m = 0.0
+    if shape == "sphere":
+        radius_cm = parameters.get("radius_of_curvature_cm")
+        if radius_cm is None:
+            raise ModelError(f"{name}: sphere requires radius_of_curvature_cm")
+        radius_m = number(radius_cm, f"{name}.radius_of_curvature_cm") * 0.01
+        if radius_m <= 0.0 or aperture_radius_m > radius_m:
+            raise ModelError(f"{name}: invalid radius of curvature")
+        if aperture_radius_m > radius_m - thickness_m:
+            raise ModelError(f"{name}: aperture exceeds the inner surface radius")
+        sag_m = radius_m - math.sqrt(radius_m * radius_m - aperture_radius_m * aperture_radius_m)
+        window["radius_of_curvature_m"] = radius_m
+    distance_budget_m = focal_plane_z_m - highest_primary_z_m - flange_offset_m
+    if sag_m >= distance_budget_m:
+        raise ModelError(f"{name}: sag must be less than the available distance budget")
+    window["outer_apex_z_m"] = focal_plane_z_m - flange_offset_m - sag_m
+
+    refractive_name = "camera_window_refractive_index"
+    transmittance_name = "camera_window_internal_transmittance"
+    if not p.has_file(refractive_name):
+        raise ModelError(f"{name} requires {refractive_name} table")
+    if not p.has_file(transmittance_name):
+        raise ModelError(f"{name} requires {transmittance_name} table")
+    refractive_contents, refractive_options = p.file(refractive_name)
+    refractive = response_grid(
+        read_response(
+            refractive_contents,
+            refractive_name,
+            "refractive_index",
+            filename_options=refractive_options,
+            value_range=REFRACTIVE_INDEX_RANGE,
+        ),
+        value_range=REFRACTIVE_INDEX_RANGE,
+    )
+    transmittance_contents, transmittance_options = p.file(transmittance_name)
+    transmittance = response_grid(
+        read_response(
+            transmittance_contents,
+            transmittance_name,
+            "transmittance",
+            filename_options=transmittance_options,
+        )
+    )
+    window["refractive_index"] = refractive
+    window["internal_transmittance"] = transmittance
+    return window
 
 
 def _file_args(p: _Parameters, name: str) -> tuple[str, str, str]:
@@ -589,8 +784,13 @@ def _response_json(contents: str, name: str, options: str, factor: float) -> str
     )
 
 
-def response_grid(table: dict[str, Any], factor: float = 1.0) -> dict[str, Any]:
-    """Resample a response table onto a 1 nm wavelength grid.
+def response_grid(
+    table: dict[str, Any],
+    factor: float = 1.0,
+    *,
+    value_range: tuple[float, float] = (0.0, 1.0),
+) -> dict[str, Any]:
+    """Resample a response table onto a 1 nm wavelength grid, within ``value_range``.
 
     1-D tables use their declared RPOL interpolation; 2-D tables are bilinear.
     """
@@ -608,16 +808,17 @@ def response_grid(table: dict[str, Any], factor: float = 1.0) -> dict[str, Any]:
         "wavelength_min_nm": grid[0],
         "wavelength_step_nm": 1.0,
         "incidence_deg": list(y) or [0.0],
-        "values": [[_fraction(v) for v in row] for row in rows],
+        "values": [[_in_range(v, value_range) for v in row] for row in rows],
     }
 
 
-def _fraction(value: float) -> float:
-    """A reflectivity: rounding may take an interpolated value just outside [0, 1], which is
+def _in_range(value: float, value_range: tuple[float, float] = (0.0, 1.0)) -> float:
+    """An interpolated response: rounding may take it just outside ``value_range``, which is
     clamped; a larger overshoot (a spline between tabulated values) is an error."""
-    if not -1e-9 <= value <= 1.0 + 1e-9:
-        raise ModelError(f"interpolated reflectivity {value:.6g} lies outside [0, 1]")
-    return min(1.0, max(0.0, value))
+    low, high = value_range
+    if not low - 1e-9 <= value <= high + 1e-9:
+        raise ModelError(f"interpolated response {value:.6g} lies outside [{low:g}, {high:g}]")
+    return min(high, max(low, value))
 
 
 def _scatter(p: _Parameters, mirror: dict[str, Any], *, surface_slopes: bool) -> None:
@@ -1172,6 +1373,7 @@ def compile_telescope(
     configuration_seed: int,
     zenith_deg: float | None = None,
     propagation_group_index: float | None = None,
+    camera_window: str | None = None,
 ) -> dict[str, Any]:
     """Compile a telescope model of a simulation-models checkout into an optical model document.
 
@@ -1190,4 +1392,5 @@ def compile_telescope(
         zenith_deg=zenith_deg,
         propagation_group_index=propagation_group_index,
         provenance=telescope.provenance,
+        camera_window=camera_window,
     )

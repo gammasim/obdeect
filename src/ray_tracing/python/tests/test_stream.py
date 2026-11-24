@@ -19,7 +19,7 @@ from obdeect.ray_tracing.stream import (
     minimum_input_plane_height_m,
     trace_stream,
 )
-from telescopes import dual, segmented
+from telescopes import dual, segmented, window_records
 
 FOCAL_LENGTH_M = 8.0  # focal length of segmented()
 RUN = {"run_number": 7, "wavelength_min_nm": 300.0, "wavelength_max_nm": 600.0}
@@ -675,6 +675,50 @@ def test_angular_efficiency_status_marks_telescope_level_transmission(
     assert run_efficiency_status["telescope_transmission.part"] == "angular"
     assert telescope_efficiency_status["telescope_transmission.part"] == "angular"
     assert telescope_efficiency_status[f"{CONSTANT_FACTOR}.state"] == "pending"
+
+
+@pytest.fixture
+def window_model():
+    records, files = window_records()
+    return OpticalModel.from_records(
+        records,
+        files.__getitem__,
+        configuration_seed=1,
+        propagation_group_index=1.0,
+        camera_window="sphere",
+    )
+
+
+def test_traced_camera_window_is_recorded_as_applied(model, window_model, tmp_path, obdeect_stream):
+    _, _, plain_out = focus(
+        model, tmp_path, obdeect_stream, beam(10, (0, 0)), pointing=(0, 0), name="nowin"
+    )
+    assert "camera_window" not in efficiency_status_of(plain_out, obdeect_stream)[0]["factors"]
+    _, _, out = focus(
+        window_model, tmp_path, obdeect_stream, beam(10, (0, 0)), pointing=(0, 0), name="win"
+    )
+    status = efficiency_status_of(out, obdeect_stream)[0]
+    assert status["factors"].split(",") == [
+        "mirror_reflectivity",
+        "telescope_transmission",
+        "camera_window",
+    ]
+    assert status["camera_window.state"] == "applied"
+    assert status["camera_window.source"].endswith(window_model.sha256)
+
+
+def test_camera_window_already_applied_is_rejected(window_model, tmp_path, obdeect_stream):
+    applied = {"factors": "camera_window", "camera_window.state": "applied"}
+    with pytest.raises(ModelError, match="camera_window is already applied"):
+        focus(
+            window_model,
+            tmp_path,
+            obdeect_stream,
+            beam(10, (0, 0)),
+            pointing=(0, 0),
+            name="winapplied",
+            run_efficiency_statuses=[applied],
+        )
 
 
 def test_angular_transmission_needs_a_model_with_transmission(model, tmp_path, obdeect_stream):

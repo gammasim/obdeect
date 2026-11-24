@@ -43,7 +43,14 @@ checked.
 | `atmosphere` | must be applied upstream (absent or pending: error) | any state; with `applied` sim_telarray needs an all-zero optical-depth table |
 | `wavelength`, `scattering` | must be applied upstream | must be applied upstream |
 | `telescope_transmission_constant` | not applied by sim_telarray: error | not applied by sim_telarray: error |
+| `camera_window` | not applied by sim_telarray: error | not applied by sim_telarray: error |
 | any other name | error | error |
+
+`camera_window` is the transmission of a camera window traced by the ray tracing (Fresnel loss at
+both surfaces and bulk absorption). sim_telarray has no traced window: it applies the flat-window
+approximation `camera_filter` instead. The optical model that traces the window is compiled only
+when `camera_filter` is `none` (see [](../ray-tracing/optical-elements.md#refracting-elements)),
+so the sim_telarray configuration written from the same model does not apply the window again.
 
 Any other factor (or unknown name) raises an error that names it, unless it is given to
 `obdeect stream to-simtel --allow-pending FACTOR` or `allow_pending=` in Python. Where sim_telarray

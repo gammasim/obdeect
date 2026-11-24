@@ -200,7 +200,7 @@ inline Vec3 tangent(const Node &node, const Vec3 &normal) {
   return normalized(t - normal * dot(t, normal));
 }
 
-inline Response response(const Node &node) {
+inline Response response(const Node &node, bool fractions = true) {
   (void)node.object({"wavelength_min_nm", "wavelength_step_nm", "incidence_deg", "values"});
   Response r;
   r.wavelength_min_nm = node["wavelength_min_nm"].positive();
@@ -210,7 +210,7 @@ inline Response response(const Node &node) {
   r.wavelength_count = rows.size();
   if (r.wavelength_count < 1)
     node["values"].fail("expected at least one row");
-  r.values = node["values"].matrix(r.wavelength_count, r.incidence_deg.size(), true);
+  r.values = node["values"].matrix(r.wavelength_count, r.incidence_deg.size(), fractions);
   return r;
 }
 
@@ -483,7 +483,8 @@ inline Obscurer obscurer(const Node &node, std::vector<Plane> &planes) {
   (void)sampling["start_z_m"].number();
   const Node optics = root["optics"];
   (void)optics.object({"propagation_group_index", "telescope_transmission", "primary", "secondary",
-                       "secondary_blocks_incoming", "focal_surface", "obscurers", "axes_offset_m"});
+                       "secondary_blocks_incoming", "focal_surface", "camera_window", "obscurers",
+                       "axes_offset_m"});
   OpticalModel model;
   if (optics.has("axes_offset_m")) {
     const auto offset = optics["axes_offset_m"].array();
@@ -522,6 +523,40 @@ inline Obscurer obscurer(const Node &node, std::vector<Plane> &planes) {
     model.focal_surface.plane_z = focal["plane_z_m"].number();
   else
     model.focal_surface.asphere = detail::asphere(focal["asphere"], model.focal_surface.id);
+  if (optics.has("camera_window")) {
+    const Node w = optics["camera_window"];
+    const auto shape = w["shape"].string();
+    if (shape == "sphere")
+      (void)w.object({"id", "shape", "outer_apex_z_m", "radius_of_curvature_m", "thickness_m",
+                      "aperture_radius_m", "outer_radius_m", "refractive_index",
+                      "internal_transmittance"});
+    else if (shape == "flat")
+      (void)w.object({"id", "shape", "outer_apex_z_m", "thickness_m", "aperture_radius_m",
+                      "outer_radius_m", "refractive_index", "internal_transmittance"});
+    else
+      w["shape"].fail("expected 'flat' or 'sphere'");
+    Window window;
+    window.id = w["id"].id();
+    window.shape = shape == "sphere" ? Window::Shape::sphere : Window::Shape::flat;
+    window.outer_apex_z = w["outer_apex_z_m"].number();
+    window.thickness = w["thickness_m"].positive();
+    window.aperture_radius = w["aperture_radius_m"].positive();
+    window.outer_radius = w["outer_radius_m"].positive();
+    if (window.outer_radius < window.aperture_radius)
+      w["outer_radius_m"].fail("must be at least the aperture radius");
+    if (window.shape == Window::Shape::sphere) {
+      window.radius_of_curvature = w["radius_of_curvature_m"].positive();
+      if (window.radius_of_curvature <= window.thickness)
+        w["radius_of_curvature_m"].fail("must exceed the window thickness");
+    }
+    window.refractive_index = detail::response(w["refractive_index"], false);
+    for (const double n : window.refractive_index.values)
+      if (!(n >= 1.0))
+        w["refractive_index"].fail("values must be >= 1");
+    window.internal_transmittance = detail::response(w["internal_transmittance"]);
+    ids.push_back(window.id);
+    model.camera_window = std::move(window);
+  }
   std::vector<Obscurer> obscurers;
   std::vector<Plane> planes;
   for (const auto &item : optics["obscurers"].array()) {
