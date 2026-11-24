@@ -6,8 +6,8 @@ internal. Units are metres, nanoseconds and nanometres. For frames, see
 
 ## Optical models
 
-Create an optical model with `OpticalModel.from_records` from validated parameter records (the
-air group index `propagation_group_index` is required), or `OpticalModel.from_simulation_models`
+Create an optical model with `OpticalModel.from_records` from validated parameter records (pass the
+air group index `propagation_group_index`; without it 1.0 is used with a DeprecationWarning), or `OpticalModel.from_simulation_models`
 from a simulation-models checkout (the index comes from the site; a telescope without a site needs
 it). The C++ core validates the resulting structured Python object directly. `load` reads an
 optical-model JSON file and checks its `sha256`; the native loader also accepts JSON text, which

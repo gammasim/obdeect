@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from functools import cached_property
@@ -60,15 +61,26 @@ class OpticalModel:
         read_file: Callable[[str], str],
         *,
         configuration_seed: int,
-        propagation_group_index: float,
+        propagation_group_index: float | None = None,
         zenith_deg: float | None = None,
         provenance: dict[str, Any] | None = None,
     ) -> OpticalModel:
         """Compile structured simulation-model parameter records into an optical model.
 
         The importer (`obdeect.ray_tracing.importers.simulation_models`) defines the parameter
-        names; `propagation_group_index` is required (no default air index).
+        names. `propagation_group_index` is the group index of the air the light travels through
+        inside the telescope; pass it explicitly. Without it the former value 1.0 (vacuum) is used
+        with a DeprecationWarning, for callers written before the argument existed; a later release
+        will require it.
         """
+        if propagation_group_index is None:
+            warnings.warn(
+                "OpticalModel.from_records without propagation_group_index uses 1.0 (vacuum); "
+                "pass the group index of the site air explicitly",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            propagation_group_index = 1.0
         document = compile_model(
             records,
             read_file,

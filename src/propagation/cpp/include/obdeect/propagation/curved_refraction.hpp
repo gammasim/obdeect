@@ -72,11 +72,12 @@ inline void scale_ray_integrals(CurvedRayIntegrals &v, double k, double k_group)
   v.excess_straight_ns = k_group * straight;
 }
 
-// Centred four-node stencil for the bracket [i1 - 1, i1] of n nodes (1 <= i1 <= n - 1): the nodes
-// i1 - 2 .. i1 + 1, clamped to the grid (first index of the stencil).
-inline std::size_t centred_stencil_start(std::size_t i1, std::size_t n) noexcept {
-  const std::size_t lower = i1 >= 2 ? i1 - 2 : 0;
-  return std::min(lower, n - 4);
+// First node of the four-node stencil i1 - 1 .. i1 + 2 for the bracket starting at node i1 - 1
+// (1 <= i1 <= n - 1), clamped to the grid. The validation against an independent ray tracer
+// (obdeect-validation propagation.refraction-curved-ray) prefers this stencil to the one centred
+// on the bracket (i1 - 2 .. i1 + 1), which doubles the time and plane-limit errors.
+inline std::size_t stencil_start(std::size_t i1, std::size_t n) noexcept {
+  return std::min(i1 - 1, n - 4);
 }
 
 namespace detail {
@@ -253,8 +254,8 @@ public:
         std::clamp(static_cast<std::size_t>(std::upper_bound(heights_.begin(), heights_.end(), h) -
                                             heights_.begin()),
                    std::size_t{1}, heights_.size() - 1);
-    const std::size_t i_start = centred_stencil_start(i1, theta_.size());
-    const std::size_t j_start = centred_stencil_start(j1, heights_.size());
+    const std::size_t i_start = stencil_start(i1, theta_.size());
+    const std::size_t j_start = stencil_start(j1, heights_.size());
     std::array<double, 4> zenith_nodes{}, height_nodes{};
     for (std::size_t k = 0; k < 4; ++k) {
       zenith_nodes[k] = zenith_coordinate_[i_start + k];
@@ -337,8 +338,7 @@ public:
 
 private:
   static constexpr std::size_t accurate_k_node_count = 9;
-  static constexpr std::size_t accurate_theta_start =
-      294; // 73.5 degrees; includes 75-degree stencil
+  static constexpr std::size_t accurate_theta_start = 296; // 74 degrees; includes 75-degree stencil
 
   void build_accurate_dispersion_tables(unsigned threads) {
     const double low = refractivity_e8(2000.) / refractivity_e8(200.);
@@ -392,8 +392,8 @@ private:
         std::clamp(static_cast<std::size_t>(std::upper_bound(heights_.begin(), heights_.end(), h) -
                                             heights_.begin()),
                    std::size_t{1}, heights_.size() - 1);
-    const std::size_t i_start = centred_stencil_start(i1, theta_.size());
-    const std::size_t j_start = centred_stencil_start(j1, heights_.size());
+    const std::size_t i_start = stencil_start(i1, theta_.size());
+    const std::size_t j_start = stencil_start(j1, heights_.size());
     if (i_start < accurate_theta_start) {
       return false;
     }

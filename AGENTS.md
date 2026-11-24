@@ -47,8 +47,10 @@ Root `docs/changes/` is the Towncrier input for all components.
 - Per-photon kernels are pure functions of (chunk, parameters): no allocation, I/O,
   Python calls or virtual dispatch per photon. Use float32 SoA photon columns (or
   immutable compiled models and contiguous buffers where stated by the component).
-  Write kernels as templates on the scalar type. The scalar version is the reference
-  for any SIMD or GPU version.
+  Write kernels as templates on the scalar type where float32 is precise enough for the
+  result; the scalar version is the reference for any SIMD or GPU version. Ray-tracing
+  intersections stay in double: float32 cannot resolve a micrometre hit on a mirror with a
+  radius of curvature of tens of metres.
 - Random numbers: counter-based (Philox), keyed on (seed, stage id, event, telescope, photon index).
 - Make units, frames, random seeds, statuses, efficiencies and loss accounting explicit.
   Reject invalid or unsupported input; never silently discard fields.

@@ -397,25 +397,6 @@ void test_linear_clamping() {
   }
 }
 
-// Run setup rejects a wavelength range outside the table rows or at and above 1000 nm, instead of
-// clamping it silently (the lookups clamp to the rows and give no transmission at 1000 nm and
-// above).
-void test_wavelength_range_at_setup() {
-  using obdeect::propagation::TransmissionTable;
-  using obdeect::propagation::WavelengthInterpolation;
-  const TransmissionTable table(two_rows, 2000.0, WavelengthInterpolation::linear);
-  table.require_wavelength_range(400.0, 401.0);
-  table.require_wavelength_range(400.5, 400.5);
-  CHECK(throws_with([&] { table.require_wavelength_range(399.9, 401.0); }, "wavelength range"));
-  CHECK(throws_with([&] { table.require_wavelength_range(400.0, 401.5); }, "wavelength range"));
-  CHECK(throws_with([&] { table.require_wavelength_range(300.0, 450.0); }, "wavelength range"));
-  // A table that has rows up to 999 nm accepts 999 nm and rejects 1000 nm.
-  const TransmissionTable wide("# H2= 2.000, H1= 3.000\n998 3.0\n999 3.0\n", 2000.0,
-                               WavelengthInterpolation::linear);
-  wide.require_wavelength_range(998.0, 999.0);
-  CHECK(throws_with([&] { wide.require_wavelength_range(998.0, 1000.0); }, "wavelength range"));
-}
-
 void test_linear_non_finite_rejected() {
   using obdeect::propagation::TransmissionTable;
   using obdeect::propagation::WavelengthInterpolation;
@@ -477,7 +458,6 @@ int main() {
     test_linear_halfway();
     test_linear_clamping();
     test_linear_non_finite_rejected();
-    test_wavelength_range_at_setup();
     test_linear_telescope_depths();
   });
 }

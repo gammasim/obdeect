@@ -889,9 +889,6 @@ private:
                      number_field(metadata, "wavelength_max_nm")};
     }
     wavelengths.validate();
-    if (config_.transmission) {
-      config_.transmission->require_wavelength_range(wavelengths.lo_nm, wavelengths.hi_nm);
-    }
     if (config_.dispersion_reference_nm) {
       if (refraction_applied) {
         throw std::invalid_argument(

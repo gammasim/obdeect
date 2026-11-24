@@ -104,6 +104,18 @@ def test_propagation_group_index_has_no_default():
         compile_model(records, files.__getitem__, configuration_seed=1)
 
 
+def test_from_records_without_group_index_warns_and_keeps_the_former_value():
+    # Callers written before the argument existed (simtools) still compile, with a warning, to
+    # exactly the model of an explicit 1.0.
+    records, files = segmented()
+    with pytest.warns(DeprecationWarning, match="propagation_group_index"):
+        implicit = OpticalModel.from_records(records, files.__getitem__, configuration_seed=1)
+    explicit = OpticalModel.from_records(
+        records, files.__getitem__, configuration_seed=1, propagation_group_index=1.0
+    )
+    assert implicit.sha256 == explicit.sha256
+
+
 def test_star_start_height_is_above_every_optical_element():
     for records_files in (segmented(), dual()):
         document = build(records_files)

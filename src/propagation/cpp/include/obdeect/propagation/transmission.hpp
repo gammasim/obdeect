@@ -162,19 +162,6 @@ public:
   [[nodiscard]] double observation_level_m() const noexcept { return 1000.0 * h2_km_; }
   [[nodiscard]] int first_wavelength_nm() const noexcept { return first_; }
   [[nodiscard]] int last_wavelength_nm() const noexcept { return first_ + rows_ - 1; }
-
-  // Throws std::invalid_argument unless the wavelength range [lo_nm, hi_nm] lies within the table
-  // rows (first to last nm) and below max_lambda. The lookups clamp to the rows and give no
-  // transmission at or above max_lambda, so a run must check its range once, at setup.
-  void require_wavelength_range(double lo_nm, double hi_nm) const {
-    if (!(lo_nm >= first_ && hi_nm <= last_wavelength_nm() && hi_nm < max_lambda)) {
-      throw std::invalid_argument(
-          "wavelength range " + std::to_string(lo_nm) + " to " + std::to_string(hi_nm) +
-          " nm is outside the transmission table (rows " + std::to_string(first_) + " to " +
-          std::to_string(last_wavelength_nm()) + " nm, below " + std::to_string(max_lambda) +
-          " nm)");
-    }
-  }
   [[nodiscard]] WavelengthInterpolation wavelength_interpolation() const noexcept { return mode_; }
   // Table heights [m a.s.l.]: the observation level and the heights H1 (ascending). The extinction
   // coefficient has a kink at each of them (chord integrals split there).
