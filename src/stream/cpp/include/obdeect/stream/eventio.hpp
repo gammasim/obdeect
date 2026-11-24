@@ -48,9 +48,9 @@ struct EventioBlock {
   std::uint32_t ident{};
   bool user_flag{};
   bool only_subobjects{}; // length bit 30: the item consists of sub-items only
-  // Bytes as read: sync tag (top-level blocks only) and item header, incl.
-  // extended length when present. Empty for blocks built by make_block until
-  // they are encoded.
+  // Bytes as stored in front of the body: the sync tag (top-level blocks only) and the item
+  // header, incl. the extended length when present. Blocks read from a file and blocks built by
+  // make_block hold them; sub-blocks of subblocks() hold their item header (no sync tag).
   std::vector<std::uint8_t> header;
   std::vector<std::uint8_t> body; // data, including padding to 4 bytes
 
@@ -69,13 +69,21 @@ public:
   explicit ByteReader(const std::vector<std::uint8_t> &bytes)
       : ByteReader(bytes.data(), bytes.size()) {}
 
+  // Little-endian unsigned value of n <= 8 bytes.
   [[nodiscard]] std::uint64_t take(std::size_t n) {
+    if (n > 8) {
+      throw std::invalid_argument("EventIO: take() reads at most 8 bytes");
+    }
     if (n > size_ - pos_) {
       throw std::runtime_error("EventIO: payload truncated");
     }
     std::uint64_t value = 0;
-    for (std::size_t i = 0; i < n; ++i) {
-      value |= std::uint64_t{data_[pos_ + i]} << (8 * i);
+    if constexpr (std::endian::native == std::endian::little) {
+      std::memcpy(&value, data_ + pos_, n); // n <= 8: the upper bytes stay zero
+    } else {
+      for (std::size_t i = 0; i < n; ++i) {
+        value |= std::uint64_t{data_[pos_ + i]} << (8 * i);
+      }
     }
     pos_ += n;
     return value;
@@ -300,6 +308,21 @@ inline void store_f32_le(std::uint8_t *dst, float value) {
   }
 }
 
+// One long-format photon bunch of a 1205 block (32 bytes, the encoder shared by make_photons_block
+// and SimtelWriter): x, y, cx, cy, ctime, zem, photons and lambda as float32 little-endian, with
+// x, y and zem in cm and ctime in ns, as CORSIKA writes them.
+inline void store_bunch_long(std::uint8_t *dst, float x, float y, float cx, float cy, float ctime,
+                             float zem, float photons, float lambda) {
+  store_f32_le(dst, x);
+  store_f32_le(dst + 4, y);
+  store_f32_le(dst + 8, cx);
+  store_f32_le(dst + 12, cy);
+  store_f32_le(dst + 16, ctime);
+  store_f32_le(dst + 20, zem);
+  store_f32_le(dst + 24, photons);
+  store_f32_le(dst + 28, lambda);
+}
+
 } // namespace detail
 
 // Sub-item form of a block (no sync tag), as stored inside a container.
@@ -314,11 +337,15 @@ class EventioReader {
 public:
   explicit EventioReader(std::istream &in) : in_{in} {}
 
-  // Read the next top-level block. Returns false at a clean end of stream.
+  // Read the next top-level block. Returns false at a clean end of stream; a read error
+  // (bad stream) throws, it is not an end of stream.
   bool next(EventioBlock &block) {
     std::uint8_t sync[4]{};
     in_.read(reinterpret_cast<char *>(sync), 4);
     const std::streamsize got = in_.gcount();
+    if (in_.bad()) {
+      throw std::runtime_error("EventIO: read error on the input");
+    }
     if (got == 0) {
       return false;
     }
@@ -365,6 +392,9 @@ private:
       return;
     }
     in_.read(reinterpret_cast<char *>(dst), static_cast<std::streamsize>(n));
+    if (in_.bad()) {
+      throw std::runtime_error("EventIO: read error on the input");
+    }
     if (static_cast<std::size_t>(in_.gcount()) != n) {
       throw std::runtime_error("EventIO: truncated block");
     }
@@ -373,10 +403,24 @@ private:
   std::istream &in_;
 };
 
-// Sub-blocks of a container block (for example 1205 inside 1204). The
+// Sub-block of a container block, viewed in place: the header fields and the body bytes point
+// into the container's body, which must outlive the view.
+struct SubblockView {
+  std::uint32_t type{};
+  std::uint32_t version{};
+  std::uint32_t ident{};
+  bool user_flag{};
+  bool only_subobjects{};
+  const std::uint8_t *header{}; // item header (12 or 16 bytes, no sync tag)
+  std::size_t header_size{};
+  const std::uint8_t *body{};
+  std::size_t body_size{};
+};
+
+// Sub-blocks of a container block (for example 1205 inside 1204) as views, without copies. The
 // sub-blocks have no sync tag; their header holds 12 or 16 bytes.
-inline std::vector<EventioBlock> subblocks(const EventioBlock &parent) {
-  std::vector<EventioBlock> out;
+inline std::vector<SubblockView> subblock_views(const EventioBlock &parent) {
+  std::vector<SubblockView> out;
   const std::vector<std::uint8_t> &data = parent.body;
   std::size_t pos = 0;
   while (pos < data.size()) {
@@ -384,15 +428,35 @@ inline std::vector<EventioBlock> subblocks(const EventioBlock &parent) {
     if (h.length > data.size() - pos - h.size) {
       throw std::runtime_error("EventIO: sub-block exceeds its container");
     }
-    const auto start = static_cast<std::ptrdiff_t>(pos);
-    const auto body_start = start + static_cast<std::ptrdiff_t>(h.size);
-    const auto end = body_start + static_cast<std::ptrdiff_t>(h.length);
-    EventioBlock block;
-    detail::copy_fields(block, h);
-    block.header.assign(data.begin() + start, data.begin() + body_start);
-    block.body.assign(data.begin() + body_start, data.begin() + end);
-    out.push_back(std::move(block));
+    SubblockView view;
+    view.type = h.type;
+    view.version = h.version;
+    view.ident = h.ident;
+    view.user_flag = h.user_flag;
+    view.only_subobjects = h.only_subobjects;
+    view.header = data.data() + pos;
+    view.header_size = h.size;
+    view.body = data.data() + pos + h.size;
+    view.body_size = static_cast<std::size_t>(h.length);
+    out.push_back(view);
     pos += h.size + static_cast<std::size_t>(h.length);
+  }
+  return out;
+}
+
+// Copying form of subblock_views: each sub-block as an EventioBlock (header and body copied).
+inline std::vector<EventioBlock> subblocks(const EventioBlock &parent) {
+  std::vector<EventioBlock> out;
+  for (const SubblockView &view : subblock_views(parent)) {
+    EventioBlock block;
+    block.type = view.type;
+    block.version = view.version;
+    block.ident = view.ident;
+    block.user_flag = view.user_flag;
+    block.only_subobjects = view.only_subobjects;
+    block.header.assign(view.header, view.header + view.header_size);
+    block.body.assign(view.body, view.body + view.body_size);
+    out.push_back(std::move(block));
   }
   return out;
 }
@@ -468,6 +532,14 @@ inline void write_block(std::ostream &out, const EventioBlock &block) {
 // Float arrays: RUNH 1200, EVTH 1202, EVTE 1209, RUNE 1210. Body: int32 count, then count float32.
 // The first value is stored as the bit pattern of a float (it holds the block name).
 
+// The payload must end after its last field, apart from the zero bytes that pad the body to 4
+// bytes (at most 3). Trailing data is rejected, as the sizes of the payload are exact.
+inline void require_payload_end(const ByteReader &in, const char *what) {
+  if (in.remaining() >= 4) {
+    throw std::runtime_error(std::string("EventIO: trailing bytes after ") + what);
+  }
+}
+
 inline std::vector<float> decode_float_block(const EventioBlock &block) {
   ByteReader in{block.body};
   const std::int32_t count = in.i32();
@@ -478,6 +550,7 @@ inline std::vector<float> decode_float_block(const EventioBlock &block) {
   for (float &v : values) {
     v = in.f32();
   }
+  require_payload_end(in, "float block");
   return values;
 }
 
@@ -515,6 +588,7 @@ inline TelPos decode_telpos(const EventioBlock &block) {
       v = in.f32();
     }
   }
+  require_payload_end(in, "TELPOS");
   return pos;
 }
 
@@ -572,6 +646,7 @@ inline TelOffset decode_teloff(const EventioBlock &block) {
       v = in.f32();
     }
   }
+  require_payload_end(in, "TELOFF");
   return off;
 }
 
@@ -615,16 +690,18 @@ struct TelPhotons {
   std::vector<Bunch> bunches;
 };
 
-inline TelPhotons decode_photons(const EventioBlock &block) {
-  if (block.version % iact::compact_version != 0 || block.version / iact::compact_version > 1) {
+// Decodes a 1205 payload given as its version and bytes (a block body or a view into a container).
+inline TelPhotons decode_photons(std::uint32_t version, const std::uint8_t *data,
+                                 std::size_t size) {
+  if (version % iact::compact_version != 0 || version / iact::compact_version > 1) {
     throw std::runtime_error("EventIO: unsupported photon block version");
   }
-  ByteReader in{block.body};
+  ByteReader in{data, size};
   TelPhotons p;
   p.array = in.i16();
   p.tel = in.i16();
   p.photons = in.f32();
-  p.compact = block.version == iact::compact_version;
+  p.compact = version == iact::compact_version;
   const std::int32_t n = in.i32();
   const std::size_t bytes_per_bunch = p.compact ? 16 : 32;
   if (n < 0 || static_cast<std::size_t>(n) * bytes_per_bunch > in.remaining()) {
@@ -657,23 +734,40 @@ inline TelPhotons decode_photons(const EventioBlock &block) {
     b.photons = static_cast<float>(0.01 * in.i16());
     b.lambda = static_cast<float>(in.i16());
   }
+  require_payload_end(in, "photon block");
   return p;
+}
+
+inline TelPhotons decode_photons(const EventioBlock &block) {
+  return decode_photons(block.version, block.body.data(), block.body.size());
 }
 
 // Encode photon bunches as 1205. Long format: version 0. Compact format:
 // version 1000 with fixed quantisation steps; values that do not fit
 // throw std::out_of_range. The array and telescope indices are int16 on disk
 // and must be 0..32767.
+// Header of a 1205 block: int16 array, int16 telescope, float32 photon sum, int32 bunch count.
+inline constexpr std::size_t photons_header_size = 12;
+
+inline void put_photons_header(ByteWriter &out, int array, int tel, float photons,
+                               std::int32_t count) {
+  out.i16(static_cast<std::int16_t>(array));
+  out.i16(static_cast<std::int16_t>(tel));
+  out.f32(photons);
+  out.i32(count);
+}
+
 inline EventioBlock make_photons_block(const TelPhotons &p, bool compact = false) {
   if (p.array < 0 || p.array > 32767 || p.tel < 0 || p.tel > 32767) {
     throw std::out_of_range("EventIO: photon block array and telescope index must be 0..32767");
   }
+  if (p.bunches.size() > static_cast<std::size_t>(INT32_MAX)) {
+    throw std::out_of_range("EventIO: photon block holds more than 2^31 - 1 bunches");
+  }
   std::vector<std::uint8_t> body;
+  body.reserve(photons_header_size + p.bunches.size() * (compact ? 16 : 32));
   ByteWriter out{body};
-  out.i16(static_cast<std::int16_t>(p.array));
-  out.i16(static_cast<std::int16_t>(p.tel));
-  out.f32(p.photons);
-  out.i32(static_cast<std::int32_t>(p.bunches.size()));
+  put_photons_header(out, p.array, p.tel, p.photons, static_cast<std::int32_t>(p.bunches.size()));
   const auto quantise = [](double value, double scale) {
     const double q = std::round(value * scale);
     if (!(q >= -32768.0 && q <= 32767.0)) {
@@ -683,14 +777,10 @@ inline EventioBlock make_photons_block(const TelPhotons &p, bool compact = false
   };
   for (const Bunch &b : p.bunches) {
     if (!compact) {
-      out.f32(b.x);
-      out.f32(b.y);
-      out.f32(b.cx);
-      out.f32(b.cy);
-      out.f32(b.ctime);
-      out.f32(b.zem);
-      out.f32(b.photons);
-      out.f32(b.lambda);
+      const std::size_t at = body.size();
+      body.resize(at + 32);
+      detail::store_bunch_long(body.data() + at, b.x, b.y, b.cx, b.cy, b.ctime, b.zem, b.photons,
+                               b.lambda);
       continue;
     }
     if (b.zem <= 0.0F) {
@@ -722,11 +812,13 @@ struct TelPhotons3d {
   std::vector<Bunch3d> bunches;
 };
 
-inline TelPhotons3d decode_photons3d(const EventioBlock &block) {
-  if (block.version != 0) {
+// Decodes a 1217 payload given as its version and bytes (a block body or a view into a container).
+inline TelPhotons3d decode_photons3d(std::uint32_t version, const std::uint8_t *data,
+                                     std::size_t size) {
+  if (version != 0) {
     throw std::runtime_error("EventIO: unsupported 3D photon block version");
   }
-  ByteReader in{block.body};
+  ByteReader in{data, size};
   TelPhotons3d p;
   p.array = in.i16();
   p.tel = in.i16();
@@ -748,7 +840,12 @@ inline TelPhotons3d decode_photons3d(const EventioBlock &block) {
     b.photons = in.f32();
     b.lambda = in.f32();
   }
+  require_payload_end(in, "3D photon block");
   return p;
+}
+
+inline TelPhotons3d decode_photons3d(const EventioBlock &block) {
+  return decode_photons3d(block.version, block.body.data(), block.body.size());
 }
 
 // ---------------------------------------------------------------------------

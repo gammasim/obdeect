@@ -4,10 +4,10 @@ import pytest
 from obdeect.propagation.optics_path import _path_m, _vertex_z_m, in_telescope_path_m
 from obdeect.ray_tracing.model import OpticalModel
 
-MIRROR_LIST = """# x y diameter focal shape
-   0.0     0.0  100.0  0.0  0
- 125.0     0.0  100.0  0.0  0
--125.0     0.0  100.0  0.0  0
+MIRROR_LIST = """# x y diameter focal shape z (z = 0: automatic height)
+   0.0     0.0  100.0  0.0  0  0.0
+ 125.0     0.0  100.0  0.0  0  0.0
+-125.0     0.0  100.0  0.0  0  0.0
 """
 
 
@@ -59,7 +59,9 @@ def segmented_records():
 
 def build(records, files=None):
     files = files or {}
-    return OpticalModel.from_records(records, files.__getitem__, configuration_seed=1)
+    return OpticalModel.from_records(
+        records, files.__getitem__, configuration_seed=1, propagation_group_index=1.0
+    )
 
 
 def test_path_single_mirror_formula():
@@ -132,10 +134,16 @@ def test_pathlen_command_prints_metres(tmp_path, capsys):
 def test_pathlen_command_reports_missing_file(tmp_path, capsys):
     from obdeect.propagation.optics_path import main
 
-    with pytest.raises(SystemExit) as error:
-        main([str(tmp_path / "missing.json")])
-    assert error.value.code == 1
-    assert "obdeect propagation pathlen" in capsys.readouterr().err
+    assert main([str(tmp_path / "missing.json")]) == 1
+    assert capsys.readouterr().err.startswith("obdeect propagation pathlen: ")
+
+
+def test_model_without_optics_section_is_not_an_optical_model():
+    model = build(segmented_records(), {"mirror_list": MIRROR_LIST})
+    document = {key: value for key, value in model.document.items() if key != "optics"}
+    model._document = document  # the compiled document, without its optics section
+    with pytest.raises(ValueError, match="has no 'optics' section: it is not an optical model"):
+        in_telescope_path_m(model)
 
 
 def test_exported_from_the_package():

@@ -9,8 +9,9 @@ arrivals = model.trace(photons, seed=2)
 image = arrivals["position_m"][arrivals["status"] == DETECTED]
 ```
 
-Use `OpticalModel.from_records` to compile structured simulation-model records, or
-`OpticalModel.from_simulation_models` to read them from a checkout. `save` and `load`
+Use `OpticalModel.from_records` to compile structured simulation-model records (with the air
+group index, `propagation_group_index`), or `OpticalModel.from_simulation_models` to read them
+from a checkout. `save` and `load`
 store the compiled optical model as JSON.
 
 `trace` takes photons as arrays: `position_m` (n, 3), `direction` (n, 3, unit
@@ -29,7 +30,7 @@ random numbers depend only on the seed and its id). It returns, per photon:
 | `focal_incidence_deg` | angle to the focal-surface normal |
 | `reflections` | number of reflections of the photon (on either mirror) |
 
-`trace` returns all 14 arrays by default. Request only what you use:
+`trace` returns all 15 arrays by default. Request only what you use:
 
 ```python
 detected = model.trace(

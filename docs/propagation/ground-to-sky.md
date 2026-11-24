@@ -38,7 +38,9 @@ the run keys `telescope_x_m`, `telescope_y_m`, `telescope_z_m`, the keys that th
 record keys `x_m`, `y_m`, `z_m` must agree with them if present. Telescope records get frame sky.
 All other records pass through unchanged.
 
-Rows that cannot be converted (`z_em <= h_t`, `c_z` not downwards, non-finite values) are removed.
+Rows that cannot be converted are removed: horizontal rows (cz = 0), non-finite values, a downward
+row whose emission lies below the plane (z_em < h_t), and an upward row whose emission lies above
+it (z_em > h_t).
 The count is printed as `dropped` in the stderr summary. Remaining rows keep their photon index, so
 the random draws of later stages do not change.
 

@@ -1,4 +1,6 @@
-"""The native core validates normalized dictionaries itself (without the Python config layer)."""
+"""The native core validates normalized emissions itself (without the Python config layer).
+
+Errors name the key of the emission, so the Python layer does not rewrite them."""
 
 import pytest
 from obdeect.sources import _core

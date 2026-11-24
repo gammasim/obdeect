@@ -2,7 +2,7 @@
 
 // Light sources: a geometry (point, line, plane wave, sky background) with angular, spectral and
 // pulse profiles, an optional sampling target, photon counts and validation
-// (docs/spec/source-core.md). Per-photon sampling is in emit.hpp.
+// (docs/sources/spec/source-core.md). Per-photon sampling is in emit.hpp.
 
 #include "obdeect/sources/density.hpp"
 #include "obdeect/sources/streams.hpp"
@@ -20,6 +20,7 @@
 #include <string>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace obdeect::sources {
 
@@ -129,6 +130,15 @@ inline Uniforms philox_draw(std::uint64_t seed, std::uint32_t event, std::uint32
                             std::uint64_t index, Stream stream) {
   return obdeect::stream::uniform4(
       {seed, stage_sources, event, telescope, index, static_cast<std::uint32_t>(stream)});
+}
+
+// Draws of rejection attempt `attempt` of one photon for one stream: the block of the counter
+// (attempt 0 is philox_draw). Blocks are below 2^24 (obdeect::stream::max_block).
+inline Uniforms philox_draw_attempt(std::uint64_t seed, std::uint32_t event,
+                                    std::uint32_t telescope, std::uint64_t index, Stream stream,
+                                    std::uint32_t attempt) {
+  return obdeect::stream::uniform4(
+      {seed, stage_sources, event, telescope, index, static_cast<std::uint32_t>(stream)}, attempt);
 }
 
 // Seed of emission i of a run seed (splitmix64 of base + golden * (i + 1)).
@@ -393,6 +403,76 @@ inline Arc arc_towards(const Vec3 &point, const Vec3 &direction, double cos_thet
 
 } // namespace detail
 
+// Gauss-Legendre nodes x and weights w on [-1, 1] (n >= 1; Newton iteration on P_n).
+inline void gauss_legendre(int n, std::vector<double> &x, std::vector<double> &w) {
+  x.assign(static_cast<std::size_t>(n), 0.0);
+  w.assign(static_cast<std::size_t>(n), 0.0);
+  for (int i = 0; i < n; ++i) {
+    double z = std::cos(pi * (i + 0.75) / (n + 0.5));
+    double dp = 1.0;
+    for (int iteration = 0; iteration < 100; ++iteration) {
+      double p0 = 1.0;
+      double p1 = z;
+      for (int k = 2; k <= n; ++k) {
+        const double p2 = ((2.0 * k - 1.0) * z * p1 - (k - 1.0) * p0) / k;
+        p0 = p1;
+        p1 = p2;
+      }
+      dp = n * (z * p1 - p0) / (z * z - 1.0);
+      const double step = p1 / dp;
+      z -= step;
+      if (std::abs(step) < 1e-15)
+        break;
+    }
+    x[static_cast<std::size_t>(i)] = z;
+    w[static_cast<std::size_t>(i)] = 2.0 / ((1.0 - z * z) * dp * dp);
+  }
+}
+
+// Fraction of the light of a point that reaches a disc target: the integral of the normalised
+// profile over the solid angle of the disc, 1/(2 pi I) int_disc I(u) h / d^3 dA with I the
+// integral of the profile over u = 1 - cos(theta) (an isotropic point gives its solid angle over
+// 4 pi). A disc centred on the profile axis (the disc seen as a cap about the axis, half angle
+// atan(R / h)) is exact: the cdf of the profile at u = 1 - h / sqrt(h^2 + R^2). Otherwise a
+// 256 x 256 Gauss-Legendre (radius) x trapezoid (azimuth) quadrature of the disc area. (64 x 64
+// missed a narrow Gaussian seen off the axis: its footprint covers only a few nodes.)
+inline double disc_fraction(const Point &p, const DiscTarget &disc) {
+  const Vec3 to_centre = disc.centre - p.position;
+  // hypot, not norm: a point 1e-170 m from the centre has a zero square (h of the plane is kept).
+  const double distance = std::hypot(to_centre.x, to_centre.y, to_centre.z);
+  const double h = std::abs(dot(to_centre, disc.normal));
+  const double total = integral(p.angular);
+  if (!(total > 0.0) || !(distance > 0.0))
+    return 0.0;
+  const Vec3 unit = to_centre * (1.0 / distance);
+  const double r = disc.radius_m;
+  if (std::abs(dot(unit, disc.normal)) > 1.0 - 1e-12 && dot(unit, p.axis) > 1.0 - 1e-12) {
+    const double u_edge = 1.0 - h / std::sqrt(h * h + r * r);
+    return std::visit([&](const auto &a) { return a.cdf(u_edge); }, p.angular);
+  }
+  constexpr int n = 256;
+  std::vector<double> nodes, weights;
+  gauss_legendre(n, nodes, weights);
+  const Basis basis = orthonormal_basis(disc.normal);
+  double sum = 0.0;
+  for (int i = 0; i < n; ++i) {
+    const double rho = 0.5 * r * (nodes[static_cast<std::size_t>(i)] + 1.0);
+    const double wr = 0.5 * r * weights[static_cast<std::size_t>(i)] * rho;
+    for (int k = 0; k < n; ++k) {
+      const double phi = two_pi * k / n;
+      const Vec3 point =
+          disc.centre + basis.e1 * (rho * std::cos(phi)) + basis.e2 * (rho * std::sin(phi));
+      const Vec3 v = point - p.position;
+      const double d = norm(v);
+      const double cosine = std::clamp(dot(v, p.axis) / d, -1.0, 1.0);
+      const double intensity =
+          std::visit([&](const auto &a) { return a.intensity(1.0 - cosine); }, p.angular);
+      sum += wr * intensity * h / (d * d * d);
+    }
+  }
+  return sum * (two_pi / n) / (two_pi * total);
+}
+
 // Number of points of the scan for the reference arc fraction of a fixed-angle line.
 inline constexpr int line_reference_points = 1025;
 
@@ -420,10 +500,7 @@ inline double expected_count(const Source &s) {
   double mean = s.photons;
   if (const auto *p = std::get_if<Point>(&s.geometry)) {
     if (const auto *disc = std::get_if<DiscTarget>(&s.target)) {
-      const double h = std::abs(dot(disc->centre - p->position, disc->normal));
-      const double per_photon = intensity_maximum(p->angular) / (two_pi * integral(p->angular)) *
-                                pi * (disc->radius_m / h) * (disc->radius_m / h);
-      mean = s.photons * per_photon;
+      mean = s.photons * disc_fraction(*p, *disc);
     } else if (const auto *sphere = std::get_if<SphereTarget>(&s.target)) {
       const double ratio = sphere->radius_m / norm(sphere->centre - p->position);
       mean = s.photons * (1.0 - std::sqrt(1.0 - ratio * ratio)) / 2.0;

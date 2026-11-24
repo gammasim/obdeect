@@ -1,6 +1,6 @@
 #pragma once
 
-// Densities, pulse and spectrum shapes and angular profiles (docs/spec/distributions.md).
+// Densities, pulse and spectrum shapes and angular profiles (docs/sources/spec/distributions.md).
 
 #include "obdeect/sources/vec3.hpp"
 
@@ -308,7 +308,9 @@ inline LinearDensity gaussian_angular_table(double sigma_rad) {
   if (!std::isfinite(sigma_rad) || sigma_rad < 1e-12)
     throw std::invalid_argument("the Gaussian angular width must be finite and at least 1e-12 rad");
   const double theta_max = std::min(5.0 * sigma_rad, pi);
-  const double step = 0.05 * sigma_rad;
+  // Nodes every 0.01 sigma: the trapezoid normalisation of the piecewise-linear table is then
+  // within 2e-5 of the analytic Gaussian (0.05 sigma gave 4e-4, the error is O(step^2)).
+  const double step = 0.01 * sigma_rad;
   std::vector<double> u, y;
   for (double theta = 0.0; theta < theta_max; theta += step) {
     const double ui = u_of_angle(theta);

@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from obdeect.sources import _core, config
+from obdeect.sources.config import MAX_SEED
 
 
 def _normalized(description: Mapping[str, Any] | str | Path) -> dict[str, Any]:
@@ -47,8 +48,8 @@ def write(
     """
     run = _normalized(description)
     if seed is not None:
-        if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < 2**64:
-            raise ValueError("seed must be an int in 0..2^64-1")
+        if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed <= MAX_SEED:
+            raise ValueError(f"seed must be an int in 0..{MAX_SEED} (2^63 - 1)")
         run["run"]["seed"] = seed
     if max_rows is not None:
         if not math.isfinite(max_rows) or max_rows < 0:

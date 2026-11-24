@@ -1,15 +1,16 @@
 """Atmospheric profile, refraction and light timing on numpy arrays.
 
 Heights are in m a.s.l., positions in m, times in ns. Directions are the direction cosines
-(cx, cy) of a downward photon (cz = sqrt(1 - cx^2 - cy^2) > 0). See docs/refraction.md.
+(cx, cy) of a downward photon (cz = sqrt(1 - cx^2 - cy^2) > 0). See docs/propagation/refraction.md.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
+import os
 
 import numpy as np
 from obdeect.propagation import _core
+from obdeect.propagation._arrays import broadcast_call
 
 
 def _as_float_array(values) -> np.ndarray:
@@ -19,10 +20,10 @@ def _as_float_array(values) -> np.ndarray:
 class AtmosphereProfile:
     """Atmprof table with spline interpolation of density, thickness and n-1.
 
-    See docs/refraction.md."""
+    See docs/propagation/refraction.md."""
 
-    def __init__(self, path: str | Path):
-        self._core = _core.AtmosphereProfile(str(path))
+    def __init__(self, path: str | os.PathLike):
+        self._core = _core.AtmosphereProfile(os.fspath(path))
 
     @property
     def levels(self) -> int:
@@ -53,10 +54,8 @@ class AtmosphereProfile:
         return self._core.group_index(float(observation_level_m))
 
     @staticmethod
-    def _apply(function, values):
-        array = _as_float_array(values)
-        result = function(np.ascontiguousarray(array.reshape(-1)))
-        return result.reshape(array.shape)
+    def _apply(function, values) -> np.ndarray:
+        return broadcast_call(function, values)
 
 
 class RefractionTables:
@@ -88,8 +87,6 @@ def refract(tables: RefractionTables, height_m, cx, cy, x_m, y_m, t_ns):
     ]
     if any(array.ndim != 1 for array in arrays):
         raise ValueError("refract: all inputs must be one-dimensional")
-    if len({array.shape[0] for array in arrays}) != 1:
-        raise ValueError("refract: all inputs must have the same length")
     new_cx, new_cy, new_x, new_y, new_t, bent = _core.refract(tables._core, *arrays)
     return new_cx, new_cy, new_x, new_y, new_t, bent.astype(bool)
 

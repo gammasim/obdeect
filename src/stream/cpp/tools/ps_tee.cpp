@@ -1,21 +1,19 @@
 // obdeect stream tee: copy a photon stream from stdin to stdout and to each named file,
 // record by record, flushing after every record. Photon columns are not decoded.
 
-#include "obdeect/stream/stdin_buffer.hpp"
 #include "obdeect/stream/stream.hpp"
+#include "tool_io.hpp"
 #include "tool_version.hpp"
 
 #include <cstdint>
 #include <cstdio>
-#include <fstream>
 #include <functional>
-#include <iostream>
+#include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace {
-
-constexpr std::size_t buffer_size = std::size_t{1} << 20;
 
 // Checks the record order of a raw copy: one stream record first, stream_end
 // last, nothing after stream_end. Records are checked before they are written.
@@ -71,52 +69,45 @@ int main(int argc, char **argv) {
         usage();
         return 0;
       }
-      if (arg.size() > 1 && arg[0] == '-')
+      if (arg.size() > 1 && arg[0] == '-') {
         throw obdeect::stream::cli::UsageError("unknown option " + arg);
+      }
       names.push_back(arg);
     }
 
-    static std::vector<char> out_buffer(buffer_size);
-    obdeect::stream::StdinBuffer stdin_buffer;
-    std::istream in(&stdin_buffer);
-    std::cout.rdbuf()->pubsetbuf(out_buffer.data(),
-                                 static_cast<std::streamsize>(out_buffer.size()));
-
-    std::vector<std::vector<char>> buffers(names.size(), std::vector<char>(buffer_size));
-    std::vector<std::ofstream> outputs(names.size());
-    for (std::size_t i = 0; i < names.size(); ++i) {
-      outputs[i].rdbuf()->pubsetbuf(buffers[i].data(),
-                                    static_cast<std::streamsize>(buffers[i].size()));
-      outputs[i].open(names[i], std::ios::binary);
-      if (!outputs[i]) {
-        throw std::runtime_error("cannot open " + names[i] + " for writing");
-      }
+    obdeect::stream::tool::Input in{"-"};
+    obdeect::stream::tool::Output out{"-"};
+    std::vector<std::unique_ptr<obdeect::stream::tool::Output>> files;
+    for (const std::string &name : names) {
+      files.push_back(std::make_unique<obdeect::stream::tool::Output>(name));
     }
 
     std::vector<std::uint8_t> record;
     StreamOrder order;
-    while (obdeect::stream::read_record_raw(in, record)) {
+    while (obdeect::stream::read_record_raw(in.stream(), record)) {
       const auto type = static_cast<obdeect::stream::RecordType>(
           obdeect::stream::stream_detail::load_le(record.data() + 4, 2));
       order.accept(type);
       const auto *data = reinterpret_cast<const char *>(record.data());
       const auto size = static_cast<std::streamsize>(record.size());
-      std::cout.write(data, size);
-      std::cout.flush();
-      for (auto &output : outputs) {
-        output.write(data, size);
-        output.flush();
+      out.stream().write(data, size);
+      out.stream().flush();
+      if (!out.stream()) {
+        throw std::runtime_error("write error on standard output");
       }
-      if (!std::cout) {
-        throw std::runtime_error("write error on stdout");
-      }
-      for (std::size_t i = 0; i < outputs.size(); ++i) {
-        if (!outputs[i]) {
+      for (std::size_t i = 0; i < files.size(); ++i) {
+        files[i]->stream().write(data, size);
+        files[i]->stream().flush();
+        if (!files[i]->stream()) {
           throw std::runtime_error("write error on " + names[i]);
         }
       }
     }
     order.finish();
+    out.finish();
+    for (const auto &file : files) {
+      file->finish();
+    }
     return 0;
   });
 }

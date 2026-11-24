@@ -30,7 +30,13 @@ static const int mask_columns[] = {OBDEECT_STREAM_COLUMN_X,         OBDEECT_STRE
                                    OBDEECT_STREAM_COLUMN_T,         OBDEECT_STREAM_COLUMN_W,
                                    OBDEECT_STREAM_COLUMN_WAVELENGTH};
 
-static float value_of(int column, int row) { return (float)column * 100.0F + (float)row * 0.5F; }
+/* Direction cosines must stay in the unit disc (the reader checks them), so cx and cy are small. */
+static float value_of(int column, int row) {
+  if (column == OBDEECT_STREAM_COLUMN_CX || column == OBDEECT_STREAM_COLUMN_CY) {
+    return 0.01F * (float)row;
+  }
+  return (float)column * 100.0F + (float)row * 0.5F;
+}
 
 static void write_stream(obdeect_stream_writer *writer) {
   float data[OBDEECT_STREAM_N_COLUMNS][ROWS];
@@ -69,6 +75,8 @@ static void write_stream(obdeect_stream_writer *writer) {
         OBDEECT_STREAM_OK);
   CHECK(obdeect_stream_writer_set_float(writer, "photons", 5.0) == OBDEECT_STREAM_OK);
   CHECK(obdeect_stream_writer_write_record(writer, OBDEECT_STREAM_RECORD_TELESCOPE_END) ==
+        OBDEECT_STREAM_OK);
+  CHECK(obdeect_stream_writer_write_record(writer, OBDEECT_STREAM_RECORD_EVENT_END) ==
         OBDEECT_STREAM_OK);
   CHECK(obdeect_stream_writer_write_record(writer, OBDEECT_STREAM_RECORD_RUN_END) ==
         OBDEECT_STREAM_OK);
@@ -162,6 +170,7 @@ static void check_stream(obdeect_stream_reader *reader) {
   expect_next(reader, OBDEECT_STREAM_RECORD_TELESCOPE_END);
   CHECK(obdeect_stream_reader_meta_float(reader, "photons", &real) == OBDEECT_STREAM_OK &&
         real == 5.0);
+  expect_next(reader, OBDEECT_STREAM_RECORD_EVENT_END);
   expect_next(reader, OBDEECT_STREAM_RECORD_RUN_END);
   CHECK(obdeect_stream_reader_next(reader, &type) == OBDEECT_STREAM_END && type == 0);
 }
@@ -193,6 +202,12 @@ static void test_arguments(const char *directory) {
 
   snprintf(path, sizeof path, "%.500s/arguments.pst", directory);
   CHECK(obdeect_stream_writer_open(path, "t", &writer) == OBDEECT_STREAM_OK);
+  /* Photons go into a telescope block (the reader checks the nesting). */
+  CHECK(obdeect_stream_writer_write_record(writer, OBDEECT_STREAM_RECORD_RUN) == OBDEECT_STREAM_OK);
+  CHECK(obdeect_stream_writer_write_record(writer, OBDEECT_STREAM_RECORD_EVENT) ==
+        OBDEECT_STREAM_OK);
+  CHECK(obdeect_stream_writer_write_record(writer, OBDEECT_STREAM_RECORD_TELESCOPE) ==
+        OBDEECT_STREAM_OK);
   CHECK(obdeect_stream_writer_write_record(writer, OBDEECT_STREAM_RECORD_PHOTONS) ==
         OBDEECT_STREAM_ERROR_ARGUMENT);
   CHECK(obdeect_stream_writer_write_record(writer, OBDEECT_STREAM_RECORD_STREAM) ==
@@ -209,9 +224,14 @@ static void test_arguments(const char *directory) {
   many = calloc((size_t)OBDEECT_STREAM_MAX_CHUNK_ROWS + 1, sizeof(float));
   CHECK(many != NULL);
   if (many != NULL) {
+    /* Zeros in every column would give cz = 0 with cx = cy = 0, which is not a unit vector: only
+     * the required columns (zero directions in the unit disc) are present. */
     int c;
     for (c = 0; c < OBDEECT_STREAM_N_COLUMNS; ++c) {
-      columns[c] = many;
+      columns[c] = NULL;
+    }
+    for (c = 0; c < (int)(sizeof mask_columns / sizeof mask_columns[0]); ++c) {
+      columns[mask_columns[c]] = many;
     }
     CHECK(obdeect_stream_writer_write_photons(writer, 1, 1, 0, OBDEECT_STREAM_MAX_CHUNK_ROWS + 1,
                                               columns) == OBDEECT_STREAM_ERROR_ARGUMENT);
@@ -219,23 +239,33 @@ static void test_arguments(const char *directory) {
                                               columns) == OBDEECT_STREAM_OK);
     free(many);
   }
-  /* Empty array and empty blob with NULL pointers. */
+  /* Empty array (in the telescope_end record) and empty blob with NULL pointers. */
   CHECK(obdeect_stream_writer_set_array(writer, "empty", NULL, 0) == OBDEECT_STREAM_OK);
-  CHECK(obdeect_stream_writer_write_record(writer, OBDEECT_STREAM_RECORD_RUN) == OBDEECT_STREAM_OK);
+  CHECK(obdeect_stream_writer_write_record(writer, OBDEECT_STREAM_RECORD_TELESCOPE_END) ==
+        OBDEECT_STREAM_OK);
+  CHECK(obdeect_stream_writer_write_record(writer, OBDEECT_STREAM_RECORD_EVENT_END) ==
+        OBDEECT_STREAM_OK);
   CHECK(obdeect_stream_writer_write_blob(writer, 1, 2, NULL, 0) == OBDEECT_STREAM_OK);
+  CHECK(obdeect_stream_writer_write_record(writer, OBDEECT_STREAM_RECORD_RUN_END) ==
+        OBDEECT_STREAM_OK);
   CHECK(obdeect_stream_writer_close(writer) == OBDEECT_STREAM_OK);
 
   CHECK(obdeect_stream_reader_open(path, &reader) == OBDEECT_STREAM_OK);
   expect_next(reader, OBDEECT_STREAM_RECORD_STREAM);
-  expect_next(reader, OBDEECT_STREAM_RECORD_PHOTONS);
   expect_next(reader, OBDEECT_STREAM_RECORD_RUN);
+  expect_next(reader, OBDEECT_STREAM_RECORD_EVENT);
+  expect_next(reader, OBDEECT_STREAM_RECORD_TELESCOPE);
+  expect_next(reader, OBDEECT_STREAM_RECORD_PHOTONS);
+  expect_next(reader, OBDEECT_STREAM_RECORD_TELESCOPE_END);
   {
     const double *values = NULL;
     size_t n = 7;
     CHECK(obdeect_stream_reader_meta_array(reader, "empty", &values, &n) == OBDEECT_STREAM_OK &&
           n == 0);
   }
+  expect_next(reader, OBDEECT_STREAM_RECORD_EVENT_END);
   expect_next(reader, OBDEECT_STREAM_RECORD_BLOB);
+  expect_next(reader, OBDEECT_STREAM_RECORD_RUN_END);
   CHECK(obdeect_stream_reader_next(reader, &type) == OBDEECT_STREAM_END);
   obdeect_stream_reader_close(reader);
 }

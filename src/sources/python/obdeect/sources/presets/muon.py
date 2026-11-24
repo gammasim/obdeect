@@ -1,10 +1,11 @@
 """Cherenkov light of a muon-like track on a telescope sphere, sky frame.
 
-Port of the old ``obdeect sources muon-track`` program (``git show HEAD:`` of its header
-``src/sources/cpp/include/obdeect/sources/programs/muon-track.hpp``). Physics as before:
+Physics as in the former C++ muon-track program (removed; see the git history before the
+source presets were rewritten):
 
-- Track from the start height down to the impact point (x, y, 0), direction
-  ``(-sin z cos a, -sin z sin a, -cos z)`` for zenith z and azimuth a.
+- Track from the start height down to the impact point (x, y, 0). The light comes from the
+  direction of ``--zenith`` and ``--azimuth`` (astronomical, sky frame; see docs/sources/presets.md,
+  "Directions"), so the track runs along their reverse, ``-(sin z cos a, -sin z sin a, cos z)``.
 - Cherenkov light with the Frank-Tamm yield of ``_cherenkov``. A constant index gives one line
   for the whole track. An index table or exponential gives lines of steps of 10 m, each with the
   index at its midpoint (the old program's stepping).
@@ -34,6 +35,7 @@ import math
 
 import numpy as np
 from obdeect.sources.presets import _cherenkov, _common
+from obdeect.sources.presets._beam import travel_from_source
 
 NAME = "muon"
 HELP = "Cherenkov light of a muon-like track on a telescope sphere (sky frame)"
@@ -134,19 +136,7 @@ def core_positions(
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
-    _common.add_run_arguments(parser)
-    _cherenkov.add_wavelength_arguments(parser)
-    _cherenkov.add_index_arguments(parser)
-
-    telescope = parser.add_argument_group("telescope")
-    telescope.add_argument("--telescope-radius", type=float, required=True, metavar="M")
-    telescope.add_argument(
-        "--telescope-position",
-        type=_common.vector,
-        default="0,0,0",
-        metavar="X,Y,Z",
-        help="sphere centre [m] (default: origin)",
-    )
+    _cherenkov.add_shared_arguments(parser)
 
     track = parser.add_argument_group("track")
     track.add_argument("--primary", default="muon", metavar="ID|NAME")
@@ -158,8 +148,20 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     track.add_argument("--impact-x", type=float, default=0.0, metavar="M")
     track.add_argument("--impact-y", type=float, default=0.0, metavar="M")
     track.add_argument("--start-height", type=float, required=True, metavar="M")
-    track.add_argument("--zenith", type=float, default=0.0, metavar="DEG")
-    track.add_argument("--azimuth", type=float, default=0.0, metavar="DEG")
+    track.add_argument(
+        "--zenith",
+        type=float,
+        default=0.0,
+        metavar="DEG",
+        help="zenith of the direction the light comes from (the track runs the other way)",
+    )
+    track.add_argument(
+        "--azimuth",
+        type=float,
+        default=0.0,
+        metavar="DEG",
+        help="astronomical azimuth of the light source (clockwise from north)",
+    )
 
     core = parser.add_argument_group("core scattering")
     core.add_argument("--core-scatter-radius", type=float, default=0.0, metavar="M")
@@ -198,6 +200,12 @@ def _check(args: argparse.Namespace) -> None:
         raise ValueError("beta must lie in (0, 1]")
 
 
+def _shifted(line: dict, x: float, y: float) -> dict:
+    """A Cherenkov line of the track at the origin, moved to the impact point (x, y, 0)."""
+    start = line["start_m"]
+    return {**line, "start_m": [start[0] + x, start[1] + y, start[2]]}
+
+
 def build(args: argparse.Namespace) -> dict:
     """Run description of the muon track (see the module docstring)."""
     _check(args)
@@ -215,15 +223,26 @@ def build(args: argparse.Namespace) -> dict:
 
     index = _cherenkov.index_from_args(args)
     step = None if args.n_minus_one is not None else PROFILE_STEP_M
-    zenith = math.radians(args.zenith)
-    azimuth = math.radians(args.azimuth)
-    direction = [
-        -math.sin(zenith) * math.cos(azimuth),
-        -math.sin(zenith) * math.sin(azimuth),
-        -math.cos(zenith),
-    ]
-    length_m = args.start_height / math.cos(zenith)
+    direction = list(travel_from_source(args.zenith, args.azimuth))
+    length_m = args.start_height / math.cos(math.radians(args.zenith))
 
+    # The track is a translation of the one at the origin: the lines are computed once, the
+    # impact point of each core position shifts their start points.
+    base = _cherenkov.cherenkov_lines(
+        end_m=[0.0, 0.0, 0.0],
+        direction=direction,
+        length_m=length_m,
+        step_m=step,
+        index=index,
+        beta=beta,
+        wavelength_min_nm=args.wavelength_min,
+        wavelength_max_nm=args.wavelength_max,
+        charge=charge,
+    )
+    if not base:
+        raise ValueError(
+            "no Cherenkov light along the track: cos(theta_c) = 1/(n beta) > 1 everywhere"
+        )
     events = []
     cores = core_positions(
         args.impact_x,
@@ -233,21 +252,7 @@ def build(args: argparse.Namespace) -> dict:
         args.seed,
     )
     for core_x, core_y in cores:
-        emissions = _cherenkov.cherenkov_lines(
-            end_m=[core_x, core_y, 0.0],
-            direction=direction,
-            length_m=length_m,
-            step_m=step,
-            index=index,
-            beta=beta,
-            wavelength_min_nm=args.wavelength_min,
-            wavelength_max_nm=args.wavelength_max,
-            charge=charge,
-        )
-        if not emissions:
-            raise ValueError(
-                "no Cherenkov light along the track: cos(theta_c) = 1/(n beta) > 1 everywhere"
-            )
+        emissions = [_shifted(line, core_x, core_y) for line in base]
         events.append({
             "repeat": args.events,
             "metadata": {
@@ -261,12 +266,6 @@ def build(args: argparse.Namespace) -> dict:
 
     return {
         "run": _common.run_section(args, frame="sky", preset=NAME),
-        "telescopes": [
-            {
-                "id": 1,
-                "position_m": list(args.telescope_position),
-                "radius_m": args.telescope_radius,
-            }
-        ],
+        "telescopes": _common.single_telescope(args.telescope_radius, args.telescope_position),
         "events": events,
     }

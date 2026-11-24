@@ -415,7 +415,7 @@ void test_bunch_size() {
   CHECK(summary.rows == 250);
   CHECK_NEAR(summary.weight, 1000.0, 1e-9);
 
-  // 1000 / 3 candidates is not an integer: the count rounds to 333 or 334, weights stay 3.
+  // 1000 / 3 candidates is not an integer: the count is 333 for this seed, weights stay 3.
   Run third =
       make_run({tel(1, {0.0, 0.0, 0.0}, 10.0)},
                {make_event(1, {make_emission(isotropic_at({0.0, 0.0, 80.0}, 1000.0), 3.0)})});
@@ -423,7 +423,8 @@ void test_bunch_size() {
   const TelescopeBlock *u = telescope_of(q, 0, 0);
   if (u && u->chunks.size() == 1) {
     const std::size_t rows = u->chunks[0].rows();
-    CHECK(rows == 333 || rows == 334);
+    // Deterministic for this seed: 1000 / 3 = 333.33 candidates, counted as 333 rows.
+    CHECK(rows == 333);
     CHECK_NEAR(weight_sum(u->chunks[0]), 3.0 * static_cast<double>(rows), 1e-6);
   } else {
     CHECK(false);
@@ -630,8 +631,13 @@ void test_resolve_auto_target() {
   const std::vector<Telescope> one = {tel(1, {0.0, 0.0, 0.0}, 10.0)};
   const Vec3 up{0.0, 0.0, 1.0};
 
-  // Inside 1.02 R = 10.2 m: no target. Just outside: a sphere of radius R.
+  // Inside the sphere (radius R = 10 m): no target. Just outside it: the sphere (no threshold, so
+  // the weight sum is continuous across the boundary of the sphere's region).
   CHECK(std::holds_alternative<std::monostate>(
+      auto_target(Point{Vec3{0.0, 0.0, 9.99}, up, Isotropic{}}, one)));
+  CHECK(std::holds_alternative<SphereTarget>(
+      auto_target(Point{Vec3{0.0, 0.0, 10.01}, up, Isotropic{}}, one)));
+  CHECK(std::holds_alternative<SphereTarget>(
       auto_target(Point{Vec3{0.0, 0.0, 10.19}, up, Isotropic{}}, one)));
   const Target iso_far = auto_target(Point{Vec3{0.0, 0.0, 50.0}, up, Isotropic{}}, one);
   const auto *sphere = std::get_if<SphereTarget>(&iso_far);
@@ -718,6 +724,14 @@ void test_validation() {
                                  {make_event(1, {make_emission(src, 1.0, 0.0, true)})});
   ground_to_plane.frame = Frame::ground;
   rejected(ground_to_plane, "to_plane_z0");
+  // The seed is stored as a signed 64-bit integer: 2^63 - 1 is the largest accepted seed.
+  rejected(make_run({tel(1, {0.0, 0.0, 0.0}, 10.0)}, events, std::uint64_t{1} << 63),
+           "seed must be at most 2^63 - 1");
+  rejected(make_run({tel(1, {0.0, 0.0, 0.0}, 10.0)}, events, ~std::uint64_t{0}),
+           "seed must be at most 2^63 - 1");
+  std::ostringstream ok;
+  write_run(ok, make_run({tel(1, {0.0, 0.0, 0.0}, 10.0)}, events, (std::uint64_t{1} << 63) - 1));
+  CHECK(!ok.str().empty());
 }
 
 // Writes one emission and checks the weight sum against its expected value. The Monte Carlo
@@ -873,6 +887,45 @@ void test_ground_auto_target_hits_the_sphere() {
 
 // Rows of a ground run do not depend on the chunk size: emitting the candidates in one chunk or in
 // two, and finishing each chunk, gives the same rows in the same order.
+// Rows of a ground run lie on the telescope sphere to float32 rounding, also for a photon that
+// starts tens of km away (the stored direction cosines have a norm error of about 1e-7, which
+// used to move the entry point by millimetres over such a path).
+void test_ground_rows_on_the_sphere() {
+  const double radius = 30.0;
+  // A line 20 km away from the frame origin, crossing the sphere; its direction is not exact in
+  // float32 (the cosines are rounded), and the line starts 20 km before the sphere.
+  Line track;
+  track.start = {-20000.0, -10.0, 5.0};
+  track.direction = normalised({1.0, 0.0005, 0.0003});
+  track.length_m = 40000.0;
+  track.angular = FixedAngle{0.0};
+  Source point = with_geometry(track, 1e5);
+  point.target = SphereTarget{Vec3{0.0, 0.0, 0.0}, radius};
+  Run run =
+      make_run({tel(1, {0.0, 0.0, 0.0}, radius)}, {make_event(1, {make_emission(point)})}, 52);
+  run.frame = Frame::ground;
+  const RunBlock r = parse_run(write_bytes(run));
+  double worst_entry = 0.0;
+  double worst_outside = 0.0;
+  std::size_t entries = 0;
+  std::size_t rows = 0;
+  for (const PhotonChunk &c : sphere_chunks(r, radius)) {
+    for (std::size_t i = 0; i < c.rows(); ++i) {
+      const Vec3 row{c[Column::x][i], c[Column::y][i], c[Column::z][i]};
+      ++rows;
+      worst_outside = std::max(worst_outside, norm(row) - radius);
+      if (c[Column::path][i] > 0.0F) {
+        // An entry point: on the sphere to float32 rounding (ulp(30 m) = 3.8e-6 m).
+        worst_entry = std::max(worst_entry, std::abs(norm(row) - radius));
+        ++entries;
+      }
+    }
+  }
+  CHECK(rows > 1000 && entries > 1000);
+  CHECK(worst_entry <= 4.0 * 3.8e-6);
+  CHECK(worst_outside <= 4.0 * 3.8e-6);
+}
+
 void test_ground_rows_independent_of_chunk() {
   Source iso = isotropic_at({3.0, -4.0, 40.0}, 1e3);
   const Emission e = make_emission(iso, 2.0, 5.0);
@@ -964,5 +1017,6 @@ int main() {
     test_ground_isotropic_outside_fraction();
     test_ground_auto_target_hits_the_sphere();
     test_ground_rows_independent_of_chunk();
+    test_ground_rows_on_the_sphere();
   });
 }

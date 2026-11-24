@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <limits>
 #include <random>
 #include <sstream>
 #include <stdexcept>
@@ -421,6 +422,7 @@ void negative_photon_indices_are_rejected() {
   CHECK(std::find(types.begin(), types.end(), RecordType::telescope) == types.end());
 }
 
+// Ground-frame chunk with the columns sim_telarray input needs (wavelength zero: not sampled).
 PhotonChunk photon_chunk(std::uint32_t telescope_id, std::uint64_t first_index, std::size_t rows) {
   PhotonChunk chunk;
   chunk.telescope_id = telescope_id;
@@ -428,7 +430,7 @@ PhotonChunk photon_chunk(std::uint32_t telescope_id, std::uint64_t first_index, 
   chunk.first_index = first_index;
   chunk.resize(rows, column_bit(Column::x) | column_bit(Column::y) | column_bit(Column::cx) |
                          column_bit(Column::cy) | column_bit(Column::t) | column_bit(Column::zem) |
-                         column_bit(Column::w));
+                         column_bit(Column::w) | column_bit(Column::wavelength));
   return chunk;
 }
 
@@ -926,9 +928,177 @@ void sphere_run_without_photons() {
 
 } // namespace
 
+// EVTH block with one word set (word index 0-based), the others as evth_block.
+EventioBlock evth_with_word(std::size_t word, float value) {
+  std::vector<float> w(273, 0.0F);
+  w[1] = 1.0F;
+  w[2] = 14.0F;
+  w[3] = 1000.0F;
+  w[6] = 2500000.0F;
+  w[10] = 0.3F;
+  w[11] = 1.2F;
+  w[76] = 5136.0F;
+  w[95] = 250.0F;
+  w[96] = 800.0F;
+  w[word] = value;
+  return make_float_block(iact::evth, 1, w);
+}
+
+// A RUNH while the run is open (no RUNE before it) would close the run silently: an error. With
+// RUNE closing the first run, the same blocks are two runs.
+void runh_while_run_open_rejected() {
+  const std::string open =
+      serialize({runh_block(), telpos_block(), evth_block(1), evte_block(1), runh_block(),
+                 telpos_block(), evth_block(2), evte_block(2), rune_block()});
+  CHECK(throws_error([&] { convert(open); }));
+  const std::string closed =
+      serialize({runh_block(), telpos_block(), evth_block(1), evte_block(1), rune_block(),
+                 runh_block(), telpos_block(), evth_block(2), evte_block(2), rune_block()});
+  CHECK(!throws_error([&] { convert(closed); }));
+  CHECK(throws_error([&] { convert(serialize({runh_block(), runh_block(), rune_block()})); }));
+}
+
+// Header numbers are read as integers: NaN, infinities and values beyond 64 bits are errors (not
+// undefined behaviour of the conversion).
+void header_integers_must_be_finite() {
+  const float infinity = std::numeric_limits<float>::infinity();
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  for (const float bad : {nan, infinity, -infinity, 1e30F}) {
+    CHECK(throws_error([&] {
+      convert(serialize({runh_block(), telpos_block(), evth_with_word(1, bad), teloff_block(),
+                         evte_block(1), rune_block()}));
+    })); // event number
+    CHECK(throws_error([&] {
+      convert(serialize({runh_block(), telpos_block(), evth_with_word(76, bad), teloff_block(),
+                         evte_block(1), rune_block()}));
+    })); // word 77 (flags)
+    CHECK(throws_error([&] {
+      convert(serialize({runh_block(), telpos_block(), evth_with_word(78, bad), teloff_block(),
+                         evte_block(1), rune_block()}));
+    })); // CURVED flag
+  }
+  CHECK(!throws_error([&] {
+    convert(serialize({runh_block(), telpos_block(), evth_with_word(1, 7.0F), teloff_block(),
+                       evte_block(7), rune_block()}));
+  }));
+}
+
+// A photon block of a telescope index outside TELPOS (3 telescopes) is an error.
+void telescope_outside_telpos_rejected() {
+  const std::string outside =
+      serialize({runh_block(), telpos_block(), evth_block(1), teloff_block(),
+                 long_block(5, 1.0F, tel1_bunches), evte_block(1), rune_block()});
+  CHECK(throws_error([&] { convert(outside); }));
+  const std::string inside =
+      serialize({runh_block(), telpos_block(), evth_block(1), teloff_block(),
+                 long_block(2, 1.0F, tel1_bunches), evte_block(1), rune_block()});
+  CHECK(!throws_error([&] { convert(inside); }));
+}
+
+// The particle block (999, 999) is a blob at top level; inside an array container it is an error,
+// as for 1217 blocks.
+void particle_block_in_container_rejected() {
+  TelPhotons particles;
+  particles.array = 999;
+  particles.tel = 999;
+  const EventioBlock particle = make_photons_block(particles);
+  const std::string inside =
+      serialize({runh_block(), telpos_block(), evth_block(1), teloff_block(),
+                 make_container(iact::telarray, 0, 0, {particle}), evte_block(1), rune_block()});
+  CHECK(throws_error([&] { convert(inside); }));
+  const std::string top_level = serialize({runh_block(), telpos_block(), evth_block(1),
+                                           teloff_block(), particle, evte_block(1), rune_block()});
+  CHECK(!throws_error([&] { convert(top_level); }));
+}
+
+// Empty input holds no CORSIKA run: an error, not an empty stream.
+void empty_input_rejected() {
+  CHECK(throws_error([&] { convert(std::string()); }));
+}
+
+// Every proper prefix of a valid file is incomplete: the reader must report it, never accept it
+// as a complete run or crash on it.
+void every_truncation_is_reported() {
+  for (const std::string &valid : {build_stream_a(), build_stream_b()}) {
+    CHECK(!throws_error([&] { convert(valid); }));
+    for (std::size_t length = 0; length < valid.size(); ++length) {
+      CHECK(throws_error([&] { convert(valid.substr(0, length)); }));
+    }
+  }
+}
+
+// A chunk of n bunches with the wavelength column zero-filled (CORSIKA "not sampled").
+PhotonChunk photon_chunk_with_wavelength(std::uint32_t telescope_id, std::size_t rows,
+                                         float lambda) {
+  PhotonChunk chunk = photon_chunk(telescope_id, 0, rows);
+  chunk.resize(rows, chunk.mask() | column_bit(Column::wavelength));
+  for (std::size_t i = 0; i < rows; ++i) {
+    chunk[Column::x][i] = 1.0F;
+    chunk[Column::zem][i] = 2000.0F;
+    chunk[Column::w][i] = 1.0F;
+    chunk[Column::wavelength][i] = lambda;
+  }
+  return chunk;
+}
+
+// sim_telarray input needs the wavelength column: without it sim_telarray would sample a
+// Cherenkov spectrum. A zero column is kept as it is ("not sampled" in CORSIKA).
+void simtel_writer_needs_wavelength_column() {
+  PhotonChunk without = photon_chunk(1, 0, 2);
+  without.resize(2, without.mask() & ~column_bit(Column::wavelength));
+  CHECK(!without.has(Column::wavelength));
+  const std::vector<Record> missing{telescope_record(1), photons_record(without),
+                                    telescope_end_record(1)};
+  CHECK(throws_error([&] { feed_writer(missing); }));
+  const std::vector<Record> zeros{telescope_record(1),
+                                  photons_record(photon_chunk_with_wavelength(1, 2, 0.0F)),
+                                  telescope_end_record(1)};
+  CHECK(!throws_error([&] { feed_writer(zeros); }));
+  // The container is written at the end; its last bunch ends with the wavelength float.
+  const auto output_of = [](const std::vector<Record> &records) {
+    std::ostringstream out;
+    SimtelWriter writer{out};
+    for (const Record &r : records) {
+      writer.write(r);
+    }
+    writer.finish();
+    return out.str();
+  };
+  const std::string zero_bytes = output_of(zeros);
+  CHECK(zero_bytes.size() > 4);
+  CHECK(zero_bytes.substr(zero_bytes.size() - 4) == std::string(4, '\0'));
+  const std::string lambda_bytes =
+      output_of({telescope_record(1), photons_record(photon_chunk_with_wavelength(1, 2, 400.0F)),
+                 telescope_end_record(1)});
+  CHECK(lambda_bytes.substr(lambda_bytes.size() - 4) != std::string(4, '\0'));
+}
+
+// The photon sum of telescope_end must be a number (int or double).
+void telescope_end_photons_must_be_a_number() {
+  Record end = telescope_end_record(1);
+  end.metadata["photons"] = std::string("many");
+  const std::vector<Record> records{
+      telescope_record(1), photons_record(photon_chunk_with_wavelength(1, 1, 400.0F)), end};
+  CHECK(throws_error([&] { feed_writer(records); }));
+  Record integer_sum = telescope_end_record(1);
+  integer_sum.metadata["photons"] = std::int64_t{1};
+  CHECK(!throws_error([&] {
+    feed_writer({telescope_record(1), photons_record(photon_chunk_with_wavelength(1, 1, 400.0F)),
+                 integer_sum});
+  }));
+}
+
 int main() {
   return run_checks([] {
     units_are_double_then_float();
+    runh_while_run_open_rejected();
+    header_integers_must_be_finite();
+    telescope_outside_telpos_rejected();
+    particle_block_in_container_rejected();
+    empty_input_rejected();
+    every_truncation_is_reported();
+    simtel_writer_needs_wavelength_column();
+    telescope_end_photons_must_be_a_number();
     float_round_trip_is_within_one_ulp();
     stream_a_records();
     curvature_flag_is_read_from_evth();

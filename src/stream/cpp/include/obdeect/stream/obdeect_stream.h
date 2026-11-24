@@ -1,5 +1,5 @@
 /*
- * obdeect stream C API: read and write photon streams (docs/format.md) from C and from any
+ * obdeect stream C API: read and write photon streams (docs/stream/format.md) from C and from any
  * language with a C FFI (Rust, Julia, Python ctypes, ...). Pure C, no exceptions cross
  * the boundary.
  *
@@ -51,7 +51,7 @@ enum {
   OBDEECT_STREAM_ERROR_INTERNAL = -9   /* unexpected failure */
 };
 
-/* Record types (values as in docs/format.md). */
+/* Record types (values as in docs/stream/format.md). */
 enum {
   OBDEECT_STREAM_RECORD_STREAM = 1,
   OBDEECT_STREAM_RECORD_RUN = 2,

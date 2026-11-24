@@ -6,27 +6,22 @@ same detected photons; horizontal rows are allowed; the sphere must enclose the 
 Tests that write or read photon streams are skipped when obdeect.stream is not installed.
 """
 
-import subprocess
-
 import numpy as np
 import pytest
-from obdeect.ray_tracing import OpticalModel
 from obdeect.ray_tracing.compiler import model_hash
 from obdeect.ray_tracing.formats import ModelError
 from obdeect.ray_tracing.stream import (
-    enclosure_distances,
     ground_to_telescope_rotation,
     minimum_input_plane_height_m,
     trace_stream,
 )
-from telescopes import segmented
 from test_stream import (
     RUN,
     SEED,
     camera_photons,
     write_stream,
 )
-from test_stream_native import _assert_same_stream, _native_argv, _native_program
+from test_stream_native import obdeect_command, run_command
 
 SPEED_OF_LIGHT_M_PER_NS = 0.299792458
 SPHERE_RADIUS_M = 40.0
@@ -35,17 +30,6 @@ SPHERE_RUN = {
     "ground_representation": "sphere",
     "telescope_r_m": np.array([SPHERE_RADIUS_M]),
 }
-
-
-@pytest.fixture
-def obdeect_stream():
-    return pytest.importorskip("obdeect.stream")
-
-
-@pytest.fixture(scope="module")
-def model():
-    records, files = segmented()
-    return OpticalModel.from_records(records, files.__getitem__, configuration_seed=1)
 
 
 def _ground_point_and_direction(count, radius_m, direction, seed):
@@ -147,10 +131,10 @@ def test_sphere_rows_trace_like_the_plane_rows_of_the_same_photons(model, tmp_pa
     assert differences["w"] == 0.0
 
 
-def test_sphere_rows_native_and_python_write_the_same_stream(model, tmp_path, obdeect_stream):
-    native = _native_program()
-    if native is None:
-        pytest.skip("obdeect-ray-tracing-trace-stream is not installed")
+def test_sphere_rows_command_and_python_write_the_same_stream(model, tmp_path, obdeect_stream):
+    command = obdeect_command()
+    if command is None:
+        pytest.skip("the obdeect command is not installed")
     plane, sphere = plane_and_sphere_photons(model, 3000)
     horizontal = {
         **sphere,
@@ -174,20 +158,11 @@ def test_sphere_rows_native_and_python_write_the_same_stream(model, tmp_path, ob
     for name, photons, run in cases:
         source = write_stream(tmp_path / f"{name}.in", {1: photons}, run=run)
         python_out = tmp_path / f"{name}.python.pst"
-        native_out = tmp_path / f"{name}.native.pst"
+        command_out = tmp_path / f"{name}.command.pst"
         trace_stream(model, source, python_out, seed=SEED, pointing=(0.0, 0.0))
-        argv = _native_argv(
-            native,
-            [str(model_file)],
-            source,
-            native_out,
-            telescopes=None,
-            pointing=(0.0, 0.0),
-            transmission="full",
-            threads=1,
-        )
-        subprocess.run(argv, check=True, capture_output=True)
-        _assert_same_stream(python_out, native_out, obdeect_stream)
+        result = run_command(command, [str(model_file)], source, command_out)
+        assert result.returncode == 0, result.stderr
+        assert python_out.read_bytes() == command_out.read_bytes(), name
 
 
 def test_path_is_carried_to_the_camera_frame(model, tmp_path, obdeect_stream):
@@ -295,15 +270,6 @@ def test_enclosure_rejects_a_sphere_that_does_not_enclose_the_optics(
         _trace(model, tmp_path, obdeect_stream, sphere, small, "small")
 
 
-def test_enclosure_distances_name_every_element(model):
-    distances = dict(enclosure_distances(model))
-    assert "primary" in distances and "focal surface (plane)" in distances
-    assert all(value >= 0.0 for value in distances.values())
-    focal = model.document["optics"]["focal_surface"]["plane_z_m"]
-    assert distances["focal surface (plane)"] == pytest.approx(abs(focal), abs=1e-9)
-    assert max(distances.values()) < SPHERE_RADIUS_M
-
-
 def test_sphere_rows_need_their_columns_and_a_radius(model, tmp_path, obdeect_stream):
     plane, sphere = plane_and_sphere_photons(model, 10)
     without_z = {k: v for k, v in sphere.items() if k != "z"}
@@ -326,7 +292,7 @@ def test_sphere_rows_need_their_columns_and_a_radius(model, tmp_path, obdeect_st
             "badrep",
         )
     negative = {**sphere, "path": np.full(10, -1.0, np.float32)}
-    with pytest.raises(Exception):  # The reader rejects a negative path (format rule).
+    with pytest.raises(ValueError, match="path must be finite and >= 0"):  # Format rule.
         _trace(model, tmp_path, obdeect_stream, negative, SPHERE_RUN, "negpath")
 
 
@@ -347,27 +313,15 @@ def test_model_hash_is_unchanged_by_the_sphere_helpers(model):
     assert minimum_input_plane_height_m(model, 0.0, 0.0) > 0.0
 
 
-def test_native_program_rejects_a_sphere_that_does_not_enclose_the_optics(
-    model, tmp_path, obdeect_stream
-):
-    native = _native_program()
-    if native is None:
-        pytest.skip("obdeect-ray-tracing-trace-stream is not installed")
+def test_command_rejects_a_sphere_that_does_not_enclose_the_optics(model, tmp_path, obdeect_stream):
+    command = obdeect_command()
+    if command is None:
+        pytest.skip("the obdeect command is not installed")
     _, sphere = plane_and_sphere_photons(model, 10)
     small = {**RUN, "ground_representation": "sphere", "telescope_r_m": np.array([0.5])}
     source = write_stream(tmp_path / "small.in", {1: sphere}, run=small)
     model_file = tmp_path / "segmented.json"
     model.save(model_file)
-    argv = _native_argv(
-        native,
-        [str(model_file)],
-        source,
-        tmp_path / "small.out",
-        telescopes=None,
-        pointing=(0.0, 0.0),
-        transmission="full",
-        threads=1,
-    )
-    result = subprocess.run(argv, capture_output=True, text=True)
+    result = run_command(command, [str(model_file)], source, tmp_path / "small.out")
     assert result.returncode != 0
     assert "must enclose the optical model" in result.stderr

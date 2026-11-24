@@ -156,12 +156,26 @@ void bounds_exact_and_errors() {
   validate_bound_support(plain);
 }
 
+// ResponseBound (the degradation maxima computed once) gives exactly response_bound.
+void bounds_cached_maxima() {
+  auto m = folded_paraboloid();
+  m.primary.reflectivity = angle_response(5.0);
+  m.primary.degradation = map(0.85, 1.0, 3.0);
+  m.secondary->reflectivity = Response{250.0, 150.0, 4, {0.0}, {0.9, 0.95, 0.92, 0.7}};
+  m.secondary->degradation = map(0.7, 0.9, 2.0);
+  m.telescope_transmission = TelescopeTransmission{0.95, 1.0, 0.03, 2.0, 1.0};
+  const ResponseBound cached(m);
+  for (double lambda = 200.0; lambda <= 700.0; lambda += 7.3)
+    CHECK(cached.at(lambda) == response_bound(m, lambda));
+}
+
 } // namespace
 
 void all_tests() {
   bounds_exact_and_errors();
   bounds_single_mirror();
   bounds_dual_mirror();
+  bounds_cached_maxima();
 }
 
 int main() { return run_checks(all_tests); }

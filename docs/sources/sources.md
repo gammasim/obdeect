@@ -121,18 +121,19 @@ The actual count is `floor(mean)` plus one with the probability of the fraction 
 | --- | --- |
 | `"none"` (default) | all photons |
 | `"auto"` | chosen from the telescopes (rule below) |
-| `{ kind = "disc", centre_m, normal, radius_m }` | photons that reach a disc (weighted) |
+| `{ kind = "disc", centre_m, normal, radius_m }` | the photons that reach a disc (each row a hit, weight 1) |
 | `{ kind = "sphere", centre_m, radius_m }` | photons inside a cone around a sphere: isotropic points; isotropic or fixed-angle lines |
 
 Auto rule. The fiducial sphere has centre `C` (the mean telescope position) and radius `R` (the
 largest distance from `C` to a telescope centre plus that telescope's radius). Two telescopes at
 x = 0 and x = 100 m with radius 12.5 m give `C` = (50, 0, 0) and `R` = 62.5 m.
 
-- `point` within `1.02 R` of `C`: none.
-- `point`, isotropic: sphere `(C, R)`.
-- `point`, fixed angle: none.
-- `point`, other profiles: disc of radius `R` centred on `C` in the plane z = `C.z`. Error if the
-  point lies in that plane.
+- `point` inside the sphere (distance to `C` at most `R`): none, all its light is inside.
+- `point` outside the sphere, isotropic: sphere `(C, R)`. Every point outside the sphere gets the
+  sphere, so the expected light changes continuously with the distance.
+- `point` outside, fixed angle: none.
+- `point` outside, other profiles: disc of radius `R` centred on `C` in the plane z = `C.z`. Error
+  if the point lies in that plane.
 - `line` with a fixed angle or isotropic profile: sphere `(C, R)`; other lines: none.
 - `plane_wave` and `sky_background`: none.
 

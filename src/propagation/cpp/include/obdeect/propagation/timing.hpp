@@ -1,6 +1,7 @@
 #pragma once
 
-// Light travel time and the refractive index at the observation level. See docs/refraction.md.
+// Light travel time and the refractive index at the observation level. See
+// docs/propagation/refraction.md.
 
 #include "obdeect/propagation/profile.hpp"
 #include "obdeect/stream/constants.hpp"

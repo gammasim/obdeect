@@ -7,6 +7,8 @@
 
 #include <cmath>
 #include <cstdint>
+#include <limits>
+#include <stdexcept>
 
 int main() {
   return run_checks([] {
@@ -15,6 +17,24 @@ int main() {
     CHECK_NEAR(inverse_square_wavelength_nm(0.0, lo, hi), lo, 1e-9);
     // u = 1/2 gives the harmonic midpoint of the range.
     CHECK_NEAR(inverse_square_wavelength_nm(0.5, lo, hi), 2.0 * lo * hi / (lo + hi), 1e-9);
+
+    // The range must satisfy 0 < lo <= hi, finite: anything else throws. lo == hi is degenerate
+    // but valid (every draw is lo).
+    const auto rejected = [](double a, double b) {
+      try {
+        static_cast<void>(inverse_square_wavelength_nm(0.5, a, b));
+      } catch (const std::invalid_argument &) {
+        return true;
+      }
+      return false;
+    };
+    CHECK(rejected(0.0, hi));
+    CHECK(rejected(-300.0, hi));
+    CHECK(rejected(std::nan(""), hi));
+    CHECK(rejected(lo, lo - 1.0));
+    CHECK(rejected(lo, std::numeric_limits<double>::infinity()));
+    CHECK(!rejected(lo, lo));
+    CHECK_NEAR(inverse_square_wavelength_nm(0.3, 355.0, 355.0), 355.0, 0.0);
 
     // Counter-based draws: mean and variance of density (1/l^2)/(1/lo - 1/hi) within 5 sigma.
     const double norm = 1.0 / lo - 1.0 / hi;

@@ -77,11 +77,12 @@ public:
     }
     if (!(cdf_.back() > 0.0))
       throw std::invalid_argument("a density must have a positive integral");
+    maximum_ = *std::max_element(y_.begin(), y_.end());
   }
 
   [[nodiscard]] double lower() const { return x_.front(); }
   [[nodiscard]] double integral() const { return cdf_.back(); }
-  [[nodiscard]] double maximum() const { return *std::max_element(y_.begin(), y_.end()); }
+  [[nodiscard]] double maximum() const { return maximum_; }
 
   [[nodiscard]] double at(double x) const {
     if (x < x_.front() || x > x_.back())
@@ -113,7 +114,50 @@ private:
   }
 
   std::vector<double> x_, y_, cdf_;
+  double maximum_{}; // Largest node value, computed once.
 };
+
+// Largest mean of one inversion block in poisson_count: exp(-mean) then stays a normal double.
+inline constexpr double poisson_block_mean = 500.0;
+
+// Poisson(mean) count from the uniform deviate u in (0, 1), by inversion of the cumulative
+// distribution (exact up to rounding; mean <= poisson_block_mean). The search stops at
+// mean + 40 sqrt(mean) + 50, far beyond the tail (its probability is negligible there).
+[[nodiscard]] inline std::uint64_t poisson_inversion(double mean, double u) {
+  if (!(mean > 0.0))
+    return 0;
+  double term = std::exp(-mean); // P(k) = exp(-mean) mean^k / k!
+  double cumulative = term;
+  std::uint64_t k = 0;
+  const auto limit = static_cast<std::uint64_t>(mean + 40.0 * std::sqrt(mean) + 50.0);
+  while (u > cumulative && k < limit) {
+    ++k;
+    term *= mean / static_cast<double>(k);
+    cumulative += term;
+  }
+  return k;
+}
+
+// Poisson(mean) count of the random key (seed, photon_id, Stream::emitter_count): the mean is split
+// into blocks of at most poisson_block_mean (a sum of independent Poisson counts is Poisson with
+// the summed mean), and block b is inverted from the deviate of counter block b. Deterministic, and
+// independent of how the photons are later blocked. Throws std::invalid_argument for a mean that is
+// negative or not finite.
+[[nodiscard]] inline std::uint64_t poisson_count(double mean, std::uint64_t photon_id,
+                                                 std::uint64_t seed) {
+  if (!std::isfinite(mean) || mean < 0.0)
+    throw std::invalid_argument("a Poisson mean must be finite and not negative");
+  check_photon_ids(photon_id, 1);
+  const RandomKey key(seed);
+  std::uint64_t count = 0;
+  double remaining = mean;
+  for (std::uint32_t block = 0; remaining > 0.0; ++block) {
+    const double part = std::min(remaining, poisson_block_mean);
+    remaining -= part;
+    count += poisson_inversion(part, uniform4(key, photon_id, Stream::emitter_count, block)[0]);
+  }
+  return count;
+}
 
 // A point emitter such as a calibration light source. Its intensity per solid
 // angle depends on u = 1 - cos(theta), theta measured from `axis`; emission
@@ -146,6 +190,13 @@ struct Emitter {
         intensity.maximum() / (6.283185307179586476925 * intensity.integral());
     const double h = disk_distance_m();
     return per_steradian * obdeect::stream::pi * disk_radius_m * disk_radius_m / (h * h);
+  }
+
+  // Number of candidate photons of an emission of `emitted` photons: Poisson with mean
+  // emitted * candidates_per_photon(), keyed on (seed, photon_id) (see poisson_count).
+  [[nodiscard]] std::uint64_t candidate_count(double emitted, std::uint64_t photon_id,
+                                              std::uint64_t seed) const {
+    return poisson_count(emitted * candidates_per_photon(), photon_id, seed);
   }
 };
 

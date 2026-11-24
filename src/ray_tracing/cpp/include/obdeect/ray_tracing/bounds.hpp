@@ -26,15 +26,22 @@ inline double response_bound(const Response &r, double wavelength_nm) {
   return bound;
 }
 
-inline double response_bound(const Mirror &mirror, double wavelength_nm) {
+// Largest node of a degradation map (the factor of its bound); 1 without a map.
+inline double degradation_maximum(const Mirror &mirror) {
+  return mirror.degradation ? *std::max_element(mirror.degradation->values.begin(),
+                                                mirror.degradation->values.end())
+                            : 1.0;
+}
+
+// Bound of the mirror's response at a wavelength, given degradation_maximum(mirror).
+// Bilinear interpolation never exceeds the largest node; outside the map the value is
+// either the edge value or 0.
+inline double response_bound(const Mirror &mirror, double wavelength_nm, double degradation_max) {
   double bound = 1.0;
   if (mirror.reflectivity)
     bound *= response_bound(*mirror.reflectivity, wavelength_nm);
-  // Bilinear interpolation never exceeds the largest node; outside the map the
-  // value is either the edge value or 0.
   if (mirror.degradation)
-    bound *=
-        *std::max_element(mirror.degradation->values.begin(), mirror.degradation->values.end());
+    bound *= degradation_max;
   return bound;
 }
 
@@ -59,14 +66,33 @@ inline void validate_bound_support(const OpticalModel &model) {
 // the sequence) is kept with probability one and carries the excess in its weight,
 // so the estimator stays unbiased (trace_bunches). The bound is tight for the
 // sequential photons, which therefore keep their output.
+// The same bound for many wavelengths of one model: the degradation maxima are computed once.
+// The model must outlive the object.
+class ResponseBound {
+public:
+  explicit ResponseBound(const OpticalModel &model)
+      : model_(model), primary_degradation_(detail::degradation_maximum(model.primary)),
+        secondary_degradation_(model.secondary ? detail::degradation_maximum(*model.secondary)
+                                               : 1.0) {
+    validate_bound_support(model);
+  }
+
+  [[nodiscard]] double at(double wavelength_nm) const {
+    double bound = detail::response_bound(model_.primary, wavelength_nm, primary_degradation_);
+    if (model_.secondary)
+      bound *= detail::response_bound(*model_.secondary, wavelength_nm, secondary_degradation_);
+    if (const auto &t = model_.telescope_transmission)
+      bound *= t->on_axis;
+    return bound * (1.0 + 1e-12);
+  }
+
+private:
+  const OpticalModel &model_;
+  double primary_degradation_, secondary_degradation_;
+};
+
 [[nodiscard]] inline double response_bound(const OpticalModel &model, double wavelength_nm) {
-  validate_bound_support(model);
-  double bound = detail::response_bound(model.primary, wavelength_nm);
-  if (model.secondary)
-    bound *= detail::response_bound(*model.secondary, wavelength_nm);
-  if (const auto &t = model.telescope_transmission)
-    bound *= t->on_axis;
-  return bound * (1.0 + 1e-12);
+  return ResponseBound(model).at(wavelength_nm);
 }
 
 } // namespace obdeect::ray_tracing

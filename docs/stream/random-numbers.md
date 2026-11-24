@@ -18,12 +18,14 @@ page is the one place where they are described.
 ## Generator
 
 Philox-4x32-10 (`obdeect/stream/random.hpp`) is a counter-based generator: every draw is a pure
-function of a key, with no state to share between photons. The key combines:
+function of a key and a counter, with no state to share between photons.
+
+The 64-bit key is `seed XOR (stage × 0x9E3779B97F4A7C15)`, so the seed (the `--seed` of the
+command; for sources, the emission seed) and the stage (the module, table below) are both mixed
+into it. The 128-bit counter holds these fields:
 
 | Field | Bits | Meaning |
 |---|---|---|
-| seed | 64 | the `--seed` of the command; for sources, the emission seed |
-| stage | 32 | the module (table below) |
 | photon index | 40 | index of the photon within its telescope and event |
 | block | 24 | block of draws for one photon |
 | telescope | 16 | telescope id |
@@ -32,6 +34,9 @@ function of a key, with no state to share between photons. The key combines:
 
 Out-of-range fields are rejected. Other generators agree in the probabilities, not in the
 individual draws.
+
+`uniform4` returns four deviates in the open interval (0, 1), as doubles. The largest one,
+1 − 2⁻³³, rounds to 1.0 when stored as float32, so consumers must keep the double values.
 
 ## Stage ids
 

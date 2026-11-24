@@ -1,4 +1,5 @@
 #include "check.hpp"
+#include "stream_fixtures.hpp"
 
 #include "obdeect/propagation/extinction.hpp"
 #include "obdeect/propagation/transmission.hpp"
@@ -19,6 +20,8 @@
 // transmission}, transmission = transmission(lambda, zem, 30 m, airmass, 28 m, 2000 m).
 
 namespace {
+
+using namespace obdeect_test;
 
 struct Reference {
   int lambda_nm;
@@ -86,15 +89,6 @@ constexpr Reference reference_points[] = {
 
 const std::string table_path =
     std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/atm_trans_2000_1_10_0_0_2000.dat";
-
-template <class Function> bool throws_invalid(Function function) {
-  try {
-    function();
-  } catch (const std::invalid_argument &) {
-    return true;
-  }
-  return false;
-}
 
 // Constant optical depth 0.5 above 3 km, zero at the observation level.
 obdeect::propagation::TransmissionTable constant_table() {
@@ -181,29 +175,39 @@ void test_extinction_kernel_constant_tau() {
 }
 
 void test_invalid_tables() {
-  CHECK(throws_invalid([] {
-    return obdeect::propagation::TransmissionTable(
-        "# H2= 1.835, H1= 3.0\n400 1\n", 2000.0,
-        obdeect::propagation::WavelengthInterpolation::floor);
-  }));
-  CHECK(throws_invalid([] {
-    return obdeect::propagation::TransmissionTable(
-        "400 1\n", 2000.0, obdeect::propagation::WavelengthInterpolation::floor);
-  }));
-  CHECK(throws_invalid([] {
-    return obdeect::propagation::TransmissionTable(
-        "# H2= 2.000, H1= 4.0 3.0\n400 1 1\n", 2000.0,
-        obdeect::propagation::WavelengthInterpolation::floor);
-  }));
-  CHECK(throws_invalid([] {
-    return obdeect::propagation::TransmissionTable(
-        "# H2= 2.000, H1= 3.0\n400 1\n402 1\n", 2000.0,
-        obdeect::propagation::WavelengthInterpolation::floor);
-  }));
-  CHECK(throws_invalid([] {
-    return obdeect::propagation::TransmissionTable(
-        "# H2= 2.000, H1= 3.0\n", 2000.0, obdeect::propagation::WavelengthInterpolation::floor);
-  }));
+  CHECK(throws_with(
+      [] {
+        return obdeect::propagation::TransmissionTable(
+            "# H2= 1.835, H1= 3.0\n400 1\n", 2000.0,
+            obdeect::propagation::WavelengthInterpolation::floor);
+      },
+      "does not match the site altitude"));
+  CHECK(throws_with(
+      [] {
+        return obdeect::propagation::TransmissionTable(
+            "400 1\n", 2000.0, obdeect::propagation::WavelengthInterpolation::floor);
+      },
+      "header"));
+  CHECK(throws_with(
+      [] {
+        return obdeect::propagation::TransmissionTable(
+            "# H2= 2.000, H1= 4.0 3.0\n400 1 1\n", 2000.0,
+            obdeect::propagation::WavelengthInterpolation::floor);
+      },
+      "heights"));
+  CHECK(throws_with(
+      [] {
+        return obdeect::propagation::TransmissionTable(
+            "# H2= 2.000, H1= 3.0\n400 1\n402 1\n", 2000.0,
+            obdeect::propagation::WavelengthInterpolation::floor);
+      },
+      "wavelengths must rise"));
+  CHECK(throws_with(
+      [] {
+        return obdeect::propagation::TransmissionTable(
+            "# H2= 2.000, H1= 3.0\n", 2000.0, obdeect::propagation::WavelengthInterpolation::floor);
+      },
+      "data rows"));
 }
 
 void test_reference_table() {
@@ -230,29 +234,44 @@ void test_reference_table() {
 // strtod accepts "nan" and "inf"; they must be rejected in H2, heights and optical depths.
 // A NaN H2 also used to pass the site altitude check (NaN > tolerance is false).
 void test_non_finite_tables_rejected() {
-  CHECK(throws_invalid([] {
-    obdeect::propagation::TransmissionTable("# H2= nan, H1= 3.000 4.000\n400 0.5 0.5\n", 2000.0,
-                                            obdeect::propagation::WavelengthInterpolation::floor);
-  }));
-  CHECK(throws_invalid([] {
-    obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.000 inf\n400 0.5 0.5\n", 2000.0,
-                                            obdeect::propagation::WavelengthInterpolation::floor);
-  }));
-  CHECK(throws_invalid([] {
-    obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.000 4.000\n400 nan 0.5\n", 2000.0,
-                                            obdeect::propagation::WavelengthInterpolation::floor);
-  }));
-  CHECK(throws_invalid([] {
-    obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.000 4.000\n400 -inf 0.5\n", 2000.0,
-                                            obdeect::propagation::WavelengthInterpolation::floor);
-  }));
+  CHECK(throws_with(
+      [] {
+        obdeect::propagation::TransmissionTable(
+            "# H2= nan, H1= 3.000 4.000\n400 0.5 0.5\n", 2000.0,
+            obdeect::propagation::WavelengthInterpolation::floor);
+      },
+      "is not a finite number"));
+  CHECK(throws_with(
+      [] {
+        obdeect::propagation::TransmissionTable(
+            "# H2= 2.000, H1= 3.000 inf\n400 0.5 0.5\n", 2000.0,
+            obdeect::propagation::WavelengthInterpolation::floor);
+      },
+      "not a finite number"));
+  CHECK(throws_with(
+      [] {
+        obdeect::propagation::TransmissionTable(
+            "# H2= 2.000, H1= 3.000 4.000\n400 nan 0.5\n", 2000.0,
+            obdeect::propagation::WavelengthInterpolation::floor);
+      },
+      "not a finite number"));
+  CHECK(throws_with(
+      [] {
+        obdeect::propagation::TransmissionTable(
+            "# H2= 2.000, H1= 3.000 4.000\n400 -inf 0.5\n", 2000.0,
+            obdeect::propagation::WavelengthInterpolation::floor);
+      },
+      "not a finite number"));
   // H2 = 0 would give log10(0) = -inf in the height grid.
-  CHECK(throws_invalid([] {
-    obdeect::propagation::TransmissionTable("# H2= 0.000, H1= 3.000\n400 0 0.5\n", 0.0,
-                                            obdeect::propagation::WavelengthInterpolation::floor);
-  }));
+  CHECK(throws_with(
+      [] {
+        obdeect::propagation::TransmissionTable(
+            "# H2= 0.000, H1= 3.000\n400 0.5\n", 0.0,
+            obdeect::propagation::WavelengthInterpolation::floor);
+      },
+      "H2 must be positive"));
   // A finite table still parses.
-  CHECK(!throws_invalid([] {
+  CHECK(accepts([] {
     obdeect::propagation::TransmissionTable("# H2= 2.000, H1= 3.000 4.000\n400 0.5 0.5\n", 2000.0,
                                             obdeect::propagation::WavelengthInterpolation::floor);
   }));
@@ -262,11 +281,14 @@ void test_non_finite_tables_rejected() {
 // are clamped to its edge rows without converting them to int first.
 void test_wavelength_lookup_bounds() {
   const auto table = constant_table();
-  CHECK(throws_invalid([&] { (void)table.transmission<double>(std::nan(""), 3500.0, 1.0); }));
-  CHECK(throws_invalid([&] {
-    (void)table.transmission2<double>(std::numeric_limits<double>::infinity(), 3500.0, 1.0, 0.0,
-                                      0.0);
-  }));
+  CHECK(throws_with([&] { (void)table.transmission<double>(std::nan(""), 3500.0, 1.0); },
+                    "wavelength must be finite"));
+  CHECK(throws_with(
+      [&] {
+        (void)table.transmission2<double>(std::numeric_limits<double>::infinity(), 3500.0, 1.0, 0.0,
+                                          0.0);
+      },
+      "wavelength must be finite"));
   const double at_table = table.transmission<double>(400.0, 3500.0, 1.0);
   CHECK_NEAR(table.transmission<double>(1e300, 3500.0, 1.0), at_table, 0.0);
   CHECK_NEAR(table.transmission<double>(-1e300, 3500.0, 1.0), at_table, 0.0);
@@ -274,15 +296,22 @@ void test_wavelength_lookup_bounds() {
 
 void test_transmission2_parameters() {
   const auto table = constant_table();
-  const double nan = std::numeric_limits<double>::quiet_NaN();
-  const double inf = std::numeric_limits<double>::infinity();
-  CHECK(throws_invalid([&] { (void)table.transmission2<double>(400.0, 3500.0, nan, 0.0, 0.0); }));
-  CHECK(throws_invalid([&] { (void)table.transmission2<double>(400.0, 3500.0, inf, 0.0, 0.0); }));
-  CHECK(throws_invalid([&] { (void)table.transmission2<double>(400.0, 3500.0, -1.0, 0.0, 0.0); }));
-  CHECK(throws_invalid([&] { (void)table.transmission2<double>(400.0, 3500.0, 1.0, nan, 0.0); }));
-  CHECK(throws_invalid([&] { (void)table.transmission2<double>(400.0, 3500.0, 1.0, 0.0, inf); }));
-  CHECK(throws_invalid([&] { (void)table.transmission2<double>(400.0, 3500.0, 1.0, -1.0, 0.0); }));
-  CHECK(throws_invalid([&] { (void)table.transmission2<double>(400.0, 3500.0, 1.0, 0.0, -1.0); }));
+  const double nan = obdeect_test::kNan;
+  const double inf = obdeect_test::kInf;
+  CHECK(throws_with([&] { (void)table.transmission2<double>(400.0, 3500.0, nan, 0.0, 0.0); },
+                    "must be finite and non-negative"));
+  CHECK(throws_with([&] { (void)table.transmission2<double>(400.0, 3500.0, inf, 0.0, 0.0); },
+                    "must be finite and non-negative"));
+  CHECK(throws_with([&] { (void)table.transmission2<double>(400.0, 3500.0, -1.0, 0.0, 0.0); },
+                    "must be finite and non-negative"));
+  CHECK(throws_with([&] { (void)table.transmission2<double>(400.0, 3500.0, 1.0, nan, 0.0); },
+                    "must be finite and non-negative"));
+  CHECK(throws_with([&] { (void)table.transmission2<double>(400.0, 3500.0, 1.0, 0.0, inf); },
+                    "must be finite and non-negative"));
+  CHECK(throws_with([&] { (void)table.transmission2<double>(400.0, 3500.0, 1.0, -1.0, 0.0); },
+                    "must be finite and non-negative"));
+  CHECK(throws_with([&] { (void)table.transmission2<double>(400.0, 3500.0, 1.0, 0.0, -1.0); },
+                    "must be finite and non-negative"));
 }
 
 // Linear mode. Rows 400 and 401 nm, at heights 3 and 5 km (interpolated in log10 h).
@@ -296,8 +325,9 @@ void test_linear_mode_selection() {
   CHECK(floor_table.wavelength_interpolation() == WavelengthInterpolation::floor);
   const TransmissionTable linear_table(two_rows, 2000.0, WavelengthInterpolation::linear);
   CHECK(linear_table.wavelength_interpolation() == WavelengthInterpolation::linear);
-  CHECK(throws_invalid(
-      [] { return TransmissionTable(two_rows, 2000.0, static_cast<WavelengthInterpolation>(7)); }));
+  CHECK(throws_with(
+      [] { return TransmissionTable(two_rows, 2000.0, static_cast<WavelengthInterpolation>(7)); },
+      "unknown wavelength interpolation mode"));
 }
 
 // Integer wavelengths give the same values in both modes (fixture table, all depths).
@@ -367,17 +397,40 @@ void test_linear_clamping() {
   }
 }
 
+// Run setup rejects a wavelength range outside the table rows or at and above 1000 nm, instead of
+// clamping it silently (the lookups clamp to the rows and give no transmission at 1000 nm and
+// above).
+void test_wavelength_range_at_setup() {
+  using obdeect::propagation::TransmissionTable;
+  using obdeect::propagation::WavelengthInterpolation;
+  const TransmissionTable table(two_rows, 2000.0, WavelengthInterpolation::linear);
+  table.require_wavelength_range(400.0, 401.0);
+  table.require_wavelength_range(400.5, 400.5);
+  CHECK(throws_with([&] { table.require_wavelength_range(399.9, 401.0); }, "wavelength range"));
+  CHECK(throws_with([&] { table.require_wavelength_range(400.0, 401.5); }, "wavelength range"));
+  CHECK(throws_with([&] { table.require_wavelength_range(300.0, 450.0); }, "wavelength range"));
+  // A table that has rows up to 999 nm accepts 999 nm and rejects 1000 nm.
+  const TransmissionTable wide("# H2= 2.000, H1= 3.000\n998 3.0\n999 3.0\n", 2000.0,
+                               WavelengthInterpolation::linear);
+  wide.require_wavelength_range(998.0, 999.0);
+  CHECK(throws_with([&] { wide.require_wavelength_range(998.0, 1000.0); }, "wavelength range"));
+}
+
 void test_linear_non_finite_rejected() {
   using obdeect::propagation::TransmissionTable;
   using obdeect::propagation::WavelengthInterpolation;
   const double nan = std::nan("");
-  const double inf = std::numeric_limits<double>::infinity();
+  const double inf = obdeect_test::kInf;
   const TransmissionTable linear_table(two_rows, 2000.0, WavelengthInterpolation::linear);
   const auto depths = linear_table.telescope_depths(4000.0, 1000.0);
-  CHECK(throws_invalid([&] { (void)linear_table.optical_depth<double>(nan, 4000.0); }));
-  CHECK(throws_invalid([&] { (void)linear_table.optical_depth<double>(inf, 4000.0); }));
-  CHECK(throws_invalid([&] { (void)linear_table.telescope_depths_at(depths, nan); }));
-  CHECK(throws_invalid([&] { (void)linear_table.transmission<double>(nan, 4000.0, 1.0); }));
+  CHECK(throws_with([&] { (void)linear_table.optical_depth<double>(nan, 4000.0); },
+                    "wavelength must be finite"));
+  CHECK(throws_with([&] { (void)linear_table.optical_depth<double>(inf, 4000.0); },
+                    "wavelength must be finite"));
+  CHECK(throws_with([&] { (void)linear_table.telescope_depths_at(depths, nan); },
+                    "wavelength must be finite"));
+  CHECK(throws_with([&] { (void)linear_table.transmission<double>(nan, 4000.0, 1.0); },
+                    "wavelength must be finite"));
 }
 
 // od_tel = tau(lambda, h_T) and od_focus = tau(lambda, h_T + l) - tau(lambda, h_T) in linear mode.
@@ -424,6 +477,7 @@ int main() {
     test_linear_halfway();
     test_linear_clamping();
     test_linear_non_finite_rejected();
+    test_wavelength_range_at_setup();
     test_linear_telescope_depths();
   });
 }

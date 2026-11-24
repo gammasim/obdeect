@@ -22,13 +22,13 @@ def record(name: str, value, unit=None, *, file: bool = False) -> dict:
 
 # Seven circular 1 m mirrors on a Davies-Cotton dish; focal lengths automatic.
 MIRROR_LIST = """# x y diameter focal shape
-   0.0     0.0  100.0  0.0  0
- 125.0     0.0  100.0  0.0  0
--125.0     0.0  100.0  0.0  0
-  62.5   108.3  100.0  0.0  0
- -62.5   108.3  100.0  0.0  0
-  62.5  -108.3  100.0  0.0  0
- -62.5  -108.3  100.0  0.0  0
+   0.0     0.0  100.0  0.0  0  0.0
+ 125.0     0.0  100.0  0.0  0  0.0
+-125.0     0.0  100.0  0.0  0  0.0
+  62.5   108.3  100.0  0.0  0  0.0
+ -62.5   108.3  100.0  0.0  0  0.0
+  62.5  -108.3  100.0  0.0  0  0.0
+ -62.5  -108.3  100.0  0.0  0  0.0
 """
 
 STRUCTURE = """# %ECSV 1.0

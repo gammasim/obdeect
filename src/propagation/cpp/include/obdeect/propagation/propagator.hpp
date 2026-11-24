@@ -1,6 +1,6 @@
 #pragma once
 
-// Atmosphere stage of a photon stream (docs/propagation.md). Records are read with
+// Atmosphere stage of a photon stream (docs/propagation/propagation.md). Records are read with
 // obdeect::stream::Reader, passed to Propagator::process, and written with obdeect::stream::Writer.
 //
 // Per photon chunk, in this order (Propagator::photons):
@@ -44,6 +44,7 @@
 #include <filesystem>
 #include <fstream>
 #include <istream>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <ostream>
@@ -59,8 +60,8 @@ namespace obdeect::propagation {
 
 enum class OutputMode { thinned, weighted };
 
-// Earth curvature of the atmosphere (extinction only; see docs/extinction.md). The modes are
-// explicit: the input run key curvature_applied says which geometry the photons have.
+// Earth curvature of the atmosphere (extinction only; see docs/propagation/extinction.md). The
+// modes are explicit: the input run key curvature_applied says which geometry the photons have.
 //   none:      plane-parallel atmosphere. Input with curvature_applied = 1 is rejected.
 //   corsika:   photons from CORSIKA with the CURVED option (curvature_applied = 1, frame G, zem
 //              above sea level). Only the airmass is replaced by the curved slant depth.
@@ -136,8 +137,10 @@ struct PropagatorConfig {
   std::uint64_t seed{};
   OutputMode mode{OutputMode::thinned};
   bool store_p{false}; // keep the acceptance column p in the output
-  // Optional single scattering of the sky-frame photons (docs/scattering.md), off by default. When
-  // enabled, the table is required and the run needs telescope_r_m (sphere radii).
+  // Optional single scattering of the sky-frame photons (docs/propagation/scattering.md), off by
+  // default. The table switches it on: scattering is on if scattering_table is set
+  // (scattering.enabled is set from it; a true flag without a table is rejected). The run needs
+  // telescope_r_m (sphere radii).
   ScatteringConfig scattering;
   std::optional<ScatteringTable> scattering_table;
   std::string scattering_source; // efficiency_status provenance, e.g. the table file name
@@ -165,13 +168,26 @@ struct PropagatorConfig {
   std::optional<std::vector<std::uint32_t>> scattering_primaries;
 };
 
+// Counts of a run. Every photon of the input has one fate (docs/propagation/propagation.md,
+// "Accounting"): the primaries are written, dropped by reason, or removed by the acceptance
+// (thinned_out); the scattered photons are written, dropped by reason or removed by the acceptance
+// (scattered_thinned_out).
 struct PropagationSummary {
   std::uint64_t photons_in{};  // rows of the input photon records (selected telescopes only)
   std::uint64_t photons_out{}; // rows written (thinned: surviving photons, weighted: w > 0)
-  std::uint64_t dropped{};     // sky-frame photons that do not reach the telescope plane
-  // The dropped photons by reason (DropCounts): dropped == dropped_by_reason.total().
+  std::uint64_t dropped{};     // primaries that do not reach the telescope plane (sphere)
+  // The dropped primaries by reason (DropCounts): dropped == dropped_by_reason.total().
   DropCounts dropped_by_reason{};
   double weight_out{}; // sum of w of the output
+  // Weight removed by the acceptance draw of the primaries: thinned, the photons that do not
+  // survive (sum of w - survivors over the reaching rows; equal to a count for rows of w = 1, where
+  // photons_in = photons_out + dropped + thinned_out); weighted, the weight w (1 - p) removed.
+  double thinned_out{};
+  // Scattered photons (single scattering) that do not reach the telescope, by reason, and the
+  // weight removed by their acceptance (as thinned_out).
+  DropCounts scattered_dropped_by_reason{};
+  std::uint64_t scattered_dropped{}; // == scattered_dropped_by_reason.total()
+  double scattered_thinned_out{};
 };
 
 // Reads a two-column text table (wavelength nm, value; '#' starts a comment).
@@ -191,7 +207,7 @@ inline EnvelopeFactor parse_envelope_text(std::string_view text, std::string nam
       continue;
     }
     if (tokens.size() != 2) {
-      throw std::invalid_argument("envelope table: each line needs wavelength and value");
+      throw std::invalid_argument("efficiency bound table: each line needs wavelength and value");
     }
     factor.wavelength_nm.push_back(detail::parse_number(tokens[0], "wavelength"));
     factor.value.push_back(detail::parse_number(tokens[1], "value"));
@@ -231,9 +247,26 @@ inline bool same_file(const std::string &a, const std::string &b) {
   return fs::equivalent(a, b, ec); // true only if both exist and are the same file
 }
 
+// Telescope ids of a selection (1-based, at most max_telescope); throws std::invalid_argument.
+// what names the selection in the message.
+inline void check_telescope_ids(const std::vector<std::uint32_t> &ids, const char *what) {
+  for (const auto id : ids) {
+    if (id < 1 || id > obdeect::stream::max_telescope) {
+      throw std::invalid_argument(std::string(what) + ": telescope ids are 1-based");
+    }
+  }
+}
+
+// Sorts a list of telescope ids and removes the repeats.
+inline void sort_unique_telescope_ids(std::vector<std::uint32_t> &ids) {
+  std::sort(ids.begin(), ids.end());
+  ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+}
+
 class Propagator {
 public:
-  explicit Propagator(PropagatorConfig config) : config_(std::move(config)) {
+  explicit Propagator(PropagatorConfig config)
+      : config_(std::move(config)), pool_(config_.threads) {
     if (config_.geometry_only) {
       check_geometry_only();
     } else if (!config_.transmission) {
@@ -262,14 +295,12 @@ public:
       }
       check_pathlen(pathlen);
     }
-    if (config_.scattering.enabled != config_.scattering_table.has_value()) {
-      throw std::invalid_argument(config_.scattering.enabled
-                                      ? "scattering needs a scattering table"
-                                      : "scattering table given, but scattering is off");
+    if (config_.scattering.enabled && !config_.scattering_table) {
+      throw std::invalid_argument("scattering needs a scattering table");
     }
-    if (config_.scattering.enabled &&
-        (config_.scattering.points_per_photon < 1 ||
-         config_.scattering.points_per_photon > max_points_per_photon)) {
+    config_.scattering.enabled = scattering_on(); // the scatter kernel reads the flag
+    if (scattering_on() && (config_.scattering.points_per_photon < 1 ||
+                            config_.scattering.points_per_photon > max_points_per_photon)) {
       throw std::invalid_argument("scattering needs 1 to 1024 points per photon");
     }
     check_curvature();
@@ -298,13 +329,28 @@ public:
     }
   }
 
+  // The propagator is not copied or moved: config_.scattering.air_profile points into config_, and
+  // pool_ owns its threads.
+  Propagator(const Propagator &) = delete;
+  Propagator &operator=(const Propagator &) = delete;
+  Propagator(Propagator &&) = delete;
+  Propagator &operator=(Propagator &&) = delete;
+  ~Propagator() = default;
+
   // Processes one input record. Records of the output go to sink(const obdeect::stream::Record &).
   // The efficiency status of a run is written before the first record that is not an efficiency
   // status after it. Throws std::invalid_argument if an incoming efficiency_status shows a factor
   // applied already.
+  // Processes a record that the caller keeps (its photons are copied).
   template <class Sink> void process(const obdeect::stream::Record &record, Sink &&sink) {
+    obdeect::stream::Record copy = record;
+    process(copy, sink);
+  }
+
+  // Processes a record that may be changed: its photons are moved into the propagator.
+  template <class Sink> void process(obdeect::stream::Record &record, Sink &&sink) {
     using obdeect::stream::RecordType;
-    if (!config_.scattering.enabled) {
+    if (!scattering_on()) {
       process_record(record, sink);
       return;
     }
@@ -312,7 +358,7 @@ public:
     // from the primaries of all telescopes of the event.
     if (in_event_) {
       if (record.type == RecordType::event_end) {
-        event_records_.push_back(record);
+        event_records_.push_back(std::move(record));
         flush_event(sink);
         return;
       }
@@ -321,7 +367,7 @@ public:
                               record.type == RecordType::stream ||
                               record.type == RecordType::stream_end;
       if (!ends_event) {
-        event_records_.push_back(record);
+        event_records_.push_back(std::move(record));
         return;
       }
       flush_event(sink);
@@ -345,14 +391,68 @@ public:
   [[nodiscard]] const PropagationSummary &summary() const noexcept { return summary_; }
 
 private:
+  // Sum of the bunch weights of a chunk (0 without a w column).
+  static double weight_sum(const obdeect::stream::PhotonChunk &chunk) {
+    double sum = 0.0;
+    for (const float weight : chunk[obdeect::stream::Column::w]) {
+      sum += static_cast<double>(weight);
+    }
+    return sum;
+  }
+
+  static double weight_sum(const std::vector<obdeect::stream::PhotonChunk> &chunks) {
+    double sum = 0.0;
+    for (const auto &chunk : chunks) {
+      sum += weight_sum(chunk);
+    }
+    return sum;
+  }
+
+  // With scattering: one telescope block per telescope and event. The scattered photons of a
+  // telescope are written in its block; a second block would need its own scattered photons.
+  static void check_one_block_per_telescope(const std::vector<obdeect::stream::Record> &records) {
+    std::vector<std::int64_t> ids;
+    for (const auto &record : records) {
+      if (record.type == obdeect::stream::RecordType::telescope) {
+        ids.push_back(
+            checked_integer(record.metadata, "telescope_id", obdeect::stream::max_telescope));
+      }
+    }
+    std::sort(ids.begin(), ids.end());
+    if (std::adjacent_find(ids.begin(), ids.end()) != ids.end()) {
+      throw std::invalid_argument("single scattering needs one telescope block per telescope and "
+                                  "event (CORSIKA array reuse is not supported with scattering)");
+    }
+  }
+
+  // The photon blocks of a telescope in an event continue the index: first_index counts the
+  // photons of the telescope in the event, and the random keys of the stages use it. A block must
+  // start where the previous one of the telescope ended (in_index_ is reset at each event).
+  void check_first_index(const obdeect::stream::PhotonChunk &input) {
+    std::uint64_t &next = in_index_[telescope_.id];
+    if (input.first_index != next) {
+      throw std::invalid_argument("photon block of telescope " + std::to_string(telescope_.id) +
+                                  " in event " + std::to_string(event_number_) +
+                                  " starts at first_index " + std::to_string(input.first_index) +
+                                  ", expected " + std::to_string(next) +
+                                  " (the blocks of a telescope must continue the index)");
+    }
+    next += input.rows();
+  }
+
   static constexpr std::int64_t max_u32 = 0xFFFFFFFFLL;
   static constexpr double min_earth_radius_m = 1e6;
 
   // One record of the stream (process without the event hold).
-  template <class Sink> void process_record(const obdeect::stream::Record &record, Sink &sink) {
+  template <class Sink> void process_record(obdeect::stream::Record &record, Sink &sink) {
     using obdeect::stream::RecordType;
     if (record.type == RecordType::efficiency_status) {
       check_incoming_efficiency_status(record.metadata);
+      if (!telescope_.open && efficiency_status_pending_) {
+        // Run status of the input: merged into the one run status of this stage (flush).
+        incoming_run_status_ = merge_status(incoming_run_status_, record.metadata);
+        return;
+      }
       // A telescope status (after the telescope record) belongs to the dropped block if its
       // telescope is not selected.
       if (!telescope_.open || selected(telescope_.id)) {
@@ -380,6 +480,7 @@ private:
           static_cast<std::uint32_t>(checked_integer(record.metadata, "event_number", max_u32));
       have_event_ = true;
       out_index_.clear();
+      in_index_.clear();
       sink(record);
       break;
     case RecordType::telescope: {
@@ -391,7 +492,7 @@ private:
       break;
     }
     case RecordType::photons:
-      photons(record.chunk, sink);
+      photons(record.chunk, sink); // moves the chunk
       break;
     case RecordType::telescope_end: {
       const auto id =
@@ -451,7 +552,7 @@ private:
     if (config_.mode != OutputMode::weighted) {
       throw std::invalid_argument("geometry-only run keeps all photons: mode must be weighted");
     }
-    if (config_.scattering.enabled || config_.scattering_table) {
+    if (scattering_on()) {
       throw std::invalid_argument("geometry-only run cannot be combined with scattering");
     }
     if (config_.store_p) {
@@ -474,33 +575,26 @@ private:
     if (ids.empty()) {
       throw std::invalid_argument("telescope selection is empty");
     }
-    for (const auto id : ids) {
-      if (id < 1 || id > obdeect::stream::max_telescope) {
-        throw std::invalid_argument("telescope selection: telescope ids are 1-based");
-      }
-    }
-    std::sort(ids.begin(), ids.end());
-    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    check_telescope_ids(ids, "telescope selection");
+    sort_unique_telescope_ids(ids);
   }
 
   // Scattering primaries: needs scattering; at least one id, 1-based; sorted and without repeats.
   // Ids of the run are checked in begin_run.
   void check_scattering_primaries() {
     auto &ids = *config_.scattering_primaries;
-    if (!config_.scattering.enabled) {
+    if (!scattering_on()) {
       throw std::invalid_argument("scattering_primaries needs scattering");
     }
     if (ids.empty()) {
       throw std::invalid_argument("scattering_primaries is empty");
     }
-    for (const auto id : ids) {
-      if (id < 1 || id > obdeect::stream::max_telescope) {
-        throw std::invalid_argument("scattering_primaries: telescope ids are 1-based");
-      }
-    }
-    std::sort(ids.begin(), ids.end());
-    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    check_telescope_ids(ids, "scattering_primaries");
+    sort_unique_telescope_ids(ids);
   }
+
+  // Scattering is on if the config has a scattering table (the table is the switch).
+  [[nodiscard]] bool scattering_on() const noexcept { return config_.scattering_table.has_value(); }
 
   // Primary photons of telescope id are scattered (all blocks by default).
   [[nodiscard]] bool is_scattering_primary(std::uint32_t telescope_id) const {
@@ -547,7 +641,7 @@ private:
     if (config_.curvature == Curvature::none) {
       return;
     }
-    if (config_.scattering.enabled) {
+    if (scattering_on()) {
       throw std::invalid_argument("curved atmosphere cannot be combined with scattering");
     }
   }
@@ -656,7 +750,90 @@ private:
     }
   }
 
-  // Run keys and the efficiency status of this stage (docs/format.md, "Efficiency status").
+  static int state_rank(const std::string &state) {
+    if (state == "pending") {
+      return 0;
+    }
+    return state == "envelope" ? 1 : 2;
+  }
+
+  static std::vector<std::string> factor_names(const obdeect::stream::Metadata &metadata) {
+    std::vector<std::string> names;
+    const auto it = metadata.find("factors");
+    if (it == metadata.end()) {
+      return names;
+    }
+    const auto *list = std::get_if<std::string>(&it->second);
+    if (list == nullptr) {
+      throw std::invalid_argument("efficiency status 'factors' is not a string");
+    }
+    std::size_t begin = 0;
+    while (begin <= list->size()) {
+      std::size_t end = list->find(',', begin);
+      if (end == std::string::npos) {
+        end = list->size();
+      }
+      const std::string token = list->substr(begin, end - begin);
+      begin = end + 1;
+      const auto first = token.find_first_not_of(" \t");
+      if (first != std::string::npos) {
+        names.push_back(token.substr(first, token.find_last_not_of(" \t") - first + 1));
+      }
+    }
+    return names;
+  }
+
+  // Merges an efficiency status `add` into `base` (one run status record,
+  // docs/propagation/propagation.md, "Efficiency status"): a factor that `base` has in the same
+  // state is not written again; a factor that advances (pending -> envelope -> applied) takes the
+  // keys of `add` (its own keys in `base` are replaced); a factor in a backward state is an error.
+  // Factors of `base` that `add` does not name are kept.
+  static obdeect::stream::Metadata merge_status(const obdeect::stream::Metadata &base,
+                                                const obdeect::stream::Metadata &add) {
+    obdeect::stream::Metadata merged = base;
+    std::vector<std::string> names = factor_names(base);
+    for (const auto &name : factor_names(add)) {
+      const std::string state_key = name + ".state";
+      const auto add_state_it = add.find(state_key);
+      if (add_state_it == add.end() || !std::holds_alternative<std::string>(add_state_it->second)) {
+        throw std::invalid_argument("efficiency status of " + name + " lacks a string state");
+      }
+      const std::string add_state = std::get<std::string>(add_state_it->second);
+      const auto base_it = merged.find(state_key);
+      if (base_it != merged.end()) {
+        const auto *base_state = std::get_if<std::string>(&base_it->second);
+        if (base_state == nullptr) {
+          throw std::invalid_argument("efficiency status state of " + name + " is not a string");
+        }
+        if (*base_state == add_state) {
+          continue; // already in the input in this state: not written again
+        }
+        if (state_rank(add_state) < state_rank(*base_state)) {
+          throw std::invalid_argument("efficiency status of " + name + " goes back from " +
+                                      *base_state + " to " + add_state);
+        }
+      } else {
+        names.push_back(name);
+      }
+      const std::string prefix = name + ".";
+      for (auto it = merged.begin(); it != merged.end();) {
+        it = it->first.compare(0, prefix.size(), prefix) == 0 ? merged.erase(it) : std::next(it);
+      }
+      for (const auto &[key, value] : add) {
+        if (key.compare(0, prefix.size(), prefix) == 0) {
+          merged[key] = value;
+        }
+      }
+    }
+    std::string list;
+    for (const auto &name : names) {
+      list += (list.empty() ? "" : ",") + name;
+    }
+    merged["factors"] = list;
+    return merged;
+  }
+
+  // Run keys and the efficiency status of this stage (docs/stream/efficiency-status.md).
   void begin_run(const obdeect::stream::Metadata &metadata, obdeect::stream::Metadata &out) {
     const auto &x_m = array_field(metadata, "telescope_x_m");
     const auto &y_m = array_field(metadata, "telescope_y_m");
@@ -712,6 +889,9 @@ private:
                      number_field(metadata, "wavelength_max_nm")};
     }
     wavelengths.validate();
+    if (config_.transmission) {
+      config_.transmission->require_wavelength_range(wavelengths.lo_nm, wavelengths.hi_nm);
+    }
     if (config_.dispersion_reference_nm) {
       if (refraction_applied) {
         throw std::invalid_argument(
@@ -723,7 +903,7 @@ private:
         throw std::invalid_argument("dispersion needs the wavelength range within 200 to 2000 nm");
       }
     }
-    if (config_.scattering.enabled) {
+    if (scattering_on()) {
       const auto &r_m = array_field(metadata, "telescope_r_m");
       if (r_m.size() != x_m.size()) {
         throw std::invalid_argument("single scattering needs telescope_r_m, one per telescope");
@@ -834,7 +1014,7 @@ private:
     efficiency_status["wavelength.state"] = std::string("applied");
     efficiency_status["wavelength.source"] = std::string("density 1/lambda^2, continuous");
     efficiency_status["wavelength.range_nm"] = std::vector<double>{range.lo_nm, range.hi_nm};
-    if (config_.scattering.enabled) {
+    if (scattering_on()) {
       factors += ",scattering";
       efficiency_status["scattering.state"] = std::string("applied");
       efficiency_status["scattering.source"] = config_.scattering_source.empty()
@@ -866,7 +1046,8 @@ private:
     efficiency_status_pending_ = false;
     obdeect::stream::Record out;
     out.type = obdeect::stream::RecordType::efficiency_status;
-    out.metadata = run_->efficiency_status;
+    out.metadata = merge_status(incoming_run_status_, run_->efficiency_status);
+    incoming_run_status_.clear();
     sink(out);
   }
 
@@ -941,7 +1122,7 @@ private:
   template <class Sink> void emit(obdeect::stream::PhotonChunk &chunk, Sink &sink) {
     using obdeect::stream::Column;
     if (config_.mode == OutputMode::weighted) {
-      chunk = without_zero_weight(chunk);
+      drop_zero_weight(chunk);
     }
     if (!config_.store_p) {
       chunk[Column::p].clear();
@@ -962,34 +1143,34 @@ private:
     sink(out);
   }
 
-  static obdeect::stream::PhotonChunk
-  without_zero_weight(const obdeect::stream::PhotonChunk &chunk) {
+  // Removes the rows with w = 0 of a chunk, in place (the rows keep their order; no copy unless
+  // a row is removed).
+  static void drop_zero_weight(obdeect::stream::PhotonChunk &chunk) {
     using obdeect::stream::Column;
+    const std::size_t rows = chunk.rows();
+    auto &w = chunk[Column::w];
     std::size_t kept = 0;
-    for (const float weight : chunk[Column::w]) {
+    for (const float weight : w) {
       kept += weight > 0.0F ? 1U : 0U;
     }
-    if (kept == chunk.rows()) {
-      return chunk;
+    if (kept == rows) {
+      return;
     }
-    obdeect::stream::PhotonChunk out;
-    out.telescope_id = chunk.telescope_id;
-    out.frame = chunk.frame;
-    out.first_index = chunk.first_index;
-    out.resize(kept, chunk.mask());
     std::size_t j = 0;
-    for (std::size_t row = 0; row < chunk.rows(); ++row) {
-      if (!(chunk[Column::w][row] > 0.0F)) {
+    for (std::size_t row = 0; row < rows; ++row) {
+      if (!(w[row] > 0.0F)) {
         continue;
       }
-      for (std::uint32_t c = 0; c < obdeect::stream::n_columns; ++c) {
-        if (chunk.has(static_cast<Column>(c))) {
-          out.columns[c][j] = chunk.columns[c][row];
+      if (j != row) {
+        for (auto &column : chunk.columns) {
+          if (!column.empty()) {
+            column[j] = column[row];
+          }
         }
       }
       ++j;
     }
-    return out;
+    chunk.truncate(kept);
   }
 
   // Spherical atmosphere of the open telescope (curvature modes other than none).
@@ -1004,13 +1185,13 @@ private:
   // interpolation in h_t between the two tables (sky_plane): the error of that interpolation is
   // second order in the 10 m spacing. Each table is looked up at its own level.
   const CurvedRefractionTables &curved_tables_at(double level_m, bool accurate) {
-    auto &cache = accurate ? curved_dispersion_tables_ : curved_tables_;
-    const auto found = cache.find(level_m);
-    if (found != cache.end()) {
+    const auto key = std::make_pair(level_m, accurate);
+    const auto found = curved_tables_.find(key);
+    if (found != curved_tables_.end()) {
       return found->second;
     }
-    return cache
-        .try_emplace(level_m, *config_.profile, config_.earth_radius_m, level_m, accurate,
+    return curved_tables_
+        .try_emplace(key, *config_.profile, config_.earth_radius_m, level_m, accurate,
                      config_.threads)
         .first->second;
   }
@@ -1083,11 +1264,12 @@ private:
     if (config_.profile) {
       plane.profile = &*config_.profile;
       if (!run_->refraction_applied) {
-        if (!tables_ || tables_altitude_m_ != telescope_.altitude_m) {
-          tables_.emplace(*config_.profile, telescope_.altitude_m);
-          tables_altitude_m_ = telescope_.altitude_m;
+        const double altitude = telescope_.altitude_m;
+        auto cached = tables_cache_.find(altitude);
+        if (cached == tables_cache_.end()) {
+          cached = tables_cache_.try_emplace(altitude, *config_.profile, altitude).first;
         }
-        plane.tables = &*tables_;
+        plane.tables = &cached->second;
       }
     }
     return plane;
@@ -1163,16 +1345,21 @@ private:
       return;
     }
     const bool weighted = config_.mode == OutputMode::weighted;
-    for (const auto &scattered : list) {
-      obdeect::stream::PhotonChunk plane_input = scattered;
-      if (run_->sphere) {
-        sky_to_sphere(plane_input, sky_plane(plane_input), telescope_.radius_m, true);
-      } else {
-        sky_to_ground(plane_input, sky_plane(plane_input), true); // stored cz of the scattering
-      }
-      for (auto &out : apply_envelope_chunk(
-               std::move(plane_input), run_->envelope, *config_.transmission, *telescope_.depths,
-               weighted, config_.seed, event_number_, telescope_.id, telescope_.out_index)) {
+    for (auto &scattered : list) {
+      obdeect::stream::PhotonChunk plane_input = std::move(scattered);
+      // The stored cz of the scattering gives the direction (use_cz_column).
+      const DropCounts counts =
+          run_->sphere
+              ? sky_to_sphere(plane_input, sky_plane(plane_input), telescope_.radius_m, true)
+              : sky_to_ground(plane_input, sky_plane(plane_input), true);
+      summary_.scattered_dropped_by_reason += counts;
+      summary_.scattered_dropped = summary_.scattered_dropped_by_reason.total();
+      const double weight_in = weight_sum(plane_input);
+      auto outputs = apply_envelope_chunk(
+          std::move(plane_input), run_->envelope, *config_.transmission, *telescope_.depths,
+          weighted, config_.seed, event_number_, telescope_.id, telescope_.out_index);
+      summary_.scattered_thinned_out += weight_in - weight_sum(outputs);
+      for (auto &out : outputs) {
         emit(out, sink);
       }
     }
@@ -1208,8 +1395,9 @@ private:
     records.swap(event_records_);
     const auto event = static_cast<std::uint32_t>(
         checked_integer(records.front().metadata, "event_number", max_u32));
-    if (config_.scattering.enabled) {
+    if (scattering_on()) {
       check_single_array_index(records);
+      check_one_block_per_telescope(records);
     }
     scatter_event(records, event);
     std::vector<bool> has_block(sphere_.size(), false);
@@ -1222,7 +1410,7 @@ private:
         }
       }
     }
-    for (const auto &record : records) {
+    for (auto &record : records) {
       if (record.type == obdeect::stream::RecordType::telescope_end) {
         const auto id =
             checked_integer(record.metadata, "telescope_id", obdeect::stream::max_telescope);
@@ -1239,7 +1427,8 @@ private:
     }
   }
 
-  template <class Sink> void photons(const obdeect::stream::PhotonChunk &input, Sink &sink) {
+  // Photons of the open telescope. The chunk is moved into chunk_ (the record is not needed after).
+  template <class Sink> void photons(obdeect::stream::PhotonChunk &input, Sink &sink) {
     if (!run_ || !telescope_.open) {
       throw std::invalid_argument("photons outside a telescope record");
     }
@@ -1253,8 +1442,9 @@ private:
     if (input.rows() == 0) {
       return;
     }
-    chunk_ = input;
-    if (input.frame == obdeect::stream::Frame::sky) {
+    check_first_index(input);
+    chunk_ = std::move(input);
+    if (chunk_.frame == obdeect::stream::Frame::sky) {
       if (config_.dispersion_reference_nm) {
         // The bending of a dispersive run needs each photon's wavelength. Assigning it here draws
         // the same numbers as the later assignment (keyed on the row, see wavelength.hpp).
@@ -1302,6 +1492,7 @@ private:
     settings.event = event_number_;
     settings.telescope = telescope_.id;
     settings.threads = config_.threads;
+    settings.pool = &pool_;
     settings.weighted = config_.mode == OutputMode::weighted;
     if (run_->sphere) {
       settings.sphere =
@@ -1311,8 +1502,10 @@ private:
     } else if (config_.curvature != Curvature::none) {
       settings.curved = curved_path(telescope_);
     }
+    const double weight_in = weight_sum(chunk_);
     std::vector<obdeect::stream::PhotonChunk> outputs =
         apply_extinction_chunk(std::move(chunk_), settings, telescope_.out_index);
+    summary_.thinned_out += weight_in - weight_sum(outputs);
     for (auto &out : outputs) {
       emit(out, sink);
     }
@@ -1320,22 +1513,23 @@ private:
 
   PropagatorConfig config_;
   PropagationSummary summary_;
+  RowPool pool_; // threads of the chunks (config_.threads), kept for the run
   std::optional<Run> run_;
   Telescope telescope_;
   bool have_event_{};
   std::map<std::uint32_t, std::uint64_t> out_index_; // per telescope, reset at each event
+  std::map<std::uint32_t, std::uint64_t> in_index_;  // per telescope: first_index of the next block
   std::uint32_t event_number_{};
   bool efficiency_status_pending_{};
-  // Caches: telescope depths per (altitude, pathlen) (the table is fixed), refraction tables of
-  // the last altitude used for sky-frame photons (flat geometry), curved tables per level of the
-  // 10 m grid (spherical geometry).
+  obdeect::stream::Metadata incoming_run_status_; // run status records of the input, before flush
+  // Caches: telescope depths per (altitude, pathlen) (the table is fixed), refraction tables per
+  // telescope altitude (flat geometry, sky-frame photons), curved tables per level of the 10 m grid
+  // and per accuracy of the dispersion tables (spherical geometry).
   std::map<std::pair<double, double>, TelescopeDepths> depths_cache_;
-  std::optional<RefractionTables> tables_;
-  double tables_altitude_m_{};
-  static constexpr double curved_altitude_step_m = 10.0;   // grid of the curved table levels [m]
-  std::map<double, CurvedRefractionTables> curved_tables_; // by level [m a.s.l.]
-  std::map<double, CurvedRefractionTables> curved_dispersion_tables_;
-  obdeect::stream::PhotonChunk chunk_; // reused by photons()
+  std::map<double, RefractionTables> tables_cache_;      // by altitude [m a.s.l.]
+  static constexpr double curved_altitude_step_m = 10.0; // grid of the curved table levels [m]
+  std::map<std::pair<double, bool>, CurvedRefractionTables> curved_tables_; // (level, accurate)
+  obdeect::stream::PhotonChunk chunk_;                                      // reused by photons()
   // Single scattering: sphere of telescope i+1, scattered photons per telescope (sky frame),
   // the records of the held event, and the running index of its primary photons.
   std::vector<ScatterTelescope> sphere_;
@@ -1357,30 +1551,17 @@ inline PropagationSummary propagate_stream(std::istream &in, std::ostream &out,
   // primaries are all blocks unless scattering_primaries names them: then the kept blocks and
   // those primaries are decoded, otherwise all.
   std::optional<std::vector<std::uint32_t>> decoded;
-  if (config.telescopes && !config.scattering.enabled) {
+  if (config.telescopes && !config.scattering_table) {
     decoded = *config.telescopes;
   } else if (config.telescopes && config.scattering_primaries) {
     std::vector<std::uint32_t> ids = *config.telescopes;
     ids.insert(ids.end(), config.scattering_primaries->begin(), config.scattering_primaries->end());
-    std::sort(ids.begin(), ids.end());
-    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    sort_unique_telescope_ids(ids);
     decoded = std::move(ids);
   }
   Propagator propagator(std::move(config));
   const auto sink = [&writer](const obdeect::stream::Record &record) {
-    switch (record.type) {
-    case obdeect::stream::RecordType::stream:
-      break;
-    case obdeect::stream::RecordType::photons:
-      writer.write_chunk(record.chunk);
-      break;
-    case obdeect::stream::RecordType::blob:
-      writer.write_blob(record.blob_eventio_type, record.blob_eventio_id, record.blob);
-      break;
-    default:
-      writer.write_metadata(record.type, record.metadata);
-      break;
-    }
+    obdeect::stream::write_record(writer, record);
   };
   obdeect::stream::Reader reader(in);
   if (decoded) {

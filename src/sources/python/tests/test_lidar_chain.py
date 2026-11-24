@@ -135,6 +135,7 @@ def chain(directory, d_m):
         directory / "lidar_out.pst",
         transmission=TRANSMISSION,
         site_altitude_m=SITE_M,
+        pathlen_m=0.0,  # no in-telescope path: the lidar chain tests the atmosphere only
         seed=SEED,
         scattering=SCATTERING,
         scattering_points=N_POINTS,

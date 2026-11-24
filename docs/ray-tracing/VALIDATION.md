@@ -147,7 +147,7 @@ the baffle costs up to 5.5%. The SST baffle costs little because most light meet
 meet the secondary shadow plate (see [shadowing](shadowing.md)). Effective areas agree within 0.36%
 (ray tracing higher, with and without baffle).
 
-## Calibration light (Phase 2)
+## Calibration light
 
 `simtools-simulate-flasher --run_mode full_simulation` and `simtools-simulate-illuminator`, both
 backends, simulation models 7.0.0:
@@ -208,7 +208,7 @@ pulses; illuminators: 10 pulses of 10^9 photons.
 The scripts are in the validation workspace (`val/phase2`: `cases.sh`, `run_case.sh`, `compare.py`,
 `summarize.py`, `xyzls_times.py`).
 
-## Air-shower photons (Phase 3)
+## Air-shower photons
 
 CORSIKA + sim_telarray against CORSIKA + ray tracing + sim_telarray, simulation models 7.0.0, 1 TeV
 gammas, 50 showers with 10 core reuses per point. Both chains read the same CORSIKA IACT file. In the
@@ -338,7 +338,7 @@ once with the final build. Largest relative difference of D80, effective area an
 SSTS-01 3.7e-9 (centroid), MSTS-01 0, LSTN-01 0. The gate of 1e-4 passes. The effective focal length is
 not deterministic in simtools and is not gated (SSTS-01: 7.9e-11).
 
-## Photons from below (ray tracing phase 1)
+## Photons from below
 
 Checks in `src/ray_tracing` (native tests in `cpp/tests/test_trace.cpp`, Python tests in
 `python/tests`), each analytic or against an independent computation:
@@ -368,23 +368,20 @@ Checks in `src/ray_tracing` (native tests in `cpp/tests/test_trace.cpp`, Python 
 - Sources: `star_photons` with `towards_source` below the telescope emits upward photons; a
   horizontal `towards_source` is rejected.
 
-## Non-sequential tracing (ray tracing phase 2)
+## Non-sequential tracing
 
 The loop replaces the first-hit classification: every photon is traced after each reflection until
 it is detected, absorbed or escapes (at most 16 reflections, then `bounce_limit`). Checks:
 
-- Sequential photons are bit-identical to the sequential path they replace. `test_trace` keeps a
-  copy of that path (`cpp/tests/legacy_trace.hpp`) and compares every field (status, surfaces,
-  positions, directions, path, time, weight, incidence angles) bit for bit for 40000 photons per
-  model: a single facet with a rod obscurer, reflectivity at incidence angles, scatter and telescope
-  transmission; a folded paraboloid with the secondary's back blocking (and its scatter), and
-  without; the synthetic segmented fixture (`python/tests/data/optical-models/segmented.json`).
-  Downward photons and flasher (direct) photons are included, with responses, scatter, incidence
-  angles and loss classification switched on and off in turn. Excluded, with the reason in the
-  test: photons that the old path lost after the secondary without reaching the focal surface (the
-  loop traces them on, and a reflection off the primary is possible), photons detected directly on
-  the focal asphere through the hole (sky light the old path never met), and the secondary's back
-  point (not recorded by the old path). Every other photon, detected ones included, is identical.
+- Sequential photons keep their results. Until the phase-2 loop, `test_trace` compared every field
+  of the sequential path it replaced bit for bit against a frozen copy of that path (since removed).
+  The results are now regression data (`cpp/tests/data/trace_golden.inc`, generated from the code
+  before the copy was removed): the status histogram of 40000 photons per model, and 200 photons per
+  model in full (doubles to 1e-9 relative), for a single facet with a rod obscurer, reflectivity at
+  incidence angles, scatter and telescope transmission; a folded paraboloid with the secondary's back
+  blocking (and its scatter), and without; the synthetic segmented fixture
+  (`python/tests/data/optical-models/segmented.json`). Downward and flasher (direct) photons are
+  included, with responses, scatter, incidence angles and loss classification switched on and off.
 - Analytic: a photon through the primary hole from below reflects on the secondary and then on the
   primary, with the analytic directions and points (flat mirrors, slope 0.1): `missed_secondary`
   after 4 reflections, path 25 sqrt(1.01).
@@ -394,7 +391,7 @@ it is detected, absorbed or escapes (at most 16 reflections, then `bounce_limit`
   extent at the analytic path (15 m), outside it is not met; a plane at the same height gives
   `direct_focal`; from above the camera is passed.
 - Mirror backs block at the analytic point, also on the first leg (from below).
-- Invariance: a block of 20000 photons that bounce on flat mirrors (sky photons and photons from
+- Invariance: a block of 20000 photons that bounce on flat mirrors (photons in the sky frame and photons from
   below) gives the same statuses, surfaces, positions, directions, paths and weights for one thread,
   4 and 8 threads, the persistent pool, and the reversed input order.
 - The asphere prefilter (`Asphere::may_meet`) never rejects a ray that hits, and a ray that starts on
@@ -409,7 +406,7 @@ it is detected, absorbed or escapes (at most 16 reflections, then `bounce_limit`
   42.2 ns (1.05x). `test_kernels` (unoptimised build, as in `ctest`): median of three runs 23.16 s
   before and 23.00 s after. The timings use the models with `prepare()` called, as the compiler does.
 
-## Sphere runs (ray tracing phase 5d)
+## Sphere runs
 
 Checks in `src/ray_tracing` (native `cpp/tests/test_sphere_rows.cpp`, Python `python/tests/test_sphere.py`):
 
@@ -425,8 +422,8 @@ Checks in `src/ray_tracing` (native `cpp/tests/test_sphere_rows.cpp`, Python `py
 - Start inside the sphere: a row at z = 4 m moving towards the primary is detected (the dish
   reflects it to the focus, analytic primary sag 0.00225 m at r = 0.3 m); the same row moving towards
   the camera gives `direct_focal` (no detected photons), native and Python.
-- Native and Python write the same stream for downward and horizontal sphere rows (compared record by
-  record, columns bit for bit).
+- The command and the Python `trace_stream` write the same stream for downward and horizontal sphere
+  rows (compared record by record, columns bit for bit).
 - Output does not depend on chunking (700-row chunks against one chunk) or threads (1 and 3), nor on
   the order of the rows (native bunch test: reversed order, same photons per bunch id).
 - Enclosure: a sphere of 0.5 m around the segmented model is rejected by both programs with the
@@ -442,5 +439,5 @@ Checks in `src/ray_tracing` (native `cpp/tests/test_sphere_rows.cpp`, Python `py
 - Sanitizer build (AddressSanitizer and UndefinedBehaviorSanitizer) of `test_sphere_rows`: clean.
 
 Downward photons take the unchanged code path: the existing ray-tracing suites (kernels, trace,
-bounds, replay comparison, the native-versus-Python stream comparison) pass without changes to their
+bounds, replay comparison, the trace-stream checks) pass without changes to their
 expected values.

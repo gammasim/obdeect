@@ -6,15 +6,19 @@ import json
 import math
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from obdeect.ray_tracing import _core
-from obdeect.ray_tracing.compiler import compile_model
+from obdeect.ray_tracing.bounds import UP as _UP
+from obdeect.ray_tracing.bounds import mirror_support as _mirror_support
+from obdeect.ray_tracing.bounds import obscurer_support as _obscurer_support
+from obdeect.ray_tracing.bounds import obscurer_top_z_m as _obscurer_top_z_m
 from obdeect.ray_tracing.errors import ModelError
 from obdeect.ray_tracing.hashing import model_hash
-from obdeect.ray_tracing.repository import read_telescope
+from obdeect.ray_tracing.importers.simulation_models import compile_model, compile_telescope
 
 STATUS_NAMES: tuple[str, ...] = _core.STATUS_NAMES
 DETECTED = STATUS_NAMES.index("detected")
@@ -38,10 +42,15 @@ class OpticalModel:
         except ValueError as error:
             raise ModelError(str(error)) from error
         self._document = isolated_document
+        # Thread pools by thread count, made on first use and shared by the calls on this model.
+        self._pools: dict[int, ThreadPool] = {}
+        # Results of mirrors_support and optics_bottoms by direction (the model is immutable).
+        self._support_cache: dict[tuple[float, ...], list[tuple[str, float]]] = {}
+        self._bottoms_cache: dict[tuple[float, ...], list[tuple[str, float]]] = {}
 
     @property
     def document(self) -> dict[str, Any]:
-        """Return a copy of the compiled document."""
+        """Return a copy of the compiled document (internal code reads `_document` directly)."""
         return deepcopy(self._document)
 
     @classmethod
@@ -51,11 +60,15 @@ class OpticalModel:
         read_file: Callable[[str], str],
         *,
         configuration_seed: int,
+        propagation_group_index: float,
         zenith_deg: float | None = None,
-        propagation_group_index: float = 1.0,
         provenance: dict[str, Any] | None = None,
     ) -> OpticalModel:
-        """Compile structured simulation-model parameter records into an optical model."""
+        """Compile structured simulation-model parameter records into an optical model.
+
+        The importer (`obdeect.ray_tracing.importers.simulation_models`) defines the parameter
+        names; `propagation_group_index` is required (no default air index).
+        """
         document = compile_model(
             records,
             read_file,
@@ -75,16 +88,18 @@ class OpticalModel:
         *,
         configuration_seed: int,
         zenith_deg: float | None = None,
+        propagation_group_index: float | None = None,
     ) -> OpticalModel:
-        """Compile a telescope model from a simulation-models checkout."""
-        telescope = read_telescope(Path(root), model, version)
-        return cls.from_records(
-            telescope.records,
-            telescope.read_file,
-            configuration_seed=configuration_seed,
-            zenith_deg=zenith_deg,
-            propagation_group_index=telescope.propagation_group_index,
-            provenance=telescope.provenance,
+        """Compile an optical model from a simulation-models checkout (see `compile_telescope`)."""
+        return cls(
+            compile_telescope(
+                root,
+                model,
+                version,
+                configuration_seed=configuration_seed,
+                zenith_deg=zenith_deg,
+                propagation_group_index=propagation_group_index,
+            )
         )
 
     @classmethod
@@ -109,6 +124,12 @@ class OpticalModel:
     def sampling_area_m2(self) -> float:
         """Area of the disk on which star photons are sampled."""
         return math.pi * self._document["sampling"]["disk_radius_m"] ** 2
+
+    def _shared_pool(self, threads: int) -> ThreadPool:
+        """The thread pool of this model with `threads` threads (0: every core), made once."""
+        if threads not in self._pools:
+            self._pools[threads] = ThreadPool(threads)
+        return self._pools[threads]
 
     @property
     def focal_surface_z_m(self) -> float:
@@ -140,7 +161,7 @@ class OpticalModel:
         (wall thickness included), a polyhedron by its highest vertex. Photons
         starting below this height never meet those obscurers.
         """
-        top = self._incoming_top()
+        top = self._incoming_top
         return None if top is None else top[0]
 
     def max_mirror_z_m(self) -> float | None:
@@ -158,15 +179,18 @@ class OpticalModel:
         after it: only the primary and, if it blocks incoming light, the secondary must lie
         below the plane.
         """
-        optics = self._document["optics"]
-        roles = ["primary"]
-        if optics.get("secondary_blocks_incoming"):
-            roles.append("secondary")
-        return [
-            (role, _mirror_support(optics[role], direction))
-            for role in roles
-            if optics.get(role) is not None
-        ]
+        key = tuple(float(x) for x in np.ravel(direction))
+        if key not in self._support_cache:
+            optics = self._document["optics"]
+            roles = ["primary"]
+            if optics.get("secondary_blocks_incoming"):
+                roles.append("secondary")
+            self._support_cache[key] = [
+                (role, _mirror_support(optics[role], direction))
+                for role in roles
+                if optics.get(role) is not None
+            ]
+        return list(self._support_cache[key])
 
     def optics_bottoms(self, normal: np.ndarray) -> list[tuple[str, float]]:
         """Lowest point along `normal` of each obscurer (any leg) and of the mirrors [m].
@@ -174,14 +198,18 @@ class OpticalModel:
         The mirrors are the primary and the secondary (photons from below meet both). The
         lowest point of an optic is min n.p, i.e. minus its support in direction -n.
         """
-        optics = self._document["optics"]
-        flipped = -np.asarray(normal, dtype=float)
-        bottoms = [(o["name"], -_obscurer_support(o, flipped)) for o in optics["obscurers"]]
-        for role in ("primary", "secondary"):
-            if optics.get(role) is not None:
-                bottoms.append((role, -_mirror_support(optics[role], flipped)))
-        return bottoms
+        key = tuple(float(x) for x in np.ravel(normal))
+        if key not in self._bottoms_cache:
+            optics = self._document["optics"]
+            flipped = -np.asarray(normal, dtype=float)
+            bottoms = [(o["name"], -_obscurer_support(o, flipped)) for o in optics["obscurers"]]
+            for role in ("primary", "secondary"):
+                if optics.get(role) is not None:
+                    bottoms.append((role, -_mirror_support(optics[role], flipped)))
+            self._bottoms_cache[key] = bottoms
+        return list(self._bottoms_cache[key])
 
+    @cached_property
     def _incoming_top(self) -> tuple[float, str] | None:
         """Highest incoming obscurer top [m] and its name, or None without incoming obscurers."""
         tops = [
@@ -255,7 +283,7 @@ class OpticalModel:
         wavelength_nm. The photons do not depend on `block_size`.
         """
         if block_size < 1:
-            raise ValueError("block_size must be positive")
+            raise ModelError("block_size must be positive")
         source = self._emitter(position_m, intensity, axis, pulse, wavelength_nm, disk)
         count = _emitter_count(source, emitted, seed, first_id)
         for start in range(0, count, block_size) or [0]:
@@ -343,7 +371,7 @@ class OpticalModel:
         classify_losses: bool = True,
         pool: ThreadPool | None = None,
     ) -> dict[str, np.ndarray]:
-        """Trace photons; returns per-photon arrays (see docs/python-guide.md).
+        """Trace photons; returns per-photon arrays (see docs/ray-tracing/python-guide.md).
 
         `photons` holds position_m (n, 3), direction (n, 3), wavelength_nm,
         time_ns, weight and photon_id. With apply_responses False only geometry
@@ -421,7 +449,6 @@ class OpticalModel:
         weight = np.asarray(photons["weight"], dtype=float)[index]
         terminal = full["terminal_surface"][index]
         id_list = [o["id"] for o in obscurers]
-        position = {obscurer_id: k for k, obscurer_id in enumerate(id_list)}
         absorbed = np.isin(terminal, id_list)
         # The path of a sequential photon is the start, the primary point, the secondary point and
         # the focal point: one reflection on the primary of a single mirror, one on each mirror of
@@ -442,9 +469,9 @@ class OpticalModel:
             np.repeat(np.array(legs, dtype=np.uint8), m),
         )
         crossing_photon = sequential[(rows % m if m else rows).astype(np.int64)]
-        crossing_obscurer = np.array([position[i] for i in ids], dtype=np.int64)
+        crossing_obscurer = _positions(ids, id_list)
         terminal_photon = np.flatnonzero(absorbed)
-        terminal_obscurer = np.array([position[i] for i in terminal[absorbed]], dtype=np.int64)
+        terminal_obscurer = _positions(terminal[absorbed], id_list)
         # One entry per photon and obscurer, also if the path meets it twice.
         pairs = (
             np.unique(
@@ -492,7 +519,7 @@ class OpticalModel:
         pool: ThreadPool | None = None,
         threads: int = 0,
     ) -> dict[str, np.ndarray]:
-        """Trace photon bunches of an air shower (see docs/batch-tracing.md).
+        """Trace photon bunches of an air shower (see docs/ray-tracing/batch-tracing.md).
 
         `bunches` holds x, y, cx, cy, time_ns, zem, size, wavelength_nm (all
         float32; wavelength 0 means "sample one from `wavelength_density` or
@@ -572,7 +599,7 @@ class OpticalModel:
         offset = np.ascontiguousarray(frame_offset_m, dtype=np.float64)
         # The traced input origin is offset - axes_offset_m (applied natively).
         traced_offset = offset - np.asarray(self.axes_offset_m, dtype=np.float64)
-        top = self._incoming_top()
+        top = self._incoming_top
         if float(length_unit_m) > 0.0 and "z" not in arrays:
             # The input plane is {p : n.p = value} with n = R[:, 2]. Its height on the
             # telescope axis is value / n_z, and an optic with support s = max over its points
@@ -666,127 +693,26 @@ class OpticalModel:
             roulette=roulette,
             classify_losses=classify_losses,
             normalise_transmission=normalise_transmission,
-            pool=pool if pool is not None else ThreadPool(threads),
+            pool=pool if pool is not None else self._shared_pool(threads),
         )
 
 
-def _circumradius(aperture: str, diameter_m: float) -> float:
-    """Radius [m] of the circle that encloses a plate aperture, as in the native tracer."""
-    half_width = 0.5 * float(diameter_m)
-    if aperture == "square":
-        return half_width * math.sqrt(2.0)
-    if aperture.startswith("hexagon"):
-        return half_width * 2.0 / math.sqrt(3.0)
-    return half_width
-
-
-def _end_radii(obscurer: Mapping[str, Any]) -> tuple[float, float]:
-    """Outer radii [m] at the start and end of a cylinder or frustum (wall included)."""
-    if "start_radius_m" in obscurer:
-        thickness = float(obscurer["thickness_m"])
-        return (
-            float(obscurer["start_radius_m"]) + thickness,
-            float(obscurer["end_radius_m"]) + thickness,
-        )
-    return (0.5 * float(obscurer["diameter_m"]),) * 2
-
-
-def _obscurer_top_z_m(obscurer: Mapping[str, Any]) -> float:
-    """Highest z [m] of one obscurer record (see the accessor)."""
-    if "vertices_m" in obscurer:
-        return max(float(v[2]) for v in obscurer["vertices_m"])
-    if "centre_m" in obscurer:
-        normal = np.asarray(obscurer["normal"], dtype=float)
-        normal /= np.linalg.norm(normal)
-        radius = _circumradius(obscurer["aperture"], obscurer["diameter_m"])
-        return float(obscurer["centre_m"][2]) + radius * math.sqrt(max(0.0, 1.0 - normal[2] ** 2))
-    start, end = (np.asarray(obscurer[key], dtype=float) for key in ("start_m", "end_m"))
-    axis = (end - start) / np.linalg.norm(end - start)
-    sine = math.sqrt(max(0.0, 1.0 - axis[2] ** 2))
-    return max(
-        float(point[2]) + radius * sine
-        for point, radius in zip((start, end), _end_radii(obscurer), strict=True)
-    )
-
-
-_UP = np.array([0.0, 0.0, 1.0])
 # Margin below the lowest optic for the start of photons moving up [m] (as the input plane).
 _LOWER_START_MARGIN_M = 1.0
-# Radial samples of an asphere mirror's aperture for its support.
-_ASPHERE_SAMPLES = 2049
 
 
-def _mirror_support(mirror: Mapping[str, Any], direction: np.ndarray) -> float:
-    """Conservative bound on the dot product over a mirror's surface.
-
-    A facet's footprint lies within its circumradius plus its sag about the centre, so
-    that bound is used. An asphere point at radius r has the direction's dot product
-    hypot(d_x, d_y) r + d_z z(r). Bound the interpolation error between radial
-    samples using the maximum absolute second derivative of that polynomial.
-    """
-    if "facets" in mirror:
-        best = -math.inf
-        for facet in mirror["facets"]:
-            radius = float(facet.get("radius_of_curvature_m", 0.0))
-            reach = _circumradius(facet["shape"], facet["diameter_m"])
-            sag = radius - math.sqrt(max(0.0, radius * radius - reach * reach)) if radius else 0.0
-            best = max(best, float(np.dot(facet["centre_m"], direction)) + reach + sag)
-        return best
-    return _asphere_support(mirror["asphere"], direction)
-
-
-def _asphere_support(asphere: Mapping[str, Any], direction: np.ndarray) -> float:
-    """Conservative bound on the dot product over an asphere (a mirror or the focal surface)."""
-    radii = np.linspace(
-        float(asphere["inner_radius_m"]), float(asphere["outer_radius_m"]), _ASPHERE_SAMPLES
-    )
-    scale = float(asphere["radial_scale_m"])
-    z = np.full(radii.shape, float(asphere["vertex_z_m"]))
-    curvature_bound = 0.0
-    magnitude = abs(float(asphere["vertex_z_m"]))
-    outer_scaled = float(asphere["outer_radius_m"]) / scale
-    for i, coefficient in enumerate(asphere["coefficients_m"]):
-        coefficient = float(coefficient)
-        z += coefficient * (radii / scale) ** (2 * i)
-        magnitude += abs(coefficient) * outer_scaled ** (2 * i)
-        if i:
-            curvature_bound += (
-                abs(coefficient) * (2 * i) * (2 * i - 1) * outer_scaled ** (2 * i - 2) / scale**2
-            )
-    radial = math.hypot(float(direction[0]), float(direction[1]))
-    dz = abs(float(direction[2]))
-    step = (float(asphere["outer_radius_m"]) - float(asphere["inner_radius_m"])) / (
-        _ASPHERE_SAMPLES - 1
-    )
-    rounding = (
-        np.finfo(float).eps
-        * (16 + 4 * len(asphere["coefficients_m"]))
-        * (radial * float(asphere["outer_radius_m"]) + dz * magnitude)
-    )
-    return float(np.max(radial * radii + float(direction[2]) * z)) + (
-        dz * curvature_bound * step**2 / 8 + rounding
-    )
-
-
-def _obscurer_support(obscurer: Mapping[str, Any], direction: np.ndarray) -> float:
-    """Maximum dot product with a direction over an obscurer's geometry."""
-    if "vertices_m" in obscurer:
-        return max(float(np.dot(v, direction)) for v in obscurer["vertices_m"])
-    if "centre_m" in obscurer:
-        normal = np.asarray(obscurer["normal"], dtype=float)
-        normal /= np.linalg.norm(normal)
-        radius = _circumradius(obscurer["aperture"], obscurer["diameter_m"])
-        radial = math.sqrt(
-            max(0.0, float(np.dot(direction, direction) - np.dot(direction, normal) ** 2))
-        )
-        return float(np.dot(obscurer["centre_m"], direction)) + radius * radial
-    start, end = (np.asarray(obscurer[key], dtype=float) for key in ("start_m", "end_m"))
-    axis = (end - start) / np.linalg.norm(end - start)
-    radial = math.sqrt(max(0.0, float(np.dot(direction, direction) - np.dot(direction, axis) ** 2)))
-    return max(
-        float(np.dot(point, direction)) + radius * radial
-        for point, radius in zip((start, end), _end_radii(obscurer), strict=True)
-    )
+def _positions(ids: Sequence[int] | np.ndarray, id_list: Sequence[int]) -> np.ndarray:
+    """Index in `id_list` of each of `ids` (each must be in the list)."""
+    keys = np.asarray(id_list, dtype=np.int64)
+    wanted = np.asarray(ids, dtype=np.int64).reshape(-1)
+    order = np.argsort(keys, kind="stable")
+    found = np.searchsorted(keys[order], wanted)
+    if wanted.size and (
+        np.any(found >= keys.size)
+        or np.any(keys[order][np.minimum(found, keys.size - 1)] != wanted)
+    ):
+        raise ModelError("obscurer id of a crossing is not an obscurer of the model")
+    return order[found].astype(np.int64)
 
 
 def _photon_arrays(photons: Mapping[str, np.ndarray]) -> dict[str, np.ndarray]:
@@ -839,7 +765,8 @@ def trace_many(
 
 
 def _emitter_count(source: _core.Emitter, emitted: float, seed: int, first_id: int) -> int:
-    """Poisson number of candidate photons of an emitter (see ``OpticalModel.emitter_photons``)."""
-    return int(
-        np.random.default_rng([seed, first_id]).poisson(emitted * source.candidates_per_photon())
-    )
+    """Poisson number of candidate photons of an emitter (see ``OpticalModel.emitter_photons``).
+
+    Drawn by the core from the Philox key of (seed, first_id), like the other photon draws.
+    """
+    return source.candidate_count(float(emitted), first_id, seed)

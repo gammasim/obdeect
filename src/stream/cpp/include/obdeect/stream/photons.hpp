@@ -14,7 +14,7 @@
 
 namespace obdeect::stream {
 
-// Metadata value: int, float, string or float array (docs/format.md, "Metadata").
+// Metadata value: int, float, string or float array (docs/stream/format.md, "Metadata").
 using Value = std::variant<std::int64_t, double, std::string, std::vector<double>>;
 using Metadata = std::map<std::string, Value>;
 
@@ -64,6 +64,18 @@ struct PhotonChunk {
       } else {
         columns[i].clear();
       }
+    }
+  }
+
+  // Clears all columns and sets rows() to n: the chunk of a photons record whose columns were not
+  // decoded (Reader::keep_photons_of). validate() rejects such a chunk; it is not written.
+  void set_rows_without_columns(std::size_t n) {
+    if (n > max_chunk_rows) {
+      throw std::invalid_argument("photon chunk exceeds 2^16 rows");
+    }
+    rows_ = n;
+    for (auto &column : columns) {
+      column.clear();
     }
   }
 
@@ -131,6 +143,40 @@ inline constexpr double direction_norm_tolerance = 1e-5;
   return cx * cx + cy * cy <= 1.0 + direction_norm_tolerance;
 }
 
+// Reader checks of a decoded chunk beyond PhotonChunk::validate() (docs/stream/format.md): every
+// column value is finite (x, y, t and w in particular); the direction is a unit vector, i.e. cz is
+// consistent with cx, cy, or without a cz column (cx, cy) lies in the unit disc; and a photon with
+// cz > 0 (upward) is only accepted if upward_allowed (format 1.1 and later). Throws
+// std::invalid_argument. Writers do not call this: they may write what the reader rejects.
+inline void validate_photon_values(const PhotonChunk &chunk, bool upward_allowed) {
+  chunk.validate();
+  for (const auto &column : chunk.columns) {
+    for (const float value : column) {
+      if (!std::isfinite(value)) {
+        throw std::invalid_argument("photon column holds a value that is not finite");
+      }
+    }
+  }
+  const bool has_cz = chunk.has(Column::cz);
+  for (std::size_t i = 0; i < chunk.rows(); ++i) {
+    const double cx = chunk[Column::cx][i];
+    const double cy = chunk[Column::cy][i];
+    if (!has_cz) {
+      if (!direction_in_unit_disc(cx, cy)) {
+        throw std::invalid_argument("photon direction (cx, cy) lies outside the unit disc");
+      }
+      continue;
+    }
+    const double cz = chunk[Column::cz][i];
+    if (!cz_is_consistent(cz, cx, cy)) {
+      throw std::invalid_argument("photon direction (cx, cy, cz) is not a unit vector");
+    }
+    if (!upward_allowed && is_upward(cz)) {
+      throw std::invalid_argument("upward photon (cz > 0) in a stream of format 1.0");
+    }
+  }
+}
+
 // Rescale (cx, cy) of a photon with any finite cz, |cz| <= 1, whose cx^2 + cy^2 rounded above
 // 1, so that cx^2 + cy^2 = 1 - cz^2 and the magnitude of the validated cz is kept (the sign of cz
 // does not matter). Other directions are unchanged.
@@ -143,7 +189,7 @@ inline void snap_direction_to_cz(float &cx, float &cy, double cz) {
   }
 }
 
-// Ground representation of a run (docs/format.md, "Run metadata"): `plane` (default) has rows at
+// Ground representation of a run (docs/stream/format.md, "Metadata"): `plane` (default) has rows at
 // z = 0 with x, y relative to the telescope sphere centre; `sphere` has 3D rows on or inside the
 // telescope sphere. Throws std::runtime_error for any other value or type.
 enum class GroundRepresentation : std::uint8_t { plane, sphere };
@@ -175,9 +221,9 @@ inline constexpr double sphere_relative_tolerance = 1e-6;
 inline constexpr double sphere_absolute_tolerance_m = 1e-4;
 
 // Throws std::invalid_argument unless the chunk is a valid set of sphere rows (G frame, see
-// docs/format.md) for a telescope sphere of radius radius_m: x y z cx cy cz t zem w present (z and
-// cz included) and finite, cz consistent with (cx, cy), and |r| <= R (1 + 1e-6) + 1e-4 m for every
-// row. Optional columns (path, wavelength) are checked by PhotonChunk::validate().
+// docs/stream/format.md) for a telescope sphere of radius radius_m: x y z cx cy cz t zem w present
+// (z and cz included) and finite, cz consistent with (cx, cy), and |r| <= R (1 + 1e-6) + 1e-4 m for
+// every row. Optional columns (path, wavelength) are checked by PhotonChunk::validate().
 inline void validate_sphere_rows(const PhotonChunk &chunk, double radius_m) {
   if (chunk.frame != Frame::ground) {
     throw std::invalid_argument("sphere rows must be in the ground frame");

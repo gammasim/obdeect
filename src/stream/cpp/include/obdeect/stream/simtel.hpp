@@ -24,10 +24,10 @@
 // -sqrt(1 - cx^2 - cy^2)). sim_telarray and the CORSIKA 1205 bunch format do not store the sign
 // of cz, so an upward (cz > 0), horizontal (cz = 0) or non-finite cz in these frames is rejected
 // with std::invalid_argument naming the frame; such photons are never written as downward ones.
-// Ground-frame (G) photons of a sphere run (ground_representation "sphere", docs/format.md) start
-// on or inside the telescope sphere of radius telescope_r_m. A downward photon that starts on the
-// sphere is written as a plane bunch: its crossing of the plane z = 0 (x, y), the arrival time at
-// the crossing, the emission altitude and the direction unchanged; the z and path columns are
+// Ground-frame (G) photons of a sphere run (ground_representation "sphere", docs/stream/format.md)
+// start on or inside the telescope sphere of radius telescope_r_m. A downward photon that starts on
+// the sphere is written as a plane bunch: its crossing of the plane z = 0 (x, y), the arrival time
+// at the crossing, the emission altitude and the direction unchanged; the z and path columns are
 // dropped. A downward photon starting inside the sphere cannot be represented and is rejected, as
 // an upward one. The run header written is that of a plane run.
 // Camera-frame (C) photons are already at the camera entrance: sim_telarray (Bypass_Optics=2)
@@ -53,14 +53,14 @@
 // number that EVTH names (99 for synthesised headers). INPUTCFG is written at the start of the run
 // because the number of events is not known then; sim_telarray ignores NSHOW 0.
 //
-// Efficiency status (docs/format.md): run efficiency status records apply to every telescope, a
-// telescope efficiency status to its telescope and overrides the run efficiency status records per
-// factor. A factor is accepted when its state is `applied` and sim_telarray does not apply it in
-// the telescope's frame, or when its state is `pending` and sim_telarray applies it in that frame.
-// `envelope` is an error for factors sim_telarray applies, because sim_telarray applies the full
-// factor, not f/f_env. With camera- or telescope-frame photons `atmosphere` must be applied
-// upstream: a status without the factor, or with it pending, is an error unless it is listed in
-// `allow_pending`. With ground-frame photons `atmosphere` is accepted in any state:
+// Efficiency status (docs/stream/format.md): run efficiency status records apply to every
+// telescope, a telescope efficiency status to its telescope and overrides the run efficiency status
+// records per factor. A factor is accepted when its state is `applied` and sim_telarray does not
+// apply it in the telescope's frame, or when its state is `pending` and sim_telarray applies it in
+// that frame. `envelope` is an error for factors sim_telarray applies, because sim_telarray applies
+// the full factor, not f/f_env. With camera- or telescope-frame photons `atmosphere` must be
+// applied upstream: a status without the factor, or with it pending, is an error unless it is
+// listed in `allow_pending`. With ground-frame photons `atmosphere` is accepted in any state:
 // sim_telarray applies its transmission table, which must then be all-zero when
 // the atmosphere was applied upstream. A factor listed in `scaled` must be in
 // state `envelope` and applied by sim_telarray: its sim_telarray table then
@@ -118,19 +118,6 @@ using CameraMap = std::map<std::uint32_t, CameraTelescope>;
 // Parses the camera map: one line per telescope, "telescope_id mirror_class
 // camera_rotation_deg"; '#' starts a comment. Throws std::invalid_argument with
 // the line number on malformed input or a repeated telescope.
-namespace simtel_detail {
-
-// Whole-string number parsers; false instead of an exception.
-inline bool parse_integer(const std::string &text, long long &value) {
-  return parse::integer(text, value);
-}
-
-inline bool parse_real(const std::string &text, double &value) {
-  return parse::finite_number(text, value);
-}
-
-} // namespace simtel_detail
-
 inline CameraMap read_camera_map(std::istream &in) {
   CameraMap map;
   std::string line;
@@ -155,15 +142,14 @@ inline CameraMap read_camera_map(std::istream &in) {
     long long id_value = 0;
     long long class_value = 0;
     double rotation = 0.0;
-    if (!simtel_detail::parse_integer(id_text, id_value) || id_value < 1 ||
+    if (!parse::integer(id_text, id_value) || id_value < 1 ||
         id_value > std::numeric_limits<std::uint32_t>::max()) {
       throw fail("telescope_id must be an integer of 1 or larger");
     }
-    if (!simtel_detail::parse_integer(class_text, class_value) ||
-        (class_value != 1 && class_value != 2)) {
+    if (!parse::integer(class_text, class_value) || (class_value != 1 && class_value != 2)) {
       throw fail("mirror_class must be 1 (single) or 2 (dual)");
     }
-    if (!simtel_detail::parse_real(rotation_text, rotation)) {
+    if (!parse::finite_number(rotation_text, rotation)) {
       throw fail("camera_rotation_deg must be a finite number");
     }
     const auto id = static_cast<std::uint32_t>(id_value);
@@ -417,14 +403,6 @@ inline EventioBlock parse_block(const std::vector<std::uint8_t> &raw) {
   return block;
 }
 
-// Bytes of a top-level block as written to a file (sync tag and header included).
-inline std::vector<std::uint8_t> block_bytes(const EventioBlock &block) {
-  std::ostringstream out;
-  write_block(out, block);
-  const std::string text = out.str();
-  return {text.begin(), text.end()};
-}
-
 // A 273-word float block with the block name in word 0 (write_tel_block layout).
 inline EventioBlock named_block(std::uint32_t type, std::uint32_t ident, const char *name,
                                 const Words &words) {
@@ -440,6 +418,7 @@ inline EventioBlock named_block(std::uint32_t type, std::uint32_t ident, const c
   return make_float_block(type, ident, values);
 }
 
+// A numeric metadata value (int or double) as a double. Throws when it is missing or not a number.
 inline double number_field(const Metadata &metadata, const char *key) {
   const auto it = metadata.find(key);
   if (it == metadata.end()) {
@@ -456,7 +435,14 @@ inline double number_field(const Metadata &metadata, const char *key) {
   throw std::runtime_error(std::string("stream key '") + key + "' is not a number");
 }
 
-inline std::vector<double> array_field(const Metadata &metadata, const char *key) {
+// A float-array metadata value by reference, or nullptr when the key is absent or not an array.
+inline const std::vector<double> *find_array(const Metadata &metadata, const char *key) {
+  const auto it = metadata.find(key);
+  return it == metadata.end() ? nullptr : std::get_if<std::vector<double>>(&it->second);
+}
+
+// A float-array metadata value by reference. Throws when it is missing or not an array.
+inline const std::vector<double> &array_field(const Metadata &metadata, const char *key) {
   const auto it = metadata.find(key);
   if (it == metadata.end()) {
     throw std::runtime_error(std::string("stream lacks '") + key +
@@ -486,7 +472,7 @@ inline TelPos telpos_from_metres(const std::vector<double> &x, const std::vector
   return pos;
 }
 
-// Efficiency status rules for obdeect stream to-simtel (docs/usage.md, "Efficiency status").
+// Efficiency status rules for obdeect stream to-simtel (docs/stream/efficiency-status.md).
 // sim_telarray applies these factors itself, by the frame of the telescope.
 // Camera frame: the camera efficiencies. Ground frame: also mirror reflectivity
 // and telescope transmission. Atmosphere is not in either list.
@@ -498,7 +484,8 @@ inline bool sim_telarray_applies(const std::string &factor, bool camera_frame) {
   return (camera_frame ? camera_factors : ground_factors).contains(factor);
 }
 
-// Factor names of the efficiency status vocabulary (docs/format.md). Any other name is unknown.
+// Factor names of the efficiency status vocabulary (docs/stream/format.md). Any other name is
+// unknown.
 inline bool known_factor(const std::string &factor) {
   return sim_telarray_applies(factor, false) || factor == "atmosphere" ||
          factor == "telescope_transmission_constant" || factor == "wavelength" ||
@@ -671,9 +658,6 @@ struct SimtelOptions {
 // for the frame and header rules.
 class PsToSimtel {
 public:
-  PsToSimtel(std::ostream &out, CameraMap camera)
-      : PsToSimtel(out, SimtelOptions{std::move(camera), std::nullopt, nullptr, {}, {}}) {}
-
   PsToSimtel(std::ostream &out, SimtelOptions options)
       : writer_{out}, camera_{std::move(options.camera)}, atmprof_{std::move(options.atmprof)},
         warnings_{options.warnings}, allow_pending_{std::move(options.allow_pending)},
@@ -689,7 +673,9 @@ public:
     }
   }
 
-  void write(const Record &record) {
+  // Converts the photons of the record in place: the record is consumed (its photon chunk may
+  // change). Use the const overload to keep the record.
+  void write(Record &record) {
     switch (record.type) {
     case RecordType::stream:
     case RecordType::stream_end:
@@ -739,8 +725,15 @@ public:
     writer_.finish();
   }
 
+  // Record that is kept: its photons are converted on a copy.
+  void write(const Record &record) {
+    Record copy = record;
+    write(copy);
+  }
+
 private:
-  void photons(const PhotonChunk &chunk) {
+  // Converts the chunk in place when its frame needs it (see the file comment).
+  void photons(PhotonChunk &chunk) {
     switch (chunk.frame) {
     case Frame::sky:
       throw std::runtime_error(
@@ -752,12 +745,10 @@ private:
                                  " is in the camera map but has ground-frame photons");
       }
       if (sphere_ground_) {
-        PhotonChunk converted = chunk;
-        sphere_to_plane_bunches(converted, telescope_radius(chunk.telescope_id));
-        writer_.write_chunk(converted);
-        return;
+        sphere_to_plane_bunches(chunk, telescope_radius(chunk.telescope_id));
+      } else {
+        require_downward_cz(chunk, "ground");
       }
-      require_downward_cz(chunk, "ground");
       writer_.write_chunk(chunk);
       return;
     case Frame::telescope: {
@@ -773,11 +764,10 @@ private:
       }
       require_downward_cz(chunk, "telescope");
       note_frame(chunk, it->second);
-      PhotonChunk converted = chunk;
       telescope_to_bypass_convention(
-          converted, simtel_detail::number_field(run_metadata_, "observation_level_m"));
-      converted.frame = Frame::ground;
-      writer_.write_chunk(converted);
+          chunk, simtel_detail::number_field(run_metadata_, "observation_level_m"));
+      chunk.frame = Frame::ground;
+      writer_.write_chunk(chunk);
       return;
     }
     case Frame::camera: {
@@ -787,11 +777,10 @@ private:
                                  " has camera-frame photons but no camera map entry");
       }
       note_frame(chunk, it->second);
-      PhotonChunk converted = chunk;
-      camera_to_bypass_convention(converted, it->second);
-      add_camera_zem(converted, simtel_detail::number_field(run_metadata_, "observation_level_m"));
-      converted.frame = Frame::ground; // sim_telarray input is written as ground-frame bunches
-      writer_.write_chunk(converted);
+      camera_to_bypass_convention(chunk, it->second);
+      add_camera_zem(chunk, simtel_detail::number_field(run_metadata_, "observation_level_m"));
+      chunk.frame = Frame::ground; // sim_telarray input is written as ground-frame bunches
+      writer_.write_chunk(chunk);
       return;
     }
     }
@@ -843,7 +832,7 @@ private:
         }
         if (!keep_telpos_height_) {
           Record zeroed = record;
-          zeroed.blob = simtel_detail::block_bytes(make_telpos_block(pos));
+          zeroed.blob = make_telpos_block(pos).raw();
           write_telpos(zeroed);
           return;
         }
@@ -897,7 +886,7 @@ private:
 
   // Sphere radius [m] of a telescope (1-based id) from the run metadata (telescope_r_m).
   double telescope_radius(std::uint32_t telescope_id) const {
-    const std::vector<double> radii = simtel_detail::array_field(run_metadata_, "telescope_r_m");
+    const std::vector<double> &radii = simtel_detail::array_field(run_metadata_, "telescope_r_m");
     if (telescope_id == 0 || telescope_id > radii.size()) {
       throw std::runtime_error("telescope " + std::to_string(telescope_id) +
                                " is not in the run metadata (telescope_r_m)");
@@ -917,6 +906,7 @@ private:
     events_ = 0;
     run_efficiency_statuses_.clear();
     telescope_efficiency_statuses_.clear();
+    checked_statuses_.clear();
     telescope_open_ = false;
     frames_.clear();
   }
@@ -966,9 +956,17 @@ private:
       throw std::runtime_error("telescope record lacks telescope_id, needed for the efficiency "
                                "status");
     }
+    // The result depends on the run records (fixed once the first event starts), the telescope's
+    // id and its own records. A telescope whose own records equal those already checked in this
+    // run passed the check and is not parsed again.
+    const auto checked = checked_statuses_.find(telescope_id_);
+    if (checked != checked_statuses_.end() && checked->second == telescope_efficiency_statuses_) {
+      return;
+    }
     simtel_detail::check_efficiency_status(run_efficiency_statuses_, telescope_efficiency_statuses_,
                                            telescope_id_, camera_.contains(telescope_id_),
                                            allow_pending_, scaled_);
+    checked_statuses_[telescope_id_] = telescope_efficiency_statuses_;
   }
 
   void begin_event(const Metadata &metadata) {
@@ -1083,12 +1081,7 @@ private:
   // Profile number of an EVTH block (CORSIKA word 77, bits 10-19).
   static std::uint32_t evth_profile(const std::vector<std::uint8_t> &raw) {
     const std::vector<float> words = decode_float_block(simtel_detail::parse_block(raw));
-    if (words.size() < corsika_word::evth_flags + 1) {
-      throw std::runtime_error("EVTH block too short for its profile word");
-    }
-    const auto flags = static_cast<std::int64_t>(std::llround(words[corsika_word::evth_flags]));
-    return static_cast<std::uint32_t>((flags >> corsika_word::evth_flag_atmosphere_shift) &
-                                      corsika_word::evth_flag_atmosphere_mask);
+    return detail::evth_profile_number(detail::evth_flags_value(words));
   }
 
   // Writes the ATMPROF block once per run, when a table was given, with `profile`
@@ -1114,7 +1107,7 @@ private:
     record.type = RecordType::blob;
     record.blob_eventio_type = block.type;
     record.blob_eventio_id = block.ident;
-    record.blob = simtel_detail::block_bytes(block);
+    record.blob = block.raw();
     writer_.write(record);
   }
 
@@ -1239,6 +1232,8 @@ private:
   bool sphere_ground_{}; // the open run has ground_representation "sphere"
   std::vector<Metadata> run_efficiency_statuses_;
   std::vector<Metadata> telescope_efficiency_statuses_;
+  // Own efficiency status records of each telescope that passed the check in the open run.
+  std::map<std::uint32_t, std::vector<Metadata>> checked_statuses_;
   bool telescope_open_{};
   bool telescope_photons_{};
   bool telescope_id_known_{};
@@ -1269,10 +1264,6 @@ inline void stream_to_simtel(std::istream &in, std::ostream &out, SimtelOptions 
     throw std::runtime_error("obdeect stream: data after stream_end");
   }
   converter.finish();
-}
-
-inline void stream_to_simtel(std::istream &in, std::ostream &out, CameraMap camera) {
-  stream_to_simtel(in, out, SimtelOptions{std::move(camera), std::nullopt, nullptr, {}, {}});
 }
 
 } // namespace obdeect::stream

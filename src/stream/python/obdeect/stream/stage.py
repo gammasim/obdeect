@@ -12,10 +12,17 @@ from collections.abc import Callable, Mapping
 
 import numpy as np
 import obdeect.stream as obdeect_stream
-from obdeect.stream.stream import METADATA_RECORDS, Reader, Writer, _frame, reject_same_file
+from obdeect.stream.stream import (
+    METADATA_RECORDS,
+    Reader,
+    Writer,
+    _frame,
+    reject_same_file,
+)
 
 EFFICIENCY_STATUS_STATES = ("applied", "envelope", "pending")
 _EFFICIENCY_STATUS_FIELDS = ("state", "source", "wavelength_nm", "value")
+_STATE_RANK = {"pending": 0, "envelope": 1, "applied": 2}
 
 
 def efficiency_status_record(
@@ -54,9 +61,29 @@ def efficiency_status_record(
     return metadata
 
 
+def _states(metadata: Mapping[str, object]) -> dict[str, str]:
+    """Factor -> state of an efficiency_status record (the reader has validated the record)."""
+    names = [n.strip() for n in str(metadata.get("factors", "")).split(",") if n.strip()]
+    return {n: str(metadata[f"{n}.state"]) for n in names}
+
+
 def _applied(metadata: Mapping[str, object]) -> set[str]:
-    names = str(metadata.get("factors", "")).split(",")
-    return {n for n in names if metadata.get(f"{n}.state") == "applied"}
+    return {name for name, state in _states(metadata).items() if state == "applied"}
+
+
+def _check_advances(run_states: Mapping[str, str], entry: Mapping[str, object]) -> None:
+    """Raise ValueError unless each factor of ``entry`` advances from its input run state.
+
+    A factor advances pending -> envelope -> applied (docs/stream/efficiency-status.md), so a
+    factor already at the same or a later state in the input cannot be written again.
+    """
+    for name, state in _states(entry).items():
+        previous = run_states.get(name)
+        if previous is not None and _STATE_RANK[state] <= _STATE_RANK[previous]:
+            raise ValueError(
+                f"efficiency status factor '{name}' cannot go from {previous} to {state} "
+                "(the input already has it in run scope)"
+            )
 
 
 def transform(
@@ -84,8 +111,8 @@ def transform(
     becomes ``frame_out``. ``efficiency_status`` (see ``efficiency_status_record``) is written
     as one record per run, after existing efficiency status records and before the first event.
     A factor ``applied`` in any input record, including one after a ``telescope`` record,
-    cannot be applied again (ValueError). The writer's
-    ``producer`` is ``"obdeect.stream.stage 0x<stage_id>"``.
+    cannot be applied again, and a factor cannot advance to a state the input already has in
+    run scope (ValueError). The writer's ``producer`` is ``"obdeect.stream.stage 0x<stage_id>"``.
     """
     if isinstance(stage_id, bool) or not isinstance(stage_id, int) or not 0 <= stage_id < 2**32:
         raise ValueError("stage_id must be an integer in [0, 2**32)")
@@ -95,35 +122,48 @@ def transform(
     entry = efficiency_status_record(efficiency_status) if efficiency_status else None
     context: dict[str, dict[str, object]] = {"run": {}, "event": {}, "telescope": {}}
     entry_applied = _applied(entry) if entry else set()
+    run_states: dict[str, str] = {}  # run-scope states of the input, before the first event
+    seen_event = False
     efficiency_status_pending = False
     output_index: dict[int, int] = {}  # per telescope; continues across array reuses
     output_weight = 0.0
 
     reject_same_file(input, output)
-    with Writer(os.fspath(output), f"obdeect.stream.stage {stage_id:#x}") as writer:
-        for record in Reader(os.fspath(input)):
+    # The input is opened before the output is created (the writer truncates it), so a missing
+    # input leaves an existing output alone.
+    with (
+        Reader(os.fspath(input)) as reader,
+        Writer(os.fspath(output), f"obdeect.stream.stage {stage_id:#x}") as writer,
+    ):
+        for record in reader:
             kind = record["type"]
             if kind == "stream":
                 continue
             if efficiency_status_pending and kind in ("event", "run_end"):
+                _check_advances(run_states, entry)
                 writer.write("efficiency_status", entry)
                 efficiency_status_pending = False
             if kind in METADATA_RECORDS:
                 metadata = dict(record["metadata"])
                 if kind in context:
-                    context[kind] = metadata
+                    context[kind] = dict(metadata)  # a copy: the output frame is set below
                 if kind == "event":
+                    seen_event = True
                     output_index = {}
                 elif kind == "telescope":
                     output_weight = 0.0
                 elif kind == "telescope_end":
                     metadata["photons"] = output_weight
                 if kind == "run":
+                    run_states = {}
+                    seen_event = False
                     efficiency_status_pending = entry is not None
                 elif kind == "efficiency_status":
                     repeated = entry_applied & _applied(metadata)
                     if repeated:
                         raise ValueError(f"factor(s) already applied upstream: {sorted(repeated)}")
+                    if not seen_event:
+                        run_states.update(_states(metadata))
                 elif kind == "telescope" and "frame" in metadata:
                     metadata["frame"] = frame_code
                 writer.write(kind, metadata)

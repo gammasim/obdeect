@@ -99,9 +99,9 @@ def test_upward_direction_is_left_unchanged(tables):
 
 def test_refract_rejects_mismatched_inputs(tables):
     good = np.zeros(3)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="same length"):
         obdeect_propagation.refract(tables, good, good, good, good, good, np.zeros(2))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="one-dimensional"):
         obdeect_propagation.refract(tables, np.zeros((3, 1)), good, good, good, good, good)
 
 
@@ -121,25 +121,25 @@ NON_FINITE = [math.nan, math.inf, -math.inf]
 
 @pytest.mark.parametrize("bad", NON_FINITE)
 def test_non_finite_heights_raise(profile, bad):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="profile height must be finite"):
         profile.density(bad)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="profile height must be finite"):
         profile.thickness(bad)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="profile height must be finite"):
         profile.refractive_index_minus_one(bad)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="profile height must be finite"):
         profile.density(np.array([1000.0, bad]))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="ambient index: height must be finite"):
         profile.group_index(bad)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="air delay needs finite heights"):
         obdeect_propagation.air_delay_ns(profile, 2180.0, bad, 0.0)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="air delay needs finite heights"):
         obdeect_propagation.air_delay_ns(profile, bad, 10000.0, 0.0)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="air delay needs finite heights and zenith angle"):
         obdeect_propagation.air_delay_ns(profile, 2180.0, 10000.0, bad)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="propagation time needs a finite path and index"):
         obdeect_propagation.propagation_time_ns(bad, 1.0002)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="propagation time needs a finite path and index"):
         obdeect_propagation.propagation_time_ns(1000.0, bad)
 
 
@@ -167,5 +167,5 @@ def test_refract_reports_non_finite_inputs_as_not_bent(tables, bad):
 
 
 def test_missing_profile_is_an_error(tmp_path):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="cannot open atmospheric profile"):
         obdeect_propagation.AtmosphereProfile(tmp_path / "missing.dat")

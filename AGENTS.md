@@ -11,8 +11,8 @@
 - `src/ray_tracing`: optical ray tracer for telescope optics and structure.
 
 Air-shower generation, electronics, triggers and event writing are out of scope.
-Read the relevant code and tests first. Use the component `docs/` for architecture
-and science changes.
+Read the relevant code and tests first. Use the component pages under `docs/<component>/`
+for architecture and science changes.
 
 ## Layout
 
@@ -23,7 +23,9 @@ Per component `src/<c>/`:
 - `cpp/tests/`: native tests (`test_*.cpp`), helpers (`check.hpp`), fixtures in `cpp/tests/data/`.
 - `python/obdeect/<c>/`: Python boundary (API, CLI, optional plotting).
 - `python/tests/`: pytest suite.
-- `docs/`: Sphinx sources.
+
+Documentation: the Sphinx sources of all components are the root `docs/` tree (one folder per
+component, plus `docs/user-guide/`); there are no per-component docs folders.
 
 Python packages: `obdeect.stream`, `.propagation`, `.sources`, `.ray_tracing`.
 Wheels: `obdeect-stream`, `obdeect-propagation`, `obdeect-sources`, `obdeect-ray-tracing`.
@@ -64,7 +66,7 @@ Root `docs/changes/` is the Towncrier input for all components.
 - `stream`: Results must not depend on photon ordering, chunk size or thread count.
   Record each efficiency in the stream.
 - `propagation`: Atmospheric effects are an ordered list of independent effects, each
-  recorded in the efficiency status of the stream. Extinction follows `docs/extinction.md`;
+  recorded in the efficiency status of the stream. Extinction follows `docs/propagation/extinction.md`;
   its tests hold the reference values.
 - `sources`: Sources are defined by validated input (position, direction, angular,
   spectral and pulse profiles), never by hardwired device names. Sources emit at sky,
@@ -74,7 +76,8 @@ Root `docs/changes/` is the Towncrier input for all components.
   dispatch virtually. Terminology: "optical model", not telescope-specific names.
   When renaming a public concept, update implementation symbols, imports, exception
   types, serialized keys, fixture variables and test call sites together.
-  Use `docs/VALIDATION.md` and `docs/optical-models.md` for architectural or scientific changes.
+  Use `docs/ray-tracing/VALIDATION.md` and `docs/ray-tracing/optical-models.md` for architectural
+  or scientific changes.
 
 ## Changes and validation
 
@@ -92,10 +95,16 @@ Root `docs/changes/` is the Towncrier input for all components.
 Run from the repository root. One combined build covers all components:
 
 ```bash
-python -m pip install -e '.[dev]'     # editable install; rebuilds on C++ changes
+# The root pyproject has no dev extra. Editable installs of the four components (-C
+# editable.rebuild=true rebuilds the C++ on import), then the dev tools:
+python -m pip install "scikit-build-core>=0.11" "setuptools-scm>=8" "nanobind>=3.1"
+python -m pip install --no-build-isolation -C editable.rebuild=true \
+  -e src/stream -e src/propagation -e src/sources -e "src/ray_tracing[plot]"
+python -m pip install pytest ruff==0.17.6 pre-commit
 cmake -S . -B build
 cmake --build build
 ctest --test-dir build --output-on-failure
+ctest --test-dir build --output-on-failure -LE slow   # fast set; -L slow runs the rest
 python -m pytest src/<component>/python/tests   # e.g. src/ray_tracing
 ruff format --check src
 ruff check src
@@ -108,12 +117,18 @@ Ruff uses a 100-character line limit (root `pyproject.toml`). Run `ruff format` 
 `ruff check`. A clean handoff needs both `ruff format --check src` and `ruff check src`.
 After renames, grep the Python files for removed symbols and run the focused tests first.
 
+Native tests carry the component as a ctest label, and the label `slow` when they take longer
+than about 5 s. A test source that is not registered in `cmake/ObdeectTests.cmake` fails the
+configure step. Set `OBDEECT_REQUIRE_TOOLS=1` (CI does) so that Python tests which need the
+native tools fail instead of being skipped.
+
 Run `clang-tidy -p build <changed-file>` for changed C++ files when available.
 `pre-commit run --all-files` runs ruff, codespell, markdownlint, yamllint, actionlint,
 pyproject-fmt, shellcheck and the towncrier check. Run the full checks for shared kernels,
 interfaces, configuration or tooling changes.
 
-CI also builds a `-DOBDEECT_USE_FMA=ON` Release and an AddressSanitizer/UBSan Debug build.
+CI also builds a ray-tracing Release with `-DOBDEECT_RAY_TRACING_USE_FMA=ON` and an
+AddressSanitizer/UBSan Debug build (per component, `cmake -S src/<component>`).
 Run them locally for floating-point kernel or memory-handling changes:
 
 ```bash
@@ -124,6 +139,13 @@ cmake --build build-sanitize --parallel
 ctest --test-dir build-sanitize --output-on-failure
 ```
 
-Docs build with warnings as errors, per component:
-`sphinx-build -W --keep-going -b html src/<component>/docs src/<component>/docs/_build/html`.
-Regenerate ray-tracing figures only from new validation results, via `src/ray_tracing/docs/figures/make_figures.py`.
+Docs build with warnings as errors (one site for all components; `docs/_build/` is ignored):
+
+```bash
+sphinx-build -W --keep-going -b html docs docs/_build/html
+```
+
+The sphinx extras are those of `src/ray_tracing[docs]` (`myst-parser`, `pydata-sphinx-theme`,
+`pyyaml`, `sphinx`, `sphinx-design`); autodoc imports `obdeect.ray_tracing`. CI runs
+`docs/build_versions.py`, which builds the same sources per release.
+Regenerate ray-tracing figures only from new validation results, via `docs/figures/make_figures.py`.

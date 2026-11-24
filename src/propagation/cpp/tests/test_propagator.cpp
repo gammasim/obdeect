@@ -1,4 +1,5 @@
 #include "check.hpp"
+#include "stream_fixtures.hpp"
 
 #include "obdeect/propagation/dispersion.hpp"
 #include "obdeect/propagation/profile.hpp"
@@ -18,9 +19,11 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <variant>
 #include <vector>
 
@@ -30,6 +33,8 @@
 
 namespace {
 
+using namespace obdeect_test;
+
 using obdeect::stream::Column;
 using obdeect::stream::Frame;
 using obdeect::stream::RecordType;
@@ -38,7 +43,7 @@ constexpr double site_m = 2000.0;
 
 std::int64_t i64(std::int64_t value) { return value; }
 
-// One photon of a synthetic chunk. Sky photons use z, cz and t; G photons use zem.
+// One photon of a synthetic chunk. Photons in the sky frame use z, cz and t; G photons use zem.
 struct Row {
   double x = 0.0, y = 0.0, z = 0.0, cx = 0.0, cy = 0.0, cz = 0.0, t = 0.0, zem = 0.0, w = 1.0;
 };
@@ -79,26 +84,6 @@ obdeect::stream::Metadata run_keys(int refraction) {
   }
   m["wavelength_min_nm"] = 250.0;
   m["wavelength_max_nm"] = 700.0;
-  return m;
-}
-
-obdeect::stream::Metadata event_keys() {
-  obdeect::stream::Metadata m;
-  m["event_number"] = i64(7);
-  return m;
-}
-
-obdeect::stream::Metadata telescope_keys(std::uint32_t id, Frame frame) {
-  obdeect::stream::Metadata m;
-  m["telescope_id"] = i64(id);
-  m["frame"] = i64(static_cast<std::int64_t>(frame));
-  return m;
-}
-
-obdeect::stream::Metadata telescope_end_keys(std::uint32_t id) {
-  obdeect::stream::Metadata m;
-  m["telescope_id"] = i64(id);
-  m["photons"] = 0.0;
   return m;
 }
 
@@ -149,7 +134,7 @@ Row ground_row(std::size_t i) {
   return row;
 }
 
-// Sky photons, emitted 3 to 23 km above the observation level, some moving upwards.
+// Photons in the sky frame, emitted 3 to 23 km above the observation level, some moving upwards.
 Row sky_row(std::size_t i) {
   Row row;
   row.x = 500.0 * std::sin(0.1 * static_cast<double>(i));
@@ -162,41 +147,6 @@ Row sky_row(std::size_t i) {
   row.t = static_cast<double>(i % 11);
   row.w = 1.0 + static_cast<double>(i % 3);
   return row;
-}
-
-std::string make_stream(const std::function<void(obdeect::stream::Writer &)> &body) {
-  std::ostringstream out;
-  {
-    obdeect::stream::Writer writer(out, "test");
-    body(writer);
-    writer.finish();
-  }
-  return out.str();
-}
-
-std::vector<obdeect::stream::Record> records_of(const std::string &bytes) {
-  std::istringstream in(bytes);
-  obdeect::stream::Reader reader(in);
-  std::vector<obdeect::stream::Record> records;
-  obdeect::stream::Record record;
-  while (reader.next(record)) {
-    records.push_back(record);
-  }
-  CHECK(reader.ended());
-  return records;
-}
-
-// Concatenated values of column c over all photon records of one telescope.
-std::vector<float> photon_column(const std::vector<obdeect::stream::Record> &records,
-                                 std::uint32_t telescope, Column c) {
-  std::vector<float> values;
-  for (const auto &record : records) {
-    if (record.type == RecordType::photons && record.chunk.telescope_id == telescope &&
-        record.chunk.has(c)) {
-      values.insert(values.end(), record.chunk[c].begin(), record.chunk[c].end());
-    }
-  }
-  return values;
 }
 
 std::size_t photon_rows(const std::vector<obdeect::stream::Record> &records,
@@ -281,15 +231,6 @@ std::size_t array_size_of(const obdeect::stream::Metadata &m, const std::string 
     return 0;
   }
   return std::get<std::vector<double>>(it->second).size();
-}
-
-bool throws_invalid(const std::function<void()> &fn) {
-  try {
-    fn();
-  } catch (const std::invalid_argument &) {
-    return true;
-  }
-  return false;
 }
 
 // Efficiency status keys and record order: stream, run, efficiency_status, event, ...
@@ -403,14 +344,16 @@ void test_never_apply_twice() {
   obdeect::stream::Metadata applied;
   applied["factors"] = std::string("atmosphere");
   applied["atmosphere.state"] = std::string("applied");
-  CHECK(throws_invalid([&] { propagate(run_then_efficiency_status(applied), config_for(table)); }));
+  CHECK(throws_with([&] { propagate(run_then_efficiency_status(applied), config_for(table)); },
+                    "already applied"));
 
   obdeect::stream::Metadata qe_applied;
   qe_applied["factors"] = std::string("qe");
   qe_applied["qe.state"] = std::string("applied");
   auto config = config_for(table);
   config.envelope = {constant_factor("qe", 0.9)};
-  CHECK(throws_invalid([&] { propagate(run_then_efficiency_status(qe_applied), config); }));
+  CHECK(throws_with([&] { propagate(run_then_efficiency_status(qe_applied), config); },
+                    "already applied"));
 
   obdeect::stream::Metadata pending;
   pending["factors"] = std::string("atmosphere,qe");
@@ -423,6 +366,41 @@ void test_never_apply_twice() {
     accepted = false;
   }
   CHECK(accepted);
+}
+
+// A run status of the input that already lists a factor of this stage is merged with the stage's
+// own status into one record: the factor appears once, and it takes the stage's state.
+void test_input_status_merged() {
+  const auto table = zero_table();
+  obdeect::stream::Metadata input_status;
+  input_status["factors"] = std::string("atmosphere,qe");
+  input_status["atmosphere.state"] = std::string("pending");
+  input_status["qe.state"] = std::string("applied");
+  input_status["qe.source"] = std::string("upstream");
+  const std::string input = make_stream([&](obdeect::stream::Writer &writer) {
+    writer.write_metadata(RecordType::run, run_keys(0));
+    writer.write_metadata(RecordType::efficiency_status, input_status);
+    writer.write_metadata(RecordType::event, event_keys());
+    writer.write_metadata(RecordType::event_end, {});
+    writer.write_metadata(RecordType::run_end, {});
+  });
+  const auto result = propagate(input, config_for(table));
+  const auto records = records_of(result.bytes);
+  int statuses = 0;
+  for (const auto &record : records) {
+    statuses += record.type == RecordType::efficiency_status ? 1 : 0;
+  }
+  CHECK(statuses == 1);
+  const auto *status = first_efficiency_status(records);
+  CHECK(status != nullptr);
+  if (status == nullptr) {
+    return;
+  }
+  CHECK(text_of(*status, "factors") == "atmosphere,qe,wavelength");
+  CHECK(text_of(*status, "atmosphere.state") == "applied");
+  CHECK(text_of(*status, "qe.state") == "applied");
+  CHECK(text_of(*status, "qe.source") == "upstream");
+  CHECK(text_of(*status, "wavelength.state") == "applied");
 }
 
 // Output does not depend on how the input is split into chunks.
@@ -450,7 +428,7 @@ void test_chunk_size_determinism() {
   }
   CHECK(!reference.empty() && !reference[0].empty());
 
-  // Sky photons (some upwards) with chunk sizes 777 and 2^16.
+  // Photons in the sky frame (some upwards) with chunk sizes 777 and 2^16.
   const auto sky_stream = [](std::size_t n, std::size_t chunk_rows) {
     return make_stream([&](obdeect::stream::Writer &writer) {
       writer.write_metadata(RecordType::run, run_keys(0));
@@ -617,7 +595,7 @@ void test_sky_refraction() {
   }
 }
 
-// Sky photons need the z column; photons of an unknown telescope are rejected.
+// Photons in the sky frame need the z column; photons of an unknown telescope are rejected.
 void test_rejects_invalid_input() {
   const auto no_z = make_stream([&](obdeect::stream::Writer &writer) {
     writer.write_metadata(RecordType::run, run_keys(0));
@@ -626,16 +604,22 @@ void test_rejects_invalid_input() {
     obdeect::stream::PhotonChunk chunk = make_chunk(Frame::sky, 1, 0, 2, sky_row);
     chunk.resize(2, obdeect::stream::required_columns);
     writer.write_chunk(chunk);
+    writer.write_metadata(RecordType::telescope_end, telescope_end_keys(1));
+    writer.write_metadata(RecordType::event_end, {});
+    writer.write_metadata(RecordType::run_end, {});
   });
-  CHECK(throws_invalid([&] { propagate(no_z, config_for(zero_table())); }));
+  CHECK(throws_with([&] { propagate(no_z, config_for(zero_table())); }, "need the z column"));
 
   const auto unknown = make_stream([&](obdeect::stream::Writer &writer) {
     writer.write_metadata(RecordType::run, run_keys(0));
     writer.write_metadata(RecordType::event, event_keys());
     writer.write_metadata(RecordType::telescope, telescope_keys(1, Frame::ground));
     writer.write_chunk(make_chunk(Frame::ground, 2, 0, 2, ground_row));
+    writer.write_metadata(RecordType::telescope_end, telescope_end_keys(1));
+    writer.write_metadata(RecordType::event_end, {});
+    writer.write_metadata(RecordType::run_end, {});
   });
-  CHECK(throws_invalid([&] { propagate(unknown, config_for(zero_table())); }));
+  CHECK(throws_with([&] { propagate(unknown, config_for(zero_table())); }, "not open"));
 }
 
 // ---- Wavelength interpolation, dispersion and the horizon
@@ -841,21 +825,22 @@ void test_dispersion_stage() {
              (k_group_600 - 1.0) * air_ns, 2e-2);
 
   // Rejections: refracted input, no profile, a wavelength range or reference outside the formulas.
-  CHECK(throws_invalid([&] { propagate(sky_wavelength_stream({500.0}, 1), config); }));
+  CHECK(throws_with([&] { propagate(sky_wavelength_stream({500.0}, 1), config); }, "refraction"));
   {
     auto no_profile = config;
     no_profile.profile.reset();
-    CHECK(throws_invalid([&] { propagate(input, no_profile); }));
+    CHECK(throws_with([&] { propagate(input, no_profile); }, "profile"));
   }
   {
     auto narrow = config;
     narrow.wavelength_range = obdeect::propagation::WavelengthRange{100.0, 700.0};
-    CHECK(throws_invalid([&] { propagate(input, narrow); }));
+    CHECK(throws_with([&] { propagate(input, narrow); }, "wavelength"));
   }
   {
     auto bad_reference = config;
     bad_reference.dispersion_reference_nm = 150.0;
-    CHECK(throws_invalid([&] { propagate(input, bad_reference); }));
+    CHECK(
+        throws_with([&] { propagate(input, bad_reference); }, "finite and within 200 to 2000 nm"));
   }
 }
 
@@ -898,7 +883,8 @@ void test_horizon_photons_not_dropped() {
 
 constexpr std::uint64_t scatter_seed = 20261107;
 
-// Scattering table of the test data: 340 to 400 nm, exponential atmosphere (docs/scattering.md).
+// Scattering table of the test data: 340 to 400 nm, exponential atmosphere
+// (docs/propagation/scattering.md).
 obdeect::propagation::ScatteringTable scattering_table() {
   return obdeect::propagation::ScatteringTable::from_file(
       std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/scattering_exponential.dat");
@@ -1175,15 +1161,16 @@ void test_scattering_rejects() {
   const std::string input = beam_stream(10, 10, false);
   auto no_table = scattering_config(table, false);
   no_table.scattering_table.reset();
-  CHECK(throws_invalid([&] { propagate(input, no_table); }));
+  CHECK(throws_with([&] { propagate(input, no_table); }, "scattering table"));
 
   obdeect::stream::Metadata no_radius = scatter_run_keys();
   no_radius.erase("telescope_r_m");
-  CHECK(throws_invalid(
-      [&] { propagate(beam_stream(10, 10, false, no_radius), scattering_config(table, false)); }));
+  CHECK(throws_with(
+      [&] { propagate(beam_stream(10, 10, false, no_radius), scattering_config(table, false)); },
+      "telescope_r_m"));
 
   const std::string ground = ground_stream(100, 100);
-  CHECK(throws_invalid([&] { propagate(ground, scattering_config(table, false)); }));
+  CHECK(throws_with([&] { propagate(ground, scattering_config(table, false)); }, "frame sky"));
 }
 
 // A sky chunk with cz (an upward row) but without w: rejected before the pre-pass writes w.
@@ -1218,8 +1205,8 @@ void test_scattering_needs_w_column() {
   photons.chunk[Column::cz][0] = 0.5F; // upward: the pre-pass sets its w
   photons.chunk[Column::cz][1] = -1.0F;
   propagator.process(photons, sink);
-  CHECK(throws_invalid(
-      [&] { propagator.process(metadata_record(RecordType::event_end, {}), sink); }));
+  CHECK(throws_with([&] { propagator.process(metadata_record(RecordType::event_end, {}), sink); },
+                    "needs the columns"));
 }
 
 // Stream of n sky-frame photons of telescope 1 with the given run keys.
@@ -1398,7 +1385,7 @@ void test_scattering_array_index() {
   const auto table = real_table();
   const std::size_t n = 100;
   const auto config = scattering_config(table, true);
-  CHECK(!throws_invalid([&] { propagate(scatter3_stream({{1, n, 4}, {2, n, 4}}, n), config); }));
+  CHECK(accepts([&] { propagate(scatter3_stream({{1, n, 4}, {2, n, 4}}, n), config); }));
   const std::string message =
       message_of([&] { propagate(scatter3_stream({{1, n, 0}, {2, n, 1}}, n), config); });
   CHECK(message.find("single scattering needs one array_index per event") != std::string::npos);
@@ -1415,13 +1402,13 @@ void test_scattering_primaries_rejects() {
     config.scattering_primaries = std::move(ids);
     return config;
   };
-  CHECK(throws_invalid([&] { propagate(input, with_primaries({0})); }));
-  CHECK(throws_invalid([&] { propagate(input, with_primaries({4})); }));
-  CHECK(throws_invalid([&] { propagate(input, with_primaries({1, 4})); }));
-  CHECK(throws_invalid([&] { propagate(input, with_primaries({})); }));
+  CHECK(throws_with([&] { propagate(input, with_primaries({0})); }, "1-based"));
+  CHECK(throws_with([&] { propagate(input, with_primaries({4})); }, "names telescope"));
+  CHECK(throws_with([&] { propagate(input, with_primaries({1, 4})); }, "names telescope"));
+  CHECK(throws_with([&] { propagate(input, with_primaries({})); }, "is empty"));
   auto no_scattering = config_for(table);
   no_scattering.scattering_primaries = std::vector<std::uint32_t>{1};
-  CHECK(throws_invalid([&] { propagate(input, no_scattering); }));
+  CHECK(throws_with([&] { propagate(input, no_scattering); }, "needs scattering"));
 }
 
 // Same file, different spellings: the output must not truncate the input.
@@ -1441,25 +1428,33 @@ void test_same_file() {
 void test_rejects_site_mismatch() {
   auto config = config_for(zero_table()); // H2 = 2000 m
   config.site_altitude_m = 2100.0;
-  CHECK(throws_invalid([&] { propagate(ground_stream(4, 4), config); }));
+  CHECK(throws_with([&] { propagate(ground_stream(4, 4), config); },
+                    "does not match the site altitude"));
 }
 
 // telescope_end needs an open telescope with the same id.
 void test_rejects_telescope_end_mismatch() {
-  const auto no_open = make_stream([&](obdeect::stream::Writer &writer) {
-    writer.write_metadata(RecordType::run, run_keys(0));
-    writer.write_metadata(RecordType::event, event_keys());
-    writer.write_metadata(RecordType::telescope_end, telescope_end_keys(1));
-  });
-  CHECK(throws_invalid([&] { propagate(no_open, config_for(zero_table())); }));
+  const obdeect::stream::Metadata header{
+      {"format_major", std::int64_t{obdeect::stream::format_major}},
+      {"format_minor", std::int64_t{obdeect::stream::format_minor}},
+      {"producer", std::string("test")}};
+  const auto no_open = raw_metadata(RecordType::stream, header) +
+                       raw_metadata(RecordType::run, run_keys(0)) +
+                       raw_metadata(RecordType::event, event_keys()) +
+                       raw_metadata(RecordType::telescope_end, telescope_end_keys(1)) +
+                       raw_record(RecordType::stream_end, "");
+  CHECK(throws_with<std::runtime_error>([&] { propagate(no_open, config_for(zero_table())); },
+                                        "telescope_end without telescope"));
 
   const auto other = make_stream([&](obdeect::stream::Writer &writer) {
     writer.write_metadata(RecordType::run, run_keys(0));
     writer.write_metadata(RecordType::event, event_keys());
     writer.write_metadata(RecordType::telescope, telescope_keys(1, Frame::ground));
     writer.write_metadata(RecordType::telescope_end, telescope_end_keys(2));
+    writer.write_metadata(RecordType::event_end, {});
+    writer.write_metadata(RecordType::run_end, {});
   });
-  CHECK(throws_invalid([&] { propagate(other, config_for(zero_table())); }));
+  CHECK(throws_with([&] { propagate(other, config_for(zero_table())); }, "not open"));
 }
 
 // A run level 24 m above the site (inside the tolerance) is used for everything: the output
@@ -1489,8 +1484,8 @@ void test_run_observation_level() {
 
 // Non-finite sky input (x, y, cz) and a non-finite run observation level are rejected.
 void test_rejects_non_finite_input() {
-  const double nan = std::numeric_limits<double>::quiet_NaN();
-  const double inf = std::numeric_limits<double>::infinity();
+  const double nan = obdeect_test::kNan;
+  const double inf = obdeect_test::kInf;
   const auto with = [](std::function<void(Row &)> set) {
     return [set](std::size_t) {
       Row row{150.0, -40.0, 10000.0, 0.0, 0.0, -1.0, 5.0, 0.0, 1.0};
@@ -1499,21 +1494,29 @@ void test_rejects_non_finite_input() {
     };
   };
   const obdeect::stream::Metadata run = run_keys(0);
-  CHECK(throws_invalid([&] {
-    propagate(sky_stream(run, 1, with([&](Row &r) { r.x = nan; })), config_for(zero_table()));
-  }));
-  CHECK(throws_invalid([&] {
-    propagate(sky_stream(run, 1, with([&](Row &r) { r.y = inf; })), config_for(zero_table()));
-  }));
-  CHECK(throws_invalid([&] {
-    propagate(sky_stream(run, 1, with([&](Row &r) { r.cz = nan; })), config_for(zero_table()));
-  }));
+  CHECK(throws_with<std::runtime_error>(
+      [&] {
+        propagate(sky_stream(run, 1, with([&](Row &r) { r.x = nan; })), config_for(zero_table()));
+      },
+      "not finite"));
+  CHECK(throws_with<std::runtime_error>(
+      [&] {
+        propagate(sky_stream(run, 1, with([&](Row &r) { r.y = inf; })), config_for(zero_table()));
+      },
+      "not finite"));
+  CHECK(throws_with<std::runtime_error>(
+      [&] {
+        propagate(sky_stream(run, 1, with([&](Row &r) { r.cz = nan; })), config_for(zero_table()));
+      },
+      "not finite"));
 
   obdeect::stream::Metadata nan_level = run_keys(0);
   nan_level["observation_level_m"] = nan;
-  const auto only_run = make_stream(
-      [&](obdeect::stream::Writer &writer) { writer.write_metadata(RecordType::run, nan_level); });
-  CHECK(throws_invalid([&] { propagate(only_run, config_for(zero_table())); }));
+  const auto only_run = make_stream([&](obdeect::stream::Writer &writer) {
+    writer.write_metadata(RecordType::run, nan_level);
+    writer.write_metadata(RecordType::run_end, {});
+  });
+  CHECK(throws_with([&] { propagate(only_run, config_for(zero_table())); }, "is not finite"));
 }
 
 // Acceptance of one photon with od_focus taken from the table as tau(h + pathlen) - tau(h)
@@ -1685,29 +1688,43 @@ void test_pathlen_rejects() {
   const auto input = ground_stream(10, 10);
   const auto table = zero_table();
   const auto rejected =
-      [&](const std::function<void(obdeect::propagation::PropagatorConfig &)> &edit) {
+      [&](const std::function<void(obdeect::propagation::PropagatorConfig &)> &edit,
+          const char *fragment) {
         auto config = config_for(table);
         edit(config);
-        return throws_invalid([&] { propagate(input, config); });
+        return throws_with([&] { propagate(input, config); }, fragment);
       };
-  CHECK(rejected([](obdeect::propagation::PropagatorConfig &c) { c.default_pathlen_m = -1.0; }));
-  CHECK(rejected([](obdeect::propagation::PropagatorConfig &c) {
-    c.default_pathlen_m = std::numeric_limits<double>::quiet_NaN();
-  }));
-  CHECK(rejected([](obdeect::propagation::PropagatorConfig &c) {
-    c.default_pathlen_m = std::numeric_limits<double>::infinity();
-  }));
+  CHECK(rejected([](obdeect::propagation::PropagatorConfig &c) { c.default_pathlen_m = -1.0; },
+                 "pathlen must be finite and not negative"));
   CHECK(rejected(
-      [](obdeect::propagation::PropagatorConfig &c) { c.telescope_pathlen_m = {{1, -0.5}}; }));
-  CHECK(rejected([](obdeect::propagation::PropagatorConfig &c) {
-    c.telescope_pathlen_m = {{2, std::numeric_limits<double>::quiet_NaN()}};
+      [](obdeect::propagation::PropagatorConfig &c) {
+        c.default_pathlen_m = std::numeric_limits<double>::quiet_NaN();
+      },
+      "pathlen must be finite and not negative"));
+  CHECK(rejected(
+      [](obdeect::propagation::PropagatorConfig &c) {
+        c.default_pathlen_m = std::numeric_limits<double>::infinity();
+      },
+      "pathlen must be finite and not negative"));
+  CHECK(rejected(
+      [](obdeect::propagation::PropagatorConfig &c) { c.telescope_pathlen_m = {{1, -0.5}}; },
+      "pathlen must be finite and not negative"));
+  CHECK(rejected(
+      [](obdeect::propagation::PropagatorConfig &c) {
+        c.telescope_pathlen_m = {{2, std::numeric_limits<double>::quiet_NaN()}};
+      },
+      "pathlen must be finite and not negative"));
+  CHECK(rejected(
+      [](obdeect::propagation::PropagatorConfig &c) { c.telescope_pathlen_m = {{0, 1.0}}; },
+      "telescope ids are 1-based"));
+  CHECK(rejected(
+      [](obdeect::propagation::PropagatorConfig &c) { c.telescope_pathlen_m = {{3, 1.0}}; },
+      "names telescope"));
+  CHECK(accepts([&] {
+    auto config = config_for(table);
+    config.telescope_pathlen_m = {{2, 0.0}};
+    propagate(input, config);
   }));
-  CHECK(rejected(
-      [](obdeect::propagation::PropagatorConfig &c) { c.telescope_pathlen_m = {{0, 1.0}}; }));
-  CHECK(rejected(
-      [](obdeect::propagation::PropagatorConfig &c) { c.telescope_pathlen_m = {{3, 1.0}}; }));
-  CHECK(!rejected(
-      [](obdeect::propagation::PropagatorConfig &c) { c.telescope_pathlen_m = {{2, 0.0}}; }));
 }
 
 } // namespace
@@ -1833,6 +1850,126 @@ void test_upward_scattering_end_to_end() {
   }
 }
 
+// ---- Accounting and input checks of the run ---------------------------------------------
+
+// Photon blocks of a telescope continue the index within an event (first_index is the index of
+// the first photon of the block among the telescope's photons of the event). A block that restarts
+// at 0 would repeat the random keys of the earlier photons, so it is rejected.
+void test_first_index_must_continue() {
+  const std::size_t n = 10;
+  const auto sky_unit = [](std::size_t i) {
+    Row row = sky_row(i);
+    row.w = 1.0;
+    return row;
+  };
+  const auto stream_of = [&](const std::vector<std::uint64_t> &firsts) {
+    return make_stream([&](obdeect::stream::Writer &writer) {
+      writer.write_metadata(RecordType::run, run_keys(0));
+      writer.write_metadata(RecordType::event, event_keys());
+      writer.write_metadata(RecordType::telescope, telescope_keys(1, Frame::sky));
+      for (const std::uint64_t first : firsts) {
+        writer.write_chunk(make_chunk(Frame::sky, 1, first, n, sky_unit));
+      }
+      writer.write_metadata(RecordType::telescope_end, telescope_end_keys(1));
+      writer.write_metadata(RecordType::event_end, {});
+      writer.write_metadata(RecordType::run_end, {});
+    });
+  };
+  const auto config = config_for(zero_table());
+  const std::string message = message_of([&] { propagate(stream_of({0, 0}), config); });
+  CHECK(message.find("first_index") != std::string::npos);
+  CHECK(throws_with([&] { propagate(stream_of({0, n + 1}), config); }, "telescope"));
+  const auto result = propagate(stream_of({0, n}), config);
+  CHECK(result.summary.photons_in == 2 * n);
+}
+
+// With scattering, one telescope block per telescope and event: the scattered photons of a
+// telescope are written in its block, and a second block would need its own scattered photons.
+void test_scattering_rejects_repeated_block() {
+  const std::size_t n = 20;
+  const auto config = scattering_config(real_table(), true);
+  const std::string message =
+      message_of([&] { propagate(scatter3_stream({{1, n, -1}, {1, n, -1}}, n), config); });
+  CHECK(message.find("one telescope block per telescope") != std::string::npos);
+}
+
+// The propagator keeps pointers into its own configuration (config_.scattering.air_profile): it
+// must not be copied or moved.
+void test_propagator_not_copyable() {
+  using obdeect::propagation::Propagator;
+  static_assert(!std::is_copy_constructible_v<Propagator>);
+  static_assert(!std::is_copy_assignable_v<Propagator>);
+  static_assert(!std::is_move_constructible_v<Propagator>);
+  static_assert(!std::is_move_assignable_v<Propagator>);
+  CHECK(true);
+}
+
+// Thinned output: every photon has one fate. For rows of weight 1, photons_in = photons_out +
+// dropped + thinned_out (thinned_out counts the photons removed by the acceptance draw).
+void test_thinned_summary_closes() {
+  const std::size_t n = 500;
+  const auto sky_unit = [](std::size_t i) {
+    Row row = sky_row(i);
+    row.w = 1.0;
+    return row;
+  };
+  const auto input = make_stream([&](obdeect::stream::Writer &writer) {
+    writer.write_metadata(RecordType::run, run_keys(0));
+    writer.write_metadata(RecordType::event, event_keys());
+    writer.write_metadata(RecordType::telescope, telescope_keys(1, Frame::sky));
+    writer.write_chunk(make_chunk(Frame::sky, 1, 0, n, sky_unit));
+    writer.write_metadata(RecordType::telescope_end, telescope_end_keys(1));
+    writer.write_metadata(RecordType::event_end, {});
+    writer.write_metadata(RecordType::run_end, {});
+  });
+  const auto result = propagate(input, config_for(real_table()));
+  const auto &summary = result.summary;
+  CHECK(summary.photons_in == n);
+  CHECK(summary.dropped > 0);
+  CHECK(summary.thinned_out > 0.0);
+  CHECK(std::abs(summary.thinned_out + static_cast<double>(summary.photons_out + summary.dropped) -
+                 static_cast<double>(summary.photons_in)) < 1e-9);
+  CHECK(std::abs(summary.weight_out - static_cast<double>(summary.photons_out)) < 1e-9);
+}
+
+// RowPool: the blocks cover the rows, the pool is reused by several runs, and the error of the
+// lowest failing block is rethrown after every block has run.
+void test_row_pool() {
+  obdeect::propagation::RowPool pool(4);
+  CHECK(pool.threads() >= 1 && pool.threads() <= 4);
+  const std::size_t rows = 3 * obdeect::propagation::row_block + 17;
+  for (int round = 0; round < 3; ++round) {
+    std::vector<int> seen(rows, 0);
+    pool.run(rows, [&](std::size_t begin, std::size_t end) {
+      for (std::size_t row = begin; row < end; ++row) {
+        seen[row] += 1;
+      }
+    });
+    CHECK(std::all_of(seen.begin(), seen.end(), [](int count) { return count == 1; }));
+  }
+  std::vector<int> failed_blocks;
+  std::string message;
+  try {
+    pool.run(4 * obdeect::propagation::row_block, [&](std::size_t begin, std::size_t) {
+      const std::size_t block = begin / obdeect::propagation::row_block;
+      if (block == 1 || block == 3) {
+        throw std::runtime_error("block " + std::to_string(block));
+      }
+    });
+  } catch (const std::runtime_error &error) {
+    message = error.what();
+  }
+  CHECK(message == "block 1");
+  // The pool still works after an error.
+  std::size_t total = 0;
+  std::mutex total_mutex;
+  pool.run(rows, [&](std::size_t begin, std::size_t end) {
+    const std::lock_guard<std::mutex> lock(total_mutex);
+    total += end - begin;
+  });
+  CHECK(total == rows);
+}
+
 int main() {
   return run_checks([] {
     test_output_index_continues_across_array_reuses();
@@ -1843,6 +1980,7 @@ int main() {
     test_expected_count();
     test_weighted_analytic();
     test_never_apply_twice();
+    test_input_status_merged();
     test_chunk_size_determinism();
     test_sky_analytic();
     test_sky_refraction();
@@ -1867,5 +2005,10 @@ int main() {
     test_scattering_telescope_selection();
     test_scattering_array_index();
     test_scattering_primaries_rejects();
+    test_first_index_must_continue();
+    test_scattering_rejects_repeated_block();
+    test_propagator_not_copyable();
+    test_thinned_summary_closes();
+    test_row_pool();
   });
 }

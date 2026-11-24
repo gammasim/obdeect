@@ -1,18 +1,17 @@
 #pragma once
 
-// Trace a photon stream through optical models: the native `obdeect ray-tracing trace-stream`.
-// Same rules and output as obdeect.ray_tracing.stream.trace_stream (Python), which this file
-// follows step by step: ground-frame (G) or telescope-frame (T) photons in, camera-frame (C)
-// photons out; records pass through, telescopes not selected are dropped and the efficiency
-// status is updated (docs/ray-tracing/photon-stream.md). Floating-point steps that the Python
-// version does in NumPy (input plane, sums, envelope interpolation) are done in the same order,
-// so the two write the same stream; only the version in the provenance strings may differ.
+// Trace a photon stream through optical models. One implementation for the native program
+// `obdeect-ray-tracing-trace-stream` and the Python API (`_core.trace_stream`): ground-frame (G)
+// or telescope-frame (T) photons in, camera-frame (C) photons out. Records pass through,
+// telescopes not selected are dropped and the efficiency status is updated
+// (docs/ray-tracing/photon-stream.md).
 
 #include "obdeect/ray_tracing/bunches.hpp"
 #include "obdeect/ray_tracing/json.hpp"
 #include "obdeect/ray_tracing/model_hash.hpp"
 #include "obdeect/ray_tracing/model_json.hpp"
 #include "obdeect/stream/photons.hpp"
+#include "obdeect/stream/random.hpp"
 #include "obdeect/stream/stream.hpp"
 
 #include <algorithm>
@@ -21,14 +20,18 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <istream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
 #include <optional>
 #include <ostream>
 #include <set>
+#include <stdexcept>
 #include <string>
+#include <system_error>
 #include <tuple>
 #include <utility>
 #include <variant>
@@ -46,10 +49,7 @@ inline constexpr double kPi = 3.141592653589793;
 inline constexpr double kInputPlaneMarginM = 1.0;
 // Radial samples of an asphere mirror's aperture for its support.
 inline constexpr std::size_t kAsphereSamples = 2049;
-// NumPy's reduction buffer: float32 sums in float64 are pairwise within blocks of this size.
-inline constexpr std::size_t kNumpyBuffer = 8192;
 inline constexpr const char *kConstantFactor = "telescope_transmission_constant";
-inline constexpr std::uint32_t kMaxTelescopeId = 65535;
 
 using Vec = std::array<double, 3>;
 
@@ -57,82 +57,10 @@ using Vec = std::array<double, 3>;
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
-// CPython's math.hypot of two values (vector_norm: exact squares and sums, one correction).
-[[nodiscard]] inline double python_hypot(double a, double b) {
-  const double x0 = std::abs(a), x1 = std::abs(b);
-  const double max = std::max(x0, x1);
-  if (std::isinf(max))
-    return max;
-  if (std::isnan(x0) || std::isnan(x1))
-    return std::numeric_limits<double>::quiet_NaN();
-  if (max == 0.0)
-    return max;
-  int max_e = 0;
-  (void)std::frexp(max, &max_e);
-  if (max_e < -1023)
-    return std::numeric_limits<double>::min() *
-           python_hypot(x0 / std::numeric_limits<double>::min(),
-                        x1 / std::numeric_limits<double>::min());
-  const double scale = std::ldexp(1.0, -max_e);
-  double csum = 1.0, frac1 = 0.0, frac2 = 0.0;
-  const auto add = [&](double hi, double lo) {
-    const double sum = csum + hi;
-    const double z = sum - csum;
-    frac2 += hi - z;
-    csum = sum;
-    frac1 += lo;
-  };
-  for (const double v : {x0, x1}) {
-    const double x = v * scale;
-    const double square = x * x;
-    add(square, std::fma(x, x, -square));
-  }
-  double h = std::sqrt(csum - 1.0 + (frac1 + frac2));
-  const double product = -h * h;
-  add(product, std::fma(-h, h, -product));
-  const double x = csum - 1.0 + (frac1 + frac2);
-  h += x / (2.0 * h);
-  return h / scale;
-}
-
-// numpy.sum(values, dtype=float64) of float32 values: pairwise within buffer blocks.
-[[nodiscard]] inline double pairwise(const float *a, std::size_t n) {
-  if (n < 8) {
-    double result = 0.0;
-    for (std::size_t i = 0; i < n; ++i)
-      result += static_cast<double>(a[i]);
-    return result;
-  }
-  if (n <= 128) {
-    std::array<double, 8> r{};
-    for (std::size_t j = 0; j < 8; ++j)
-      r[j] = static_cast<double>(a[j]);
-    std::size_t i = 8;
-    for (; i < n - (n % 8); i += 8)
-      for (std::size_t j = 0; j < 8; ++j)
-        r[j] += static_cast<double>(a[i + j]);
-    double result = ((r[0] + r[1]) + (r[2] + r[3])) + ((r[4] + r[5]) + (r[6] + r[7]));
-    for (; i < n; ++i)
-      result += static_cast<double>(a[i]);
-    return result;
-  }
-  std::size_t half = n / 2;
-  half -= half % 8;
-  return pairwise(a, half) + pairwise(a + half, n - half);
-}
-
-[[nodiscard]] inline double numpy_sum(const std::vector<float> &values) {
-  double total = 0.0;
-  for (std::size_t start = 0; start < values.size(); start += kNumpyBuffer)
-    total = total + pairwise(values.data() + start, std::min(kNumpyBuffer, values.size() - start));
-  return total;
-}
-
-// numpy.interp(x, nodes, values) for x within [nodes[0], nodes[-1]] (checked by the caller).
-[[nodiscard]] inline double numpy_interp(double x, const std::vector<double> &nodes,
-                                         const std::vector<double> &values) {
-  if (std::isnan(x))
-    return x;
+// numpy.interp-like linear interpolation of (nodes, values) at x, nodes increasing, x inside
+// [nodes.front(), nodes.back()] (checked by the caller).
+[[nodiscard]] inline double interpolate(double x, const std::vector<double> &nodes,
+                                        const std::vector<double> &values) {
   const std::size_t n = nodes.size();
   if (n == 1)
     return values[0];
@@ -141,13 +69,7 @@ using Vec = std::array<double, 3>;
   if (j == n - 1 || nodes[j] == x)
     return values[j];
   const double slope = (values[j + 1] - values[j]) / (nodes[j + 1] - nodes[j]);
-  double result = slope * (x - nodes[j]) + values[j];
-  if (std::isnan(result)) {
-    result = slope * (x - nodes[j + 1]) + values[j + 1];
-    if (std::isnan(result) && values[j] == values[j + 1])
-      result = values[j];
-  }
-  return result;
+  return slope * (x - nodes[j]) + values[j];
 }
 
 [[nodiscard]] inline std::string format_g(double value) {
@@ -351,7 +273,7 @@ using Vec = std::array<double, 3>;
       curvature_bound += std::abs(coefficient) * power * (power - 1.0) *
                          std::pow(outer_scaled, power - 2.0) / std::pow(scale, 2.0);
   }
-  const double radial = python_hypot(direction[0], direction[1]);
+  const double radial = std::hypot(direction[0], direction[1]);
   const double dz = std::abs(direction[2]);
   const double rounding = std::numeric_limits<double>::epsilon() *
                           static_cast<double>(16 + 4 * coefficients.size()) *
@@ -652,7 +574,7 @@ inline void check_lower_input_plane(const StreamModel &model, const std::array<d
   return std::find(names.begin(), names.end(), name) != names.end();
 }
 
-// One efficiency status entry; for `envelope`, its envelope table.
+// One efficiency status entry; for `envelope`, its efficiency bound table.
 struct Factor {
   std::string state;
   std::optional<st::Value> wavelength_nm;
@@ -850,14 +772,42 @@ struct Config {
   std::vector<Envelope> envelopes;
 };
 
-// The ground-to-telescope rotation and the input planes (upper: photons from above; lower:
-// photons from below) of a telescope pointing.
+// The rotation to the telescope frame, the offset of the traced frame and the input planes of
+// the photons of one telescope pointing (or of the telescope frame): upper for photons from
+// above, lower for photons from below. The plane checks depend on these values only, so they run
+// once (at the first photons that need them).
 struct InputPlanes {
-  std::array<double, 9> rotation;
-  double upper;
-  double lower;
+  std::array<double, 9> rotation{1, 0, 0, 0, 1, 0, 0, 0, 1};
+  Vec offset{0.0, 0.0, 0.0};
+  double upper{};
+  double lower{};
+  bool upper_checked{};
+  bool lower_checked{};
 };
 
+// Ground-frame planes of a telescope pointing (zenith, azimuth) [deg].
+[[nodiscard]] inline InputPlanes ground_input_planes(const StreamModel &model, double zenith_deg,
+                                                     double azimuth_deg) {
+  InputPlanes planes;
+  planes.rotation = ground_to_telescope_rotation(zenith_deg, azimuth_deg);
+  // The traced origin is -axes_offset (the ground origin has no offset).
+  planes.upper = minimum_input_plane_height_m(model, zenith_deg, azimuth_deg);
+  planes.lower = lower_input_plane_m(model, column(planes.rotation, 2),
+                                     minus({0.0, 0.0, 0.0}, model.axes_offset()));
+  return planes;
+}
+
+// Telescope-frame planes: no tilt. The traced frame is that of trace(), so the axes offset that
+// it subtracts is cancelled, and a photon at p is traced at p.
+[[nodiscard]] inline InputPlanes telescope_input_planes(const Optics &optics) {
+  InputPlanes planes;
+  planes.offset = optics.model->axes_offset();
+  planes.upper = optics.telescope_plane_m;
+  planes.lower = optics.telescope_lower_plane_m;
+  return planes;
+}
+
+// Per-telescope state of the block that is being read.
 struct Telescope {
   std::uint32_t id{};
   bool kept{};
@@ -871,7 +821,7 @@ struct Telescope {
 
 } // namespace stream_trace_detail
 
-// Settings of one trace-stream run (see `obdeect ray-tracing trace-stream`).
+// Settings of one trace-stream run (see `obdeect-ray-tracing-trace-stream`).
 struct StreamTraceSettings {
   std::uint64_t seed{};
   unsigned threads{1};
@@ -884,6 +834,80 @@ struct StreamTraceSettings {
 struct StreamTraceCounts {
   std::uint64_t events{}, photons_in{}, photons_out{};
 };
+
+// One optical model of a run, as the text of its JSON file: the model of every telescope (no
+// telescope id), or the model of one telescope id.
+struct ModelSource {
+  std::optional<std::uint32_t> telescope;
+  std::string text;
+};
+
+// A telescope id given by the user: sim_telarray numbering from 1; the random key holds 16 bits.
+[[nodiscard]] inline std::uint32_t checked_telescope_id(std::int64_t value) {
+  if (value < 1 || value > std::numeric_limits<std::uint16_t>::max())
+    throw ModelError("telescope id " + std::to_string(value) + " outside 1.." +
+                     std::to_string(std::numeric_limits<std::uint16_t>::max()));
+  return static_cast<std::uint32_t>(value);
+}
+
+// The optics of a run and the telescopes it traces, from its models: one model for every
+// telescope, or the model of each telescope id. A model text is loaded once.
+struct RunOptics {
+  std::shared_ptr<const stream_trace_detail::Optics> shared;
+  std::map<std::uint32_t, std::shared_ptr<const stream_trace_detail::Optics>> per_telescope;
+  std::optional<std::set<std::uint32_t>> telescopes; // None: every telescope
+};
+
+[[nodiscard]] inline RunOptics make_run_optics(const std::vector<ModelSource> &models,
+                                               std::optional<std::set<std::uint32_t>> telescopes,
+                                               stream_trace_detail::TransmissionPart part,
+                                               const std::string &version) {
+  RunOptics run;
+  if (models.empty())
+    throw ModelError("give at least one optical model");
+  if (models.size() == 1 && !models.front().telescope) {
+    run.shared = stream_trace_detail::make_optics(
+        stream_trace_detail::load_stream_model(models.front().text), part, version);
+    run.telescopes = std::move(telescopes);
+    return run;
+  }
+  std::map<std::string, std::shared_ptr<const stream_trace_detail::Optics>> loaded;
+  for (const auto &model : models) {
+    if (!model.telescope)
+      throw ModelError("give one optical model for every telescope, or one for each telescope id");
+    if (run.per_telescope.count(*model.telescope))
+      throw ModelError("a telescope id is given in more than one optical model");
+    auto &optics = loaded[model.text];
+    if (!optics)
+      optics = stream_trace_detail::make_optics(stream_trace_detail::load_stream_model(model.text),
+                                                part, version);
+    run.per_telescope[*model.telescope] = optics;
+  }
+  std::set<std::uint32_t> selected;
+  if (telescopes) {
+    selected = *telescopes;
+  } else {
+    for (const auto &[id, optics] : run.per_telescope)
+      selected.insert(id);
+  }
+  std::string missing;
+  for (const auto id : selected)
+    if (!run.per_telescope.count(id))
+      missing += (missing.empty() ? "" : ", ") + std::to_string(id);
+  if (!missing.empty())
+    throw ModelError("telescopes without an optical model: [" + missing + "]");
+  for (auto it = run.per_telescope.begin(); it != run.per_telescope.end();)
+    it = selected.count(it->first) ? std::next(it) : run.per_telescope.erase(it);
+  run.telescopes = std::move(selected);
+  return run;
+}
+
+// True if two paths name the same file (through links): an input must not be overwritten.
+[[nodiscard]] inline bool same_file(const std::string &input, const std::string &output) {
+  std::error_code error;
+  const bool same = std::filesystem::equivalent(input, output, error);
+  return !error && same;
+}
 
 // Reads the records of one stream and writes the traced records.
 class StreamTracer {
@@ -944,6 +968,10 @@ public:
 
 private:
   using Metadata = obdeect::stream::Metadata;
+  using Telescope = stream_trace_detail::Telescope;
+  using InputPlanes = stream_trace_detail::InputPlanes;
+  // Input planes by optical model and pointing (none: the telescope frame).
+  using GeometryKey = std::tuple<const Optics *, std::optional<std::pair<double, double>>>;
 
   [[nodiscard]] bool per_telescope() const { return !shared_; }
 
@@ -1012,6 +1040,16 @@ private:
     if (!telescope_) {
       for (auto &[name, factor] : factors_of(metadata))
         run_factors_.insert_or_assign(name, std::move(factor));
+      // The run status of the shared optics is written again in the output (run_status_pending_):
+      // an own factor that is already applied would be written twice, so it is refused here.
+      if (shared_)
+        for (const auto &name : shared_->own_factors()) {
+          const auto found = run_factors_.find(name);
+          if (found != run_factors_.end() && found->second.state == "applied")
+            throw ModelError("the efficiency status says " + name +
+                             " is already applied; trace-stream applies it in its trace and "
+                             "cannot skip it");
+        }
       bool normalise = shared_ && shared_->normalise();
       for (const auto &[id, optics] : per_telescope_)
         normalise = normalise || optics->normalise();
@@ -1040,10 +1078,8 @@ private:
   }
 
   void event(const Metadata &metadata) {
-    using namespace stream_trace_detail;
-    (void)int_key(metadata, "event_number", "event");
+    (void)stream_trace_detail::int_key(metadata, "event_number", "event");
     event_ = metadata;
-    geometry_.clear();
     telescope_.reset();
     next_index_.clear();
     ++counts_.events;
@@ -1075,13 +1111,13 @@ private:
     }
   }
 
-  void write_status(stream_trace_detail::Telescope &telescope, const Metadata &metadata) {
+  void write_status(Telescope &telescope, const Metadata &metadata) {
     writer_.write_metadata(obdeect::stream::RecordType::efficiency_status,
                            stream_trace_detail::own_status(optics(telescope.id), metadata));
     telescope.status_written = true;
   }
 
-  void ensure_status(stream_trace_detail::Telescope &telescope) {
+  void ensure_status(Telescope &telescope) {
     if (per_telescope() && !telescope.status_written)
       write_status(telescope, {});
   }
@@ -1104,7 +1140,7 @@ private:
     telescope_.reset();
   }
 
-  const stream_trace_detail::Config &config(stream_trace_detail::Telescope &telescope) {
+  const stream_trace_detail::Config &config(Telescope &telescope) {
     using namespace stream_trace_detail;
     if (!telescope.config) {
       std::map<std::string, Factor> factors = run_factors_;
@@ -1128,31 +1164,33 @@ private:
     return *telescope.config;
   }
 
-  // Rotation and input planes of ground-frame photons for a telescope (cached per event).
-  const stream_trace_detail::InputPlanes &ground_geometry(std::uint32_t telescope_id) {
-    using namespace stream_trace_detail;
-    auto found = geometry_.find(telescope_id);
+  // Pointing of the ground-frame photons: the settings, else the run record.
+  [[nodiscard]] std::pair<double, double> pointing_for_run() const {
+    if (settings_.pointing)
+      return *settings_.pointing;
+    if (run_pointing_)
+      return *run_pointing_;
+    throw ModelError("no telescope pointing for ground-frame photons: give "
+                     "--pointing-zenith-deg and --pointing-azimuth-deg, or the run keys "
+                     "telescope_pointing_zenith_rad and telescope_pointing_azimuth_rad");
+  }
+
+  // Input planes of a telescope's photons, cached per optical model and pointing (the same for
+  // every event and block of the run).
+  InputPlanes &input_planes(std::uint32_t telescope_id, bool ground_frame) {
+    const Optics &model_optics = optics(telescope_id);
+    std::optional<std::pair<double, double>> pointing;
+    if (ground_frame)
+      pointing = pointing_for_run();
+    const GeometryKey key{&model_optics, pointing};
+    auto found = geometry_.find(key);
     if (found == geometry_.end()) {
-      std::pair<double, double> pointing;
-      if (settings_.pointing)
-        pointing = *settings_.pointing;
-      else if (run_pointing_)
-        pointing = *run_pointing_;
-      else
-        throw ModelError("no telescope pointing for ground-frame photons: give "
-                         "--pointing-zenith-deg and --pointing-azimuth-deg, or the run keys "
-                         "telescope_pointing_zenith_rad and telescope_pointing_azimuth_rad");
-      const StreamModel &model = *optics(telescope_id).model;
-      const auto rotation = ground_to_telescope_rotation(pointing.first, pointing.second);
-      // The traced origin is -axes_offset (the ground origin has no offset).
-      found = geometry_
-                  .emplace(telescope_id,
-                           stream_trace_detail::InputPlanes{
-                               rotation,
-                               minimum_input_plane_height_m(model, pointing.first, pointing.second),
-                               lower_input_plane_m(model, column(rotation, 2),
-                                                   minus({0.0, 0.0, 0.0}, model.axes_offset()))})
-                  .first;
+      found =
+          geometry_
+              .emplace(key, pointing ? stream_trace_detail::ground_input_planes(
+                                           *model_optics.model, pointing->first, pointing->second)
+                                     : stream_trace_detail::telescope_input_planes(model_optics))
+              .first;
     }
     return found->second;
   }
@@ -1219,38 +1257,34 @@ private:
     // Plane rows cannot be horizontal (they have no plane to start on); sphere rows can.
     if (horizontal && !sphere_rows)
       throw ModelError("horizontal photons relative to the telescope axis are not supported yet");
-    std::array<double, 9> rotation = {1, 0, 0, 0, 1, 0, 0, 0, 1};
-    Vec offset = {0.0, 0.0, 0.0};
-    double plane = 0.0, lower = std::numeric_limits<double>::quiet_NaN();
     const bool ground = chunk.frame == obdeect::stream::Frame::ground;
-    if (ground) {
-      if (chunk.has(Column::z) && !sphere_rows)
-        for (const float z : chunk[Column::z])
-          if (z != 0.0F)
-            throw ModelError("ground-frame photons must lie in the plane z = 0");
-      const auto &geometry = ground_geometry(telescope.id);
-      rotation = geometry.rotation;
-      // Sphere rows start at their own z: the input planes are not used.
-      plane = sphere_rows ? 0.0 : geometry.upper;
-      lower = sphere_rows ? std::numeric_limits<double>::quiet_NaN() : geometry.lower;
-    } else {
-      if (!chunk.has(Column::z))
-        throw ModelError("telescope-frame photons need the column z");
-      plane = optics.telescope_plane_m;
-      lower = optics.telescope_lower_plane_m;
-      // The telescope frame is the frame of trace(): cancel the axes offset that the tracer
-      // subtracts, so that a photon at p is traced at p.
-      offset = optics.model->axes_offset();
-    }
-    // first_index + rows >= 2^32, tested without overflowing the sum.
-    constexpr std::uint64_t index_limit = std::uint64_t{1} << 32;
-    if (event_number < 0 || event_number >= (std::int64_t{1} << 32) ||
-        chunk.first_index >= index_limit || rows >= index_limit - chunk.first_index)
-      throw ModelError("bunch ids need event numbers and photon indices below 2^32");
-    if (downward && !sphere_rows)
+    if (ground && chunk.has(Column::z) && !sphere_rows)
+      for (const float z : chunk[Column::z])
+        if (z != 0.0F)
+          throw ModelError("ground-frame photons must lie in the plane z = 0");
+    if (!ground && !chunk.has(Column::z))
+      throw ModelError("telescope-frame photons need the column z");
+    InputPlanes &input = input_planes(telescope.id, ground);
+    const std::array<double, 9> rotation = input.rotation;
+    const Vec offset = input.offset;
+    // Sphere rows start at their own z: the input planes are not used.
+    const double plane = sphere_rows ? 0.0 : input.upper;
+    const double lower = sphere_rows ? std::numeric_limits<double>::quiet_NaN() : input.lower;
+
+    if (event_number < 0 || event_number >= (std::int64_t{1} << 32))
+      throw ModelError("event numbers must lie below 2^32 (the random key)");
+    // Bunch ids are the photon indices of the block: the event is in the random key.
+    if (chunk.first_index > st::max_photon_index ||
+        rows - 1 > st::max_photon_index - chunk.first_index)
+      throw ModelError("photon indices must lie below 2^40 (the random key)");
+    if (downward && !sphere_rows && !input.upper_checked) {
       check_input_plane(*optics.model, rotation, offset, plane);
-    if (upward && !sphere_rows)
+      input.upper_checked = true;
+    }
+    if (upward && !sphere_rows && !input.lower_checked) {
       check_lower_input_plane(*optics.model, rotation, offset, lower);
+      input.lower_checked = true;
+    }
     const auto &x_in = chunk[Column::x];
     const auto &y_in = chunk[Column::y];
     const auto &t_in = chunk[Column::t];
@@ -1282,7 +1316,7 @@ private:
         path_start[i] = static_cast<double>(chunk[Column::path][i]);
       if (has_path && path_start[i] < 0.0)
         throw ModelError("photon path is shorter than its move to the start point");
-      bunch_id[i] = (static_cast<std::uint64_t>(event_number) << 32) | (chunk.first_index + i);
+      bunch_id[i] = chunk.first_index + i;
     }
     const std::vector<float> zeros(rows, 0.0F);
     const auto &zem = chunk.has(Column::zem) ? chunk[Column::zem] : zeros;
@@ -1348,7 +1382,7 @@ private:
                              "] nm");
         }
         for (std::size_t i = 0; i < traced; ++i)
-          inverse[i] /= numpy_interp(wavelength_out[i], table.nodes, table.values);
+          inverse[i] /= interpolate(wavelength_out[i], table.nodes, table.values);
       }
       for (std::size_t i = 0; i < traced; ++i)
         weight[i] = weight[i] * inverse[i];
@@ -1385,10 +1419,10 @@ private:
       }
       writer_.write_chunk(out_);
       telescope.out_index += n;
-      w_.insert(w_.end(), out_[Column::w].begin(), out_[Column::w].end());
+      // The sum of the weights in output order, so that it does not depend on the input chunking.
+      for (const float w : out_[Column::w])
+        telescope.weight += static_cast<double>(w);
     }
-    telescope.weight += numpy_sum(w_);
-    w_.clear();
     counts_.photons_out += traced;
   }
 
@@ -1403,13 +1437,12 @@ private:
   std::map<std::string, stream_trace_detail::Factor> run_factors_;
   std::optional<InverseSquareLaw> law_;
   std::optional<Metadata> event_;
-  std::map<std::uint32_t, stream_trace_detail::InputPlanes> geometry_;
-  std::optional<stream_trace_detail::Telescope> telescope_;
+  std::map<GeometryKey, InputPlanes> geometry_;
+  std::optional<Telescope> telescope_;
   std::map<std::uint32_t, std::uint64_t> next_index_;
   StreamTraceCounts counts_;
   bool run_status_pending_{false};
   obdeect::stream::PhotonChunk out_;
-  std::vector<float> w_;
 };
 
 // Traces a whole stream from `in` to `out`. `shared` is the model of every telescope, or null

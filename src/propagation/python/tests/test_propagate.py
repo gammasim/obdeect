@@ -1,5 +1,6 @@
 """Atmosphere stage through the Python API and the obdeect propagation run executable."""
 
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -13,6 +14,10 @@ from obdeect.stream.cli import find_program
 DATA = Path(__file__).resolve().parents[2] / "cpp" / "tests" / "data"
 TABLE_PATH = DATA / "atm_trans_2000_1_10_0_0_2000.dat"
 SITE_M = 2000.0
+# Spherical runs with a profile build the curved refraction tables inside the core, a cost of
+# several seconds per run that does not depend on the photon count. Four threads cut it about
+# three-fold; the output does not depend on the thread count (checked elsewhere).
+SPHERICAL_THREADS = 4
 
 
 class StreamWriter:
@@ -46,9 +51,14 @@ def read_records(data):
 
 
 def _executable():
+    """Path of the propagation run executable. Missing: skipped, or failed when the environment
+    variable OBDEECT_REQUIRE_TOOLS=1 is set (CI should set it, so that the checks always run)."""
     exe = find_program("obdeect.propagation", "obdeect-propagation-run")
     if exe is None:
-        pytest.skip("obdeect propagation run not installed")
+        message = "obdeect propagation run not installed"
+        if os.environ.get("OBDEECT_REQUIRE_TOOLS") == "1":
+            pytest.fail(message)
+        pytest.skip(message)
     return exe
 
 
@@ -107,11 +117,6 @@ def _efficiency_status(records):
     return next(r["metadata"] for r in records if r["type"] == "efficiency_status")
 
 
-def test_export_is_lazy():
-    assert callable(obdeect_propagation.propagate)
-    assert "propagate" in obdeect_propagation.__all__
-
-
 def test_efficiency_status_and_counts(tmp_path, envelope_files):
     n = 30000
     source = tmp_path / "in.pst"
@@ -121,6 +126,7 @@ def test_efficiency_status_and_counts(tmp_path, envelope_files):
     options = {
         "transmission": TABLE_PATH,
         "site_altitude_m": SITE_M,
+        "pathlen_m": 0.0,
         "seed": 11,
         "envelope": envelope_files,
         "store_p": True,
@@ -183,47 +189,11 @@ def test_input_efficiency_status_showing_atmosphere_applied_is_rejected(tmp_path
         obdeect_propagation.propagate(
             source,
             tmp_path / "out.pst",
+            pathlen_m=0.0,
             transmission=TABLE_PATH,
             site_altitude_m=SITE_M,
             seed=1,
         )
-
-
-def test_executable_matches_api(tmp_path, envelope_files):
-    exe = _executable()
-    source = tmp_path / "in.pst"
-    source.write_bytes(ground_stream(5000, seed=2, chunk_rows=2048))
-    api_out = tmp_path / "api.pst"
-    obdeect_propagation.propagate(
-        source,
-        api_out,
-        transmission=TABLE_PATH,
-        site_altitude_m=SITE_M,
-        seed=7,
-        envelope=envelope_files,
-    )
-    cli_out = tmp_path / "cli.pst"
-    command = [
-        exe,
-        "--transmission",
-        str(TABLE_PATH),
-        "--site-altitude",
-        str(SITE_M),
-        "--seed",
-        "7",
-        "--envelope",
-        f"qe={envelope_files['qe']}",
-        "--envelope",
-        f"mirror={envelope_files['mirror']}",
-        "-i",
-        str(source),
-        "-o",
-        str(cli_out),
-    ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    assert result.returncode == 0, result.stderr
-    assert "photons in 10000" in result.stderr
-    assert cli_out.read_bytes() == api_out.read_bytes()
 
 
 def test_executable_stdin_matches_file_input(tmp_path):
@@ -235,6 +205,8 @@ def test_executable_stdin_matches_file_input(tmp_path):
         str(TABLE_PATH),
         "--site-altitude",
         str(SITE_M),
+        "--pathlen",
+        "0",
         "--seed",
         "7",
         "-i",
@@ -250,6 +222,188 @@ def test_executable_stdin_matches_file_input(tmp_path):
     assert b"photons in 10000" in stdin_result.stderr
     assert stdin_result.stderr == file_result.stderr
     assert stdin_result.stdout == file_result.stdout
+
+
+def _envelope_cli(envelope_files):
+    return [
+        "--envelope",
+        f"qe={envelope_files['qe']}",
+        "--envelope",
+        f"mirror={envelope_files['mirror']}",
+    ]
+
+
+def _photons_in_is(text):
+    return lambda records, stderr: text in stderr
+
+
+def _pathlen_status(records, stderr):
+    assert list(_efficiency_status(records)["atmosphere.pathlen_m"]) == [28.0, 0.0]
+
+
+def _geometry_pending(records, stderr):
+    assert _efficiency_status(records)["atmosphere.state"] == "pending"
+
+
+# One case per check of the native executable against the Python call: the same input and the
+# same settings through both. api(envelope_files) gives the keyword arguments of propagate(),
+# cli(envelope_files) the command-line arguments; check(records, stderr) adds a check.
+EXECUTABLE_CASES = {
+    "envelope": dict(
+        stream=lambda: ground_stream(5000, seed=2, chunk_rows=2048),
+        api=lambda files: dict(
+            transmission=TABLE_PATH,
+            site_altitude_m=SITE_M,
+            seed=7,
+            pathlen_m=0.0,
+            envelope=files,
+        ),
+        cli=lambda files: [
+            "--transmission",
+            str(TABLE_PATH),
+            "--site-altitude",
+            str(SITE_M),
+            "--pathlen",
+            "0",
+            "--seed",
+            "7",
+            *_envelope_cli(files),
+        ],
+        check=_photons_in_is("photons in 10000"),
+    ),
+    "scattering": dict(
+        stream=lambda: beam_stream(300),
+        api=lambda files: dict(
+            transmission=TABLE_PATH,
+            site_altitude_m=SITE_M,
+            seed=5,
+            pathlen_m=0.0,
+            scattering=SCATTERING_TABLE,
+            scattering_points=4,
+        ),
+        cli=lambda files: [
+            "--transmission",
+            str(TABLE_PATH),
+            "--site-altitude",
+            str(SITE_M),
+            "--pathlen",
+            "0",
+            "--seed",
+            "5",
+            "--scattering",
+            str(SCATTERING_TABLE),
+            "--scattering-points",
+            "4",
+        ],
+    ),
+    "pathlen": dict(
+        stream=lambda: ground_stream(5000, seed=6, chunk_rows=2048),
+        api=lambda files: dict(
+            transmission=TABLE_PATH,
+            site_altitude_m=SITE_M,
+            seed=7,
+            pathlen_m=28.0,
+            telescope_pathlen_m={2: 0.0},
+        ),
+        cli=lambda files: [
+            "--transmission",
+            str(TABLE_PATH),
+            "--site-altitude",
+            str(SITE_M),
+            "--pathlen",
+            "0",
+            "--seed",
+            "7",
+            "--pathlen",
+            "28",
+            "--telescope-pathlen",
+            "2=0",
+        ],
+        check=_pathlen_status,
+    ),
+    "geometry-only": dict(
+        stream=lambda: sky_stream(2000, seed=4),
+        api=lambda files: dict(extinction=False, **_geometry_options()),
+        cli=lambda files: [
+            "--no-extinction",
+            "--site-altitude",
+            str(SITE_M),
+            "--seed",
+            "3",
+            "--profile",
+            str(PROFILE_PATH),
+            "--wavelength-range",
+            "400",
+            "700",
+        ],
+        check=_geometry_pending,
+    ),
+    "curvature": dict(
+        stream=lambda: sky_stream(2000, seed=5, curvature_applied=0),
+        api=lambda files: dict(
+            transmission=TABLE_PATH,
+            site_altitude_m=SITE_M,
+            seed=7,
+            pathlen_m=0.0,
+            curvature="spherical",
+            earth_radius_m=6.0e6,
+        ),
+        cli=lambda files: [
+            "--transmission",
+            str(TABLE_PATH),
+            "--site-altitude",
+            str(SITE_M),
+            "--pathlen",
+            "0",
+            "--seed",
+            "7",
+            "--curvature",
+            "spherical",
+            "--earth-radius-m",
+            "6000000",
+        ],
+    ),
+    "telescopes": dict(
+        stream=lambda: ground_stream(2000, seed=6, chunk_rows=512),
+        api=lambda files: dict(
+            transmission=TABLE_PATH,
+            site_altitude_m=SITE_M,
+            seed=3,
+            pathlen_m=0.0,
+            telescopes=[2, 1],
+        ),
+        cli=lambda files: [
+            "--transmission",
+            str(TABLE_PATH),
+            "--site-altitude",
+            str(SITE_M),
+            "--pathlen",
+            "0",
+            "--seed",
+            "3",
+            "--telescopes",
+            "2,1,2",
+        ],
+        check=_photons_in_is("photons in 4000"),
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(EXECUTABLE_CASES))
+def test_executable_matches_api(tmp_path, envelope_files, case):
+    spec = EXECUTABLE_CASES[case]
+    exe = _executable()
+    source = tmp_path / "in.pst"
+    source.write_bytes(spec["stream"]())
+    api_out = tmp_path / "api.pst"
+    obdeect_propagation.propagate(source, api_out, **spec["api"](envelope_files))
+    cli_out = tmp_path / "cli.pst"
+    command = [exe, *spec["cli"](envelope_files), "-i", str(source), "-o", str(cli_out)]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert cli_out.read_bytes() == api_out.read_bytes()
+    if "check" in spec:
+        spec["check"](read_records(cli_out.read_bytes()), result.stderr)
 
 
 SCATTERING_TABLE = DATA / "scattering_exponential.dat"
@@ -312,6 +466,7 @@ def test_scattering_adds_kernel_weight_times_envelope(tmp_path, mirror_file):
     options = {
         "transmission": TABLE_PATH,
         "site_altitude_m": SITE_M,
+        "pathlen_m": 0.0,
         "seed": 1,
         "envelope": {"mirror": mirror_file},
         "mode": "weighted",
@@ -336,7 +491,7 @@ def test_scattering_adds_kernel_weight_times_envelope(tmp_path, mirror_file):
         "wavelength": np.full(n, 355.0),
     }
     kernel = obdeect_propagation.scatter(
-        columns,
+        {name: np.asarray(values, dtype=np.float32) for name, values in columns.items()},
         obdeect_propagation.ScatteringTable(str(SCATTERING_TABLE)),
         obdeect_propagation.TransmissionTable(
             str(TABLE_PATH), site_altitude_m=SITE_M, wavelength_interpolation="floor"
@@ -372,6 +527,7 @@ def test_scattering_chunk_sizes_agree(tmp_path, mirror_file):
             obdeect_propagation.propagate(
                 source,
                 tmp_path / f"out_{chunk_rows}.pst",
+                pathlen_m=0.0,
                 transmission=TABLE_PATH,
                 site_altitude_m=SITE_M,
                 seed=3,
@@ -386,13 +542,13 @@ def test_scattering_chunk_sizes_agree(tmp_path, mirror_file):
 def test_scattering_rejects_invalid_settings(tmp_path):
     source = tmp_path / "beam.pst"
     source.write_bytes(beam_stream(10, radii=False))
-    options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 1}
+    options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 1, "pathlen_m": 0.0}
     with pytest.raises(ValueError, match="telescope_r_m"):
         obdeect_propagation.propagate(
             source, tmp_path / "out.pst", scattering=SCATTERING_TABLE, **options
         )
     source.write_bytes(beam_stream(10))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="scattering needs 1 to 1024 points per photon"):
         obdeect_propagation.propagate(
             source,
             tmp_path / "out.pst",
@@ -400,43 +556,6 @@ def test_scattering_rejects_invalid_settings(tmp_path):
             scattering_points=0,
             **options,
         )
-
-
-def test_executable_matches_api_with_scattering(tmp_path):
-    exe = _executable()
-    source = tmp_path / "beam.pst"
-    source.write_bytes(beam_stream(300))
-    api_out = tmp_path / "api.pst"
-    obdeect_propagation.propagate(
-        source,
-        api_out,
-        transmission=TABLE_PATH,
-        site_altitude_m=SITE_M,
-        seed=5,
-        scattering=SCATTERING_TABLE,
-        scattering_points=4,
-    )
-    cli_out = tmp_path / "cli.pst"
-    command = [
-        exe,
-        "--transmission",
-        str(TABLE_PATH),
-        "--site-altitude",
-        str(SITE_M),
-        "--seed",
-        "5",
-        "--scattering",
-        str(SCATTERING_TABLE),
-        "--scattering-points",
-        "4",
-        "-i",
-        str(source),
-        "-o",
-        str(cli_out),
-    ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    assert result.returncode == 0, result.stderr
-    assert cli_out.read_bytes() == api_out.read_bytes()
 
 
 def test_rejects_identical_paths(tmp_path):
@@ -449,6 +568,7 @@ def test_rejects_identical_paths(tmp_path):
             obdeect_propagation.propagate(
                 source,
                 output,
+                pathlen_m=0.0,
                 transmission=TABLE_PATH,
                 site_altitude_m=SITE_M,
                 seed=1,
@@ -467,6 +587,8 @@ def test_executable_rejects_identical_paths(tmp_path):
         str(TABLE_PATH),
         "--site-altitude",
         str(SITE_M),
+        "--pathlen",
+        "0",
         "--seed",
         "1",
         "-i",
@@ -536,8 +658,9 @@ def test_pathlen_changes_acceptance(tmp_path):
         "seed": 4,
         "mode": "weighted",
         "store_p": True,
+        "pathlen_m": 0.0,
     }
-    obdeect_propagation.propagate(source, with_path, pathlen_m=28.0, **base)
+    obdeect_propagation.propagate(source, with_path, **{**base, "pathlen_m": 28.0})
     obdeect_propagation.propagate(source, without, **base)
     p_with = _photon_block(read_records(with_path.read_bytes()), 1, "p")
     p_without = _photon_block(read_records(without.read_bytes()), 1, "p")
@@ -547,83 +670,48 @@ def test_pathlen_changes_acceptance(tmp_path):
     assert list(status["atmosphere.pathlen_m"]) == [0.0, 0.0]
 
 
+NOT_NEGATIVE = "pathlen must be finite and not negative"
+
+
 @pytest.mark.parametrize(
-    "options",
+    ("options", "message"),
     [
-        {"pathlen_m": -1.0},
-        {"pathlen_m": float("nan")},
-        {"pathlen_m": float("inf")},
-        {"telescope_pathlen_m": {1: -0.5}},
-        {"telescope_pathlen_m": {1: float("nan")}},
-        {"telescope_pathlen_m": {0: 1.0}},
-        {"telescope_pathlen_m": {3: 1.0}},
+        ({"pathlen_m": -1.0}, NOT_NEGATIVE),
+        ({"pathlen_m": float("nan")}, NOT_NEGATIVE),
+        ({"pathlen_m": float("inf")}, NOT_NEGATIVE),
+        ({"telescope_pathlen_m": {1: -0.5}}, NOT_NEGATIVE),
+        ({"telescope_pathlen_m": {1: float("nan")}}, NOT_NEGATIVE),
+        ({"telescope_pathlen_m": {0: 1.0}}, "telescope ids are 1-based"),
+        ({"telescope_pathlen_m": {3: 1.0}}, "telescope_pathlen_m names telescope 3"),
     ],
 )
-def test_pathlen_rejects_invalid(tmp_path, options):
+def test_pathlen_rejects_invalid(tmp_path, options, message):
     source = tmp_path / "in.pst"
     source.write_bytes(ground_stream(100, seed=5))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=message):
         obdeect_propagation.propagate(
             source,
             tmp_path / "out.pst",
             transmission=TABLE_PATH,
             site_altitude_m=SITE_M,
             seed=1,
-            **options,
+            **{"pathlen_m": 0.0, **options},
         )
 
 
 def test_pathlen_ids_must_be_integers(tmp_path):
     source = tmp_path / "in.pst"
     source.write_bytes(ground_stream(100, seed=5))
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="telescope_pathlen_m key must be an integer"):
         obdeect_propagation.propagate(
             source,
             tmp_path / "out.pst",
             transmission=TABLE_PATH,
             site_altitude_m=SITE_M,
             seed=1,
+            pathlen_m=0.0,
             telescope_pathlen_m={1.5: 1.0},
         )
-
-
-def test_executable_pathlen_matches_api(tmp_path):
-    exe = _executable()
-    source = tmp_path / "in.pst"
-    source.write_bytes(ground_stream(5000, seed=6, chunk_rows=2048))
-    api_out = tmp_path / "api.pst"
-    obdeect_propagation.propagate(
-        source,
-        api_out,
-        transmission=TABLE_PATH,
-        site_altitude_m=SITE_M,
-        seed=7,
-        pathlen_m=28.0,
-        telescope_pathlen_m={2: 0.0},
-    )
-    cli_out = tmp_path / "cli.pst"
-    command = [
-        exe,
-        "--transmission",
-        str(TABLE_PATH),
-        "--site-altitude",
-        str(SITE_M),
-        "--seed",
-        "7",
-        "--pathlen",
-        "28",
-        "--telescope-pathlen",
-        "2=0",
-        "-i",
-        str(source),
-        "-o",
-        str(cli_out),
-    ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    assert result.returncode == 0, result.stderr
-    assert cli_out.read_bytes() == api_out.read_bytes()
-    status = _efficiency_status(read_records(cli_out.read_bytes()))
-    assert list(status["atmosphere.pathlen_m"]) == [28.0, 0.0]
 
 
 @pytest.mark.parametrize(
@@ -648,6 +736,8 @@ def test_executable_rejects_invalid_pathlen(args):
         str(TABLE_PATH),
         "--site-altitude",
         str(SITE_M),
+        "--pathlen",
+        "0",
         "--seed",
         "1",
         *args,
@@ -784,6 +874,7 @@ def test_geometry_only_matches_geometry_of_normal_run(tmp_path):
         source,
         normal_out,
         transmission=TABLE_PATH,
+        pathlen_m=0.0,
         mode="weighted",
         store_p=True,
         **_geometry_options(),
@@ -840,25 +931,32 @@ def test_geometry_only_on_ground_stream_keeps_every_photon(tmp_path):
         )
 
 
-@pytest.mark.parametrize(
-    ("options", "message"),
-    [
-        ({"transmission": TABLE_PATH}, "transmission"),
-        ({"envelope": {"qe": "qe.dat"}}, "envelope"),
-        ({"mode": "thinned"}, "thinned"),
-        ({"scattering": "table.dat"}, "scattering"),
-        ({"scattering_points": 4}, "scattering_points"),
-        # The default value is rejected too, as the CLI rejects any --scattering-points.
-        ({"scattering_points": 8}, "scattering_points"),
-        ({"pathlen_m": 0.0}, "pathlen_m"),
-        ({"store_p": True}, "store_p"),
-        ({"pathlen_m": 1.0}, "pathlen_m"),
-        ({"telescope_pathlen_m": {1: 1.0}}, "telescope_pathlen_m"),
-    ],
-)
-def test_geometry_only_rejects_extinction_options(tmp_path, options, message):
+# Each setting that the geometry-only run rejects; "ENVELOPE" stands for an envelope file.
+GEOMETRY_ONLY_REJECTIONS = [
+    ({"transmission": TABLE_PATH}, "geometry-only run takes no transmission table"),
+    ({"envelope": "ENVELOPE"}, "geometry-only run takes no envelope"),
+    ({"mode": "thinned"}, "geometry-only run keeps all photons: mode must be weighted"),
+    ({"scattering": SCATTERING_TABLE}, "geometry-only run cannot be combined with scattering"),
+    ({"store_p": True}, "geometry-only run has no acceptance column p to store"),
+    # Python-side: the core cannot see these, their defaults would hide that they were given.
+    ({"scattering_points": 4}, "extinction=False cannot be combined with scattering_points"),
+    # The default value is rejected too, as the CLI rejects any --scattering-points.
+    ({"scattering_points": 8}, "extinction=False cannot be combined with scattering_points"),
+    ({"pathlen_m": 0.0}, "extinction=False cannot be combined with pathlen_m"),
+    ({"pathlen_m": 1.0}, "extinction=False cannot be combined with pathlen_m"),
+    (
+        {"telescope_pathlen_m": {1: 1.0}},
+        "extinction=False cannot be combined with telescope_pathlen_m",
+    ),
+]
+
+
+@pytest.mark.parametrize(("options", "message"), GEOMETRY_ONLY_REJECTIONS)
+def test_geometry_only_rejects_extinction_options(tmp_path, envelope_files, options, message):
     source = tmp_path / "in.pst"
     source.write_bytes(ground_stream(10, seed=1))
+    if options.get("envelope") == "ENVELOPE":
+        options = {"envelope": {"qe": envelope_files["qe"]}}
     with pytest.raises(ValueError, match=message):
         obdeect_propagation.propagate(
             source,
@@ -874,37 +972,9 @@ def test_transmission_is_required_with_extinction(tmp_path):
     source = tmp_path / "in.pst"
     source.write_bytes(ground_stream(10, seed=1))
     with pytest.raises(ValueError, match="transmission is required"):
-        obdeect_propagation.propagate(source, tmp_path / "out.pst", site_altitude_m=SITE_M, seed=1)
-
-
-def test_executable_geometry_only_matches_api(tmp_path):
-    exe = _executable()
-    source = tmp_path / "in.pst"
-    source.write_bytes(sky_stream(2000, seed=4))
-    api_out = tmp_path / "api.pst"
-    obdeect_propagation.propagate(source, api_out, extinction=False, **_geometry_options())
-    cli_out = tmp_path / "cli.pst"
-    command = [
-        exe,
-        "--no-extinction",
-        "--site-altitude",
-        str(SITE_M),
-        "--seed",
-        "3",
-        "--profile",
-        str(PROFILE_PATH),
-        "--wavelength-range",
-        "400",
-        "700",
-        "-i",
-        str(source),
-        "-o",
-        str(cli_out),
-    ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    assert result.returncode == 0, result.stderr
-    assert cli_out.read_bytes() == api_out.read_bytes()
-    assert _efficiency_status(read_records(cli_out.read_bytes()))["atmosphere.state"] == "pending"
+        obdeect_propagation.propagate(
+            source, tmp_path / "out.pst", pathlen_m=0.0, site_altitude_m=SITE_M, seed=1
+        )
 
 
 @pytest.mark.parametrize(
@@ -953,7 +1023,7 @@ def test_curvature_default_refuses_corsika_curved_input(tmp_path):
     source = tmp_path / "in.pst"
     source.write_bytes(ground_stream(100, seed=1, curvature_applied=1))
     out = tmp_path / "out.pst"
-    options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 1}
+    options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 1, "pathlen_m": 0.0}
     with pytest.raises(ValueError, match="CORSIKA CURVED"):
         obdeect_propagation.propagate(source, out, **options)
     summary = obdeect_propagation.propagate(source, out, curvature="corsika", **options)
@@ -963,10 +1033,14 @@ def test_curvature_default_refuses_corsika_curved_input(tmp_path):
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
-        ({"curvature": "curved"}, "curvature must be one of"),
-        ({"curvature": "Corsika"}, "curvature must be one of"),
-        ({"curvature": "corsika", "earth_radius_m": 1e5}, "above 1e6 m"),
-        ({"curvature": "spherical", "earth_radius_m": float("nan")}, "above 1e6 m"),
+        ({"curvature": "curved"}, r"curvature must be none, corsika or spherical: 'curved'"),
+        ({"curvature": "Corsika"}, r"curvature must be none, corsika or spherical: 'Corsika'"),
+        ({"curvature": "corsika", "earth_radius_m": 1e5}, r"earth radius must be finite and above"),
+        (
+            {"curvature": "spherical", "earth_radius_m": float("nan")},
+            r"earth radius must be finite and above",
+        ),
+        ({"earth_radius_m": 6.0e6}, r"earth_radius_m needs curvature corsika or spherical"),
     ],
 )
 def test_curvature_rejects_invalid_settings(tmp_path, kwargs, message):
@@ -979,13 +1053,14 @@ def test_curvature_rejects_invalid_settings(tmp_path, kwargs, message):
             transmission=TABLE_PATH,
             site_altitude_m=SITE_M,
             seed=1,
+            pathlen_m=0.0,
             **kwargs,
         )
 
 
 def test_spherical_needs_uncurved_input(tmp_path):
     source = tmp_path / "in.pst"
-    options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 1}
+    options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 1, "pathlen_m": 0.0}
     source.write_bytes(sky_stream(10, seed=1, curvature_applied=1))
     with pytest.raises(ValueError, match="already applied"):
         obdeect_propagation.propagate(
@@ -1001,18 +1076,20 @@ def test_spherical_needs_uncurved_input(tmp_path):
 def test_spherical_accepts_profile(tmp_path):
     # Spherical refraction and air delay: the run keeps refraction_applied = 0 (bending).
     source = tmp_path / "in.pst"
-    source.write_bytes(sky_stream(10, seed=1, curvature_applied=0))
+    source.write_bytes(sky_stream(2, seed=1, curvature_applied=0))
     out = tmp_path / "out.pst"
     summary = obdeect_propagation.propagate(
         source,
         out,
+        pathlen_m=0.0,
         transmission=TABLE_PATH,
         site_altitude_m=SITE_M,
         seed=1,
         curvature="spherical",
         profile=PROFILE_PATH,
+        threads=SPHERICAL_THREADS,
     )
-    assert summary["photons_in"] == 20
+    assert summary["photons_in"] == 4
     records = read_records(out.read_bytes())
     run = next(r["metadata"] for r in records if r["type"] == "run")
     assert run["curvature_applied"] == 1
@@ -1027,6 +1104,7 @@ def test_spherical_status_and_run_record(tmp_path):
     obdeect_propagation.propagate(
         source,
         out,
+        pathlen_m=0.0,
         transmission=TABLE_PATH,
         site_altitude_m=SITE_M,
         seed=3,
@@ -1042,7 +1120,7 @@ def test_spherical_status_and_run_record(tmp_path):
 
 
 def test_corsika_status_and_no_status_without_curvature(tmp_path):
-    options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 2}
+    options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 2, "pathlen_m": 0.0}
     corsika_in = tmp_path / "corsika.pst"
     corsika_in.write_bytes(ground_stream(100, seed=2, curvature_applied=1))
     corsika_out = tmp_path / "corsika_out.pst"
@@ -1074,43 +1152,6 @@ def test_spherical_geometry_only_is_allowed(tmp_path):
     assert summary["photons_in"] == 400
 
 
-def test_executable_curvature_matches_api(tmp_path):
-    exe = _executable()
-    source = tmp_path / "in.pst"
-    source.write_bytes(sky_stream(2000, seed=5, curvature_applied=0))
-    api_out = tmp_path / "api.pst"
-    obdeect_propagation.propagate(
-        source,
-        api_out,
-        transmission=TABLE_PATH,
-        site_altitude_m=SITE_M,
-        seed=7,
-        curvature="spherical",
-        earth_radius_m=6.0e6,
-    )
-    cli_out = tmp_path / "cli.pst"
-    command = [
-        exe,
-        "--transmission",
-        str(TABLE_PATH),
-        "--site-altitude",
-        str(SITE_M),
-        "--seed",
-        "7",
-        "--curvature",
-        "spherical",
-        "--earth-radius-m",
-        "6000000",
-        "-i",
-        str(source),
-        "-o",
-        str(cli_out),
-    ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    assert result.returncode == 0, result.stderr
-    assert cli_out.read_bytes() == api_out.read_bytes()
-
-
 def test_executable_rejects_unknown_curvature(tmp_path):
     exe = _executable()
     command = [
@@ -1119,6 +1160,8 @@ def test_executable_rejects_unknown_curvature(tmp_path):
         str(TABLE_PATH),
         "--site-altitude",
         str(SITE_M),
+        "--pathlen",
+        "0",
         "--seed",
         "1",
         "--curvature",
@@ -1159,7 +1202,7 @@ def test_telescopes_keeps_selected_blocks_and_run_records(tmp_path):
     source.write_bytes(ground_stream(n, seed=4, chunk_rows=1024))
     full_out = tmp_path / "full.pst"
     selected_out = tmp_path / "selected.pst"
-    options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 9}
+    options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 9, "pathlen_m": 0.0}
     obdeect_propagation.propagate(source, full_out, **options)
     summary = obdeect_propagation.propagate(source, selected_out, telescopes=[2], **options)
 
@@ -1179,49 +1222,23 @@ def test_telescopes_keeps_selected_blocks_and_run_records(tmp_path):
             assert repr(got.get("metadata")) == repr(want.get("metadata"))
 
 
-def test_telescopes_executable_matches_api(tmp_path):
-    exe = _executable()
-    source = tmp_path / "in.pst"
-    source.write_bytes(ground_stream(2000, seed=6, chunk_rows=512))
-    api_out = tmp_path / "api.pst"
-    obdeect_propagation.propagate(
-        source,
-        api_out,
-        transmission=TABLE_PATH,
-        site_altitude_m=SITE_M,
-        seed=3,
-        telescopes=[2, 1],
-    )
-    cli_out = tmp_path / "cli.pst"
-    command = [
-        exe,
-        "--transmission",
-        str(TABLE_PATH),
-        "--site-altitude",
-        str(SITE_M),
-        "--seed",
-        "3",
-        "--telescopes",
-        "2,1,2",
-        "-i",
-        str(source),
-        "-o",
-        str(cli_out),
-    ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    assert result.returncode == 0, result.stderr
-    assert "photons in 4000" in result.stderr
-    assert cli_out.read_bytes() == api_out.read_bytes()
-
-
-@pytest.mark.parametrize("telescopes", [[], [0], [3], [1.5]])
-def test_telescopes_rejects_invalid_selection(tmp_path, telescopes):
+@pytest.mark.parametrize(
+    ("telescopes", "error", "message"),
+    [
+        ([], ValueError, "telescope selection is empty"),
+        ([0], ValueError, "telescope ids are 1-based"),
+        ([3], ValueError, "telescope selection names telescope 3"),
+        ([1.5], TypeError, "telescopes must be an integer, not 1.5"),
+    ],
+)
+def test_telescopes_rejects_invalid_selection(tmp_path, telescopes, error, message):
     source = tmp_path / "in.pst"
     source.write_bytes(ground_stream(100, seed=8))
-    with pytest.raises((ValueError, TypeError)):
+    with pytest.raises(error, match=message):
         obdeect_propagation.propagate(
             source,
             tmp_path / "out.pst",
+            pathlen_m=0.0,
             transmission=TABLE_PATH,
             site_altitude_m=SITE_M,
             seed=1,
@@ -1240,6 +1257,7 @@ def test_telescopes_combine_with_scattering(tmp_path):
     options = {
         "transmission": TABLE_PATH,
         "site_altitude_m": SITE_M,
+        "pathlen_m": 0.0,
         "seed": 1,
         "mode": "weighted",
         "wavelength_interpolation": "floor",
@@ -1273,6 +1291,8 @@ def test_executable_rejects_invalid_telescopes(selection):
         str(TABLE_PATH),
         "--site-altitude",
         str(SITE_M),
+        "--pathlen",
+        "0",
         "--seed",
         "1",
         "--telescopes",
@@ -1286,7 +1306,7 @@ def test_executable_rejects_invalid_telescopes(selection):
 def test_threads_output_is_identical_to_single_thread(tmp_path):
     source = tmp_path / "in.pst"
     source.write_bytes(ground_stream(3000, seed=4, chunk_rows=1024))
-    options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 9}
+    options = {"transmission": TABLE_PATH, "site_altitude_m": SITE_M, "seed": 9, "pathlen_m": 0.0}
     single = tmp_path / "single.pst"
     multi = tmp_path / "multi.pst"
     obdeect_propagation.propagate(source, single, **options)
@@ -1294,14 +1314,23 @@ def test_threads_output_is_identical_to_single_thread(tmp_path):
     assert multi.read_bytes() == single.read_bytes()
 
 
-@pytest.mark.parametrize("threads", [0, -1, 257, 1.5])
-def test_threads_rejects_invalid_count(tmp_path, threads):
+@pytest.mark.parametrize(
+    ("threads", "error", "message"),
+    [
+        (0, ValueError, "threads must be an integer from 1 to 256"),
+        (-1, ValueError, "threads must be an integer from 1 to 256"),
+        (257, ValueError, "threads must be an integer from 1 to 256"),
+        (1.5, TypeError, "threads must be an integer, not 1.5"),
+    ],
+)
+def test_threads_rejects_invalid_count(tmp_path, threads, error, message):
     source = tmp_path / "in.pst"
     source.write_bytes(ground_stream(100, seed=8))
-    with pytest.raises((ValueError, TypeError)):
+    with pytest.raises(error, match=message):
         obdeect_propagation.propagate(
             source,
             tmp_path / "out.pst",
+            pathlen_m=0.0,
             transmission=TABLE_PATH,
             site_altitude_m=SITE_M,
             seed=1,
@@ -1355,6 +1384,7 @@ def test_wavelength_interpolation_default_is_linear_and_is_recorded(tmp_path):
     obdeect_propagation.propagate(
         source,
         default_out,
+        pathlen_m=0.0,
         transmission=TABLE_PATH,
         site_altitude_m=SITE_M,
         seed=1,
@@ -1364,6 +1394,7 @@ def test_wavelength_interpolation_default_is_linear_and_is_recorded(tmp_path):
     obdeect_propagation.propagate(
         source,
         floor_out,
+        pathlen_m=0.0,
         transmission=TABLE_PATH,
         site_altitude_m=SITE_M,
         seed=1,
@@ -1430,6 +1461,7 @@ def test_dispersion_needs_profile_and_unrefracted_input(tmp_path):
         obdeect_propagation.propagate(
             source,
             tmp_path / "a.pst",
+            pathlen_m=0.0,
             transmission=TABLE_PATH,
             site_altitude_m=SITE_M,
             seed=1,
@@ -1441,16 +1473,18 @@ def test_dispersion_needs_profile_and_unrefracted_input(tmp_path):
         obdeect_propagation.propagate(
             refracted,
             tmp_path / "b.pst",
+            pathlen_m=0.0,
             transmission=TABLE_PATH,
             site_altitude_m=SITE_M,
             seed=1,
             profile=PROFILE_PATH,
             dispersion_reference_nm=500.0,
         )
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="200 to 2000 nm"):
         obdeect_propagation.propagate(
             source,
             tmp_path / "c.pst",
+            pathlen_m=0.0,
             transmission=TABLE_PATH,
             site_altitude_m=SITE_M,
             seed=1,
@@ -1475,6 +1509,7 @@ def test_dispersion_changes_bent_photons_by_a_small_amount(tmp_path):
         seed=4,
         mode="weighted",
         profile=PROFILE_PATH,
+        pathlen_m=0.0,
     )
     off_out = tmp_path / "off.pst"
     obdeect_propagation.propagate(source, off_out, **options)
@@ -1524,6 +1559,7 @@ def test_near_horizon_photons_are_bent_not_dropped(tmp_path):
     summary = obdeect_propagation.propagate(
         source,
         tmp_path / "out.pst",
+        pathlen_m=0.0,
         transmission=TABLE_PATH,
         site_altitude_m=SITE_M,
         seed=1,
@@ -1585,11 +1621,22 @@ def test_to_sky_round_trip_through_the_stage(tmp_path):
     assert summary["photons_out"] == 2 * n
     original = read_records(ground.read_bytes())
     returned = read_records(back.read_bytes())
+    # The sky stream stores t as float32 with the path/c term included, |t| up to about 3.4e4 ns
+    # (spacing about 4e-3 ns). The conversion rounds t once there, so this is the time bound.
+    sky_times = _photon_block(read_records(sky.read_bytes()), 1, "t")
+    time_atol = np.spacing(np.float32(np.max(np.abs(sky_times))))
     for telescope in (1, 2):
-        for column in ("x", "y", "cx", "cy", "t", "zem"):
+        for column in ("x", "y", "cx", "cy", "zem"):
             want = _photon_block(original, telescope, column)
             got = _photon_block(returned, telescope, column)
-            np.testing.assert_allclose(got, want, rtol=1e-6, atol=1e-2, err_msg=column)
+            # Float32 values: two spacings at the largest magnitude (measured: at most one).
+            atol = 2 * np.spacing(np.float32(np.max(np.abs(want))))
+            np.testing.assert_allclose(got, want, rtol=0.0, atol=atol, err_msg=column)
+        # The worst measured error is 1.8e-3 ns (about 30 float32 spacings of the output t near
+        # 1e3 ns), but it is the rounding of the intermediate sky-frame time, see time_atol above.
+        want = _photon_block(original, telescope, "t")
+        got = _photon_block(returned, telescope, "t")
+        np.testing.assert_allclose(got, want, rtol=0.0, atol=time_atol, err_msg="t")
 
 
 def test_to_sky_rejects_sky_frame_input(tmp_path):
@@ -1597,7 +1644,7 @@ def test_to_sky_rejects_sky_frame_input(tmp_path):
     source.write_bytes(sky_stream(10, seed=1))
     with pytest.raises(ValueError, match="frame G"):
         obdeect_propagation.to_sky(source, tmp_path / "out.pst")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="same file"):
         obdeect_propagation.to_sky(source, source)
 
 
@@ -1613,10 +1660,11 @@ def test_geometry_only_rejects_wavelength_interpolation(tmp_path):
             seed=1,
             wavelength_interpolation="floor",
         )
-    with pytest.raises(ValueError, match="wavelength_interpolation must be one of"):
+    with pytest.raises(ValueError, match="wavelength interpolation must be linear or floor"):
         obdeect_propagation.propagate(
             source,
             tmp_path / "out2.pst",
+            pathlen_m=0.0,
             transmission=TABLE_PATH,
             site_altitude_m=SITE_M,
             seed=1,
@@ -1634,6 +1682,7 @@ def test_multiple_envelopes_are_multiplied_at_the_photon_wavelength(tmp_path):
     obdeect_propagation.propagate(
         source,
         out,
+        pathlen_m=0.0,
         transmission=TABLE_PATH,
         site_altitude_m=SITE_M,
         seed=1,
@@ -1723,9 +1772,136 @@ def test_spherical_dispersion_is_independent_of_chunk_size(tmp_path):
             profile=PROFILE_PATH,
             curvature="spherical",
             dispersion_reference_nm=500.0,
+            threads=SPHERICAL_THREADS,
         )
         outputs.append(read_records(target.read_bytes()))
     for column in ("x", "y", "cx", "cy", "t", "w"):
         np.testing.assert_array_equal(
             _photon_block(outputs[0], 1, column), _photon_block(outputs[1], 1, column)
         )
+
+
+def _sky_stream(columns_per_block, telescope_z_m=0.0, radii=None, event=3):
+    """Sky-frame stream of telescope 1: one photon block per dict of column arrays."""
+    run = {
+        "run_number": 1,
+        "observation_level_m": SITE_M,
+        "telescope_x_m": [0.0],
+        "telescope_y_m": [0.0],
+        "telescope_z_m": [telescope_z_m],
+        "refraction_applied": 0,
+        "wavelength_min_nm": 355.0,
+        "wavelength_max_nm": 355.0,
+    }
+    if radii is not None:
+        run["telescope_r_m"] = [radii]
+    writer = StreamWriter()
+    writer.metadata("run", run)
+    writer.metadata("event", {"event_number": event})
+    writer.metadata("telescope", {"telescope_id": 1, "frame": 0})
+    first = 0
+    for columns in columns_per_block:
+        rows = len(columns["x"])
+        writer.photons(1, 0, columns, first_index=first)
+        first += rows
+    writer.metadata("telescope_end", {"telescope_id": 1, "photons": 0.0})
+    writer.metadata("event_end")
+    writer.metadata("run_end")
+    return writer.getvalue()
+
+
+def test_thinned_summary_closes_with_removed_photons(tmp_path):
+    """Every unit-weight photon has one fate: written, dropped or removed by the acceptance."""
+    rng = np.random.default_rng(4)
+    n = 4000
+    cx = rng.uniform(-0.2, 0.2, n)
+    cy = rng.uniform(-0.2, 0.2, n)
+    columns = {
+        "x": rng.uniform(-300, 300, n),
+        "y": rng.uniform(-300, 300, n),
+        "z": rng.uniform(-50, 20000, n),  # some below the observation level and the plane
+        "cx": cx,
+        "cy": cy,
+        "cz": -np.sqrt(1.0 - cx**2 - cy**2),  # all downwards
+        "t": np.zeros(n),
+        "w": np.ones(n),
+    }
+    source = tmp_path / "in.pst"
+    source.write_bytes(_sky_stream([columns]))
+    summary = obdeect_propagation.propagate(
+        source,
+        tmp_path / "out.pst",
+        pathlen_m=0.0,
+        transmission=TABLE_PATH,
+        site_altitude_m=SITE_M,
+        seed=2,
+    )
+
+    by_reason = summary["dropped_by_reason"]
+    assert set(by_reason) == {
+        "moving_away",
+        "horizontal",
+        "below_ground",
+        "turns_over",
+        "not_bendable",
+        "misses_level",
+        "misses_sphere",
+    }
+    assert summary["dropped"] == sum(by_reason.values())
+    assert summary["thinned_out"] > 0
+    assert summary["photons_in"] == summary["photons_out"] + summary["dropped"] + round(
+        summary["thinned_out"]
+    )
+    assert abs(summary["thinned_out"] - round(summary["thinned_out"])) < 1e-9
+    assert summary["scattered_dropped"] == 0
+    assert sum(summary["scattered_dropped_by_reason"].values()) == 0
+    assert summary["scattered_thinned_out"] == 0.0
+
+
+def _scatter_population(rng, n):
+    """Primaries as in the loss-accounting validation: down from 1000 m, up from 100 m, down from
+    3000 m, zenith 30 degrees, no horizontal photons."""
+    zenith = np.radians(30.0)
+    columns = {name: [] for name in ("x", "y", "z", "cx", "cy", "cz")}
+    for z, sign in ((1000.0, -1.0), (100.0, 1.0), (3000.0, -1.0)):
+        azimuth = rng.uniform(0, 2 * np.pi, n)
+        columns["x"].append(rng.uniform(-50, 50, n))
+        columns["y"].append(rng.uniform(-50, 50, n))
+        columns["z"].append(np.full(n, z))
+        columns["cx"].append(np.sin(zenith) * np.cos(azimuth))
+        columns["cy"].append(np.sin(zenith) * np.sin(azimuth))
+        columns["cz"].append(np.full(n, sign * np.cos(zenith)))
+    out = {name: np.concatenate(values) for name, values in columns.items()}
+    out["t"] = np.zeros(3 * n)
+    out["w"] = np.ones(3 * n)
+    return out
+
+
+def test_scattered_photons_that_miss_are_counted(tmp_path):
+    """Scattered photons that do not reach the telescope are dropped and counted, not lost.
+
+    Telescope plane 500 m above the observation level, sphere radius 12 m, weighted output.
+    """
+    columns = _scatter_population(np.random.default_rng(9), 40)
+    source = tmp_path / "primaries.pst"
+    source.write_bytes(_sky_stream([columns], telescope_z_m=500.0, radii=12.0))
+    options = {
+        "transmission": TABLE_PATH,
+        "site_altitude_m": SITE_M,
+        "pathlen_m": 0.0,
+        "seed": 3,
+        "mode": "weighted",
+    }
+    base = obdeect_propagation.propagate(source, tmp_path / "base.pst", **options)
+    on = obdeect_propagation.propagate(
+        source,
+        tmp_path / "on.pst",
+        scattering=SCATTERING_TABLE,
+        scattering_points=8,
+        **options,
+    )
+    assert on["dropped"] == base["dropped"]
+    assert on["dropped_by_reason"] == base["dropped_by_reason"]
+    assert on["scattered_dropped"] == sum(on["scattered_dropped_by_reason"].values())
+    assert on["scattered_dropped"] > 0
+    assert on["photons_out"] > base["photons_out"]

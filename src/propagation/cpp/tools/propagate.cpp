@@ -1,6 +1,6 @@
-// obdeect propagation run: the atmosphere stage on a photon stream (docs/propagation.md).
-// Reads a stream from a file or stdin, writes the processed stream to a file or stdout, and
-// prints a summary to stderr.
+// obdeect propagation run: the atmosphere stage on a photon stream
+// (docs/propagation/propagation.md). Reads a stream from a file or stdin, writes the processed
+// stream to a file or stdout, and prints a summary to stderr.
 
 #include "obdeect/propagation/propagator.hpp"
 #include "obdeect/stream/cli.hpp"
@@ -35,7 +35,8 @@ void usage() {
       "                       --seed N [--mode thinned|weighted] [--store-p]\n"
       "                       [--scattering FILE] [--scattering-points N]\n"
       "                       [--scattering-primaries ID[,ID...]]\n"
-      "                       [--pathlen M] [--telescope-pathlen ID=M]...\n"
+      "                       --pathlen M (required with extinction) [--telescope-pathlen "
+      "ID=M]...\n"
       "                       [--curvature none|corsika|spherical] [--earth-radius-m M]\n"
       "                       [--ground-representation plane|sphere]\n"
       "                       [--threads N] [--telescopes ID[,ID...]]\n"
@@ -82,6 +83,24 @@ Curvature parse_curvature_flag(const std::string &text) {
   }
 }
 
+// --wavelength-interpolation NAME: linear or floor.
+WavelengthInterpolation parse_interpolation_flag(const std::string &text) {
+  try {
+    return parse_wavelength_interpolation(text);
+  } catch (const std::invalid_argument &) {
+    throw UsageError("--wavelength-interpolation is linear or floor: " + text);
+  }
+}
+
+// --ground-representation NAME: plane or sphere.
+obdeect::stream::GroundRepresentation parse_ground_flag(const std::string &text) {
+  try {
+    return parse_ground_representation(text);
+  } catch (const std::invalid_argument &) {
+    throw UsageError("--ground-representation is plane or sphere: " + text);
+  }
+}
+
 std::uint32_t parse_points(const std::string &text) {
   long value = 0;
   if (!obdeect::stream::parse::integer(text, value) || value < 1 ||
@@ -121,8 +140,7 @@ std::vector<std::uint32_t> parse_telescope_list(const std::string &text, const c
     }
     start = comma + 1;
   }
-  std::sort(ids.begin(), ids.end());
-  ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+  sort_unique_telescope_ids(ids);
   return ids;
 }
 
@@ -184,15 +202,8 @@ int main(int argc, char **argv) {
               dispersion_reference_nm =
                   parse_double(value("--dispersion-reference-nm"), "--dispersion-reference-nm");
             } else if (arg == "--wavelength-interpolation") {
-              const std::string text = value("--wavelength-interpolation");
+              interpolation = parse_interpolation_flag(value("--wavelength-interpolation"));
               interpolation_given = true;
-              if (text == "linear") {
-                interpolation = WavelengthInterpolation::linear;
-              } else if (text == "floor") {
-                interpolation = WavelengthInterpolation::floor;
-              } else {
-                throw UsageError("--wavelength-interpolation is linear or floor: " + text);
-              }
             } else if (arg == "--envelope") {
               const std::string spec = value("--envelope");
               const auto equals = spec.find('=');
@@ -237,14 +248,7 @@ int main(int argc, char **argv) {
             } else if (arg == "--curvature") {
               curvature = parse_curvature_flag(value("--curvature"));
             } else if (arg == "--ground-representation") {
-              const std::string text = value("--ground-representation");
-              if (text == "plane") {
-                ground_representation = obdeect::stream::GroundRepresentation::plane;
-              } else if (text == "sphere") {
-                ground_representation = obdeect::stream::GroundRepresentation::sphere;
-              } else {
-                throw UsageError("--ground-representation is plane or sphere: " + text);
-              }
+              ground_representation = parse_ground_flag(value("--ground-representation"));
             } else if (arg == "--earth-radius-m") {
               earth_radius = parse_double(value("--earth-radius-m"), "--earth-radius-m");
             } else if (arg == "--threads") {
@@ -268,6 +272,12 @@ int main(int argc, char **argv) {
           if (!site_altitude || !seed || (!transmission && !no_extinction)) {
             throw UsageError("--transmission (or --no-extinction), --site-altitude and --seed are "
                              "required");
+          }
+          // Same rule as the Python API (propagate): the in-telescope path is needed with
+          // extinction.
+          if (!no_extinction && !pathlen_given) {
+            throw UsageError("--pathlen is required with extinction: the in-telescope path [m] "
+                             "(0 for none; see obdeect propagation pathlen)");
           }
           if (no_extinction) {
             // Geometry only: nothing is thinned or weighted, so these options make no sense.
@@ -334,7 +344,6 @@ int main(int argc, char **argv) {
           config.telescopes = telescopes;
           config.store_p = store_p;
           if (scattering) {
-            config.scattering.enabled = true;
             config.scattering.points_per_photon = scattering_points.value_or(8);
             config.scattering_table.emplace(ScatteringTable::from_file(*scattering));
             config.scattering_source = *scattering;
@@ -368,10 +377,13 @@ int main(int argc, char **argv) {
           out.flush();
           std::fprintf(
               stderr,
-              "obdeect propagation run: photons in %llu, out %llu (weight %.6g), dropped %llu\n",
+              "obdeect propagation run: photons in %llu, out %llu (weight %.6g), dropped %llu, "
+              "thinned out %.6g, scattered dropped %llu, scattered thinned out %.6g\n",
               static_cast<unsigned long long>(summary.photons_in),
               static_cast<unsigned long long>(summary.photons_out), summary.weight_out,
-              static_cast<unsigned long long>(summary.dropped));
+              static_cast<unsigned long long>(summary.dropped), summary.thinned_out,
+              static_cast<unsigned long long>(summary.scattered_dropped),
+              summary.scattered_thinned_out);
           return 0;
         }
       });

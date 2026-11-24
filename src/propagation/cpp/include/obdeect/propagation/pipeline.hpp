@@ -36,9 +36,24 @@ struct ExtinctionSettings {
   // Sphere rows (frame G, sphere representation): atmospheric_acceptance_sphere, which takes
   // precedence over curved. The chunk must then carry the cz and path columns.
   std::optional<SphereGeometry> sphere{};
-  // Threads for the rows of the chunk (1: in place). The result does not depend on it.
+  // Threads for the rows of the chunk (1: in place), used when pool is null. The result does not
+  // depend on it.
   unsigned threads{1};
+  // Pool of the run (see RowPool): the propagator keeps one for all chunks. Null: a pool for this
+  // call with `threads` threads.
+  RowPool *pool{nullptr};
 };
+
+// E at the wavelength of a row: linear mode at the continuous wavelength, floor mode at the integer
+// nm iwl (table_wavelength), as the table lookups. Throws if the efficiency bound does not cover
+// it.
+inline double envelope_at(const Envelope &envelope, bool linear, float wavelength, int iwl) {
+  const double lambda = linear ? static_cast<double>(wavelength) : static_cast<double>(iwl);
+  if (lambda < envelope.min_wavelength_nm() || lambda > envelope.max_wavelength_nm()) {
+    throw std::invalid_argument("wavelength outside the efficiency bound table");
+  }
+  return envelope(lambda);
+}
 
 namespace detail {
 
@@ -142,16 +157,17 @@ apply_extinction_chunk(obdeect::stream::PhotonChunk chunk, const ExtinctionSetti
   }
   // Each stage runs over all rows before the next one, so the first error is the same for any
   // thread count. Rows are independent within a stage.
-  const unsigned threads = settings.threads;
+  std::optional<RowPool> own_pool;
+  RowPool &runner = settings.pool != nullptr ? *settings.pool : own_pool.emplace(settings.threads);
   const auto &wavelength = chunk[Column::wavelength];
-  for_row_blocks(rows, threads, [&](std::size_t begin, std::size_t end) {
+  runner.run(rows, [&](std::size_t begin, std::size_t end) {
     assign_wavelengths(chunk, settings.wavelengths, settings.seed, settings.event,
                        settings.telescope, begin, end);
   });
 
   // Acceptance p = p_atm * E(lambda); rows at or above MAX_LAMBDA are dropped (p = 0).
   std::vector<double> p(rows, 0.0);
-  for_row_blocks(rows, threads, [&](std::size_t begin, std::size_t end) {
+  runner.run(rows, [&](std::size_t begin, std::size_t end) {
     if (settings.sphere) {
       atmospheric_acceptance_sphere<double>(chunk, *settings.table, *settings.depths,
                                             *settings.sphere, p, begin, end);
@@ -164,20 +180,14 @@ apply_extinction_chunk(obdeect::stream::PhotonChunk chunk, const ExtinctionSetti
   });
   const Envelope &envelope = *settings.envelope;
   const bool linear = settings.table->wavelength_interpolation() == WavelengthInterpolation::linear;
-  for_row_blocks(rows, threads, [&](std::size_t begin, std::size_t end) {
+  runner.run(rows, [&](std::size_t begin, std::size_t end) {
     for (std::size_t row = begin; row < end; ++row) {
       const int iwl = table_wavelength(static_cast<double>(wavelength[row]));
       if (iwl < 0) {
         p[row] = 0.0;
         continue;
       }
-      // Floor mode: E at the integer nm of the row. Linear mode: E at the continuous wavelength,
-      // linear between the nodes of the envelope (as the table lookups).
-      const double lambda = linear ? static_cast<double>(wavelength[row]) : iwl;
-      if (lambda < envelope.min_wavelength_nm() || lambda > envelope.max_wavelength_nm()) {
-        throw std::invalid_argument("wavelength outside the envelope table");
-      }
-      p[row] *= envelope(lambda);
+      p[row] *= envelope_at(envelope, linear, wavelength[row], iwl);
     }
   });
 
@@ -188,11 +198,11 @@ apply_extinction_chunk(obdeect::stream::PhotonChunk chunk, const ExtinctionSetti
     return out;
   }
   return thin_chunk(chunk, p, settings.seed, settings.event, settings.telescope, out_first_index,
-                    true, stream_thinning, threads);
+                    true, stream_thinning, runner);
 }
 
-// Envelope step for scattered photons (docs/scattering.md, frame G). Their transmission from the
-// scattering point to the telescope sphere is in w, so the acceptance is E(lambda) times
+// Envelope step for scattered photons (docs/propagation/scattering.md, frame G). Their transmission
+// from the scattering point to the telescope sphere is in w, so the acceptance is E(lambda) times
 // exp(-od_focus(lambda)), the in-telescope part of the extinction (the same od_focus, and the same
 // wavelength mode, as apply_extinction_chunk). Thinned or weighted as apply_extinction_chunk;
 // wavelengths must be assigned.
@@ -224,14 +234,10 @@ apply_envelope_chunk(obdeect::stream::PhotonChunk chunk, const Envelope &envelop
     if (iwl < 0) {
       continue; // at or above MAX_LAMBDA: p = 0
     }
-    const double lambda = linear ? static_cast<double>(wavelength[row]) : iwl;
-    if (lambda < envelope.min_wavelength_nm() || lambda > envelope.max_wavelength_nm()) {
-      throw std::invalid_argument("wavelength outside the envelope table");
-    }
     // od_focus is 0 for a path of 0 m, so the factor is exactly 1 then.
     const double od_focus =
         table.telescope_depths_at(depths, static_cast<double>(wavelength[row])).od_focus;
-    p[row] = envelope(lambda) * std::exp(-od_focus);
+    p[row] = envelope_at(envelope, linear, wavelength[row], iwl) * std::exp(-od_focus);
   }
   if (weighted) {
     weight_chunk(chunk, p, true);

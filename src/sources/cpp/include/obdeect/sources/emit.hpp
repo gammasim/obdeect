@@ -1,7 +1,7 @@
 #pragma once
 
 // Per-photon sampling of every source geometry and emission of photon chunks
-// (docs/spec/source-core.md).
+// (docs/sources/spec/source-core.md).
 
 #include "obdeect/sources/source.hpp"
 
@@ -16,37 +16,74 @@
 
 namespace obdeect::sources {
 
+// Rejection attempts of one photon towards a disc target before the sampler gives up. A photon
+// needs about 1 / (fraction of light reaching the disc) attempts, so this is a bug guard only.
+inline constexpr std::uint32_t max_disc_attempts = 1U << 24;
+
+// Per-emission constants of the sampler, computed once per emission (not per photon).
+struct Prepared {
+  double reference{1.0}; // line_reference_fraction of a line with a sphere target, else 1
+  Basis basis{};         // orthonormal basis of the emission axis (point, line or sky background)
+};
+
 namespace detail {
 
-inline Vec3 cone_direction(const Vec3 &axis, double cos_theta, double azimuth) {
-  const Basis basis = orthonormal_basis(axis);
+// Direction at angle theta (cosine cos_theta) and azimuth about `axis`, with its basis cached.
+inline Vec3 cone_direction_about(const Vec3 &axis, const Basis &basis, double cos_theta,
+                                 double azimuth) {
   const double sin_theta = std::sqrt(std::max(0.0, (1.0 - cos_theta) * (1.0 + cos_theta)));
   return direction_about(axis, basis, cos_theta, sin_theta, azimuth);
+}
+
+inline Vec3 cone_direction(const Vec3 &axis, double cos_theta, double azimuth) {
+  return cone_direction_about(axis, orthonormal_basis(axis), cos_theta, azimuth);
 }
 
 inline double line_position(const Line &l, double u) {
   return l.profile.empty() ? l.length_m * u : l.profile.sample(u);
 }
 
-inline void sample_point(const Point &e, const Target &target, const Uniforms &ud,
-                         std::uint64_t seed, std::uint32_t event, std::uint32_t telescope,
-                         std::uint64_t index, Photon &p) {
+// True when the ray from origin along the unit direction meets the disc in front of the origin.
+inline bool hits_disc(const Vec3 &origin, const Vec3 &direction, const DiscTarget &disc) {
+  const double denominator = dot(direction, disc.normal);
+  if (denominator == 0.0)
+    return false;
+  const double t = dot(disc.centre - origin, disc.normal) / denominator;
+  if (!(t > 0.0))
+    return false;
+  const Vec3 offset = origin + direction * t - disc.centre;
+  return dot(offset, offset) <= disc.radius_m * disc.radius_m;
+}
+
+// A point with a disc target: the photons are the directions of the profile that reach the disc.
+// Each attempt draws a direction from the profile (attempt 0 uses the direction draws ud; later
+// attempts their own draws) and keeps it when it hits the disc, so every candidate is a hit with
+// weight 1 and the candidate count is the expected number of hits (expected_count).
+inline void sample_point_disc(const Point &e, const Basis &basis, const DiscTarget &disc,
+                              const Uniforms &ud, std::uint64_t seed, std::uint32_t event,
+                              std::uint32_t telescope, std::uint64_t index, Photon &p) {
+  for (std::uint32_t attempt = 0; attempt < max_disc_attempts; ++attempt) {
+    const Uniforms u = attempt == 0 ? ud
+                                    : philox_draw_attempt(seed, event, telescope, index,
+                                                          Stream::direction, attempt);
+    const Vec3 direction =
+        cone_direction_about(e.axis, basis, 1.0 - angle_quantile(e.angular, u[0]), two_pi * u[1]);
+    if (hits_disc(e.position, direction, disc)) {
+      p.direction = direction;
+      return;
+    }
+  }
+  throw std::runtime_error("disc target: no photon reached the disc within " +
+                           std::to_string(max_disc_attempts) +
+                           " attempts (the disc subtends a negligible fraction of the light)");
+}
+
+inline void sample_point(const Point &e, const Basis &basis, const Target &target,
+                         const Uniforms &ud, std::uint64_t seed, std::uint32_t event,
+                         std::uint32_t telescope, std::uint64_t index, Photon &p) {
   p.position = e.position;
   if (const auto *disc = std::get_if<DiscTarget>(&target)) {
-    const Uniforms ut = philox_draw(seed, event, telescope, index, Stream::target);
-    const Basis basis = orthonormal_basis(disc->normal);
-    const double r = disc->radius_m * std::sqrt(ut[0]);
-    const double phi = two_pi * ut[1];
-    const Vec3 point =
-        disc->centre + basis.e1 * (r * std::cos(phi)) + basis.e2 * (r * std::sin(phi));
-    const Vec3 to_point = point - e.position;
-    const double distance = norm(to_point);
-    p.direction = to_point * (1.0 / distance);
-    const double h = std::abs(dot(disc->centre - e.position, disc->normal));
-    const double cosine = std::clamp(dot(p.direction, e.axis), -1.0, 1.0);
-    const double ratio = h / distance;
-    p.weight = std::visit([&](const auto &a) { return a.intensity(1.0 - cosine); }, e.angular) /
-               intensity_maximum(e.angular) * ratio * ratio * ratio;
+    sample_point_disc(e, basis, *disc, ud, seed, event, telescope, index, p);
   } else if (const auto *sphere = std::get_if<SphereTarget>(&target)) {
     const Vec3 to_centre = sphere->centre - e.position;
     const double d = norm(to_centre);
@@ -55,41 +92,44 @@ inline void sample_point(const Point &e, const Target &target, const Uniforms &u
     p.direction =
         cone_direction(to_centre * (1.0 / d), 1.0 - ud[0] * (1.0 - cos_max), two_pi * ud[1]);
   } else {
-    p.direction = cone_direction(e.axis, 1.0 - angle_quantile(e.angular, ud[0]), two_pi * ud[1]);
+    p.direction =
+        cone_direction_about(e.axis, basis, 1.0 - angle_quantile(e.angular, ud[0]), two_pi * ud[1]);
   }
 }
 
 // False when the photon misses the target (the row is dropped).
-inline bool sample_line(const Line &l, const Target &target, double reference, const Uniforms &ud,
-                        std::uint64_t seed, std::uint32_t event, std::uint32_t telescope,
-                        std::uint64_t index, Photon &p) {
+inline bool sample_line(const Line &l, const Basis &basis, const Target &target, double reference,
+                        const Uniforms &ud, std::uint64_t seed, std::uint32_t event,
+                        std::uint32_t telescope, std::uint64_t index, Photon &p) {
   const double s = line_position(l, philox_draw(seed, event, telescope, index, Stream::target)[0]);
   p.position = l.start + l.direction * s;
   if (l.beta > 0.0)
     p.time_ns += s / (l.beta * speed_of_light_m_per_ns);
   const auto *sphere = std::get_if<SphereTarget>(&target);
+  if (sphere && !(reference > 0.0))
+    return false; // no photon of this line reaches the sphere (the expected count is 0)
   if (sphere && std::holds_alternative<Isotropic>(l.angular)) {
     // Cone about the sphere seen from the point; weight = fraction of 4 pi / reference.
     const Vec3 to_centre = sphere->centre - p.position;
     const double d = norm(to_centre);
     const double fraction = sphere_fraction(p.position, *sphere);
-    p.direction = d > 0.0 ? cone_direction(to_centre * (1.0 / d), 1.0 - ud[0] * 2.0 * fraction,
-                                           two_pi * ud[1])
-                          : cone_direction(l.direction, 1.0 - 2.0 * ud[0], two_pi * ud[1]);
+    p.direction =
+        d > 0.0
+            ? cone_direction(to_centre * (1.0 / d), 1.0 - ud[0] * 2.0 * fraction, two_pi * ud[1])
+            : cone_direction_about(l.direction, basis, 1.0 - 2.0 * ud[0], two_pi * ud[1]);
     p.weight = fraction / reference;
   } else if (sphere) {
     const double cos_theta = 1.0 - std::get<FixedAngle>(l.angular).u0;
     const Arc arc = arc_towards(p.position, l.direction, cos_theta, *sphere);
     if (!arc.hit)
       return false;
-    const Basis basis = orthonormal_basis(l.direction);
     const double sin_theta = std::sqrt(std::max(0.0, 1.0 - cos_theta * cos_theta));
     p.direction = direction_about(l.direction, basis, cos_theta, sin_theta,
                                   arc.centre + arc.half * (2.0 * ud[0] - 1.0));
     p.weight = arc.half / pi / reference;
   } else {
-    p.direction =
-        cone_direction(l.direction, 1.0 - angle_quantile(l.angular, ud[0]), two_pi * ud[1]);
+    p.direction = cone_direction_about(l.direction, basis, 1.0 - angle_quantile(l.angular, ud[0]),
+                                       two_pi * ud[1]);
   }
   return true;
 }
@@ -138,19 +178,19 @@ inline void sample_plane_wave(const PlaneWave &w, std::uint64_t seed, std::uint3
   p.time_ns += (norm(p.position - source) - w.distance_m) / speed_of_light_m_per_ns;
 }
 
-inline void sample_sky_background(const SkyBackground &b, const Uniforms &ud, std::uint64_t seed,
-                                  std::uint32_t event, std::uint32_t telescope, std::uint64_t index,
-                                  Photon &p) {
+inline void sample_sky_background(const SkyBackground &b, const Basis &basis, const Uniforms &ud,
+                                  std::uint64_t seed, std::uint32_t event, std::uint32_t telescope,
+                                  std::uint64_t index, Photon &p) {
   const double cos_cone = std::cos(b.viewcone_deg * pi / 180.0);
-  p.direction = cone_direction(b.axis, 1.0 - ud[0] * (1.0 - cos_cone), two_pi * ud[1]);
+  p.direction = cone_direction_about(b.axis, basis, 1.0 - ud[0] * (1.0 - cos_cone), two_pi * ud[1]);
   // Start point: uniform over the disc seen along the direction, lifted onto the sphere.
   const Uniforms ut = philox_draw(seed, event, telescope, index, Stream::target);
   const double r = std::sqrt(ut[0]);
   const double phi = two_pi * ut[1];
   const double h = std::sqrt(std::max(0.0, 1.0 - r * r));
-  const Basis basis = orthonormal_basis(p.direction);
+  const Basis start_basis = orthonormal_basis(p.direction);
   const Vec3 unit =
-      basis.e1 * (r * std::cos(phi)) + basis.e2 * (r * std::sin(phi)) - p.direction * h;
+      start_basis.e1 * (r * std::cos(phi)) + start_basis.e2 * (r * std::sin(phi)) - p.direction * h;
   p.position = b.centre + unit * b.radius_m;
   p.time_ns -= h * b.radius_m / speed_of_light_m_per_ns;
 }
@@ -164,11 +204,24 @@ inline double line_reference(const Source &s) {
   return l && sphere ? line_reference_fraction(*l, *sphere) : 1.0;
 }
 
-// Candidate photon `index` (no validation: use emit() or validate() first); `reference` is
-// line_reference(s). False when a line photon misses its target.
-inline bool sample_photon(const Source &s, std::uint64_t seed, std::uint32_t event,
-                          std::uint32_t telescope, std::uint64_t index, Photon &p,
-                          double reference) {
+// The constants of a source for the sampler (its validation is the caller's business).
+inline Prepared prepare(const Source &s) {
+  Prepared prepared;
+  prepared.reference = line_reference(s);
+  if (const auto *e = std::get_if<Point>(&s.geometry))
+    prepared.basis = orthonormal_basis(e->axis);
+  else if (const auto *l = std::get_if<Line>(&s.geometry))
+    prepared.basis = orthonormal_basis(l->direction);
+  else if (const auto *b = std::get_if<SkyBackground>(&s.geometry))
+    prepared.basis = orthonormal_basis(b->axis);
+  return prepared;
+}
+
+// Candidate photon `index` (no validation: use emit() or validate() first). False when a line
+// photon misses its target.
+inline bool sample_photon(const Source &s, const Prepared &prepared, std::uint64_t seed,
+                          std::uint32_t event, std::uint32_t telescope, std::uint64_t index,
+                          Photon &p) {
   // Draws that a profile ignores are not computed (same result, fewer Philox calls).
   const Uniforms none{};
   p = Photon{};
@@ -185,33 +238,32 @@ inline bool sample_photon(const Source &s, std::uint64_t seed, std::uint32_t eve
   }
   const Uniforms ud = philox_draw(seed, event, telescope, index, Stream::direction);
   if (const auto *e = std::get_if<Point>(&s.geometry)) {
-    detail::sample_point(*e, s.target, ud, seed, event, telescope, index, p);
+    detail::sample_point(*e, prepared.basis, s.target, ud, seed, event, telescope, index, p);
     return true;
   }
   if (const auto *l = std::get_if<Line>(&s.geometry))
-    return detail::sample_line(*l, s.target, reference, ud, seed, event, telescope, index, p);
-  detail::sample_sky_background(std::get<SkyBackground>(s.geometry), ud, seed, event, telescope,
-                                index, p);
+    return detail::sample_line(*l, prepared.basis, s.target, prepared.reference, ud, seed, event,
+                               telescope, index, p);
+  detail::sample_sky_background(std::get<SkyBackground>(s.geometry), prepared.basis, ud, seed,
+                                event, telescope, index, p);
   return true;
 }
 
-// Candidates first .. first + candidates - 1 as float32 rows (source_columns). Line photons that
-// miss their target are dropped; returns the rows written. chunk.first_index is left to the
-// caller.
-inline std::size_t emit(const Source &s, std::uint64_t seed, std::uint32_t event,
-                        std::uint32_t telescope, std::uint64_t first, std::size_t candidates,
-                        obdeect::stream::PhotonChunk &chunk) {
-  validate(s);
+// Candidates first .. first + candidates - 1 as float32 rows (source_columns) of a validated
+// source with its constants prepare(s). Line photons that miss their target are dropped; returns
+// the rows written. chunk.first_index is left to the caller.
+inline std::size_t emit_prepared(const Source &s, const Prepared &prepared, std::uint64_t seed,
+                                 std::uint32_t event, std::uint32_t telescope, std::uint64_t first,
+                                 std::size_t candidates, obdeect::stream::PhotonChunk &chunk) {
   if (candidates > obdeect::stream::max_chunk_rows)
     throw std::invalid_argument("a chunk holds at most 65536 rows");
   chunk.resize(candidates, source_columns);
   chunk.telescope_id = telescope;
   using obdeect::stream::Column;
   std::size_t row = 0;
-  const double reference = line_reference(s);
   Photon p;
   for (std::size_t i = 0; i < candidates; ++i) {
-    if (!sample_photon(s, seed, event, telescope, first + i, p, reference))
+    if (!sample_photon(s, prepared, seed, event, telescope, first + i, p))
       continue;
     chunk[Column::x][row] = static_cast<float>(p.position.x);
     chunk[Column::y][row] = static_cast<float>(p.position.y);
@@ -228,36 +280,22 @@ inline std::size_t emit(const Source &s, std::uint64_t seed, std::uint32_t event
   return row;
 }
 
+// Candidates first .. first + candidates - 1 of a source (validates it and prepares it per call;
+// the run writer uses emit_prepared with the constants of each emission).
+inline std::size_t emit(const Source &s, std::uint64_t seed, std::uint32_t event,
+                        std::uint32_t telescope, std::uint64_t first, std::size_t candidates,
+                        obdeect::stream::PhotonChunk &chunk) {
+  validate(s);
+  return emit_prepared(s, prepare(s), seed, event, telescope, first, candidates, chunk);
+}
+
 // Expected sum of weights of the emitted photons: the candidate count times the mean weight
-// (midpoint rule for a disc target and for a line with a sphere target; exact otherwise).
+// (midpoint rule along a line with a sphere target; exact otherwise: a disc target gives weight 1
+// per candidate).
 inline double expected_weight(const Source &s, int steps = 2000) {
   const double count = expected_count(s);
   if (!(count > 0.0))
     return 0.0;
-  double sum = 0.0;
-  if (const auto *p = std::get_if<Point>(&s.geometry)) {
-    const auto *disc = std::get_if<DiscTarget>(&s.target);
-    if (!disc)
-      return count;
-    // Mean of the disc weight over uniform points of the disc (midpoint in r^2 and azimuth).
-    const Basis basis = orthonormal_basis(disc->normal);
-    const double h = std::abs(dot(disc->centre - p->position, disc->normal));
-    const double imax = intensity_maximum(p->angular);
-    for (int i = 0; i < steps; ++i) {
-      const double r = disc->radius_m * std::sqrt((i + 0.5) / steps);
-      for (int k = 0; k < steps; ++k) {
-        const double phi = two_pi * (k + 0.5) / steps;
-        const Vec3 to_point = disc->centre + basis.e1 * (r * std::cos(phi)) +
-                              basis.e2 * (r * std::sin(phi)) - p->position;
-        const double distance = norm(to_point);
-        const double cosine = std::clamp(dot(to_point, p->axis) / distance, -1.0, 1.0);
-        const double ratio = h / distance;
-        sum += std::visit([&](const auto &a) { return a.intensity(1.0 - cosine); }, p->angular) /
-               imax * ratio * ratio * ratio;
-      }
-    }
-    return count * sum / (static_cast<double>(steps) * steps);
-  }
   const auto *l = std::get_if<Line>(&s.geometry);
   const auto *sphere = std::get_if<SphereTarget>(&s.target);
   if (!l || !sphere)
@@ -267,6 +305,7 @@ inline double expected_weight(const Source &s, int steps = 2000) {
   const double reference = line_reference_fraction(*l, *sphere);
   if (!(reference > 0.0))
     return 0.0;
+  double sum = 0.0;
   const int line_steps = steps * 10;
   for (int j = 0; j < line_steps; ++j) {
     const Vec3 point = l->start + l->direction * detail::line_position(*l, (j + 0.5) / line_steps);

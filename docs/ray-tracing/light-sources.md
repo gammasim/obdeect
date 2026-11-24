@@ -114,7 +114,7 @@ point are not met, which is correct for a start point inside the telescope.
 
 For the same photons, the sphere row of each downward photon is the entry point of its line into
 the sphere, and the tracer gives the same detected photons as the plane run (checked in
-[Validation](VALIDATION.md#sphere-runs-ray-tracing-phase-5d)).
+[Validation](VALIDATION.md#sphere-runs)).
 
 Times differ slightly between the two representations. A plane row is moved from the ground
 plane to the input plane at the vacuum speed of light ($t + s\,|d|/c$, $s$ signed) and is then

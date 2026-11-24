@@ -1,7 +1,7 @@
 // obdeect ray-tracing trace-stream: trace a photon stream (G or T photons) to camera-frame (C)
 // photons (docs/ray-tracing/photon-stream.md). Reads a stream from a file or stdin, writes the
-// traced stream to a file or stdout, and prints a summary to stderr. Same options and output as
-// obdeect.ray_tracing.stream.trace_stream (Python).
+// traced stream to a file or stdout, and prints a summary to stderr. The Python API
+// (obdeect.ray_tracing.stream.trace_stream) runs the same code.
 
 #include "obdeect/ray_tracing/stream_trace.hpp"
 #include "obdeect/stream/cli.hpp"
@@ -9,15 +9,11 @@
 #include "obdeect/stream/stdin_buffer.hpp"
 
 #include <cstdio>
-#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
-#include <map>
-#include <memory>
 #include <optional>
 #include <set>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -38,15 +34,6 @@ void usage() {
                "                       [-i FILE|-] [-o FILE|-]\n");
 }
 
-constexpr std::uint32_t max_telescope_id = 65535;
-
-std::uint32_t telescope_id(long value) {
-  if (value < 1 || value > static_cast<long>(max_telescope_id))
-    throw rt::ModelError("telescope id " + std::to_string(value) + " outside 1.." +
-                         std::to_string(max_telescope_id));
-  return static_cast<std::uint32_t>(value);
-}
-
 // --telescopes IDS: comma-separated telescope ids; empty items are ignored.
 std::set<std::uint32_t> parse_telescopes(const std::string &text) {
   std::set<std::uint32_t> ids;
@@ -60,7 +47,7 @@ std::set<std::uint32_t> parse_telescopes(const std::string &text) {
       long id = 0;
       if (!obdeect::stream::parse::integer(item, id))
         throw UsageError("telescope ids must be integers: " + text);
-      ids.insert(telescope_id(id));
+      ids.insert(rt::checked_telescope_id(id));
     }
     start = comma + 1;
   }
@@ -77,7 +64,7 @@ std::pair<std::optional<std::uint32_t>, std::string> parse_model(const std::stri
   long id = 0;
   if (!obdeect::stream::parse::integer(text.substr(0, equals), id))
     throw UsageError("--model takes PATH or TELESCOPE_ID=PATH: " + text);
-  return {telescope_id(id), text.substr(equals + 1)};
+  return {rt::checked_telescope_id(id), text.substr(equals + 1)};
 }
 
 // --threads N: 0 uses every core, as in the Python command.
@@ -95,12 +82,6 @@ std::string read_file(const std::string &path) {
   if (!in)
     throw std::runtime_error("cannot open optical model: " + path);
   return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
-}
-
-bool same_file(const std::string &input, const std::string &output) {
-  std::error_code error;
-  const bool same = std::filesystem::equivalent(input, output, error);
-  return !error && same;
 }
 
 } // namespace
@@ -173,49 +154,13 @@ int main(int argc, char **argv) {
         if (zenith)
           settings.pointing = std::pair{*zenith, *azimuth};
 
-        // One model for every telescope, or the model of each telescope id (files loaded once).
-        std::shared_ptr<const rt::stream_trace_detail::Optics> shared;
-        std::map<std::uint32_t, std::shared_ptr<const rt::stream_trace_detail::Optics>> per;
-        if (models.size() == 1 && !models.front().first) {
-          shared = rt::stream_trace_detail::make_optics(
-              rt::stream_trace_detail::load_stream_model(read_file(models.front().second)), part,
-              settings.version);
-          settings.telescopes = telescopes;
-        } else {
-          std::map<std::filesystem::path, std::shared_ptr<const rt::stream_trace_detail::Optics>>
-              loaded;
-          for (const auto &[id, path] : models) {
-            if (!id)
-              throw rt::ModelError(
-                  "give one --model PATH, or --model TELESCOPE_ID=PATH for each telescope");
-            if (per.count(*id))
-              throw rt::ModelError("a telescope id is given in more than one --model");
-            const auto key = std::filesystem::weakly_canonical(path);
-            if (!loaded.count(key))
-              loaded[key] = rt::stream_trace_detail::make_optics(
-                  rt::stream_trace_detail::load_stream_model(read_file(path)), part,
-                  settings.version);
-            per[*id] = loaded[key];
-          }
-          std::set<std::uint32_t> selected;
-          if (telescopes) {
-            selected = *telescopes;
-          } else {
-            for (const auto &[id, optics] : per)
-              selected.insert(id);
-          }
-          std::string missing;
-          for (const auto id : selected)
-            if (!per.count(id))
-              missing += (missing.empty() ? "" : ", ") + std::to_string(id);
-          if (!missing.empty())
-            throw rt::ModelError("telescopes without an optical model: [" + missing + "]");
-          for (auto it = per.begin(); it != per.end();)
-            it = selected.count(it->first) ? std::next(it) : per.erase(it);
-          settings.telescopes = selected;
-        }
+        std::vector<rt::ModelSource> sources;
+        for (const auto &[id, path] : models)
+          sources.push_back({id, read_file(path)});
+        auto run = rt::make_run_optics(sources, telescopes, part, settings.version);
+        settings.telescopes = run.telescopes;
 
-        if (input != "-" && output != "-" && same_file(input, output))
+        if (input != "-" && output != "-" && rt::same_file(input, output))
           throw rt::ModelError("input and output are the same file: " + output);
         std::ifstream in_file;
         if (input != "-") {
@@ -235,7 +180,8 @@ int main(int argc, char **argv) {
         std::istream &in = input == "-" ? stdin_stream : static_cast<std::istream &>(in_file);
         std::ostream &out = output == "-" ? static_cast<std::ostream &>(std::cout)
                                           : static_cast<std::ostream &>(out_file);
-        const auto counts = rt::trace_stream(in, out, std::move(shared), std::move(per), settings);
+        const auto counts = rt::trace_stream(in, out, std::move(run.shared),
+                                             std::move(run.per_telescope), settings);
         out.flush();
         if (!out)
           throw std::runtime_error("write error on the output stream");

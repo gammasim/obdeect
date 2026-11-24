@@ -1,7 +1,8 @@
 #pragma once
 
-// A run of light-source events written as an obdeect photon stream (docs/spec/run.md): one run
-// record, then per event one telescope block per telescope holding the photons of all emissions.
+// A run of light-source events written as an obdeect photon stream (docs/sources/spec/run.md): one
+// run record, then per event one telescope block per telescope holding the photons of all
+// emissions.
 
 #include "obdeect/sources/emit.hpp"
 #include "obdeect/sources/source.hpp"
@@ -98,10 +99,11 @@ inline SphereTarget target_sphere(const Run &run) {
   return fiducial_sphere(run.telescopes);
 }
 
-// Target "auto" of a source, from a sphere (centre C, radius R): no target for a point within
-// 1.02 R of C, the sphere for an isotropic point, none for a fixed angle, otherwise a disc of
-// radius R about C in the plane z = C.z. A line with a fixed angle or isotropic emission gets the
-// sphere; other lines and geometries no target.
+// Target "auto" of a source, from a sphere (centre C, radius R): no target for a point inside the
+// sphere (all its light is in the sphere), the sphere for an isotropic point outside it, none for
+// a fixed angle, otherwise a disc of radius R about C in the plane z = C.z (a non-isotropic point
+// cannot aim at a sphere). A line with a fixed angle or isotropic emission gets the sphere; other
+// lines and geometries no target.
 inline Target resolve_auto_target(const Source &s, const SphereTarget &sphere) {
   if (!(sphere.radius_m > 0.0))
     throw std::invalid_argument("an automatic target needs at least one telescope");
@@ -112,7 +114,7 @@ inline Target resolve_auto_target(const Source &s, const SphereTarget &sphere) {
     return std::monostate{};
   }
   const auto *p = std::get_if<Point>(&s.geometry);
-  if (!p || norm(p->position - sphere.centre) <= 1.02 * sphere.radius_m)
+  if (!p || norm(p->position - sphere.centre) <= sphere.radius_m)
     return std::monostate{};
   if (std::holds_alternative<Isotropic>(p->angular))
     return sphere;
@@ -149,6 +151,8 @@ inline void validate_run(const Run &run) {
             "run: total event count exceeds the Philox event key range");
     event_count += event.repeat;
   }
+  require(run.seed <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()),
+          "run: seed must be at most 2^63 - 1 (it is stored as a signed 64-bit integer)");
   require(!ground || run.telescopes.size() == 1,
           "run: a ground run (frame ground) needs exactly one telescope: its sphere is the origin "
           "of the frame");
@@ -206,8 +210,11 @@ inline void finish_sphere_rows(const Emission &e, const Run &run,
     double s = 0.0;
     const double r2 = dot(start, start);
     if (r2 > radius2) {
-      // Solve |start + s d|^2 = R^2 (d is a unit vector): s^2 + 2 b s + (r2 - R^2) = 0.
-      const double b = dot(start, direction);
+      // Solve |start + s d|^2 = R^2 for the unit vector d (renormalised here: the stored float32
+      // cosines have a norm error of about 1e-7, which would move a row km away by mm):
+      // s^2 + 2 b s + (r2 - R^2) = 0.
+      const Vec3 unit = direction * (1.0 / norm(direction));
+      const double b = dot(start, unit);
       const double disc = b * b - (r2 - radius2);
       s = -b - std::sqrt(std::max(0.0, disc));
       // Both roots have the same sign (r2 > R^2): the smaller one must lie ahead of the photon.
@@ -215,7 +222,7 @@ inline void finish_sphere_rows(const Emission &e, const Run &run,
         ++drops.misses_sphere;
         continue;
       }
-      row = start + direction * s;
+      row = start + unit * s;
       time += s / speed_of_light_m_per_ns;
     }
     if (kept != i)
@@ -296,10 +303,14 @@ inline void finish_rows(const Emission &e, const Run &run, obdeect::stream::Phot
 } // namespace detail
 
 // Emissions of a run with automatic targets resolved, bunch sizes applied and seeds assigned:
-// emission k of the run (in event order) uses source_seed(run.seed, k).
+// emission k of the run (in event order) uses source_seed(run.seed, k). The per-emission values
+// of the sampler and the expectations are computed once here.
 struct PlannedEmission {
   Emission emission;
   std::uint64_t seed{};
+  Prepared prepared;
+  double count{};  // expected candidate rows (expected_count; before line misses)
+  double weight{}; // expected sum of weights, bunch size included
 };
 
 inline std::vector<std::vector<PlannedEmission>> plan(const Run &run) {
@@ -307,14 +318,26 @@ inline std::vector<std::vector<PlannedEmission>> plan(const Run &run) {
   const SphereTarget sphere = target_sphere(run);
   std::vector<std::vector<PlannedEmission>> planned;
   std::uint64_t k = 0;
-  for (const auto &event : run.events) {
+  for (std::size_t i = 0; i < run.events.size(); ++i) {
     auto &list = planned.emplace_back();
-    for (const auto &e : event.emissions) {
-      PlannedEmission p{e, source_seed(run.seed, k++)};
+    const auto &event = run.events[i];
+    for (std::size_t j = 0; j < event.emissions.size(); ++j) {
+      const auto &e = event.emissions[j];
+      PlannedEmission p;
+      p.emission = e;
+      p.seed = source_seed(run.seed, k++);
       if (std::holds_alternative<AutoTarget>(p.emission.source.target))
         p.emission.source.target = resolve_auto_target(p.emission.source, sphere);
       p.emission.source.photons = e.source.photons / e.bunch_size;
-      validate(p.emission.source);
+      try {
+        validate(p.emission.source);
+      } catch (const std::invalid_argument &error) {
+        throw std::invalid_argument("events[" + std::to_string(i) + "].emissions[" +
+                                    std::to_string(j) + "]: " + error.what());
+      }
+      p.prepared = prepare(p.emission.source);
+      p.count = expected_count(p.emission.source);
+      p.weight = expected_weight(p.emission.source) * p.emission.bunch_size;
       list.push_back(std::move(p));
     }
   }
@@ -327,15 +350,35 @@ inline constexpr std::uint64_t cached_bytes_per_photon = 10 * sizeof(float);
 // generated again per telescope above it. The output is the same either way.
 inline constexpr std::uint64_t max_cached_event_bytes = std::uint64_t{1} << 30;
 
-// Expected sum of weights of the whole run (all events and telescopes).
-inline double expected_weight(const Run &run) {
-  const auto planned = plan(run);
+// Expected sum of weights of a planned run (all events and telescopes).
+inline double expected_weight(const std::vector<std::vector<PlannedEmission>> &planned,
+                              const Run &run) {
   double sum = 0.0;
   for (std::size_t i = 0; i < planned.size(); ++i)
     for (const auto &p : planned[i])
-      sum += expected_weight(p.emission.source) * p.emission.bunch_size *
-             static_cast<double>(run.events[i].repeat);
+      sum += p.weight * static_cast<double>(run.events[i].repeat);
   return sum * static_cast<double>(run.telescopes.size());
+}
+
+// Expected sum of weights of the whole run (all events and telescopes).
+inline double expected_weight(const Run &run) { return expected_weight(plan(run), run); }
+
+// Target kinds of the emissions of an event, for the event metadata: "index:kind" for every
+// emission with a target ("sphere" or "disc"), comma separated; empty when there is none.
+inline std::string targets_of(const std::vector<PlannedEmission> &emissions) {
+  std::string out;
+  for (std::size_t j = 0; j < emissions.size(); ++j) {
+    const Target &target = emissions[j].emission.source.target;
+    const char *kind = std::holds_alternative<SphereTarget>(target) ? "sphere"
+                       : std::holds_alternative<DiscTarget>(target) ? "disc"
+                                                                    : nullptr;
+    if (!kind)
+      continue;
+    if (!out.empty())
+      out += ',';
+    out += std::to_string(j) + ':' + kind;
+  }
+  return out;
 }
 
 // Writes the run. Photons are keyed on (emission seed, event number, telescope 0), so all
@@ -351,7 +394,7 @@ inline RunSummary write_run(std::ostream &out, const Run &run,
   if (run.frame == obdeect::stream::Frame::ground)
     m["ground_representation"] = std::string("sphere");
   m["run_number"] = run.number;
-  m["seed"] = static_cast<std::int64_t>(run.seed);
+  m["seed"] = static_cast<std::int64_t>(run.seed); // validate_run: at most 2^63 - 1
   m["observation_level_m"] = run.observation_level_m;
   m["atmosphere_id"] = run.atmosphere_id;
   m["refraction_applied"] = std::int64_t{0};
@@ -387,7 +430,7 @@ inline RunSummary write_run(std::ostream &out, const Run &run,
   obdeect::stream::Writer writer(out, run.producer);
   writer.write_metadata(RecordType::run, m);
   RunSummary summary;
-  summary.expected = expected_weight(run);
+  summary.expected = expected_weight(planned, run);
   obdeect::stream::PhotonChunk chunk;
   std::vector<obdeect::stream::PhotonChunk> cached;
   std::vector<std::uint64_t> counts;
@@ -401,11 +444,14 @@ inline RunSummary write_run(std::ostream &out, const Run &run,
       obdeect::stream::Metadata em{{"event_number", static_cast<std::int64_t>(event_number)}};
       for (const auto &[name, value] : run.events[i].metadata)
         em.emplace(name, value);
+      // Which emissions were written with a sphere or disc target (their rows reach only it).
+      if (const std::string targets = targets_of(emissions); !targets.empty())
+        em.emplace("targets", targets);
       writer.write_metadata(RecordType::event, em);
       counts.clear();
       std::uint64_t total = 0;
       for (const auto &p : emissions) {
-        counts.push_back(photon_count(p.emission.source, p.seed, event, key));
+        counts.push_back(round_count(p.count, p.seed, event, key));
         total += counts.back();
       }
       // Calls f(chunk) for every chunk of the event, in emission and photon order; dropped photons
@@ -418,7 +464,7 @@ inline RunSummary write_run(std::ostream &out, const Run &run,
           for (std::uint64_t done = 0; done < counts[k];) {
             const auto rows = static_cast<std::size_t>(
                 std::min<std::uint64_t>(obdeect::stream::max_chunk_rows, counts[k] - done));
-            emit(p.emission.source, p.seed, event, key, done, rows, chunk);
+            emit_prepared(p.emission.source, p.prepared, p.seed, event, key, done, rows, chunk);
             detail::finish_rows(p.emission, run, chunk, drops_sink);
             done += rows;
             if (chunk.rows() > 0)

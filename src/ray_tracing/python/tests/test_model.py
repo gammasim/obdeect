@@ -30,25 +30,26 @@ def test_repository_compile_command(tmp_path, capsys):
     write_simulation_models(root, "TEST-design", records, files)
     telescope = read_telescope(root, "TEST-design", "9.9.9")
     assert set(telescope.records) == set(records)
-    assert telescope.propagation_group_index == 1.0
+    # No site, so no air index: the compile command needs one.
+    assert telescope.propagation_group_index is None
 
     output = tmp_path / "compiled.json"
-    assert (
-        main([
-            "compile",
-            "--simulation-models",
-            str(root),
-            "--model",
-            "TEST-design",
-            "--version",
-            "9.9.9",
-            "--seed",
-            "3",
-            "--output",
-            str(output),
-        ])
-        == 0
-    )
+    command = [
+        "compile",
+        "--simulation-models",
+        str(root),
+        "--model",
+        "TEST-design",
+        "--version",
+        "9.9.9",
+        "--seed",
+        "3",
+        "--output",
+        str(output),
+    ]
+    assert main(command) == 1
+    assert "give propagation_group_index" in capsys.readouterr().err
+    assert main([*command, "--propagation-group-index", "1.0"]) == 0
     assert "TEST-design 9.9.9: optical model" in capsys.readouterr().out
     compiled = OpticalModel.load(output)
     assert compiled.document["provenance"]["configuration_seed"] == 3
@@ -58,7 +59,11 @@ def test_repository_compile_command(tmp_path, capsys):
 def model_of(records_files, *, seed=1, zenith_deg=None):
     records, files = records_files
     return OpticalModel.from_records(
-        records, files.__getitem__, configuration_seed=seed, zenith_deg=zenith_deg
+        records,
+        files.__getitem__,
+        configuration_seed=seed,
+        zenith_deg=zenith_deg,
+        propagation_group_index=1.0,
     )
 
 
@@ -310,6 +315,58 @@ def test_containment():
     x = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
     result = containment(x, np.zeros(5), fraction=0.8)
     assert result["centroid_x_m"] == 2.0 and result["radius_m"] == 2.0
+
+
+# Points uniform in area on a disc of radius 1 (Vogel spiral: deterministic, error of order 1/n).
+def uniform_disc(n=20_000, radius=1.0):
+    k = np.arange(n) + 0.5
+    r = radius * np.sqrt(k / n)
+    theta = k * np.pi * (3.0 - np.sqrt(5.0))
+    return r * np.cos(theta), r * np.sin(theta)
+
+
+@pytest.mark.parametrize("fraction", [0.5, 0.8])
+def test_containment_uniform_disc(fraction):
+    # Equal weights: the radius holding a fraction f of a uniform disc is R sqrt(f).
+    x, y = uniform_disc()
+    result = containment(x, y, fraction=fraction)
+    assert result["radius_m"] == pytest.approx(math.sqrt(fraction), rel=2e-3)
+    assert abs(result["centroid_x_m"]) < 1e-3 and abs(result["centroid_y_m"]) < 1e-3
+
+
+def test_containment_weights_do_not_change_equal_scaling():
+    x, y = uniform_disc()
+    unweighted = containment(x, y, fraction=0.8)
+    scaled = containment(x, y, weights=np.full(len(x), 3.0), fraction=0.8)
+    assert scaled["radius_m"] == pytest.approx(unweighted["radius_m"], rel=1e-12)
+    assert scaled["centroid_x_m"] == pytest.approx(unweighted["centroid_x_m"], abs=1e-12)
+
+
+def test_containment_weighted_disc():
+    # Weight r^2 per point: the enclosed weight fraction within r is (r / R)^4, so the radius
+    # holding 0.8 of the weight is 0.8^(1/4) R, about the centre.
+    x, y = uniform_disc()
+    weights = x * x + y * y
+    result = containment(x, y, weights=weights, fraction=0.8)
+    assert result["radius_m"] == pytest.approx(0.8**0.25, rel=2e-3)
+    assert abs(result["centroid_x_m"]) < 1e-3 and abs(result["centroid_y_m"]) < 1e-3
+
+
+def test_containment_zero_weights_are_rejected():
+    x, y = uniform_disc(100)
+    with pytest.raises(ValueError, match="sum to zero"):
+        containment(x, y, weights=np.zeros(len(x)), fraction=0.8)
+    # Zero weight on some photons is fine: they simply do not count.
+    weights = np.zeros(len(x))
+    weights[:50] = 1.0
+    result = containment(x, y, weights=weights, fraction=1.0)
+    assert np.isfinite(result["radius_m"])
+
+
+@pytest.mark.parametrize("fraction", [0.0, -0.1, 1.5])
+def test_containment_rejects_fraction_outside_unit_interval(fraction):
+    with pytest.raises(ValueError, match=r"fraction must lie in \(0, 1\]"):
+        containment(np.zeros(3), np.zeros(3), fraction=fraction)
 
 
 def test_trace_commands(tmp_path, capsys):

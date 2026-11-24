@@ -28,6 +28,8 @@
 #include "obdeect/propagation/refraction.hpp"
 #include "obdeect/propagation/timing.hpp"
 
+#include "obdeect/propagation/quadrature.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -37,14 +39,6 @@
 namespace obdeect::propagation {
 
 namespace detail {
-
-// 8-point Gauss-Legendre nodes and weights on [-1, 1].
-inline constexpr std::array<double, 8> horizon_gauss_nodes = {
-    -0.9602898564975363, -0.7966664774136267, -0.5255324099163290, -0.1834346424956498,
-    0.1834346424956498,  0.5255324099163290,  0.7966664774136267,  0.9602898564975363};
-inline constexpr std::array<double, 8> horizon_gauss_weights = {
-    0.1012285362903763, 0.2223810344533745, 0.3137066458778873, 0.3626837833783620,
-    0.3626837833783620, 0.3137066458778873, 0.2223810344533745, 0.1012285362903763};
 
 inline constexpr double horizon_piece_m = 250.;     // default largest sub-interval [m]
 inline constexpr double horizon_first_piece_m = 1.; // first sub-interval at the emission [m]
@@ -61,7 +55,7 @@ inline bool horizon_integrands(const AtmosphereProfile &profile, double phase_sc
   const double profile_nu = profile.index_minus_one_cm(h_cm);
   const double nu = phase_scale * profile_nu;
   const double s = s_e * (1. + nu_e) / (1. + nu); // Snell: n sin(theta) = n_e sin(theta_e)
-  const double c2 = 1. - s * s;
+  const double c2 = (1. - s) * (1. + s);          // exact near the horizon, where s -> 1
   if (!(s < 1.) || !(c2 > 0.)) {
     return false;
   }
@@ -82,35 +76,19 @@ inline bool horizon_path_integrals(const AtmosphereProfile &profile, double phas
   dx_cm = 0.;
   excess_cm = 0.;
   const bool near_horizontal = c_e < horizon_singular_cos;
-  const double first_cm = std::min(100. * horizon_first_piece_m, piece_cm);
-  double p0 = 0.; // distance below the emission level [cm]
-  double width = first_cm;
-  while (p0 < length_cm) {
-    const double p1 = std::min(length_cm, p0 + width);
-    for (std::size_t k = 0; k < horizon_gauss_nodes.size(); ++k) {
-      double p = 0., weight = 0.;
-      if (near_horizontal) {
-        // p = u^2 on [sqrt(p0), sqrt(p1)], dp = 2 u du.
-        const double u0 = std::sqrt(p0), u1 = std::sqrt(p1);
-        const double u = 0.5 * (u0 + u1) + 0.5 * (u1 - u0) * horizon_gauss_nodes[k];
-        p = u * u;
-        weight = 0.5 * (u1 - u0) * 2. * u * horizon_gauss_weights[k];
-      } else {
-        p = 0.5 * (p0 + p1) + 0.5 * (p1 - p0) * horizon_gauss_nodes[k];
-        weight = 0.5 * (p1 - p0) * horizon_gauss_weights[k];
-      }
-      double f_tan = 0., f_time = 0.;
-      if (!horizon_integrands(profile, phase_scale, h_e_cm + direction * p, group_scale, s_e, c_e,
-                              nu_e, f_tan, f_time)) {
-        return false;
-      }
-      dx_cm += weight * f_tan;
-      excess_cm += weight * f_time;
-    }
-    p0 = p1;
-    width = std::min(2. * width, piece_cm);
-  }
-  return true;
+  // p: distance below the emission level [cm].
+  return detail::gauss_pieces(length_cm, 100. * horizon_first_piece_m, piece_cm, near_horizontal,
+                              [&](double p, double weight) {
+                                double f_tan = 0., f_time = 0.;
+                                if (!horizon_integrands(profile, phase_scale,
+                                                        h_e_cm + direction * p, group_scale, s_e,
+                                                        c_e, nu_e, f_tan, f_time)) {
+                                  return false;
+                                }
+                                dx_cm += weight * f_tan;
+                                excess_cm += weight * f_time;
+                                return true;
+                              });
 }
 
 // Shared body of bend_quadrature and bend_quadrature_pieces. piece_m is the largest sub-interval.
@@ -151,15 +129,7 @@ template <class T>
   // Travel time: vacuum path plus the group-index excess along the bent path.
   const double travel_cm = (h - obs) / c_e + excess_cm;
   const double travel_ns = travel_cm / (100. * speed_of_light_m_per_ns);
-  if (s_e > 0.) {
-    const double shift_m = dx_cm / 100.;
-    x = static_cast<T>(static_cast<double>(x) + shift_m * ux / s_e);
-    y = static_cast<T>(static_cast<double>(y) + shift_m * uy / s_e);
-    const double scale = s_obs / s_e;
-    cx = static_cast<T>(ux * scale);
-    cy = static_cast<T>(uy * scale);
-  }
-  t = static_cast<T>(static_cast<double>(t) + travel_ns);
+  apply_bend(cx, cy, x, y, t, ux, uy, s_e, dx_cm, s_obs, travel_ns);
   return true;
 }
 
@@ -257,15 +227,7 @@ template <class T>
   // Travel time: vacuum path along the emission direction plus the group-index excess.
   const double travel_cm = (h_t - h_e) / c_e + excess_cm;
   const double travel_ns = travel_cm / (100. * speed_of_light_m_per_ns);
-  if (s_e > 0.) {
-    const double shift_m = dx_cm / 100.;
-    x = static_cast<T>(static_cast<double>(x) + shift_m * ux / s_e);
-    y = static_cast<T>(static_cast<double>(y) + shift_m * uy / s_e);
-    const double scale = s_t / s_e;
-    cx = static_cast<T>(ux * scale);
-    cy = static_cast<T>(uy * scale);
-  }
-  t = static_cast<T>(static_cast<double>(t) + travel_ns);
+  detail::apply_bend(cx, cy, x, y, t, ux, uy, s_e, dx_cm, s_t, travel_ns);
   return true;
 }
 

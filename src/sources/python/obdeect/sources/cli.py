@@ -89,10 +89,20 @@ def apply_set(description: dict, path: list[str | int], value: Any, text: str) -
         node[last] = value
 
 
-def _overrides(description: dict, args: argparse.Namespace) -> dict:
-    """Copy of the run description with ``--seed`` and then ``--set`` applied."""
-    result = copy.deepcopy(description)
+def _seed_override(args: argparse.Namespace) -> Any:
+    """The run seed given on the command line: --seed, or the last --set run.seed=N; else None."""
     seed = getattr(args, "seed_override", None)
+    for text in getattr(args, "overrides", None) or []:
+        path, value = parse_set(text)
+        if path == ["run", "seed"]:
+            seed = value
+    return seed
+
+
+def _overrides(description: dict, args: argparse.Namespace) -> dict:
+    """Copy of the run description with the run seed and the --set values applied."""
+    result = copy.deepcopy(description)
+    seed = _seed_override(args)
     if seed is not None:
         apply_set(result, ["run", "seed"], seed, f"--seed {seed}")
     for text in getattr(args, "overrides", None) or []:
@@ -109,8 +119,9 @@ def _preset_names() -> str:
     return ", ".join(presets.PRESETS)
 
 
-def _add_common(parser: argparse.ArgumentParser, command: str) -> None:
-    """Options of ``run`` and ``check``; an option that a preset defines stays the preset's."""
+def _add_common(parser: argparse.ArgumentParser, command: str, *, preset: bool) -> None:
+    """Options of ``run`` and ``check``. A preset defines its own --seed (its run seed), so the
+    shared --seed is only for run files; any other clash with a preset option is an error."""
     options = [
         (
             ("--set",),
@@ -143,15 +154,16 @@ def _add_common(parser: argparse.ArgumentParser, command: str) -> None:
                 "40 bytes per row; default 1e8)",
             },
         ))
-        options.append((
-            ("--seed",),
-            {
-                "dest": "seed_override",
-                "type": int,
-                "metavar": "N",
-                "help": "random seed of the run (shortcut for --set run.seed=N)",
-            },
-        ))
+        if not preset:
+            options.append((
+                ("--seed",),
+                {
+                    "dest": "seed_override",
+                    "type": int,
+                    "metavar": "N",
+                    "help": "random seed of the run (shortcut for --set run.seed=N)",
+                },
+            ))
     else:
         options.append((
             ("--json",),
@@ -160,11 +172,12 @@ def _add_common(parser: argparse.ArgumentParser, command: str) -> None:
                 "help": "print the normalized run description as JSON (usable as a run file)",
             },
         ))
+    taken = {flag for action in parser._actions for flag in action.option_strings}
     for flags, kwargs in options:
-        try:
-            parser.add_argument(*flags, **kwargs)
-        except argparse.ArgumentError:
-            pass  # a preset defines this option
+        clash = taken.intersection(flags)
+        if clash:
+            raise ValueError(f"the preset defines {', '.join(sorted(clash))}, a common option")
+        parser.add_argument(*flags, **kwargs)
 
 
 def _top_parser(command: str) -> argparse.ArgumentParser:
@@ -177,7 +190,7 @@ def _top_parser(command: str) -> argparse.ArgumentParser:
         + f"\n\nRun 'obdeect sources {command} PRESET --help' for the options of a preset.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    _add_common(parser, command)
+    _add_common(parser, command, preset=False)
     return parser
 
 
@@ -189,7 +202,7 @@ def _source_parser(command: str, source: str, module: Any | None) -> argparse.Ar
     )
     if module is not None:
         module.add_arguments(parser)
-    _add_common(parser, command)
+    _add_common(parser, command, preset=module is not None)
     return parser
 
 
@@ -206,13 +219,9 @@ def _load(command: str, argv: list[str]) -> tuple[dict, argparse.Namespace]:
         module = presets.preset(source)
         parser = _source_parser(command, source, module)
         args = parser.parse_args(rest)
-        if hasattr(args, "seed"):
-            if getattr(args, "seed_override", None) is not None:
-                args.seed = args.seed_override
-            for text in args.overrides:
-                path, value = parse_set(text)
-                if path == ["run", "seed"]:
-                    args.seed = value
+        seed = _seed_override(args)
+        if seed is not None and hasattr(args, "seed"):
+            args.seed = seed  # the preset's random choices use the run seed too
         description = module.build(args)
     return _overrides(description, args), args
 

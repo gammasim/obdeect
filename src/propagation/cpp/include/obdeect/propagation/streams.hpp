@@ -1,6 +1,7 @@
 #pragma once
 
 #include "obdeect/stream/stages.hpp"
+#include "obdeect/stream/stream.hpp"
 
 #include <cstdint>
 

@@ -3,6 +3,7 @@
 // (against numerical integration of the exact integrands), and the spherical lookup_scaled()
 // (against direct quadrature with the n-1 column multiplied by k).
 #include "check.hpp"
+#include "stream_fixtures.hpp"
 
 #include "obdeect/propagation/curved_refraction.hpp"
 #include "obdeect/propagation/dispersion.hpp"
@@ -21,6 +22,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifndef OBDEECT_PROPAGATION_TEST_DATA_DIR
@@ -28,6 +30,10 @@
 #endif
 
 namespace {
+
+using obdeect_test::accepts;
+using obdeect_test::kInf;
+using obdeect_test::kNan;
 
 using obdeect::propagation::AtmosphereProfile;
 using obdeect::propagation::bend;
@@ -45,22 +51,14 @@ using obdeect::propagation::straight_path_air_delay_ns;
 constexpr double kPi = obdeect::stream::pi;
 constexpr double kEarthRadius = obdeect::stream::earth_radius_m;
 constexpr double kObservation = 2180.; // observation level of the fixture [m a.s.l.]
-constexpr double kInf = std::numeric_limits<double>::infinity();
-constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
 
 const std::string kFixture =
     std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/atmprof_ecmwf_north_winter_fixed.dat";
 
 double radians(double degrees) { return degrees * kPi / 180.; }
 
-template <class Function> bool throws_invalid(Function function) {
-  try {
-    function();
-  } catch (const std::invalid_argument &) {
-    return true;
-  }
-  return false;
-}
+// Threads for the table builds. The tables do not depend on the count (curved_refraction.hpp).
+unsigned build_threads() { return std::max(2U, std::thread::hardware_concurrency()); }
 
 // Fixture text with the n-1 column (4th column) multiplied by k; comments and other columns kept.
 std::string scaled_profile_text(const std::string &path, double k) {
@@ -129,13 +127,17 @@ void test_ciddor(const AtmosphereProfile &) {
 
   // Validation: the wavelength range and non-finite values are rejected.
   for (const double bad : {199.9, 2000.1, 0., -500., kNan, kInf}) {
-    CHECK(throws_invalid([&] { static_cast<void>(refractivity_e8(bad)); }));
-    CHECK(throws_invalid([&] { static_cast<void>(group_refractivity_e8(bad)); }));
-    CHECK(throws_invalid([&] { static_cast<void>(refractivity_ratio(bad, 500.)); }));
-    CHECK(throws_invalid([&] { static_cast<void>(group_refractivity_ratio(500., bad)); }));
+    CHECK(throws_with([&] { static_cast<void>(refractivity_e8(bad)); },
+                      "wavelength must be finite and within 200 to 2000 nm"));
+    CHECK(throws_with([&] { static_cast<void>(group_refractivity_e8(bad)); },
+                      "wavelength must be finite and within 200 to 2000 nm"));
+    CHECK(throws_with([&] { static_cast<void>(refractivity_ratio(bad, 500.)); },
+                      "wavelength must be finite and within 200 to 2000 nm"));
+    CHECK(throws_with([&] { static_cast<void>(group_refractivity_ratio(500., bad)); },
+                      "wavelength must be finite and within 200 to 2000 nm"));
   }
-  CHECK(!throws_invalid([&] { static_cast<void>(refractivity_e8(200.)); }));
-  CHECK(!throws_invalid([&] { static_cast<void>(refractivity_e8(2000.)); }));
+  CHECK(accepts([&] { static_cast<void>(refractivity_e8(200.)); }));
+  CHECK(accepts([&] { static_cast<void>(refractivity_e8(2000.)); }));
 }
 
 // Plane-parallel reference: composite Simpson in height of the exact integrands with the phase
@@ -289,7 +291,7 @@ CurvedRayIntegrals reference_scaled(const AtmosphereProfile &profile, double h_t
 }
 
 void test_spherical_scaled(const AtmosphereProfile &profile) {
-  const CurvedRefractionTables tables(profile, kEarthRadius, kObservation, false, 2);
+  const CurvedRefractionTables tables(profile, kEarthRadius, kObservation, false, build_threads());
 
   // The reference against the kernel on the same profile (k = 1): validates the quadrature.
   for (const double theta_deg : {0., 45., 85.}) {
@@ -415,7 +417,8 @@ void test_spherical_scaled(const AtmosphereProfile &profile) {
     constexpr double h_e = 60000.;
     const CurvedRayIntegrals ref =
         reference_scaled(profile, kObservation, theta, h_e, k, k_group, 40000);
-    const CurvedRefractionTables accurate_tables(profile, kEarthRadius, kObservation, true, 2);
+    const CurvedRefractionTables accurate_tables(profile, kEarthRadius, kObservation, true,
+                                                 build_threads());
     CurvedRayIntegrals approx{};
     CHECK(accurate_tables.lookup_scaled(theta, h_e, k, k_group, approx));
     CHECK(std::abs(approx.shift_m - ref.shift_m) / std::abs(ref.shift_m) <= 1e-3);

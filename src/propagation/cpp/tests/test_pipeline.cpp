@@ -1,4 +1,5 @@
 #include "check.hpp"
+#include "stream_fixtures.hpp"
 
 #include "obdeect/propagation/extinction.hpp"
 #include "obdeect/propagation/pipeline.hpp"
@@ -19,18 +20,11 @@
 
 namespace {
 
+using namespace obdeect_test;
+
 using obdeect::stream::Column;
 
 constexpr std::uint64_t seed = 20261107;
-
-template <class Function> bool throws_invalid(Function function) {
-  try {
-    function();
-  } catch (const std::invalid_argument &) {
-    return true;
-  }
-  return false;
-}
 
 // Constant optical depth 0.5 above 3 km, zero at the observation level (one row, 400 nm;
 // other wavelengths are clamped to it).
@@ -91,7 +85,7 @@ void test_cz_column_must_be_finite() {
 
   auto consistent = photons(4, 400.0F);
   consistent[Column::cz].assign(4, -1.0F);
-  CHECK(!throws_invalid(
+  CHECK(accepts(
       [&] { (void)obdeect::propagation::apply_extinction_chunk(consistent, settings, 0); }));
 
   for (const float bad :
@@ -99,8 +93,8 @@ void test_cz_column_must_be_finite() {
     auto chunk = photons(4, 400.0F);
     chunk[Column::cz].assign(4, -1.0F);
     chunk[Column::cz][2] = bad;
-    CHECK(throws_invalid(
-        [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
+    CHECK(throws_with(
+        [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }, "cz"));
   }
 }
 
@@ -117,12 +111,11 @@ void test_near_horizontal_direction_accepted() {
   chunk[Column::cx][0] = 0.989117742F;
   chunk[Column::cy][0] = -0.147124648F;
   chunk[Column::cz].assign(1, -0.000614837F);
-  CHECK(!throws_invalid(
-      [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
+  CHECK(accepts([&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
 
   chunk[Column::cz][0] = -0.05F;
-  CHECK(throws_invalid(
-      [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
+  CHECK(throws_with([&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); },
+                    "cz"));
 }
 
 // A float32 direction with cx^2 + cy^2 slightly above 1 (rounding of a horizontal photon) is
@@ -136,12 +129,11 @@ void test_direction_rounding_outside_unit_disc_accepted() {
   auto chunk = photons(1, 400.0F);
   chunk[Column::cx][0] = 1.0000001F;
   chunk[Column::cy][0] = 0.0F;
-  CHECK(!throws_invalid(
-      [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
+  CHECK(accepts([&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
 
   chunk[Column::cx][0] = 1.001F;
-  CHECK(throws_invalid(
-      [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
+  CHECK(throws_with([&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); },
+                    "direction cosines must satisfy"));
 }
 
 // A rounded over-unit direction takes the magnitude of its validated cz: cx^2 + cy^2 becomes
@@ -178,14 +170,14 @@ void test_wavelength_must_be_finite() {
        {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(), -1.0F}) {
     auto chunk = photons(3, 400.0F);
     chunk[Column::wavelength][1] = bad;
-    CHECK(throws_invalid(
-        [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); }));
+    CHECK(
+        throws_with([&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, settings, 0); },
+                    "wavelength must be finite and non-negative"));
   }
   // Finite wavelengths and unassigned rows are accepted.
   auto valid = photons(3, 400.0F);
   valid[Column::wavelength][1] = 0.0F;
-  CHECK(!throws_invalid(
-      [&] { (void)obdeect::propagation::apply_extinction_chunk(valid, settings, 0); }));
+  CHECK(accepts([&] { (void)obdeect::propagation::apply_extinction_chunk(valid, settings, 0); }));
 }
 
 // Thinned mode needs weights <= max_bunch_photons; weighted mode keeps any finite weight >= 0
@@ -197,8 +189,8 @@ void test_large_weights_only_weighted() {
   auto chunk = photons(2, 400.0F);
   chunk[Column::w][0] = 1e13F;
   const auto thinned = settings_for(table, depths, envelope, false);
-  CHECK(throws_invalid(
-      [&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, thinned, 0); }));
+  CHECK(throws_with([&] { (void)obdeect::propagation::apply_extinction_chunk(chunk, thinned, 0); },
+                    "cannot be thinned"));
   const auto weighted = settings_for(table, depths, envelope, true);
   const auto out = obdeect::propagation::apply_extinction_chunk(chunk, weighted, 0);
   CHECK(total_rows(out) == 2);
@@ -209,8 +201,9 @@ void test_large_weights_only_weighted() {
   for (const float bad : {std::numeric_limits<float>::infinity(), -1.0F}) {
     auto invalid = photons(1, 400.0F);
     invalid[Column::w][0] = bad;
-    CHECK(throws_invalid(
-        [&] { (void)obdeect::propagation::apply_extinction_chunk(invalid, weighted, 0); }));
+    CHECK(throws_with(
+        [&] { (void)obdeect::propagation::apply_extinction_chunk(invalid, weighted, 0); },
+        "bunch weight must be finite"));
   }
 }
 
@@ -258,9 +251,9 @@ void test_atmospheric_acceptance_wavelength() {
   obdeect::propagation::atmospheric_acceptance<double>(chunk, table, depths, p);
   CHECK(p[1] == p[0]);
   chunk[Column::wavelength][1] = std::numeric_limits<float>::quiet_NaN();
-  CHECK(throws_invalid([&] {
-    (void)obdeect::propagation::atmospheric_acceptance<double>(chunk, table, depths, p);
-  }));
+  CHECK(throws_with(
+      [&] { (void)obdeect::propagation::atmospheric_acceptance<double>(chunk, table, depths, p); },
+      "wavelength must be finite"));
 }
 
 } // namespace

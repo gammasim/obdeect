@@ -1,4 +1,5 @@
 #include "check.hpp"
+#include "stream_fixtures.hpp"
 
 #include "obdeect/propagation/pipeline.hpp"
 #include "obdeect/propagation/streams.hpp"
@@ -19,6 +20,8 @@
 
 namespace {
 
+using namespace obdeect_test;
+
 using obdeect::stream::Column;
 
 constexpr std::uint64_t seed = 20261107;
@@ -31,27 +34,20 @@ std::uint32_t mask_of(std::initializer_list<Column> columns) {
   return mask;
 }
 
-template <class Function> bool throws_invalid(Function function) {
-  try {
-    function();
-  } catch (const std::invalid_argument &) {
-    return true;
-  }
-  return false;
-}
-
 void test_envelope() {
   const obdeect::propagation::Envelope envelope({300.0, 400.0, 500.0}, {0.0, 0.5, 1.0});
   CHECK_NEAR(envelope(300.0), 0.0, 0.0);
   CHECK_NEAR(envelope(350.0), 0.25, 1e-15);
   CHECK_NEAR(envelope(450.0), 0.75, 1e-15);
   CHECK_NEAR(envelope(500.0), 1.0, 0.0);
-  CHECK(throws_invalid([] { obdeect::propagation::Envelope bad({300.0, 300.0}, {0.1, 0.2}); }));
-  CHECK(throws_invalid(
-      [] { obdeect::propagation::Envelope bad({300.0, 400.0}, {0.1, std::nan("")}); }));
-  CHECK(throws_invalid(
-      [] { obdeect::propagation::Envelope bad({300.0, std::nan("")}, {0.1, 0.2}); }));
-  CHECK(throws_invalid([] { obdeect::propagation::Envelope bad({300.0, 400.0}, {0.1, 1.5}); }));
+  CHECK(throws_with([] { obdeect::propagation::Envelope bad({300.0, 300.0}, {0.1, 0.2}); },
+                    "envelope wavelengths must be strictly increasing"));
+  CHECK(throws_with([] { obdeect::propagation::Envelope bad({300.0, 400.0}, {0.1, std::nan("")}); },
+                    "envelope values must be finite and within [0, 1]"));
+  CHECK(throws_with([] { obdeect::propagation::Envelope bad({300.0, std::nan("")}, {0.1, 0.2}); },
+                    "envelope"));
+  CHECK(throws_with([] { obdeect::propagation::Envelope bad({300.0, 400.0}, {0.1, 1.5}); },
+                    "envelope values must be finite and within [0, 1]"));
 }
 
 // The wavelength range must be finite, with 1 <= lo <= hi <= 2^24.
@@ -59,15 +55,18 @@ void test_wavelength_range_validation() {
   obdeect::propagation::WavelengthRange{250.0, 700.0}.validate();
   obdeect::propagation::WavelengthRange{1.0, obdeect::propagation::max_exact_wavelength_nm}
       .validate();
-  constexpr double inf = std::numeric_limits<double>::infinity();
-  CHECK(throws_invalid([] { (void)obdeect::propagation::WavelengthRange{250.0, inf}.validate(); }));
-  CHECK(throws_invalid(
-      [] { (void)obdeect::propagation::WavelengthRange{std::nan(""), 700.0}.validate(); }));
-  CHECK(
-      throws_invalid([] { (void)obdeect::propagation::WavelengthRange{-inf, 700.0}.validate(); }));
-  CHECK(throws_invalid([] { (void)obdeect::propagation::WavelengthRange{0.5, 700.0}.validate(); }));
-  CHECK(
-      throws_invalid([] { (void)obdeect::propagation::WavelengthRange{700.0, 699.0}.validate(); }));
+  constexpr double inf = obdeect_test::kInf;
+  CHECK(throws_with([] { (void)obdeect::propagation::WavelengthRange{250.0, inf}.validate(); },
+                    "wavelength range needs finite 1 <= lo <= hi <= 2^24"));
+  CHECK(throws_with(
+      [] { (void)obdeect::propagation::WavelengthRange{std::nan(""), 700.0}.validate(); },
+      "wavelength range needs finite 1 <= lo <= hi <= 2^24"));
+  CHECK(throws_with([] { (void)obdeect::propagation::WavelengthRange{-inf, 700.0}.validate(); },
+                    "wavelength range needs finite 1 <= lo <= hi <= 2^24"));
+  CHECK(throws_with([] { (void)obdeect::propagation::WavelengthRange{0.5, 700.0}.validate(); },
+                    "wavelength range needs finite 1 <= lo <= hi <= 2^24"));
+  CHECK(throws_with([] { (void)obdeect::propagation::WavelengthRange{700.0, 699.0}.validate(); },
+                    "wavelength range needs finite 1 <= lo <= hi <= 2^24"));
   // lo == hi: a fixed wavelength (monochromatic light source), assigned as lo.
   obdeect::propagation::WavelengthRange{355.0, 355.0}.validate();
   {
@@ -78,8 +77,8 @@ void test_wavelength_range_validation() {
     for (const float lambda : fixed[Column::wavelength])
       CHECK(lambda == 355.0F);
   }
-  CHECK(
-      throws_invalid([] { (void)obdeect::propagation::WavelengthRange{250.0, 1e10}.validate(); }));
+  CHECK(throws_with([] { (void)obdeect::propagation::WavelengthRange{250.0, 1e10}.validate(); },
+                    "wavelength range needs finite 1 <= lo <= hi <= 2^24"));
   // The largest allowed range draws wavelengths in [1, 2^24).
   obdeect::stream::PhotonChunk chunk;
   chunk.resize(4096, mask_of({Column::x, Column::y, Column::cx, Column::cy, Column::t, Column::w,
@@ -103,42 +102,61 @@ void test_non_finite_acceptance_rejected() {
   for (std::size_t r = 0; r < 3; ++r) {
     chunk[Column::w][r] = 2.0F;
   }
-  CHECK(throws_invalid([&] {
-    (void)obdeect::propagation::thin_chunk(chunk, std::vector<double>{0.5, nan, 0.5}, seed, 0, 0, 0,
-                                           true);
-  }));
-  CHECK(throws_invalid([&] {
-    (void)obdeect::propagation::thin_chunk(chunk, std::vector<double>{0.5, 0.5}, seed, 0, 0, 0,
-                                           true);
-  }));
-  CHECK(throws_invalid([&] {
-    (void)obdeect::propagation::thin_chunk(chunk, std::vector<double>{0.5, 1.5, 0.5}, seed, 0, 0, 0,
-                                           true);
-  }));
+  CHECK(throws_with(
+      [&] {
+        (void)obdeect::propagation::thin_chunk(chunk, std::vector<double>{0.5, nan, 0.5}, seed, 0,
+                                               0, 0, true);
+      },
+      "acceptance must be within [0, 1]"));
+  CHECK(throws_with(
+      [&] {
+        (void)obdeect::propagation::thin_chunk(chunk, std::vector<double>{0.5, 0.5}, seed, 0, 0, 0,
+                                               true);
+      },
+      "acceptance needs one value per row"));
+  CHECK(throws_with(
+      [&] {
+        (void)obdeect::propagation::thin_chunk(chunk, std::vector<double>{0.5, 1.5, 0.5}, seed, 0,
+                                               0, 0, true);
+      },
+      "acceptance must be within [0, 1]"));
   obdeect::stream::PhotonChunk weighted = chunk;
-  CHECK(throws_invalid([&] {
-    (void)obdeect::propagation::weight_chunk(weighted, std::vector<double>{0.5, nan, 0.5}, true);
-  }));
-  CHECK(throws_invalid([&] {
-    (void)obdeect::propagation::weight_chunk(weighted, std::vector<double>{0.5, 0.5}, true);
-  }));
+  CHECK(throws_with(
+      [&] {
+        (void)obdeect::propagation::weight_chunk(weighted, std::vector<double>{0.5, nan, 0.5},
+                                                 true);
+      },
+      "acceptance must be within [0, 1]"));
+  CHECK(throws_with(
+      [&] {
+        (void)obdeect::propagation::weight_chunk(weighted, std::vector<double>{0.5, 0.5}, true);
+      },
+      "acceptance needs one value per row"));
   // Nothing changed by the rejected calls.
   CHECK(weighted[Column::w][0] == 2.0F && weighted[Column::w][1] == 2.0F);
   CHECK(!weighted.has(Column::p));
 
   obdeect::stream::PhotonChunk bad_weight = chunk;
   bad_weight[Column::w][1] = std::numeric_limits<float>::quiet_NaN();
-  CHECK(throws_invalid([&] {
-    (void)obdeect::propagation::weight_chunk(bad_weight, std::vector<double>{0.5, 0.5, 0.5}, false);
-  }));
+  CHECK(throws_with(
+      [&] {
+        (void)obdeect::propagation::weight_chunk(bad_weight, std::vector<double>{0.5, 0.5, 0.5},
+                                                 false);
+      },
+      "bunch weight must be finite and non-negative"));
   bad_weight[Column::w][1] = std::numeric_limits<float>::infinity();
-  CHECK(throws_invalid([&] {
-    (void)obdeect::propagation::weight_chunk(bad_weight, std::vector<double>{0.5, 0.5, 0.5}, false);
-  }));
-  CHECK(throws_invalid([&] {
-    (void)obdeect::propagation::thin_chunk(bad_weight, std::vector<double>{0.5, 0.5, 0.5}, seed, 0,
-                                           0, 0, true);
-  }));
+  CHECK(throws_with(
+      [&] {
+        (void)obdeect::propagation::weight_chunk(bad_weight, std::vector<double>{0.5, 0.5, 0.5},
+                                                 false);
+      },
+      "bunch weight must be finite and non-negative"));
+  CHECK(throws_with(
+      [&] {
+        (void)obdeect::propagation::thin_chunk(bad_weight, std::vector<double>{0.5, 0.5, 0.5}, seed,
+                                               0, 0, 0, true);
+      },
+      "bunch weight must be within [0, max_bunch_photons]"));
 }
 
 // Wavelengths follow density ~ 1/lambda^2 on [lo, hi]: P(lambda < x) analytic.

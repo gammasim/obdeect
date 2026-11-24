@@ -5,7 +5,7 @@ altitude. The optical depth between an observation level h_obs and an emission h
 c(h_e) - c(h_obs), with c linearly interpolated in height and in wavelength. The converter
 writes tau(lambda, h) = c(lambda, h) - c(lambda, h_obs) for integer wavelengths (1 nm steps)
 on a height grid above h_obs; the absolute offset of c does not matter. See
-docs/extinction.md, "Legacy tables".
+docs/propagation/legacy-tables.md.
 """
 
 import argparse
@@ -210,20 +210,35 @@ def convert_table(
         "# tau(lambda, h) = c(lambda, h) - c(lambda, H2), vertical optical depth above H2",
         f"# H2= {observation_km:.6f}, H1= " + " ".join(f"{h:.6f}" for h in heights),
     ]
-    for wavelength in wavelengths:
-        values = [
-            float(np.interp(wavelength, table.wavelength_nm, tau_source[:, k]))
-            for k in range(len(heights))
-        ]
+    # One interpolation per height column, over all wavelengths at once.
+    grid = np.column_stack([
+        np.interp(wavelengths, table.wavelength_nm, tau_source[:, k]) for k in range(len(heights))
+    ])
+    for wavelength, values in zip(wavelengths, grid, strict=True):
         lines.append(f"{wavelength:d} " + " ".join(f"{v:.12g}" for v in values))
     output = Path(output_path)
     output.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return output
 
 
+class _DeprecatedAlias(argparse.Action):
+    """An option that stores into dest, with a warning that its name is deprecated."""
+
+    def __init__(self, option_strings, dest, replacement, **kwargs):
+        super().__init__(option_strings, dest, **kwargs)
+        self.replacement = replacement
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        print(
+            f"{parser.prog}: {option_string} is deprecated, use {self.replacement}",
+            file=sys.stderr,
+        )
+        setattr(namespace, self.dest, values)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Command line: ``obdeect propagation convert-table --format FORMAT IN -o OUT
-    --observation-level M``."""
+    --site-altitude M``. ``--observation-level`` is the deprecated name of ``--site-altitude``."""
     parser = argparse.ArgumentParser(
         prog="obdeect propagation convert-table",
         description=(
@@ -235,11 +250,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("-o", "--output", required=True, help="obdeect propagation table to write")
     parser.add_argument("--format", required=True, choices=list(FORMATS))
     parser.add_argument(
-        "--observation-level",
+        "--site-altitude",
+        dest="site_altitude",
         type=float,
-        required=True,
         metavar="M",
-        help="observation level [m a.s.l.]",
+        help="observation level [m a.s.l.] (the table's H2); required",
+    )
+    parser.add_argument(
+        "--observation-level",
+        dest="site_altitude",
+        type=float,
+        metavar="M",
+        action=_DeprecatedAlias,
+        replacement="--site-altitude",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--min-wavelength",
@@ -249,16 +273,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         "205 modtran5)",
     )
     args = parser.parse_args(argv)
+    if args.site_altitude is None:
+        parser.error("--site-altitude is required")
     try:
         convert_table(
             args.input,
             args.output,
             format=args.format,
-            observation_level_m=args.observation_level,
+            observation_level_m=args.site_altitude,
             min_wavelength_nm=args.min_wavelength,
         )
     except (OSError, ValueError) as error:
-        print(f"obdeect propagation convert-table: {error}", file=sys.stderr)
+        print(f"{parser.prog}: {error}", file=sys.stderr)
         return 1
     return 0
 

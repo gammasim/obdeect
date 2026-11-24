@@ -1,7 +1,7 @@
 #pragma once
 
 // Ray bending and travel time in a plane-parallel atmosphere with n(h) = 1 + nu(h). See
-// docs/refraction.md for the derivation.
+// docs/propagation/refraction.md for the derivation.
 //
 // Snell's law n(h) sin(theta(h)) = n_e sin(theta_e) fixes the ray. With delta = n_e / n - 1,
 // sin(theta) = s_e (1 + delta) and, expanded about the emission angle,
@@ -26,10 +26,34 @@ class RefractionTables;
 
 namespace detail {
 
-// The series limit of bend(): s_e |nu_obs - nu_e| > 0.1 cos^2(theta_e). Single source of truth for
-// bend() and bend_series_limit_exceeded().
-inline bool series_limit_violated(double s_e, double c_e, double nu_e, double nu_obs) noexcept {
-  return s_e * std::fabs(nu_obs - nu_e) > 0.1 * c_e * c_e;
+// Series limit of bend(). The integrands are Taylor series in ds = s - s_e about s_e, whose
+// nearest singularity is s = 1 at distance 1 - s_e. With r = |ds| / (1 - s_e) the truncation error
+// after six terms behaves as C r^7; the measured C is at most 4e3 m (test_horizon.cpp, ECMWF
+// profile, emission 5-20 km, zenith 80-87 deg). |ds| is bounded by s_e |nu_obs - nu_e| along the
+// path, so r <= 0.03 gives an error below 1e-7 m. Single source of truth for bend() and
+// bend_series_limit_exceeded().
+inline constexpr double series_ratio_limit = 0.03;
+
+inline bool series_limit_violated(double s_e, double nu_e, double nu_obs) noexcept {
+  return s_e * std::fabs(nu_obs - nu_e) > series_ratio_limit * (1. - s_e);
+}
+
+// Applies a bent ray to the photon: the position moves by shift_cm along the direction
+// (ux, uy)/s_e, the direction is scaled to s_out (the sine at the output level, s_out = s_e scale),
+// and the travel time gains travel_ns. Shared by bend(), bend_quadrature() and bend_upward().
+// Positions are shifted and directions rescaled only for a non-vertical ray (s_e > 0).
+template <class T>
+void apply_bend(T &cx, T &cy, T &x, T &y, T &t, double ux, double uy, double s_e, double shift_cm,
+                double s_out, double travel_ns) {
+  if (s_e > 0.) {
+    const double shift_m = shift_cm / 100.;
+    x = static_cast<T>(static_cast<double>(x) + shift_m * ux / s_e);
+    y = static_cast<T>(static_cast<double>(y) + shift_m * uy / s_e);
+    const double scale = s_out / s_e;
+    cx = static_cast<T>(ux * scale);
+    cy = static_cast<T>(uy * scale);
+  }
+  t = static_cast<T>(static_cast<double>(t) + travel_ns);
 }
 
 } // namespace detail
@@ -75,21 +99,20 @@ public:
   [[nodiscard]] const AtmosphereProfile &profile() const noexcept { return profile_; }
   [[nodiscard]] double index_minus_one_at_observation() const noexcept { return nu_obs_; }
 
-  // Air travel time of a vertical ray from the observation level to height h [cm], in
-  // excess of the vacuum time [ns].
-  double vertical_time0_cm(double h) const {
-    if (!std::isfinite(h)) {
-      throw std::invalid_argument("height must be finite");
-    }
-    return (moment(h, 1)) / (100. * speed_of_light_m_per_ns);
-  }
-
   // Integral of nu^power from the observation level to h [cm].
   [[nodiscard]] double moment(double h_cm, int power) const {
     if (power < 0 || power > AtmosphereProfile::max_moment) {
       throw std::invalid_argument("moment order must be in [0, max_moment]");
     }
     return profile_.index_moment_cm(h_cm, power) - moment_obs_[static_cast<std::size_t>(power)];
+  }
+
+  // moment(h_cm, power) for every power = 0..max_moment, from one profile lookup.
+  void moments(double h_cm, std::array<double, AtmosphereProfile::max_moment + 1> &out) const {
+    profile_.index_moments_cm(h_cm, out);
+    for (std::size_t power = 0; power < out.size(); ++power) {
+      out[power] -= moment_obs_[power];
+    }
   }
 
 private:
@@ -163,7 +186,8 @@ private:
 //
 // Returns false and leaves every argument unchanged if an input is not finite, the direction
 // is not strictly inside the unit circle, the emission is below the observation level, or the
-// ray is too close to the horizon for the expansion (s_e (nu_obs - nu_e) / cos^2 > 0.1).
+// ray is too close to the horizon for the expansion (s_e |nu_obs - nu_e| > 0.03 (1 - s_e), see
+// series_ratio_limit).
 // Arithmetic is done in double.
 //
 // Dispersion: k scales the n-1 profile for the phase index (nu -> k nu), k_group for the group
@@ -194,7 +218,7 @@ template <class T>
   const double nu_e = k * tables.profile().index_minus_one_cm(h);
   const double nu_obs = k * tables.index_minus_one_at_observation();
   const double height = h - tables.observation_level_cm(); // cm
-  if (detail::series_limit_violated(s_e, c_e, nu_e, nu_obs)) {
+  if (detail::series_limit_violated(s_e, nu_e, nu_obs)) {
     return false;
   }
   const double s_obs = s_e * (1. + nu_e) / (1. + nu_obs);
@@ -205,10 +229,8 @@ template <class T>
   // Moments M_b = integral of nu^b over [obs, h] of the unscaled profile, b = 0 is the height;
   // scaled below by k^b. The group term uses the unscaled M_1.
   std::array<double, AtmosphereProfile::max_moment + 1> m{};
+  tables.moments(h, m);
   m[0] = height;
-  for (int b = 1; b <= AtmosphereProfile::max_moment; ++b) {
-    m[static_cast<std::size_t>(b)] = tables.moment(h, b);
-  }
   const double moment1_straight = m[1];
   double k_power = 1.;
   for (int b = 1; b <= AtmosphereProfile::max_moment; ++b) {
@@ -257,15 +279,7 @@ template <class T>
     // (k_group - k) * (1/c) integral of nu dh / cos(theta_e), unscaled profile.
     travel_ns += (k_group - k) * moment1_straight / (100. * speed_of_light_m_per_ns * c_e);
   }
-  if (s_e > 0.) {
-    const double shift_m = displacement / 100.;
-    x = static_cast<T>(static_cast<double>(x) + shift_m * ux / s_e);
-    y = static_cast<T>(static_cast<double>(y) + shift_m * uy / s_e);
-    const double scale = s_obs / s_e;
-    cx = static_cast<T>(ux * scale);
-    cy = static_cast<T>(uy * scale);
-  }
-  t = static_cast<T>(static_cast<double>(t) + travel_ns);
+  detail::apply_bend(cx, cy, x, y, t, ux, uy, s_e, displacement, s_obs, travel_ns);
   return true;
 }
 
@@ -296,10 +310,9 @@ template <class T>
     return false;
   }
   const double s_e = std::sqrt(s2);
-  const double c_e = std::sqrt(1. - s2);
   const double nu_e = k * tables.profile().index_minus_one_cm(h);
   const double nu_obs = k * tables.index_minus_one_at_observation();
-  return detail::series_limit_violated(s_e, c_e, nu_e, nu_obs);
+  return detail::series_limit_violated(s_e, nu_e, nu_obs);
 }
 
 } // namespace obdeect::propagation

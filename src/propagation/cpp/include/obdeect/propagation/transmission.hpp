@@ -1,9 +1,11 @@
 #pragma once
 
 // Optical-depth table of the atmosphere (extinction-table format) and the transmission of a
-// photon from its emission height to the telescope. See docs/extinction.md.
+// photon from its emission height to the telescope. See docs/propagation/extinction.md.
 
+#include "obdeect/propagation/quadrature.hpp"
 #include "obdeect/stream/parse.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -112,14 +114,7 @@ namespace detail {
   return y[i - 1] + (at - x[i - 1]) / (x[i] - x[i - 1]) * (y[i] - y[i - 1]);
 }
 
-// Curved atmosphere (slant_optical_depth): 8-point Gauss-Legendre nodes and weights on [-1, 1].
-inline constexpr std::size_t gauss_points = 8;
-inline constexpr std::array<double, gauss_points> gauss_nodes{
-    -0.9602898564975363, -0.7966664774136267, -0.5255324099163290, -0.1834346424956498,
-    0.1834346424956498,  0.5255324099163290,  0.7966664774136267,  0.9602898564975363};
-inline constexpr std::array<double, gauss_points> gauss_weights{
-    0.1012285362903763, 0.2223810344533745, 0.3137066458778873, 0.3626837833783620,
-    0.3626837833783620, 0.3137066458778873, 0.2223810344533745, 0.1012285362903763};
+// Curved atmosphere (slant_optical_depth) uses the Gauss-Legendre table of quadrature.hpp.
 // Cosines below this use h = h_t + u^2 in the first segment (the integrand 1/cos has a
 // 1/sqrt singularity at h_t when cos_t -> 0).
 inline constexpr double curved_substitution_cos = 0.2;
@@ -167,6 +162,19 @@ public:
   [[nodiscard]] double observation_level_m() const noexcept { return 1000.0 * h2_km_; }
   [[nodiscard]] int first_wavelength_nm() const noexcept { return first_; }
   [[nodiscard]] int last_wavelength_nm() const noexcept { return first_ + rows_ - 1; }
+
+  // Throws std::invalid_argument unless the wavelength range [lo_nm, hi_nm] lies within the table
+  // rows (first to last nm) and below max_lambda. The lookups clamp to the rows and give no
+  // transmission at or above max_lambda, so a run must check its range once, at setup.
+  void require_wavelength_range(double lo_nm, double hi_nm) const {
+    if (!(lo_nm >= first_ && hi_nm <= last_wavelength_nm() && hi_nm < max_lambda)) {
+      throw std::invalid_argument(
+          "wavelength range " + std::to_string(lo_nm) + " to " + std::to_string(hi_nm) +
+          " nm is outside the transmission table (rows " + std::to_string(first_) + " to " +
+          std::to_string(last_wavelength_nm()) + " nm, below " + std::to_string(max_lambda) +
+          " nm)");
+    }
+  }
   [[nodiscard]] WavelengthInterpolation wavelength_interpolation() const noexcept { return mode_; }
   // Table heights [m a.s.l.]: the observation level and the heights H1 (ascending). The extinction
   // coefficient has a kink at each of them (chord integrals split there).
@@ -240,7 +248,8 @@ public:
   //   integral from h_t to zem of (d tau/dh) / cos theta(h) dh,
   // with cos theta(h) = sqrt(1 - p^2 / (R + h)^2), p = (R + h_t) sin theta_t and cos theta_t =
   // cos_zenith. Zero if zem <= h_t. The plane-parallel limit R -> infinity is
-  // |tau(zem) - tau(h_t)| / cos_zenith. Computed in double precision; see docs/extinction.md.
+  // |tau(zem) - tau(h_t)| / cos_zenith. Computed in double precision; see
+  // docs/propagation/extinction.md.
   template <class T>
   [[nodiscard]] T slant_optical_depth(T wavelength_nm, T telescope_altitude_m,
                                       T emission_altitude_m, T cos_zenith,

@@ -7,8 +7,9 @@ per event are ``--photons``. The spectrum is required, for example ``table:FILE`
 two-column wavelength/density table. Only one telescope is supported: all telescopes of a run
 receive the same photons.
 
-Azimuth convention: astronomical, clockwise from north seen from above (sky frame x north, y
-west), as in laser-beam. The default pointing (zenith 0) looks straight up.
+Direction convention (docs/sources/presets.md#directions-zenith-and-azimuth): the zenith and the
+astronomical azimuth (clockwise from north, east is 90 deg) give the direction the photons come
+from, the telescope pointing. The default pointing (zenith 0) looks straight up.
 """
 
 from __future__ import annotations
@@ -60,15 +61,16 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         type=float,
         default=0.0,
         metavar="DEG",
-        help="zenith of the telescope pointing (default 0: up) [deg]",
+        help="zenith of the sky direction the photons come from, the telescope pointing "
+        "(default 0: up) [deg]",
     )
     group.add_argument(
         "--telescope-azimuth",
         type=float,
         default=0.0,
         metavar="DEG",
-        help="astronomical azimuth of the telescope pointing: clockwise from "
-        "north [deg] (default 0)",
+        help="astronomical azimuth of the sky direction the photons come from, the telescope "
+        "pointing: clockwise from north, east is 90 [deg] (default 0)",
     )
 
 
@@ -98,6 +100,6 @@ def build(args: argparse.Namespace) -> dict:
     }
     return {
         "run": _common.run_section(args, frame="sky"),
-        "telescopes": [{"id": 1, "position_m": centre, "radius_m": radius}],
+        "telescopes": _common.single_telescope(radius, centre),
         "events": [{"repeat": args.events, "emissions": [emission]}],
     }

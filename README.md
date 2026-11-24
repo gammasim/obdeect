@@ -32,18 +32,31 @@ Requires Python 3.14 or higher.
 
 ## Example
 
-Flasher light on the dish, propagated through the atmosphere, traced through a telescope
-optical model, and written as sim_telarray input:
+Light of a point source 10 km above the telescope, propagated through the atmosphere, traced
+through a telescope optical model, and written as sim_telarray input:
 
 ```sh
-obdeect sources flasher --type dish --photons 1e6 \
-  | obdeect propagation run --transmission atm.dat --site-altitude 2156 --seed 1 -i - -o - \
+obdeect sources run point-source --observation-level 2156 --spectrum fixed:wavelength_nm=400 \
+    --position 0,0,10000 --photons 1e8 --events 5 --telescope-radius 12.5 \
+  | obdeect propagation run --transmission atm.dat --site-altitude 2156 --seed 1 \
+      --pathlen "$(obdeect propagation pathlen telescope.json)" -i - -o - \
   | obdeect ray-tracing trace-stream --model telescope.json --seed 7 \
+      --pointing-zenith-deg 0 --pointing-azimuth-deg 0 \
   | obdeect stream to-simtel --camera-map cam.txt > sim.simtel
 ```
 
+`telescope.json` is an optical model (`obdeect ray-tracing compile`). Sources that emit inside
+the telescope skip the stages before their frame; a flasher on the dish writes camera-frame
+photons, which go straight to sim_telarray:
+
+```sh
+obdeect sources run flasher --type dish --position 0,0,1.6 --camera-radius 0.9 \
+    --observation-level 2156 --spectrum fixed:wavelength_nm=400 --photons 1e6 \
+  | obdeect stream to-simtel --camera-map cam.txt > flasher.simtel
+```
+
 `obdeect stream to-simtel` prints the sim_telarray option (`Bypass_Optics`) to use for the
-file.
+file. See `docs/user-guide/pipelines.md` for the other sources and CORSIKA input.
 
 ## Build from source
 

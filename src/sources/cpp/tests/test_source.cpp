@@ -1,4 +1,5 @@
 #include "check.hpp"
+#include "source_fixtures.hpp"
 
 #include "obdeect/sources/emit.hpp"
 #include "obdeect/sources/source.hpp"
@@ -18,6 +19,8 @@ using namespace obdeect::sources;
 using obdeect::stream::Column;
 
 namespace {
+
+using obdeect_test::accepts;
 
 constexpr double inf = std::numeric_limits<double>::infinity();
 
@@ -121,48 +124,112 @@ void stars() {
   }
 }
 
+// Fraction of the light of a point that reaches a disc, by a midpoint rule over the disc area with
+// the same integrand as disc_fraction (1 / (2 pi I) int I(u) h / d^3 dA).
+double disc_fraction_midpoint(const Point &p, const DiscTarget &disc, int steps) {
+  const Basis basis = orthonormal_basis(disc.normal);
+  const double h = std::abs(dot(disc.centre - p.position, disc.normal));
+  double sum = 0.0;
+  for (int i = 0; i < steps; ++i) {
+    const double rho = disc.radius_m * (i + 0.5) / steps;
+    for (int k = 0; k < steps; ++k) {
+      const double phi = two_pi * (k + 0.5) / steps;
+      const Vec3 v = disc.centre + basis.e1 * (rho * std::cos(phi)) +
+                     basis.e2 * (rho * std::sin(phi)) - p.position;
+      const double d = norm(v);
+      const double cosine = std::clamp(dot(v, p.axis) / d, -1.0, 1.0);
+      sum += std::visit([&](const auto &a) { return a.intensity(1.0 - cosine); }, p.angular) * rho *
+             h / (d * d * d);
+    }
+  }
+  const double dr = disc.radius_m / steps, dphi = two_pi / steps;
+  return sum * dr * dphi / (two_pi * integral(p.angular));
+}
+
+void disc_fraction_closed_forms() {
+  // On the axis: the cdf of the profile at 1 - cos(atan(R / h)). Isotropic: solid angle / 4 pi.
+  const double h = 10.0, r = 2.0;
+  const double solid_angle = 2.0 * pi * (1.0 - h / std::sqrt(h * h + r * r));
+  const DiscTarget disc{{0.0, 0.0, 0.0}, {0.0, 0.0, 1.0}, r};
+  const Point iso{{0.0, 0.0, h}, {0.0, 0.0, -1.0}, Isotropic{}};
+  CHECK_NEAR(disc_fraction(iso, disc), solid_angle / (4.0 * pi), 1e-15);
+  // Lambertian: sin^2(alpha) = R^2 / (R^2 + h^2).
+  const Point lamb{{0.0, 0.0, h}, {0.0, 0.0, -1.0}, Lambertian{}};
+  CHECK_NEAR(disc_fraction(lamb, disc), r * r / (r * r + h * h), 1e-14);
+  // Filled cone of 5 deg inside the disc's cap (alpha = 11.3 deg): all of its light.
+  const Point cone{{0.0, 0.0, h}, {0.0, 0.0, -1.0}, FilledCone{1.0 - std::cos(5.0 * pi / 180.0)}};
+  CHECK_NEAR(disc_fraction(cone, disc), 1.0, 1e-14);
+  // Off the axis of the profile: the disc is not the cap about the axis; a 5 deg cone there does
+  // not reach a disc 60 deg away (exact zero).
+  const Point tilted{{0.0, 0.0, h},
+                     normalised({std::sin(1.0), 0.0, -std::cos(1.0)}),
+                     FilledCone{1.0 - std::cos(5.0 * pi / 180.0)}};
+  CHECK(disc_fraction(tilted, disc) == 0.0);
+}
+
+void disc_fraction_quadrature() {
+  // Off-axis disc (tilted normal, centre off the point's axis): the Gauss-Legendre quadrature
+  // (64 x 64) against a midpoint rule of 2000 x 2000 cells, for smooth profiles, to 1e-9 relative.
+  const DiscTarget disc{{1.0, -0.5, 3.0}, normalised({0.2, 0.1, 1.0}), 4.0};
+  const Point iso{{0.0, 0.0, 0.0}, normalised({0.05, 0.0, 1.0}), Isotropic{}};
+  // The midpoint rule is O(h^2): Richardson extrapolation of the 2000 and 4000 cell rules.
+  const auto richardson = [&](const Point &p) {
+    return (4.0 * disc_fraction_midpoint(p, disc, 4000) - disc_fraction_midpoint(p, disc, 2000)) /
+           3.0;
+  };
+  const double gl = disc_fraction(iso, disc);
+  const double mid = richardson(iso);
+  CHECK(gl > 0.0 && gl < 0.5);
+  CHECK(std::abs(gl - mid) <= 1e-9 * mid);
+  // A Gaussian profile (table, sigma 0.1 rad) on the same disc.
+  const Point gauss{
+      {0.0, 0.0, 0.0}, normalised({0.05, 0.0, 1.0}), TabulatedAngular{gaussian_angular_table(0.1)}};
+  const double g_gl = disc_fraction(gauss, disc);
+  // The axis (5 sigma of the table, 28 deg) lies inside the disc: all of the light reaches it.
+  CHECK(g_gl > 0.99 && g_gl <= 1.0 + 1e-9);
+  // The table is piecewise linear (kinks every 0.05 sigma), so the rules agree to 1e-5 only.
+  const double g_mid = (4.0 * disc_fraction_midpoint(gauss, disc, 4000) -
+                        disc_fraction_midpoint(gauss, disc, 2000)) /
+                       3.0;
+  CHECK(std::abs(g_gl - g_mid) <= 1e-5 * g_gl);
+}
+
 void emitters_isotropic_disc() {
   // Isotropic emitter 10 m above a 2 m disc (obdeect ray tracing test_kernels.cpp emitters): the
-  // candidates per emitted photon are R^2 / (4 h^2) = 1/100.
+  // photons that reach the disc are its solid angle over 4 pi: 2 pi (1 - h / sqrt(h^2 + R^2)) / 4
+  // pi.
   Source s = lamp_source(4e5);
   s.target = DiscTarget{{0.0, 0.0, 0.0}, {0.0, 0.0, 1.0}, 2.0};
-  CHECK_NEAR(expected_count(s), 4e5 / 100.0, 1e-9);
+  const double h = 10.0, r = 2.0;
+  const double fraction = (1.0 - h / std::sqrt(h * h + r * r)) / 2.0;
+  CHECK_NEAR(expected_count(s), 4e5 * fraction, 1e-9);
+  CHECK_NEAR(expected_weight(s), expected_count(s), 1e-9);
   const auto c = emit_all(s, 5, 4000);
-  double sum = 0.0, sum2 = 0.0;
-  const std::size_t rows = c.rows();
-  CHECK(rows == 4000);
-  for (std::size_t i = 0; i < rows; ++i) {
-    const double w = c[Column::w][i];
-    CHECK(w > 0.0 && w <= 1.0);
+  CHECK(c.rows() == 4000);
+  for (std::size_t i = 0; i < c.rows(); ++i) {
+    // Every candidate is a hit: weight 1, on the disc, moving down onto it.
+    CHECK(c[Column::w][i] == 1.0f);
     const Vec3 hit = at_plane(c, i, 0.0);
     CHECK(std::hypot(hit.x, hit.y) <= 2.0 + 1e-3);
-    sum += w;
-    sum2 += w * w;
+    CHECK(c[Column::cz][i] < 0.0f);
   }
-  // Mean weight per candidate = (fraction of emitted photons on the disc) / (candidates per
-  // photon) = (solid angle / 4 pi) * 100. Checked at four sigma.
-  const double mean = sum / rows, sd = std::sqrt((sum2 / rows - mean * mean) / rows);
-  const double solid_angle = 2.0 * pi * (1.0 - 10.0 / std::sqrt(104.0));
-  const double expected = solid_angle / (4.0 * pi) * 100.0;
-  CHECK(std::abs(mean - expected) <= 4.0 * sd);
   CHECK(same_chunk(c, emit_all(s, 5, 4000, 333)));
 }
 
 void disc_target_angular_profile() {
-  // A 5 deg filled cone lights only the inner part of the disc (obdeect ray tracing test: weight is
-  // positive inside the cone and zero outside it).
+  // A 5 deg filled cone lights only the inner part of the disc (2 m radius at 10 m: the disc
+  // subtends 11.3 deg): every candidate is inside the cone, with weight 1.
   Source s = lamp_source(1e5);
   s.geometry =
       Point{{0.0, 0.0, 10.0}, {0.0, 0.0, -1.0}, FilledCone{1.0 - std::cos(5.0 * pi / 180.0)}};
   s.target = DiscTarget{{0.0, 0.0, 0.0}, {0.0, 0.0, 1.0}, 2.0};
   const auto c = emit_all(s, 5, 10000);
+  CHECK(c.rows() == 10000);
+  CHECK_NEAR(expected_weight(s), expected_count(s), 1e-9);
   for (std::size_t i = 0; i < c.rows(); ++i) {
     const double angle = std::acos(-c[Column::cz][i]) * 180.0 / pi;
-    // Away from the cone edge (5 deg, margin 1e-3 deg): weight > 0 inside, 0 outside.
-    if (angle < 5.0 - 1e-3)
-      CHECK(c[Column::w][i] > 0.0);
-    else if (angle > 5.0 + 1e-3)
-      CHECK(c[Column::w][i] == 0.0);
+    CHECK(angle <= 5.0 + 1e-3);
+    CHECK(c[Column::w][i] == 1.0f);
   }
 }
 
@@ -230,11 +297,13 @@ void counts() {
   const Source s = star_source(inf, 2.5);
   double total = 0.0;
   const int trials = 40000;
+  int outside = 0;
   for (int seed = 0; seed < trials; ++seed) {
     const auto k = photon_count(s, static_cast<std::uint64_t>(seed), 0, 0);
-    CHECK(k == 2 || k == 3);
+    outside += (k == 2 || k == 3) ? 0 : 1;
     total += static_cast<double>(k);
   }
+  CHECK(outside == 0);
   CHECK_NEAR(total / trials, 2.5, 4.0 * std::sqrt(0.25 / trials));
   CHECK(photon_count(star_source(inf, 7.0), 3, 0, 0) == 7);
   // A cone target: photons * (1 - cos) / 2 of the 4 pi emission.
@@ -260,58 +329,52 @@ void sphere_target() {
   }
 }
 
-template <class F> bool throws_invalid(F f) {
-  try {
-    f();
-  } catch (const std::invalid_argument &) {
-    return true;
-  }
-  return false;
-}
-
 void validation() {
-  const auto rejects = [](const Source &s) { return throws_invalid([&] { validate(s); }); };
+  const auto rejects_with = [](const Source &s, const char *fragment) {
+    return throws_with([&] { validate(s); }, fragment);
+  };
   Source s = lamp_source(10.0);
-  CHECK(!rejects(s));
+  CHECK(accepts([&] { validate(s); }));
   Source bad = s;
   bad.photons = -1.0;
-  CHECK(rejects(bad));
+  CHECK(rejects_with(bad, "photons must be finite"));
   bad = s;
   bad.geometry = Point{{0, 0, 1}, {0, 0, 2}, Isotropic{}};
-  CHECK(rejects(bad));
+  CHECK(rejects_with(bad, "axis must be a unit vector"));
   bad = s;
   bad.geometry = Point{{0, 0, 10}, {0, 0, -1}, FixedAngle{0.1}};
   bad.target = DiscTarget{{0, 0, 0}, {0, 0, 1}, 2.0};
-  CHECK(rejects(bad)); // No density for a disc target.
+  CHECK(rejects_with(bad, "needs a density")); // No density for a disc target.
   bad = s;
   bad.geometry = Point{{0, 0, 10}, {0, 0, -1}, Lambertian{}};
   bad.target = SphereTarget{{0, 0, 0}, 2.0};
-  CHECK(rejects(bad)); // A sphere target needs an isotropic point.
+  CHECK(rejects_with(bad, "needs an isotropic point")); // A sphere target needs an isotropic point.
   bad = s;
   bad.target = SphereTarget{{0, 0, 9}, 2.0};
-  CHECK(rejects(bad)); // The point lies inside the sphere.
+  CHECK(rejects_with(bad, "sphere")); // The point lies inside the sphere.
   bad = star_source(inf);
   bad.target = SphereTarget{{0, 0, 9}, 2.0};
-  CHECK(rejects(bad)); // A plane wave takes no target.
+  CHECK(rejects_with(bad, "takes no target")); // A plane wave takes no target.
   bad = star_source(inf);
   bad.geometry = PlaneWave{{0.0, 0.0, -1.0}, inf, 5.0, 0.0, 30.0};
-  CHECK(rejects(bad)); // Upward rays from a start plane above the disc: the wrong side.
+  CHECK(rejects_with(
+      bad, "source side")); // Upward rays from a start plane above the disc: the wrong side.
   bad = star_source(inf);
   bad.geometry = PlaneWave{{1.0, 0.0, 0.0}, inf, 5.0, 0.0, 30.0};
-  CHECK(
-      rejects(bad)); // Horizontal with start_z_m: no start plane z = const (use start_distance_m).
+  CHECK(rejects_with(bad, "start_distance_m")); // Horizontal with start_z_m: no start plane z =
+                                                // const (use start_distance_m).
   bad = star_source(inf);
   bad.geometry = PlaneWave{{0.0, 0.0, 1.0}, inf, 5.0, 0.0, -30.0};
-  CHECK(rejects(bad)); // Downward rays must start above the disc.
+  CHECK(rejects_with(bad, "source side")); // Downward rays must start above the disc.
   bad = star_source(inf);
   bad.geometry = PlaneWave{{0.0, 0.0, -1.0}, 20.0, 5.0, 0.0, 30.0};
-  CHECK(rejects(bad)); // Finite distance: the same side rule.
+  CHECK(rejects_with(bad, "source side")); // Finite distance: the same side rule.
   bad = s;
   bad.spectrum = InverseSquare{600.0, 300.0};
-  CHECK(rejects(bad));
+  CHECK(rejects_with(bad, "need 0 < low"));
   bad = s;
   bad.pulse = Exponential{0.0, -1.0};
-  CHECK(rejects(bad));
+  CHECK(rejects_with(bad, "pulse:"));
 }
 
 // The start rules of plane waves: exactly one of start_z_m and start_distance_m; start_z_m only
@@ -321,31 +384,33 @@ void plane_wave_start_rules() {
   Source s;
   s.photons = 10.0;
   s.geometry = PlaneWave{{1.0, 0.0, 0.0}, inf, 5.0, 0.0, 30.0, std::nullopt};
-  CHECK(throws_invalid([&] { validate(s); }));
+  CHECK(throws_with([&] { validate(s); }, "start_distance_m"));
   try {
     validate(s);
   } catch (const std::invalid_argument &e) {
     CHECK(std::string(e.what()).find("start_distance_m") != std::string::npos);
   }
   s.geometry = PlaneWave{{1.0, 0.0, 0.0}, inf, 5.0, 0.0, std::nullopt, 30.0};
-  CHECK(!throws_invalid([&] { validate(s); }));
+  CHECK(accepts([&] { validate(s); }));
   s.geometry = PlaneWave{{0.0, 0.0, 1.0}, inf, 5.0, 0.0, std::nullopt, std::nullopt};
-  CHECK(!throws_invalid([&] { validate(s); })); // neither start: start_z_m = 0 (as before)
+  CHECK(accepts([&] { validate(s); })); // neither start: start_z_m = 0 (as before)
   s.geometry = PlaneWave{{1.0, 0.0, 0.0}, inf, 5.0, 0.0, std::nullopt, std::nullopt};
-  CHECK(throws_invalid([&] { validate(s); })); // horizontal with neither: needs start_distance_m
+  CHECK(throws_with([&] { validate(s); },
+                    "start_distance_m")); // horizontal with neither: needs start_distance_m
   s.geometry = PlaneWave{{0.0, 0.0, 1.0}, inf, 5.0, 0.0, 30.0, 30.0};
-  CHECK(throws_invalid([&] { validate(s); })); // both starts
+  CHECK(throws_with([&] { validate(s); }, "start")); // both starts
   s.geometry = PlaneWave{{1.0, 0.0, 0.0}, inf, 5.0, 0.0, std::nullopt, 4.0};
-  CHECK(throws_invalid([&] { validate(s); })); // closer than the disc's extent (5 m)
+  CHECK(throws_with([&] { validate(s); },
+                    "start_distance_m must be at least")); // closer than the disc's extent (5 m)
   s.geometry = PlaneWave{{1.0, 0.0, 0.0}, inf, 5.0, 0.0, std::nullopt, 5.0};
-  CHECK(!throws_invalid([&] { validate(s); }));
+  CHECK(accepts([&] { validate(s); }));
   s.geometry = PlaneWave{{1.0, 0.0, 0.0}, inf, 5.0, 0.0, std::nullopt, -1.0};
-  CHECK(throws_invalid([&] { validate(s); }));
+  CHECK(throws_with([&] { validate(s); }, "start_distance_m must be finite"));
   // Direction 60 deg from the vertical: the extent is 5 sqrt(1 - 0.25) = 4.33 m.
   s.geometry = PlaneWave{normalised({0.866, 0.0, 0.5}), inf, 5.0, 0.0, std::nullopt, 4.5};
-  CHECK(!throws_invalid([&] { validate(s); }));
+  CHECK(accepts([&] { validate(s); }));
   s.geometry = PlaneWave{normalised({0.866, 0.0, 0.5}), inf, 5.0, 0.0, std::nullopt, 4.0};
-  CHECK(throws_invalid([&] { validate(s); }));
+  CHECK(throws_with([&] { validate(s); }, "start_distance_m must be at least"));
 }
 
 void upward_plane_waves() {
@@ -355,7 +420,7 @@ void upward_plane_waves() {
   Source up;
   up.photons = 20000.0;
   up.geometry = PlaneWave{normalised({0.01, 0.0, -1.0}), inf, 5.0, 0.0, -30.0};
-  CHECK(!throws_invalid([&] { validate(up); }));
+  CHECK(accepts([&] { validate(up); }));
   const auto c = emit_all(up, 7, 20000);
   CHECK(c.rows() == 20000);
   const Vec3 towards = normalised({0.01, 0.0, -1.0});
@@ -400,51 +465,52 @@ void upward_plane_waves() {
 
 void validation_bounds() {
   // Photon counts: non-finite and beyond 2^53 (not exact as a count) are rejected.
-  CHECK(throws_invalid([] { validate(lamp_source(std::numeric_limits<double>::quiet_NaN())); }));
-  CHECK(throws_invalid([] { validate(lamp_source(inf)); }));
-  CHECK(throws_invalid([] { validate(lamp_source(1e17)); }));
-  CHECK(!throws_invalid([] { validate(lamp_source(9007199254740992.0)); }));
-  // A disc target at h = 1e-170 overflows the candidate count (h^2 underflows to zero):
-  // expected_count and photon_count throw instead of returning inf.
+  CHECK(throws_with([] { validate(lamp_source(std::numeric_limits<double>::quiet_NaN())); },
+                    "photons must be finite"));
+  CHECK(throws_with([] { validate(lamp_source(inf)); }, "photons must be finite"));
+  CHECK(throws_with([] { validate(lamp_source(1e17)); }, "at most 2^53"));
+  CHECK(accepts([] { validate(lamp_source(9007199254740992.0)); }));
+  // A disc target at h = 1e-170 (h^2 underflows to zero): the fraction is the hemisphere, not NaN.
   Source near = lamp_source(1.0);
   near.geometry = Point{{0.0, 0.0, 1e-170}, {0.0, 0.0, -1.0}, Isotropic{}};
   near.target = DiscTarget{{0.0, 0.0, 0.0}, {0.0, 0.0, 1.0}, 2.0};
-  CHECK(throws_invalid([&] { (void)expected_count(near); }));
-  CHECK(throws_invalid([&] { (void)photon_count(near, 1, 0, 0); }));
+  // The disc then subtends the hemisphere: fraction 1/2 (no overflow).
+  CHECK_NEAR(expected_count(near), 0.5, 1e-12);
+  CHECK(photon_count(near, 1, 0, 0) <= 1);
   // A large but valid count is still accepted.
-  CHECK(!throws_invalid([] { (void)expected_count(lamp_source(1e15)); }));
+  CHECK(accepts([] { (void)expected_count(lamp_source(1e15)); }));
 
   // Complex pulse: every width must be finite (+inf used to pass the >= 0 test).
   Source pulse = lamp_source(10.0);
   pulse.pulse = ComplexPulse{inf, 0.5, 0.5, 0.0};
-  CHECK(throws_invalid([&] { validate(pulse); }));
+  CHECK(throws_with([&] { validate(pulse); }, "pulse:"));
   pulse.pulse = ComplexPulse{1.0, inf, 0.5, 0.0};
-  CHECK(throws_invalid([&] { validate(pulse); }));
+  CHECK(throws_with([&] { validate(pulse); }, "pulse:"));
   pulse.pulse = ComplexPulse{1.0, 0.5, inf, 0.0};
-  CHECK(throws_invalid([&] { validate(pulse); }));
+  CHECK(throws_with([&] { validate(pulse); }, "pulse:"));
   pulse.pulse = ComplexPulse{1.0, 0.5, 0.5, inf};
-  CHECK(throws_invalid([&] { validate(pulse); }));
+  CHECK(throws_with([&] { validate(pulse); }, "pulse:"));
   pulse.pulse = ComplexPulse{1.0, 0.5, 0.5, 0.0};
-  CHECK(!throws_invalid([&] { validate(pulse); }));
+  CHECK(accepts([&] { validate(pulse); }));
 
   // Magnitudes: lengths, times and wavelengths stay within 1e30 (squares and float32
   // columns finite); positive wavelengths are at least 1e-30 (inverses finite).
   Source big = lamp_source(10.0);
   big.geometry = Point{{1e31, 0.0, 0.0}, {0.0, 0.0, -1.0}, Isotropic{}};
-  CHECK(throws_invalid([&] { validate(big); }));
+  CHECK(throws_with([&] { validate(big); }, "out of range"));
   big = lamp_source(10.0);
   big.pulse = Fixed{1e31};
-  CHECK(throws_invalid([&] { validate(big); }));
+  CHECK(throws_with([&] { validate(big); }, "time out of range"));
   big = lamp_source(10.0);
   big.spectrum = Fixed{1e-31};
-  CHECK(throws_invalid([&] { validate(big); }));
+  CHECK(throws_with([&] { validate(big); }, "wavelength out of range"));
   big = lamp_source(10.0);
   big.spectrum = InverseSquare{1e-320, 600.0}; // 1 / low would overflow.
-  CHECK(throws_invalid([&] { validate(big); }));
+  CHECK(throws_with([&] { validate(big); }, "need 0 < low < high"));
   big = star_source(1e200);
-  CHECK(throws_invalid([&] { validate(big); }));
+  CHECK(throws_with([&] { validate(big); }, "distance must be infinite or positive"));
   big = star_source(inf); // A plane wave is not a length: accepted.
-  CHECK(!throws_invalid([&] { validate(big); }));
+  CHECK(accepts([&] { validate(big); }));
 }
 
 } // namespace
@@ -455,6 +521,8 @@ int main() {
     upward_plane_waves();
     plane_wave_start_rules();
     emitters_isotropic_disc();
+    disc_fraction_closed_forms();
+    disc_fraction_quadrature();
     disc_target_angular_profile();
     chunks_and_determinism();
     directions_and_angles();

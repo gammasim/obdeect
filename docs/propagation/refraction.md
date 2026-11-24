@@ -64,7 +64,8 @@ travel time         T  = (1/c) integral of n(h) / cos(theta(h)) dh
 `dx` is the displacement against the straight line along the emission direction (negative: the ray
 ends nearer the vertical of the emission point). `T` includes the vacuum path along the emission
 direction, `(h_e - obs) / (c cos(theta_e))`; `T` minus that vacuum path is the air excess. The
-refractive index n is used for the travel time (no dispersion term).
+refractive index n is used for the travel time (no dispersion term; with `k`, `k_group` the
+travel time changes as described in [Dispersion](#dispersion)).
 
 The integrals are evaluated as a series. With `delta = n_e/n - 1` (about 1e-4) the integrands are
 power series in `s_e delta`, with coefficients from the Taylor series of `s/sqrt(1-s^2)` and
@@ -79,8 +80,13 @@ The new direction is `(cx, cy) sin(theta_obs)/sin(theta_e)`; the position moves 
 `bend` returns `False` and leaves the photon unchanged if an input (height, direction, position,
 time) is not finite, the direction is not inside the unit circle (upward or horizontal), the emission
 is below the observation level, or the ray is too close to the horizon for the series
-(`sin(theta_e) (nu_obs - nu_e) > 0.1 cos^2(theta_e)`, about 87 degrees; `bend_series_limit_exceeded`
-in `refraction.hpp` is the one definition of this condition). Public height lookups, the timing
+(`sin(theta_e) |nu_obs - nu_e| > 0.03 (1 - sin(theta_e))`, about 83 degrees from 20 km and 86 degrees
+from 5 km on the ECMWF table with the observation level at 2000 m;
+`bend_series_limit_exceeded` in `refraction.hpp` is the one definition of this condition). The
+ratio `r = sin(theta_e) |nu_obs - nu_e| / (1 - sin(theta_e))` is the size of the change of
+`s = sin(theta)` along the path relative to the distance `1 - sin(theta_e)` to the singularity of
+the integrands at `s = 1`. The truncation error after six terms is `C r^7` with `C <= 4e3 m`
+(measured, `test_horizon`); `r <= 0.03` keeps it below 1e-7 m. Public height lookups, the timing
 helpers and the observation level throw for non-finite values.
 
 Example (ECMWF table, observation level 2180 m, photon direction purely in x):
@@ -121,8 +127,10 @@ wavelength in um and `s2 = 1 / lambda^2`:
 ```
 
 The group index follows from `n_g = n - lambda dn/dlambda` with `d/dlambda = -2 s2 / lambda d/ds2`.
-Both are valid for 200 nm to 2000 nm; outside that range they throw `ValueError` (`std::invalid_argument`
-in C++).
+The code accepts 200 nm to 2000 nm; outside that range they throw `ValueError` (`std::invalid_argument`
+in C++). Within it the formula has no pole (the poles are at `s2 = k0` and `k2`, i.e. about 0.065 and
+0.13 um), so the ends are an extrapolation of the Ciddor formula beyond the range it is usually quoted
+for (the quoted range was not re-checked for this implementation).
 
 ```text
 k       = (n-1)(lambda) / (n-1)(lambda_ref)      phase factor:  n(lambda) - 1 = k (n - 1)
@@ -165,8 +173,10 @@ straight       = k_group straight(1)
 Between 75 and 80 degrees the result blends smoothly into a wavelength-dependent table. Above
 80 degrees the table evaluates the ray geometry with the phase index and the travel time with
 the group index. It interpolates on nine refractivity-scale nodes covering all combinations of
-wavelength and reference wavelength from 200 to 2000 nm. The table is built on first use of a
-high-zenith photon and cached per telescope altitude level for the lifetime of the propagator.
+wavelength and reference wavelength from 200 to 2000 nm. The table is built by the propagator the
+first time a sky-frame photon of a telescope at that altitude level is bent in spherical mode, and
+cached per level for the lifetime of the propagator (the build itself is in the
+`CurvedRefractionTables` constructor).
 The direct quadrature fallback uses the same transition. Each cached altitude level requires
 additional memory and construction time; telescopes at different levels require separate tables.
 No dispersion tables are built when `--dispersion-reference-nm` is absent.

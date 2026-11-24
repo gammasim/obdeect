@@ -1,0 +1,1 @@
+The number of candidate photons of a point emitter (`OpticalModel.emitter_photons`, `trace_emitter`, `trace_emitter_blocks`) is now a Poisson draw from the core's Philox generator, keyed on (seed, first_id) with its own stream id, instead of NumPy's PCG64. Emitter outputs change for the same seed; the photon distribution does not.

@@ -35,8 +35,10 @@
 #include "obdeect/propagation/timing.hpp"
 #include "obdeect/stream/constants.hpp"
 
+#include "obdeect/propagation/quadrature.hpp"
 #include <algorithm>
 #include <array>
+
 #include <cmath>
 #include <cstddef>
 #include <stdexcept>
@@ -49,30 +51,35 @@ struct CurvedRayIntegrals {
   double shift_m{};
   double excess_bent_ns{};
   double excess_straight_ns{};
+  // Derivative of excess_bent_ns with respect to the group scale at k_group = k = 1 [ns]: the
+  // group index integral along the bent ray, (1/c) Int nu / cos theta_ref dx. Only set by lookups
+  // and curved_ray_integrals; used by scale_ray_integrals.
+  double bent_group_ns{};
 };
 
 // Integrals of the profile with n-1 scaled by k (phase) and the group index by k_group
 // (dispersion), from the integrals of the unscaled profile, first order in the scale:
 //   shift_m            = k shift_m
-//   excess_bent_ns     = k excess_bent_ns + (k_group - k) excess_straight_ns
+//   excess_bent_ns     = k excess_bent_ns + (k_group - k) bent_group_ns
 //   excess_straight_ns = k_group excess_straight_ns
-// Exact at k = k_group = 1. See CurvedRefractionTables::lookup_scaled.
+// The group term is the derivative of the bent excess along the bent ray (nu / cos theta_ref), the
+// same as the accurate-dispersion tables. Exact at k = k_group = 1. See
+// CurvedRefractionTables::lookup_scaled.
 inline void scale_ray_integrals(CurvedRayIntegrals &v, double k, double k_group) noexcept {
   const double straight = v.excess_straight_ns;
   v.shift_m = k * v.shift_m;
-  v.excess_bent_ns = k * v.excess_bent_ns + (k_group - k) * straight;
+  v.excess_bent_ns = k * v.excess_bent_ns + (k_group - k) * v.bent_group_ns;
   v.excess_straight_ns = k_group * straight;
 }
 
-namespace detail {
+// Centred four-node stencil for the bracket [i1 - 1, i1] of n nodes (1 <= i1 <= n - 1): the nodes
+// i1 - 2 .. i1 + 1, clamped to the grid (first index of the stencil).
+inline std::size_t centred_stencil_start(std::size_t i1, std::size_t n) noexcept {
+  const std::size_t lower = i1 >= 2 ? i1 - 2 : 0;
+  return std::min(lower, n - 4);
+}
 
-// 8-point Gauss-Legendre nodes and weights on [-1, 1].
-inline constexpr std::array<double, 8> curved_gauss_nodes = {
-    -0.9602898564975363, -0.7966664774136267, -0.5255324099163290, -0.1834346424956498,
-    0.1834346424956498,  0.5255324099163290,  0.7966664774136267,  0.9602898564975363};
-inline constexpr std::array<double, 8> curved_gauss_weights = {
-    0.1012285362903763, 0.2223810344533745, 0.3137066458778873, 0.3626837833783620,
-    0.3626837833783620, 0.3137066458778873, 0.2223810344533745, 0.1012285362903763};
+namespace detail {
 
 inline constexpr double curved_piece_m = 500.;      // largest sub-interval in r [m]
 inline constexpr double curved_first_piece_m = 1.;  // first sub-interval near the telescope [m]
@@ -162,42 +169,24 @@ curved_ray_integrals(const AtmosphereProfile &profile, double earth_radius_m,
 
   const bool near_telescope = cos_s < detail::curved_singular_cos;
   double shift = 0., bent = 0., straight = 0., group_delta = 0.;
-  auto accumulate = [&](double weight, double x) {
-    const detail::CurvedIntegrands f = detail::curved_integrands(profile, family, x);
-    shift += weight * f.shift;
-    bent += weight * f.bent;
-    straight += weight * f.straight;
-    group_delta += weight * f.group_delta;
-  };
-
-  double x0 = 0.;
-  double width = near_telescope ? detail::curved_first_piece_m : detail::curved_piece_m;
-  while (x0 < length) {
-    const double x1 = std::min(length, x0 + std::min(width, detail::curved_piece_m));
-    if (near_telescope) {
-      // x = u^2: Gauss on [sqrt(x0), sqrt(x1)] with the Jacobian 2u.
-      const double u0 = std::sqrt(x0), u1 = std::sqrt(x1);
-      const double mid = 0.5 * (u0 + u1), half = 0.5 * (u1 - u0);
-      for (std::size_t k = 0; k < detail::curved_gauss_nodes.size(); ++k) {
-        const double u = mid + half * detail::curved_gauss_nodes[k];
-        accumulate(half * 2. * u * detail::curved_gauss_weights[k], u * u);
-      }
-    } else {
-      const double mid = 0.5 * (x0 + x1), half = 0.5 * (x1 - x0);
-      for (std::size_t k = 0; k < detail::curved_gauss_nodes.size(); ++k) {
-        accumulate(half * detail::curved_gauss_weights[k],
-                   mid + half * detail::curved_gauss_nodes[k]);
-      }
-    }
-    x0 = x1;
-    width = std::min(2. * width, detail::curved_piece_m);
-  }
+  // x = r - r_t in [0, length]: u^2 substitution near the telescope (the integrands have 1/sqrt
+  // singularities there), with the first piece curved_first_piece_m wide.
+  detail::gauss_pieces(
+      length, near_telescope ? detail::curved_first_piece_m : detail::curved_piece_m,
+      detail::curved_piece_m, near_telescope, [&](double x, double weight) {
+        const detail::CurvedIntegrands f = detail::curved_integrands(profile, family, x);
+        shift += weight * f.shift;
+        bent += weight * f.bent;
+        straight += weight * f.straight;
+        group_delta += weight * f.group_delta;
+        return true;
+      });
 
   const double c = speed_of_light_m_per_ns;
   if (bent_group_delta_ns != nullptr) {
     *bent_group_delta_ns = group_delta / c;
   }
-  return {shift, bent / c, straight / c};
+  return {shift, bent / c, straight / c, group_delta / c};
 }
 
 // Grid of the integrals for one telescope altitude and Earth radius, built once with
@@ -219,6 +208,7 @@ public:
     shift_.resize(count);
     bent_.resize(count);
     straight_.resize(count);
+    group_.resize(count);
     // Every node is independent and writes its own slot: the thread count does not change the
     // result.
     const std::size_t nh = heights_.size();
@@ -229,6 +219,7 @@ public:
         shift_[k] = v.shift_m;
         bent_[k] = v.excess_bent_ns;
         straight_[k] = v.excess_straight_ns;
+        group_[k] = v.bent_group_ns;
       }
     });
     if (enable_accurate_dispersion) {
@@ -262,8 +253,8 @@ public:
         std::clamp(static_cast<std::size_t>(std::upper_bound(heights_.begin(), heights_.end(), h) -
                                             heights_.begin()),
                    std::size_t{1}, heights_.size() - 1);
-    const std::size_t i_start = std::min(i1 - 1, theta_.size() - 4);
-    const std::size_t j_start = std::min(j1 - 1, heights_.size() - 4);
+    const std::size_t i_start = centred_stencil_start(i1, theta_.size());
+    const std::size_t j_start = centred_stencil_start(j1, heights_.size());
     std::array<double, 4> zenith_nodes{}, height_nodes{};
     for (std::size_t k = 0; k < 4; ++k) {
       zenith_nodes[k] = zenith_coordinate_[i_start + k];
@@ -275,6 +266,7 @@ public:
     out.shift_m = interpolate(shift_, i_start, j_start, wi, wj);
     out.excess_bent_ns = interpolate(bent_, i_start, j_start, wi, wj);
     out.excess_straight_ns = interpolate(straight_, i_start, j_start, wi, wj);
+    out.bent_group_ns = interpolate(group_, i_start, j_start, wi, wj);
     return true;
   }
 
@@ -345,7 +337,8 @@ public:
 
 private:
   static constexpr std::size_t accurate_k_node_count = 9;
-  static constexpr std::size_t accurate_theta_start = 296; // 74 degrees; includes 75-degree stencil
+  static constexpr std::size_t accurate_theta_start =
+      294; // 73.5 degrees; includes 75-degree stencil
 
   void build_accurate_dispersion_tables(unsigned threads) {
     const double low = refractivity_e8(2000.) / refractivity_e8(200.);
@@ -399,8 +392,8 @@ private:
         std::clamp(static_cast<std::size_t>(std::upper_bound(heights_.begin(), heights_.end(), h) -
                                             heights_.begin()),
                    std::size_t{1}, heights_.size() - 1);
-    const std::size_t i_start = std::min(i1 - 1, theta_.size() - 4);
-    const std::size_t j_start = std::min(j1 - 1, heights_.size() - 4);
+    const std::size_t i_start = centred_stencil_start(i1, theta_.size());
+    const std::size_t j_start = centred_stencil_start(j1, heights_.size());
     if (i_start < accurate_theta_start) {
       return false;
     }
@@ -544,7 +537,7 @@ private:
   std::vector<double> zenith_coordinate_; // ln(cos theta + floor) at the nodes
   std::vector<double> heights_;           // emission altitudes [m a.s.l.], ascending
   // Row-major [theta][height] arrays.
-  std::vector<double> shift_, bent_, straight_;
+  std::vector<double> shift_, bent_, straight_, group_;
   std::vector<double> dispersion_k_;
   std::vector<double> dispersion_shift_, dispersion_bent_, dispersion_bent_delta_,
       dispersion_straight_;

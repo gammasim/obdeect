@@ -7,12 +7,14 @@ sources can feed that chain, in place of sim_telarray.
 
 `obdeect stream to-grisu` writes ground-frame photons as GrISU photon text. The
 atmosphere must be applied upstream and the wavelength assigned, for example by
-[`obdeect propagation run`](../propagation/propagation.md):
+[`obdeect propagation run`](../propagation/propagation.md). The run needs the key `energy_gev`
+(the primary energy, as a CORSIKA shower gives it): a point-source stream without it is rejected,
+and so are sphere runs.
 
 ```console
 $ zstd -dc run.corsika.zst | obdeect stream from-corsika \
     | obdeect propagation run --transmission atm.dat --site-altitude 2156 --seed 1 \
-        --envelope qe=qe_envelope.dat -i - -o - \
+        --pathlen 0 --envelope qe=qe_envelope.dat -i - -o - \
     | obdeect stream to-grisu --telescope-config TLLOC.dat > run.grisu
 ```
 
@@ -43,8 +45,9 @@ P -20.5 -11.5 -0.5 +0 +20000 +12.5 400 3 7
 - `P x y dcx dcy zem t lambda 3 tel`: one line per photon. `x`, `y` [m] are the telescope position
   plus the photon position; `zem` the emission height [m]; `t` the arrival time [ns]; `lambda` the
   wavelength [nm, integer]; `3` the emitter type (unknown); `tel` the GrISU telescope id (1-based).
-- A bunch with weight above 1 is an error unless `--expand-bunches` writes `round(w)` copies. A
-  weight below 1 is an error: thin the photons upstream.
+- A bunch with weight above 1 is an error unless `--expand-bunches` writes copies; the weight must be
+  an integer (copies are whole photons). A weight below 1 is an error: thin the photons
+  upstream.
 - Numbers use 9 significant digits. Values below 1e-8 in magnitude are written as 0.
 
 Frames: the CORSIKA ground frame (x north, y west) maps to GrISU by `x_g = -y_c`, `y_g = -x_c`.

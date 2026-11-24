@@ -14,10 +14,14 @@ REQUIRED = ("x", "y", "cx", "cy", "t", "w")
 
 
 def _chunk(rows, offset=0.0):
-    return {
+    columns = {
         name: np.arange(rows, dtype=np.float32) + np.float32(i + offset)
         for i, name in enumerate(REQUIRED)
     }
+    # Unit directions (the reader checks them): small cx and cy, cz absent (downward).
+    columns["cx"] = np.arange(rows, dtype=np.float32) * np.float32(0.001)
+    columns["cy"] = np.arange(rows, dtype=np.float32) * np.float32(0.001)
+    return columns
 
 
 def _write(path, *, efficiency_status=None):
@@ -81,6 +85,8 @@ def test_transform(tmp_path):
     assert info["run"] == {"run_number": 5}
     assert info["event"] == {"event_number": 1}
     assert info["telescope"]["telescope_id"] == 4
+    # The telescope metadata seen by func is a copy: the output frame does not change it.
+    assert info["telescope"]["frame"] == "ground"
     assert info["frame"] == obdeect_stream.FRAMES["ground"]
     assert info["stage_id"] == 0x444C0001
 
@@ -239,3 +245,46 @@ def test_transform_indices_continue_across_array_reuses(tmp_path):
         r["first_index"] for r in obdeect_stream.Reader(str(output)) if r["type"] == "photons"
     ]
     assert firsts == [0, 6]
+
+
+def test_transform_checks_run_scope_transitions(tmp_path):
+    # The input has qe pending in run scope; a stage that writes qe pending again is invalid.
+    _write(tmp_path / "in.pst", efficiency_status={"factors": "qe", "qe.state": "pending"})
+    with pytest.raises(ValueError, match="cannot go from pending to pending"):
+        transform(
+            tmp_path / "in.pst",
+            tmp_path / "out.pst",
+            lambda t, c, m: c,
+            stage_id=1,
+            frame_out="camera",
+            efficiency_status={"qe": {"state": "pending", "source": "x"}},
+        )
+    # Advancing it (pending -> applied) is accepted.
+    transform(
+        tmp_path / "in.pst",
+        tmp_path / "advanced.pst",
+        lambda t, c, m: c,
+        stage_id=1,
+        frame_out="camera",
+        efficiency_status={"qe": {"state": "applied", "source": "x"}},
+    )
+    statuses = [
+        r["metadata"]
+        for r in obdeect_stream.Reader(str(tmp_path / "advanced.pst"))
+        if r["type"] == "efficiency_status"
+    ]
+    assert [s["qe.state"] for s in statuses] == ["pending", "applied"]
+
+
+def test_missing_input_keeps_existing_output(tmp_path):
+    output = tmp_path / "out.pst"
+    output.write_bytes(b"keep me")
+    with pytest.raises((ValueError, OSError)):
+        transform(
+            tmp_path / "missing.pst",
+            output,
+            lambda t, c, m: c,
+            stage_id=1,
+            frame_out="camera",
+        )
+    assert output.read_bytes() == b"keep me"

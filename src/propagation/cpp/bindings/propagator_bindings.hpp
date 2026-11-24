@@ -2,6 +2,8 @@
 
 // Python API of the atmosphere stage: obdeect.propagation.propagate on stream files (the stream I/O
 // is the C++ core's). Included by core.cpp after the nanobind headers.
+//
+// The Python wrapper passes every argument: the defaults live in Python only.
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/map.h>
@@ -12,9 +14,9 @@
 #include <nanobind/stl/vector.h>
 
 #include "obdeect/propagation/propagator.hpp"
+#include "stream_file.hpp"
 
 #include <cstdint>
-#include <fstream>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -40,6 +42,31 @@ inline nb::dict dropped_by_reason_dict(const DropCounts &counts) {
   return out;
 }
 
+// "thinned" or "weighted" (the Python mode argument); anything else is rejected.
+inline OutputMode parse_output_mode(const std::string &text) {
+  if (text == "thinned") {
+    return OutputMode::thinned;
+  }
+  if (text == "weighted") {
+    return OutputMode::weighted;
+  }
+  throw std::invalid_argument("mode must be thinned or weighted: '" + text + "'");
+}
+
+// 1-based telescope ids of a selection; the Python side gives integers.
+inline std::vector<std::uint32_t> telescope_ids(const std::vector<std::int64_t> &ids,
+                                                const char *what) {
+  std::vector<std::uint32_t> selection;
+  selection.reserve(ids.size());
+  for (const std::int64_t id : ids) {
+    if (id < 1 || id > static_cast<std::int64_t>(obdeect::stream::max_telescope)) {
+      throw std::invalid_argument(std::string(what) + ": telescope ids are 1-based");
+    }
+    selection.push_back(static_cast<std::uint32_t>(id));
+  }
+  return selection;
+}
+
 } // namespace obdeect::propagation
 
 inline void bind_propagator(nb::module_ &module) {
@@ -50,7 +77,7 @@ inline void bind_propagator(nb::module_ &module) {
          const std::optional<std::string> &profile_path,
          const std::vector<std::pair<std::string, std::string>> &envelope_paths,
          const std::optional<std::tuple<double, double>> &wavelength_range, std::uint64_t seed,
-         bool weighted, bool store_p, const std::optional<std::string> &scattering_path,
+         const std::string &mode, bool store_p, const std::optional<std::string> &scattering_path,
          std::uint32_t scattering_points, double pathlen_m,
          const std::map<std::int64_t, double> &telescope_pathlen_m, bool geometry_only,
          const std::string &curvature, const std::optional<double> &earth_radius_m,
@@ -66,24 +93,11 @@ inline void bind_propagator(nb::module_ &module) {
         config.threads = static_cast<unsigned>(threads);
         config.geometry_only = geometry_only;
         if (telescopes) {
-          std::vector<std::uint32_t> selection;
-          for (const std::int64_t id : *telescopes) {
-            if (id < 1 || id > static_cast<std::int64_t>(obdeect::stream::max_telescope)) {
-              throw std::invalid_argument("telescopes: telescope ids are 1-based");
-            }
-            selection.push_back(static_cast<std::uint32_t>(id));
-          }
-          config.telescopes = std::move(selection);
+          config.telescopes = obdeect::propagation::telescope_ids(*telescopes, "telescopes");
         }
         if (scattering_primaries) {
-          std::vector<std::uint32_t> selection;
-          for (const std::int64_t id : *scattering_primaries) {
-            if (id < 1 || id > static_cast<std::int64_t>(obdeect::stream::max_telescope)) {
-              throw std::invalid_argument("scattering_primaries: telescope ids are 1-based");
-            }
-            selection.push_back(static_cast<std::uint32_t>(id));
-          }
-          config.scattering_primaries = std::move(selection);
+          config.scattering_primaries =
+              obdeect::propagation::telescope_ids(*scattering_primaries, "scattering_primaries");
         }
         config.curvature = obdeect::propagation::parse_curvature(curvature);
         config.ground_representation =
@@ -118,65 +132,54 @@ inline void bind_propagator(nb::module_ &module) {
               std::get<0>(*wavelength_range), std::get<1>(*wavelength_range)};
         }
         config.seed = seed;
-        config.mode = weighted ? obdeect::propagation::OutputMode::weighted
-                               : obdeect::propagation::OutputMode::thinned;
+        config.mode = obdeect::propagation::parse_output_mode(mode);
         config.store_p = store_p;
         if (scattering_path) {
-          config.scattering.enabled = true;
           config.scattering.points_per_photon = scattering_points;
           config.scattering_table.emplace(
               obdeect::propagation::ScatteringTable::from_file(*scattering_path));
           config.scattering_source = *scattering_path;
         }
 
-        if (obdeect::propagation::same_file(input_path, output_path)) {
-          throw std::invalid_argument("input and output are the same file: " + input_path);
-        }
-        std::ifstream in(input_path, std::ios::binary);
-        if (!in) {
-          throw std::runtime_error("cannot open input stream: " + input_path);
-        }
-        std::ofstream out(output_path, std::ios::binary);
-        if (!out) {
-          throw std::runtime_error("cannot open output stream: " + output_path);
-        }
         const obdeect::propagation::PropagationSummary summary =
-            obdeect::propagation::propagate_stream(in, out, std::move(config));
-        out.close();
+            obdeect_propagation_bindings::convert_stream_file(
+                input_path, output_path, [&config](std::istream &in, std::ostream &out) {
+                  return obdeect::propagation::propagate_stream(in, out, std::move(config));
+                });
         nb::dict result;
         result["photons_in"] = summary.photons_in;
         result["photons_out"] = summary.photons_out;
         result["dropped"] = summary.dropped;
-        result["dropped_by_reason"] = dropped_by_reason_dict(summary.dropped_by_reason);
+        result["dropped_by_reason"] =
+            obdeect::propagation::dropped_by_reason_dict(summary.dropped_by_reason);
         result["weight_out"] = summary.weight_out;
+        result["thinned_out"] = summary.thinned_out;
+        result["scattered_dropped"] = summary.scattered_dropped;
+        result["scattered_dropped_by_reason"] =
+            obdeect::propagation::dropped_by_reason_dict(summary.scattered_dropped_by_reason);
+        result["scattered_thinned_out"] = summary.scattered_thinned_out;
         return result;
       },
       nb::arg("input_path"), nb::arg("output_path"), nb::arg("transmission_path"),
-      nb::arg("site_altitude_m"), nb::arg("profile_path") = nb::none(),
-      nb::arg("envelope_paths") = std::vector<std::pair<std::string, std::string>>{},
-      nb::arg("wavelength_range") = nb::none(), nb::arg("seed"), nb::arg("weighted") = false,
-      nb::arg("store_p") = false, nb::arg("scattering_path") = nb::none(),
-      nb::arg("scattering_points") = std::uint32_t{8}, nb::arg("pathlen_m") = 0.0,
-      nb::arg("telescope_pathlen_m") = std::map<std::int64_t, double>{},
-      nb::arg("geometry_only") = false, nb::arg("curvature") = "none",
-      nb::arg("earth_radius_m") = nb::none(), nb::arg("telescopes") = nb::none(),
-      nb::arg("threads") = std::int64_t{1}, nb::arg("scattering_primaries") = nb::none(),
-      nb::arg("wavelength_interpolation") = "linear",
-      nb::arg("dispersion_reference_nm") = nb::none(), nb::arg("ground_representation") = "plane",
+      nb::arg("site_altitude_m"), nb::arg("profile_path"), nb::arg("envelope_paths"),
+      nb::arg("wavelength_range"), nb::arg("seed"), nb::arg("mode"), nb::arg("store_p"),
+      nb::arg("scattering_path"), nb::arg("scattering_points"), nb::arg("pathlen_m"),
+      nb::arg("telescope_pathlen_m"), nb::arg("geometry_only"), nb::arg("curvature"),
+      nb::arg("earth_radius_m"), nb::arg("telescopes"), nb::arg("threads"),
+      nb::arg("scattering_primaries"), nb::arg("wavelength_interpolation"),
+      nb::arg("dispersion_reference_nm"), nb::arg("ground_representation"),
       "Run the atmosphere stage on a photon stream file (geometry_only: no extinction, see "
-      "docs/propagation.md). envelope_paths: (name, file) pairs of "
-      "two-column text tables (nm, value). scattering_path: optional scattering table (single "
-      "scattering of the primaries, off when None). pathlen_m: path inside each telescope [m]; "
-      "telescope_pathlen_m: {telescope_id (1-based): metres} overrides. curvature: none, corsika "
-      "or spherical (see Curvature); earth_radius_m: Earth radius [m], None for the CORSIKA "
-      "CURVED radius. scattering_primaries: ids (1-based) whose photons are scattered (needs "
-      "scattering; None: all blocks). telescopes: ids (1-based) to keep, None for all; other "
-      "telescopes' blocks "
-      "are "
+      "docs/propagation/propagation.md). envelope_paths: (name, file) pairs of two-column text "
+      "tables (nm, value). scattering_path: optional scattering table (single scattering of the "
+      "primaries, off when None). pathlen_m: path inside each telescope [m]; telescope_pathlen_m: "
+      "{telescope_id (1-based): metres} overrides. curvature: none, corsika or spherical (see "
+      "Curvature); earth_radius_m: Earth radius [m], None for the CORSIKA CURVED radius. "
+      "scattering_primaries: ids (1-based) whose photons are scattered (needs scattering; None: "
+      "all blocks). telescopes: ids (1-based) to keep, None for all; other telescopes' blocks are "
       "dropped and not decoded. threads: 1 to 256 worker threads, the output does not depend on "
-      "it. wavelength_interpolation: linear (default) or floor (sim_telarray), see "
-      "WavelengthInterpolation. dispersion_reference_nm: wavelength [nm] of the profile's n-1; "
-      "None: no dispersion (needs a profile; rejected for refracted input). ground_representation: "
-      "plane (default) or sphere (rows on the telescope sphere, needs telescope_r_m; extinction of "
-      "sphere rows is applied along the chord).");
+      "it. wavelength_interpolation: linear or floor (sim_telarray), see WavelengthInterpolation. "
+      "dispersion_reference_nm: wavelength [nm] of the profile's n-1; None: no dispersion (needs "
+      "a profile; rejected for refracted input). ground_representation: plane or sphere (rows on "
+      "the telescope sphere, needs telescope_r_m; extinction of sphere rows is applied along the "
+      "chord). The GIL is released while the stream is processed.");
 }

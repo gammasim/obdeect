@@ -1,4 +1,5 @@
 #include "check.hpp"
+#include "stream_fixtures.hpp"
 
 #include "obdeect/propagation/propagator.hpp"
 #include "obdeect/propagation/scattering.hpp"
@@ -27,22 +28,14 @@
 
 namespace {
 
+using namespace obdeect_test;
+
 using obdeect::stream::Column;
 using obdeect::stream::Frame;
 using obdeect::stream::RecordType;
 
 constexpr double site_m = 2000.0;
 constexpr std::size_t telescope_count = 3;
-
-std::string make_stream(const std::function<void(obdeect::stream::Writer &)> &body) {
-  std::ostringstream out;
-  {
-    obdeect::stream::Writer writer(out, "test");
-    body(writer);
-    writer.finish();
-  }
-  return out.str();
-}
 
 // Stream of two events, each with telescopes 1..3 (G photons, n per telescope). Telescope 2 has a
 // telescope-level efficiency status (qe applied upstream) after its telescope record.
@@ -108,18 +101,6 @@ std::string input_stream(std::size_t n) {
     }
     writer.write_metadata(RecordType::run_end, {});
   });
-}
-
-std::vector<obdeect::stream::Record> records_of(const std::string &bytes) {
-  std::istringstream in(bytes);
-  obdeect::stream::Reader reader(in);
-  std::vector<obdeect::stream::Record> records;
-  obdeect::stream::Record record;
-  while (reader.next(record)) {
-    records.push_back(record);
-  }
-  CHECK(reader.ended());
-  return records;
 }
 
 // The records written again with the writer of propagate_stream (same producer): equal records
@@ -217,15 +198,6 @@ std::string propagate(const std::string &input, obdeect::propagation::Propagator
   return out.str();
 }
 
-template <class Function> bool throws_invalid(Function function) {
-  try {
-    function();
-  } catch (const std::invalid_argument &) {
-    return true;
-  }
-  return false;
-}
-
 obdeect::propagation::TransmissionTable table() {
   return obdeect::propagation::TransmissionTable::from_file(
       std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/atm_trans_2000_1_10_0_0_2000.dat", site_m,
@@ -278,7 +250,7 @@ int main() {
         if (record.chunk.telescope_id == 2) {
           decoded += record.chunk.rows();
         } else {
-          CHECK(record.chunk.rows() == 0);
+          CHECK(record.chunk.mask() == 0); // no columns; rows() is the header row count
           skipped += 1;
         }
       }
@@ -287,12 +259,14 @@ int main() {
     }
 
     // Invalid selections and combinations are rejected.
-    CHECK(throws_invalid([&] { propagate(input, config_for(table(), {0})); }));
-    CHECK(throws_invalid([&] { propagate(input, config_for(table(), {4})); }));
+    CHECK(throws_with([&] { propagate(input, config_for(table(), {0})); },
+                      "telescope ids are 1-based"));
+    CHECK(throws_with([&] { propagate(input, config_for(table(), {4})); },
+                      "telescope selection names telescope"));
     {
       auto config = config_for(table());
       config.telescopes = std::vector<std::uint32_t>{};
-      CHECK(throws_invalid([&] { propagate(input, config); }));
+      CHECK(throws_with([&] { propagate(input, config); }, "telescope selection is empty"));
     }
     // A telescope selection with scattering is allowed (the kept telescopes are the scattering
     // targets; see test_propagator.cpp). This G-frame input is rejected for its frame, which the
