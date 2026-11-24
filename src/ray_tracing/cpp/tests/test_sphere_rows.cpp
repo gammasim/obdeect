@@ -255,8 +255,8 @@ void start_inside_moving_towards_primary() {
 // path and reaches the focal surface from below: direct_focal, not detected.
 void start_inside_moving_towards_camera() {
   const auto model = single_facet(10.0, 0.6);
-  const auto t = trace_photon(model, {{0.3, 0.0, 5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, true,
-                              false, true, true, 0, true);
+  const auto t = trace_photon(model, {{0.3, 0.0, 5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1,
+                              {.from_below = true});
   CHECK(t.status == Status::direct_focal);
   CHECK(t.terminal_surface == 2);
   CHECK_NEAR(t.position.z, 10.0, 1e-9);
@@ -321,7 +321,7 @@ void horizontal_rows_on_tilted_telescope() {
                    static_cast<double>(row.y[0]),
                    -s * static_cast<double>(row.x[0]) + c * static_cast<double>(row.z[0])};
   const auto seq = trace_photon(model, {start, normalized(Vec3{d_tel[0], d_tel[1], d_tel[2]})},
-                                400.0, 0.0, 1.0, 0, 1, true, false, true, true, 0, false);
+                                400.0, 0.0, 1.0, 0, 1);
   CHECK(seq.status == Status::detected);
   CHECK(seq.primary_surface == 1);
   CHECK(std::abs(out.position[2] - seq.position.z) < 1e-6);

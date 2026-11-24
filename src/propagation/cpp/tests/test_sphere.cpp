@@ -6,6 +6,7 @@
 // against the integrator in the overlap region, the spherical geometry of a horizontal photon,
 // ground_to_sky of sphere rows, and independence of chunking and row order.
 #include "check.hpp"
+#include "stream_fixtures.hpp"
 
 #include "obdeect/propagation/ground_to_sky.hpp"
 #include "obdeect/propagation/profile.hpp"
@@ -39,6 +40,8 @@
 
 namespace {
 
+using namespace obdeect_test;
+
 using obdeect::propagation::AtmosphereProfile;
 using obdeect::propagation::bend_quadrature;
 using obdeect::propagation::bend_upward;
@@ -53,10 +56,6 @@ using obdeect::stream::PhotonChunk;
 constexpr double kObs = 2000.0;                                 // observation level [m]
 constexpr double kC = obdeect::stream::speed_of_light_m_per_ns; // [m/ns]
 constexpr double kR = obdeect::stream::earth_radius_m;          // [m]
-
-std::string data_file(const std::string &name) {
-  return std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/" + name;
-}
 
 AtmosphereProfile ecmwf_profile() {
   return AtmosphereProfile::from_file(data_file("atmprof_ecmwf_north_winter_fixed.dat"));
@@ -138,8 +137,8 @@ bool is_dropped(const PhotonChunk &chunk, std::size_t row) {
 
 // Integrates the ray with fixed RK4 steps until it crosses the level z_stop (flat, relative to the
 // observation level) moving downward (downward = true: d_z < 0 and z <= z_stop) or upward. The
-// crossing of the last step is interpolated linearly.
-void march_to_level(const RayMedium &medium, RayState &state, double z_stop, double step_m,
+// crossing of the last step is interpolated linearly. False if the ray never crosses z_stop.
+bool march_to_level(const RayMedium &medium, RayState &state, double z_stop, double step_m,
                     bool downward) {
   for (std::size_t n = 0; n < 100000000; ++n) {
     RayState previous = state;
@@ -153,9 +152,10 @@ void march_to_level(const RayMedium &medium, RayState &state, double z_stop, dou
         state.d[i] = previous.d[i] + f * (state.d[i] - previous.d[i]);
       }
       state.t = previous.t + f * (state.t - previous.t);
-      return;
+      return true;
     }
   }
+  return false;
 }
 
 // Independent reference for a turning ray (flat geometry, k = 1): emitted upward at h_e with
@@ -395,7 +395,7 @@ void test_integrator_matches_downward_bending() {
     state.x = {0.0, 0.0, z0};
     state.d = {s_e, 0.0, cz};
     state.t = 0.0;
-    march_to_level(medium, state, 0.0, 0.25, true);
+    CHECK(march_to_level(medium, state, 0.0, 0.25, true));
     CHECK_NEAR(state.x[0], bx, 1e-5);
     CHECK_NEAR(state.x[1], by, 1e-5);
     CHECK_NEAR(state.d[0], bcx, 1e-8);
@@ -421,7 +421,7 @@ void test_integrator_matches_upward_bending() {
   state.x = {0.0, 0.0, h_e - kObs};
   state.d = {s_e, 0.0, cz};
   state.t = 0.0;
-  march_to_level(medium, state, plane_m - kObs, 0.25, false);
+  CHECK(march_to_level(medium, state, plane_m - kObs, 0.25, false));
   CHECK_NEAR(state.x[0], x, 1e-5);
   CHECK_NEAR(state.d[0], cx, 1e-8);
   CHECK_NEAR(state.t, t, 1e-5);
@@ -446,12 +446,14 @@ void test_turning_ray_against_snell() {
   state.d = {s_e, 0.0, cz};
   state.t = 0.0;
   // Back down to the emission level (z = h_e - obs), after the apex.
-  march_to_level(medium, state, h_e - kObs, 0.5, true);
+  CHECK(march_to_level(medium, state, h_e - kObs, 0.5, true));
+  // The reference's quadrature noise is about 2e-3 m and 5e-3 ns over this 318 km path (the profile
+  // has a kink at every level and cell, so the midpoint rule does not converge monotonically: 80
+  // 000, 160 000, 320 000 and 640 000 nodes differ by up to 1e-2 ns). 640 000 nodes keep that noise
+  // inside the tolerances below.
   const SnellLeg reference = snell_turning_reference(profile, h_e, s_e, 640000);
   std::fprintf(stderr, "turning reference: dx %.9f m, dt %.9f ns\n", reference.dx, reference.dt);
   CHECK(state.d[2] < 0.0);
-  // The reference's quadrature noise is about 2e-3 m and 5e-3 ns over this 318 km path (the profile
-  // has a kink at every level and cell), which bounds the agreement; see the report.
   CHECK_NEAR(state.x[0], reference.dx, 5e-3);
   CHECK_NEAR(state.t, reference.dt, 1e-2);
   std::fprintf(stderr,
@@ -762,7 +764,7 @@ void test_plane_arrival_matches_plane_mode() {
   chunk[Column::t][0] = 0.0F;
   chunk[Column::w][0] = 1.0F;
   PhotonChunk plane_chunk = chunk;
-  obdeect::propagation::sky_to_ground(plane_chunk, plane);
+  (void)obdeect::propagation::sky_to_ground(plane_chunk, plane);
   double x_out = 0, y_out = 0, cx_out = 0, cy_out = 0, t_out = 0;
   const double fz = static_cast<float>(z);
   const double cz_mag = std::sqrt(1.0 - cx * cx - cy * cy);
@@ -801,22 +803,15 @@ void test_ground_to_sky_round_trip() {
              float_ulp(chunk[Column::path][0]) / kC + 2.0 * float_ulp(4.0));
 }
 
-bool throws_invalid(auto &&action) {
-  try {
-    action();
-  } catch (const std::invalid_argument &) {
-    return true;
-  }
-  return false;
-}
-
 void test_validation() {
   const SkyPlane plane = plane_at(0.0, 0.0, 3.0);
   PhotonChunk chunk = sky_chunk({{0.0, 0.0, 100.0, 0.0, 0.0, -1.0, 0.0}});
-  CHECK(throws_invalid([&] { obdeect::propagation::sky_to_sphere(chunk, plane, 0.0); }));
+  CHECK(throws_with([&] { (void)obdeect::propagation::sky_to_sphere(chunk, plane, 0.0); },
+                    "sphere radius must be finite and positive"));
   PhotonChunk ground = chunk;
   ground.frame = obdeect::stream::Frame::ground;
-  CHECK(throws_invalid([&] { obdeect::propagation::sky_to_sphere(ground, plane, 12.0); }));
+  CHECK(throws_with([&] { (void)obdeect::propagation::sky_to_sphere(ground, plane, 12.0); },
+                    "needs photons in frame sky"));
 }
 
 } // namespace
@@ -856,7 +851,7 @@ void test_straight_chords_stay_above_ground() {
                     static_cast<float>(c_xy * std::sin(azimuth)), static_cast<float>(-cz), 0.0});
   }
   PhotonChunk chunk = sky_chunk(rows);
-  sky_to_sphere(chunk, plane, radius, false);
+  (void)sky_to_sphere(chunk, plane, radius, false);
   std::size_t accepted = 0;
   for (std::size_t r = 0; r < rows.size(); ++r) {
     if (chunk[Column::w][r] == 0.0F) {

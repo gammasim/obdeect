@@ -171,7 +171,7 @@ def test_constant_optical_depth(tmp_path):
 
 
 def test_table_rejects_wrong_altitude():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="does not match the site altitude"):
         TransmissionTable(str(TABLE_PATH), 1835.0, wavelength_interpolation="floor")
 
 
@@ -273,7 +273,7 @@ def test_non_finite_wavelength_rejected(table, bad):
     columns = _photons(10, np.random.default_rng(6))
     columns["wavelength"] = np.full(10, 400.0, dtype=np.float32)
     columns["wavelength"][3] = bad
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="wavelength must be finite and non-negative"):
         _apply(table, columns, weighted=False)
 
 
@@ -295,13 +295,13 @@ def test_non_finite_cz_rejected(table):
     columns["cz"] = columns["cz"].astype(np.float32)
     _apply(table, columns, weighted=False)  # consistent cz is accepted
     columns["cz"][4] = np.nan
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="cz column must be finite"):
         _apply(table, columns, weighted=False)
 
 
 def test_non_finite_wavelength_range_rejected(table):
     columns = _photons(10, np.random.default_rng(9))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="wavelength range needs finite"):
         apply_extinction(
             columns,
             table,
@@ -322,11 +322,11 @@ def test_invalid_input_rejected(table):
     columns = _photons(10, np.random.default_rng(3))
     columns["cx"][0] = np.float32(0.9)
     columns["cy"][0] = np.float32(0.9)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="direction cosines must satisfy"):
         _apply(table, columns, weighted=False)
     columns = _photons(10, np.random.default_rng(3))
     columns["unknown"] = columns["w"]
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="unknown photon column"):
         _apply(table, columns, weighted=False)
 
 

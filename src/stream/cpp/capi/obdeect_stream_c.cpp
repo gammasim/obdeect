@@ -63,15 +63,17 @@ int from_exception() noexcept {
     return fail(OBDEECT_STREAM_ERROR_MEMORY, "out of memory");
   } catch (const std::invalid_argument &error) {
     return fail(OBDEECT_STREAM_ERROR_ARGUMENT, error.what());
+  } catch (const obdeect::stream::InputReadError &error) {
+    return fail(OBDEECT_STREAM_ERROR_IO, error.what());
+  } catch (const obdeect::stream::StreamReadError &error) {
+    return fail(OBDEECT_STREAM_ERROR_IO, error.what());
+  } catch (const obdeect::stream::UnsupportedVersionError &error) {
+    return fail(OBDEECT_STREAM_ERROR_VERSION, error.what());
+  } catch (const obdeect::stream::MalformedStreamError &error) {
+    // Includes TruncatedStreamError.
+    return fail(OBDEECT_STREAM_ERROR_FORMAT, error.what());
   } catch (const std::runtime_error &error) {
-    const char *text = error.what();
-    if (std::strstr(text, "unsupported format major version") != nullptr) {
-      return fail(OBDEECT_STREAM_ERROR_VERSION, text);
-    }
-    if (std::strstr(text, "read error") != nullptr) {
-      return fail(OBDEECT_STREAM_ERROR_IO, text);
-    }
-    return fail(OBDEECT_STREAM_ERROR_FORMAT, text);
+    return fail(OBDEECT_STREAM_ERROR_FORMAT, error.what());
   } catch (const std::exception &error) {
     return fail(OBDEECT_STREAM_ERROR_INTERNAL, error.what());
   } catch (...) {
@@ -81,37 +83,62 @@ int from_exception() noexcept {
 
 int bad_argument(const char *what) { return fail(OBDEECT_STREAM_ERROR_ARGUMENT, what); }
 
-// Unbuffered std::streambuf writing to a file descriptor.
+// std::streambuf writing to a file descriptor through a buffer of 1 MiB. Pending bytes go out
+// when the buffer is full and on sync (flush). A failed write is remembered: the stream then goes
+// bad, which the caller reports as an I/O error (check_output, close).
 class FdOutBuffer : public std::streambuf {
 public:
-  explicit FdOutBuffer(int fd) : fd_(fd) {}
+  static constexpr std::size_t buffer_size = std::size_t{1} << 20;
+
+  explicit FdOutBuffer(int fd) : fd_(fd), buffer_(buffer_size) {
+    setp(buffer_.data(), buffer_.data() + buffer_.size());
+  }
+  // Best effort for a writer that is not closed; close() reports errors.
+  ~FdOutBuffer() override { static_cast<void>(flush_pending()); }
+  FdOutBuffer(const FdOutBuffer &) = delete;
+  FdOutBuffer &operator=(const FdOutBuffer &) = delete;
 
 protected:
-  std::streamsize xsputn(const char *data, std::streamsize n) override {
-    std::streamsize done = 0;
-    while (done < n) {
-      const auto got =
-          static_cast<long long>(::write(fd_, data + done, static_cast<std::size_t>(n - done)));
-      if (got < 0) {
-        if (errno == EINTR) {
-          continue;
-        }
-        break;
-      }
-      done += got;
-    }
-    return done;
-  }
   int_type overflow(int_type c) override {
-    if (traits_type::eq_int_type(c, traits_type::eof())) {
-      return traits_type::not_eof(c);
+    if (!flush_pending()) {
+      return traits_type::eof();
     }
-    const char ch = traits_type::to_char_type(c);
-    return xsputn(&ch, 1) == 1 ? c : traits_type::eof();
+    if (!traits_type::eq_int_type(c, traits_type::eof())) {
+      *pptr() = traits_type::to_char_type(c);
+      pbump(1);
+    }
+    return traits_type::not_eof(c);
   }
 
+  int sync() override { return flush_pending() ? 0 : -1; }
+
 private:
+  // Writes the pending bytes; false once a write has failed.
+  bool flush_pending() {
+    if (failed_) {
+      return false;
+    }
+    const char *data = pbase();
+    std::size_t left = static_cast<std::size_t>(pptr() - pbase());
+    while (left > 0) {
+      const auto got = ::write(fd_, data, left);
+      if (got < 0 && errno == EINTR) {
+        continue;
+      }
+      if (got <= 0) {
+        failed_ = true;
+        return false;
+      }
+      data += got;
+      left -= static_cast<std::size_t>(got);
+    }
+    setp(buffer_.data(), buffer_.data() + buffer_.size());
+    return true;
+  }
+
   int fd_;
+  std::vector<char> buffer_;
+  bool failed_{false};
 };
 
 } // namespace
@@ -128,7 +155,11 @@ struct obdeect_stream_reader {
   bool failed{false};
 
   explicit obdeect_stream_reader(int fd)
-      : fd_buffer(fd < 0 ? 1 : std::size_t{1} << 20, fd), fd_stream(&fd_buffer) {}
+      : fd_buffer(fd < 0 ? 1 : std::size_t{1} << 20, fd), fd_stream(&fd_buffer) {
+    // A read error of the descriptor reaches the caller as its own exception (not as an
+    // end of input).
+    fd_stream.exceptions(std::ios::badbit);
+  }
 
   bool has_metadata() const {
     return has_record && (record.type == obdeect::stream::RecordType::stream ||
@@ -284,6 +315,8 @@ int obdeect_stream_reader_open_fd(int fd, obdeect_stream_reader **out) {
 void obdeect_stream_reader_close(obdeect_stream_reader *reader) {
   try {
     delete reader;
+    // No exception may cross the C API, and close has no status to report it in.
+    // NOLINTNEXTLINE(bugprone-empty-catch)
   } catch (...) {
   }
 }
@@ -588,12 +621,16 @@ int obdeect_stream_writer_write_record(obdeect_stream_writer *writer, int record
     if (writer == nullptr) {
       return bad_argument("NULL argument");
     }
-    obdeect::stream::Metadata metadata;
-    metadata.swap(writer->pending);
-    const auto type = static_cast<obdeect::stream::RecordType>(record_type);
-    if (record_type < 0 || record_type > 0xFFFF || !obdeect::stream::is_metadata_record(type)) {
+    // Validate the type first: a refused call keeps the pending metadata for a retry.
+    if (record_type < 0 || record_type > 0xFFFF) {
       return bad_argument("not a metadata record type");
     }
+    const auto type = static_cast<obdeect::stream::RecordType>(record_type);
+    if (!obdeect::stream::is_metadata_record(type)) {
+      return bad_argument("not a metadata record type");
+    }
+    obdeect::stream::Metadata metadata;
+    metadata.swap(writer->pending);
     writer->writer->write_metadata(type, metadata);
     return check_output(writer);
   } catch (...) {
@@ -666,6 +703,8 @@ int obdeect_stream_writer_close(obdeect_stream_writer *writer) {
   }
   try {
     delete writer;
+    // No exception may cross the C API; the result is already in code.
+    // NOLINTNEXTLINE(bugprone-empty-catch)
   } catch (...) {
   }
   return code;

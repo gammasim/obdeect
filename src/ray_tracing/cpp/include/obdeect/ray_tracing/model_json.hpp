@@ -2,12 +2,15 @@
 
 #include "obdeect/ray_tracing/json.hpp"
 #include "obdeect/ray_tracing/model.hpp"
+#include "obdeect/ray_tracing/model_hash.hpp"
 #include "obdeect/stream/constants.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <initializer_list>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -20,14 +23,36 @@ inline constexpr std::string_view kModelFormat = "obdeect.optical-model.v2";
 
 namespace detail {
 
+// The path of a JSON value (model, .optics, .primary.facets[3]): a chain of parts, each one
+// shared with the nodes below it. It is turned into text only when an error is reported, so
+// validating a large array allocates no strings.
+struct PathPart {
+  std::shared_ptr<const PathPart> parent;
+  std::string_view key; // A member name (it lives in the document) ...
+  std::size_t index{};  // ... or an array index when `indexed`.
+  bool indexed{};
+};
+
+inline std::string path_text(const PathPart &part) {
+  if (!part.parent)
+    return "model";
+  const std::string text =
+      part.indexed ? "[" + std::to_string(part.index) + "]" : "." + std::string(part.key);
+  return path_text(*part.parent) + text;
+}
+
 // A JSON value together with its path, for precise error messages.
 class Node {
 public:
-  Node(const json::Value &value, std::string path) : value_(&value), path_(std::move(path)) {}
+  Node(const json::Value &value, std::shared_ptr<const PathPart> path)
+      : value_(&value), path_(std::move(path)) {}
 
-  [[noreturn]] void fail(const std::string &what) const { throw ModelError(path_ + ": " + what); }
+  [[noreturn]] void fail(const std::string &what) const {
+    throw ModelError(path_text(*path_) + ": " + what);
+  }
 
   [[nodiscard]] bool is_null() const { return value_->kind() == json::Value::Kind::null; }
+  [[nodiscard]] bool is_object() const { return value_->kind() == json::Value::Kind::object; }
 
   [[nodiscard]] const json::Value::Object &
   object(std::initializer_list<std::string_view> keys) const {
@@ -43,7 +68,7 @@ public:
     const json::Value *member = value_->find(key);
     if (member == nullptr)
       fail("missing key '" + std::string(key) + "'");
-    return {*member, path_ + "." + std::string(key)};
+    return {*member, child(key, 0, false)};
   }
   [[nodiscard]] bool has(std::string_view key) const {
     const json::Value *member = value_->find(key);
@@ -55,8 +80,9 @@ public:
       fail("expected an array");
     std::vector<Node> items;
     const auto &values = std::get<json::Value::Array>(value_->data);
+    items.reserve(values.size());
     for (std::size_t i = 0; i < values.size(); ++i)
-      items.emplace_back(values[i], path_ + "[" + std::to_string(i) + "]");
+      items.emplace_back(values[i], child({}, i, true));
     return items;
   }
   [[nodiscard]] double number() const {
@@ -144,8 +170,13 @@ public:
   }
 
 private:
+  [[nodiscard]] std::shared_ptr<const PathPart> child(std::string_view key, std::size_t index,
+                                                      bool indexed) const {
+    return std::make_shared<const PathPart>(PathPart{path_, key, index, indexed});
+  }
+
   const json::Value *value_;
-  std::string path_;
+  std::shared_ptr<const PathPart> path_;
 };
 
 inline Aperture aperture(const Node &node) {
@@ -433,10 +464,23 @@ inline Obscurer obscurer(const Node &node, std::vector<Plane> &planes) {
 // Validate an already structured optical model (format obdeect.optical-model.v2).
 [[nodiscard]] inline OpticalModel load_model(json::Value root_value) {
   using detail::Node;
-  const Node root{root_value, "model"};
+  using detail::PathPart;
+  const Node root{root_value, std::make_shared<const PathPart>(PathPart{nullptr, "", 0, false})};
   (void)root.object({"format", "sha256", "provenance", "notes", "sampling", "optics"});
   if (root["format"].string() != kModelFormat)
     root["format"].fail("expected '" + std::string(kModelFormat) + "'");
+  // The sha256 entry is checked against the text by load_model(string_view); a structured
+  // document carries no canonical text here (the Python caller checks it).
+  if (!root["provenance"].is_object())
+    root["provenance"].fail("expected an object");
+  for (const auto &note : root["notes"].array())
+    (void)note.string();
+  const Node sampling = root["sampling"];
+  (void)sampling.object({"disk_radius_m", "disk_z_m", "start_z_m"});
+  // The star-light disk: a positive radius and finite heights (no zero-area sampling).
+  (void)sampling["disk_radius_m"].positive();
+  (void)sampling["disk_z_m"].number();
+  (void)sampling["start_z_m"].number();
   const Node optics = root["optics"];
   (void)optics.object({"propagation_group_index", "telescope_transmission", "primary", "secondary",
                        "secondary_blocks_incoming", "focal_surface", "obscurers", "axes_offset_m"});
@@ -492,7 +536,8 @@ inline Obscurer obscurer(const Node &node, std::vector<Plane> &planes) {
   return model;
 }
 
-// Parse an optical-model file using the same validation as structured inputs.
+// Parse an optical-model file: the same validation as structured inputs, and the sha256 entry must
+// be the SHA-256 of the canonical text (see model_hash.hpp), as the Python loader checks.
 [[nodiscard]] inline OpticalModel load_model(std::string_view text) {
   json::Value root_value;
   try {
@@ -500,6 +545,12 @@ inline Obscurer obscurer(const Node &node, std::vector<Plane> &planes) {
   } catch (const std::runtime_error &error) {
     throw ModelError(error.what());
   }
+  const std::string expected = model_hash(text);
+  const detail::Node root{root_value, std::make_shared<const detail::PathPart>(
+                                          detail::PathPart{nullptr, "", 0, false})};
+  // (The root's path is "model"; see detail::path_text.)
+  if (root["sha256"].string() != expected)
+    root["sha256"].fail("does not match the document (expected " + expected + ")");
   return load_model(std::move(root_value));
 }
 

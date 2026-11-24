@@ -1,4 +1,5 @@
 #include "check.hpp"
+#include "source_fixtures.hpp"
 
 #include "obdeect/sources/emit.hpp"
 #include "obdeect/sources/source.hpp"
@@ -19,6 +20,8 @@ using namespace obdeect::sources;
 using obdeect::stream::Column;
 
 namespace {
+
+using obdeect_test::accepts;
 
 constexpr double inf = std::numeric_limits<double>::infinity();
 
@@ -58,15 +61,6 @@ bool same_chunk(const Photons &a, const Photons &b) {
     if (a.columns[c] != b.columns[c])
       return false;
   return true;
-}
-
-template <class F> bool throws_invalid(F f) {
-  try {
-    f();
-  } catch (const std::invalid_argument &) {
-    return true;
-  }
-  return false;
 }
 
 Vec3 position_of(const Photons &c, std::size_t i) {
@@ -198,6 +192,20 @@ void line_sphere_isotropic() {
   CHECK(std::abs(sum - expected) <= 4.0 * std::sqrt(sum2));
 }
 
+void line_sphere_missed_by_fixed_angle_line() {
+  // A fixed-angle line whose cone never reaches the sphere has reference 0 and no expected photons;
+  // emitting candidates anyway drops every row (no NaN weights from 0 / 0). (An isotropic line
+  // always has a sphere fraction above zero: its 4 pi cap, so it cannot reach this guard.)
+  Line l = sphere_line(FixedAngle{1.0 - std::cos(5.0 * pi / 180.0)});
+  l.start = {100.0, 0.0, 300.0}; // 100 m from the axis of the sphere of radius 15 m
+  const Source s = line_source(l, 1000.0, sphere_15);
+  CHECK(line_reference(s) == 0.0);
+  CHECK(expected_count(s) == 0.0);
+  CHECK(expected_weight(s) == 0.0);
+  const auto c = emit_all(s, 30, 500);
+  CHECK(c.rows() == 0);
+}
+
 void line_profile() {
   // Triangular density on [0, 10] m with its peak at 2 m: mean (0 + 2 + 10) / 3 = 4 m and
   // P(s < 2 m) = 1 / 5.
@@ -309,36 +317,37 @@ void line_validation() {
     l.length_m = 10.0;
     return line_source(l, 10.0);
   };
-  CHECK(!throws_invalid([&] { validate(base()); }));
+  CHECK(accepts([&] { validate(base()); }));
   Source bad = base();
   std::get<Line>(bad.geometry).length_m = 1e100;
-  CHECK(throws_invalid([&] { validate(bad); }));
+  CHECK(throws_with([&] { validate(bad); }, "length"));
   bad = base();
   std::get<Line>(bad.geometry).start.x = 1e100;
-  CHECK(throws_invalid([&] { validate(bad); }));
+  CHECK(throws_with([&] { validate(bad); }, "start"));
   bad = base();
   std::get<Line>(bad.geometry).direction = {0.0, 0.0, -2.0};
-  CHECK(throws_invalid([&] { validate(bad); }));
+  CHECK(throws_with([&] { validate(bad); }, "direction"));
   bad = base();
   std::get<Line>(bad.geometry).beta = 1.5;
-  CHECK(throws_invalid([&] { validate(bad); }));
+  CHECK(throws_with([&] { validate(bad); }, "beta"));
   bad = base();
   std::get<Line>(bad.geometry).profile = LinearDensity({0.0, 20.0}, {1.0, 1.0});
-  CHECK(throws_invalid([&] { validate(bad); })); // profile beyond the length
+  CHECK(throws_with([&] { validate(bad); }, "profile")); // profile beyond the length
   bad = base();
   bad.target = DiscTarget{{0.0, 0.0, 0.0}, {0.0, 0.0, 1.0}, 2.0};
-  CHECK(throws_invalid([&] { validate(bad); })); // a line takes no disc target
+  CHECK(throws_with([&] { validate(bad); }, "takes no disc target")); // a line takes no disc target
   bad = base();
   std::get<Line>(bad.geometry).angular = Lambertian{};
   bad.target = sphere_15;
-  CHECK(throws_invalid([&] { validate(bad); })); // sphere target needs fixed or isotropic
+  CHECK(throws_with([&] { validate(bad); },
+                    "needs a fixed angle or isotropic")); // sphere target needs fixed or isotropic
   // Photon counts above 2^53 are rejected, as for the other geometries.
   bad = base();
   bad.photons = 1e16;
-  CHECK(throws_invalid([&] { validate(bad); }));
-  CHECK(throws_invalid([&] { (void)emit_all(bad, 1, 10); }));
+  CHECK(throws_with([&] { validate(bad); }, "at most 2^53"));
+  CHECK(throws_with([&] { (void)emit_all(bad, 1, 10); }, "at most 2^53"));
   bad.photons = 9007199254740992.0;
-  CHECK(!throws_invalid([&] { validate(bad); }));
+  CHECK(accepts([&] { validate(bad); }));
 }
 
 // Plane waves with start_distance_m: the start plane is perpendicular to towards_source at that
@@ -353,7 +362,7 @@ void plane_wave_start_distance() {
   Source horizontal;
   horizontal.photons = static_cast<double>(n);
   horizontal.geometry = PlaneWave{{1.0, 0.0, 0.0}, inf, 2.0, 0.0, std::nullopt, 30.0};
-  CHECK(!throws_invalid([&] { validate(horizontal); }));
+  CHECK(accepts([&] { validate(horizontal); }));
   const auto h = emit_all(horizontal, 5, n);
   CHECK(h.rows() == n);
   for (std::size_t i = 0; i < h.rows(); ++i) {
@@ -372,7 +381,7 @@ void plane_wave_start_distance() {
   up.photons = static_cast<double>(n);
   const Vec3 towards = normalised({0.6, 0.0, -0.8});
   up.geometry = PlaneWave{towards, inf, 2.0, 0.0, std::nullopt, 30.0};
-  CHECK(!throws_invalid([&] { validate(up); }));
+  CHECK(accepts([&] { validate(up); }));
   const auto u = emit_all(up, 6, n);
   CHECK(u.rows() == n);
   for (std::size_t i = 0; i < u.rows(); ++i) {
@@ -444,6 +453,7 @@ int main() {
     line_fixed_angle_no_target();
     line_sphere_fixed_angle();
     line_sphere_isotropic();
+    line_sphere_missed_by_fixed_angle_line();
     line_profile();
     rows_independent_of_chunk();
     sky_background();

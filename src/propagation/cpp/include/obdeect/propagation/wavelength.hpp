@@ -1,8 +1,9 @@
 #pragma once
 
 // Wavelength assignment for photons without a wavelength: density proportional to
-// 1/lambda^2 on [lo, hi] nm, drawn by inverse CDF. The value is continuous; table lookups
-// floor it to integer nm.
+// 1/lambda^2 on [lo, hi] nm, drawn by inverse CDF. The value is continuous. Transmission table
+// lookups interpolate linearly between the integer-nm rows (default,
+// WavelengthInterpolation::linear) or floor it to integer nm (WavelengthInterpolation::floor).
 
 #include "obdeect/propagation/streams.hpp"
 

@@ -19,6 +19,7 @@
 
 #include "obdeect/stream/format.hpp"
 #include "obdeect/stream/photons.hpp"
+#include "obdeect/stream/stages.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -225,8 +226,10 @@ Angular angular_of(const Section &s) {
     return FilledCone{cone_u0(s.real("angle_deg"), s.where("angle_deg"))};
   if (kind == "gauss") {
     const double sigma = s.real("sigma_deg");
-    if (!(sigma >= 0.0 && sigma <= 180.0))
-      bad(s.where("sigma_deg"), "sigma_deg must be in [0, 180]");
+    if (!(sigma > 0.0 && sigma <= 180.0))
+      bad(s.where("sigma_deg"), "sigma_deg must be in (0, 180]");
+    if (sigma * pi / 180.0 < 1e-12)
+      bad(s.where("sigma_deg"), "sigma_deg is too small (the table needs at least 1e-12 rad)");
     return TabulatedAngular{gaussian_angular_table(sigma * pi / 180.0)};
   }
   if (kind == "table") {
@@ -369,7 +372,11 @@ Emission single_emission(nb::handle h) {
   if (!within_limits(e.time_offset_ns))
     bad("emission.time_offset_ns", "out of range");
   e.source.photons /= e.bunch_size;
-  validate(e.source);
+  try {
+    validate(e.source);
+  } catch (const std::invalid_argument &error) {
+    bad("emission", error.what());
+  }
   return e;
 }
 
@@ -450,15 +457,14 @@ nb::dict check_run_py(nb::handle run_description) {
     events += run.events[i].repeat;
     for (std::size_t j = 0; j < planned[i].size(); ++j) {
       const auto &p = planned[i][j];
-      const double mean = expected_count(p.emission.source);
-      candidates += mean * repeat * static_cast<double>(run.telescopes.size());
+      candidates += p.count * repeat * static_cast<double>(run.telescopes.size());
       nb::dict d;
       d["event"] = i;
       d["emission"] = j;
       d["repeat"] = run.events[i].repeat;
       d["seed"] = p.seed;
-      d["candidates"] = mean;
-      d["expected_weight"] = expected_weight(p.emission.source) * p.emission.bunch_size;
+      d["candidates"] = p.count;
+      d["expected_weight"] = p.weight;
       emissions.append(d);
     }
   }
@@ -467,7 +473,7 @@ nb::dict check_run_py(nb::handle run_description) {
   out["telescopes"] = run.telescopes.size();
   out["emissions"] = emissions;
   out["expected_candidates"] = candidates;
-  out["expected_weight"] = expected_weight(run);
+  out["expected_weight"] = expected_weight(planned, run);
   return out;
 }
 
@@ -476,8 +482,7 @@ nb::dict emit_chunk_py(nb::handle emission, std::uint64_t seed, std::uint32_t ev
   const Emission e = single_emission(emission);
   obdeect::stream::PhotonChunk chunk;
   emit(e.source, seed, event, telescope, first_index, rows, chunk);
-  // The run's per-emission rows (bunch weight, time offset, move to z = 0); no zem column. Rows
-  // that do not reach the plane are dropped (their count is not returned here).
+  // The run's per-emission rows (bunch weight, time offset, move to z = 0); no zem column.
   Run camera_run;
   camera_run.frame = obdeect::stream::Frame::camera;
   Drops drops;
@@ -488,6 +493,8 @@ nb::dict emit_chunk_py(nb::handle emission, std::uint64_t seed, std::uint32_t ev
       const auto column = static_cast<obdeect::stream::Column>(c);
       out[obdeect::stream::column_name(column)] = to_array(chunk[column]);
     }
+  // Photons of a to_plane_z0 emission that move away from the plane and are dropped.
+  out["not_on_plane"] = drops.not_on_plane;
   return out;
 }
 
@@ -516,6 +523,10 @@ NB_MODULE(_core, m) {
     d["format_minor"] = obdeect::stream::format_minor;
     d["max_chunk_rows"] = obdeect::stream::max_chunk_rows;
     d["sources_format_major"] = photon_stream_format_major;
+    nb::dict stages;
+    stages["sources"] = obdeect::stream::stage_sources;
+    stages["programs"] = obdeect::stream::stage_programs;
+    d["stages"] = stages;
     nb::dict frames;
     frames["sky"] = static_cast<int>(obdeect::stream::Frame::sky);
     frames["telescope"] = static_cast<int>(obdeect::stream::Frame::telescope);

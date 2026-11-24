@@ -62,6 +62,24 @@ def test_command_loads_only_its_component(monkeypatch):
     assert "obdeect.ray_tracing.cli" not in sys.modules
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="shell redirection `>&-` is POSIX")
+def test_closed_stdout_is_a_clean_error(tmp_path):
+    # `>&-` closes stdout: no Python traceback, a one-line error and a non-zero status.
+    stream = tmp_path / "empty.pst"
+    with obdeect_stream.Writer(str(stream), "pytest") as writer:
+        writer.write("run", {})
+        writer.write("run_end", {})
+    result = subprocess.run(
+        f'"{sys.executable}" -m obdeect.stream.cli stream cat "{stream}" >&-',
+        shell=True,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+    assert "AttributeError" not in result.stderr
+
+
 def test_unknown_command_is_an_error():
     result = subprocess.run([*OBDEECT, "stream", "nonsense"], capture_output=True, text=True)
     assert result.returncode == 2

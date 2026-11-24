@@ -3,7 +3,7 @@
 Dish: one flasher at ``--position`` in the camera frame, pointing along -z, emitting into the
 camera plane (``to_plane_z0``). Secondary: four flashers in the telescope frame; flasher ``i``
 sits at ``(+-offset, +-offset, mirror_camera_distance + depth)`` and points at altitude
-``-90 deg + inclination``, towards its azimuth. Old program: ``flasher.hpp``.
+``-90 deg + inclination``, towards its azimuth.
 """
 
 import argparse
@@ -127,19 +127,18 @@ def _profiles(args: argparse.Namespace) -> dict:
 
 
 def _point(args, profiles, position, axis, photons, *, offset_ns=0.0, to_plane_z0=False):
-    return {
-        "kind": "point",
-        "photons": photons,
-        "bunch_size": args.bunch_size,
-        "time_offset_ns": offset_ns,
-        "to_plane_z0": to_plane_z0,
-        "position_m": position,
-        "axis": axis,
-        "angular": profiles["angular"],
-        "spectrum": profiles["spectrum"],
-        "pulse": profiles["pulse"],
-        "target": "auto",
-    }
+    return _common.point_emission(
+        photons=photons,
+        bunch_size=args.bunch_size,
+        position_m=position,
+        axis=axis,
+        angular=profiles["angular"],
+        spectrum=profiles["spectrum"],
+        pulse=profiles["pulse"],
+        target="auto",
+        time_offset_ns=offset_ns,
+        to_plane_z0=to_plane_z0,
+    )
 
 
 def _dish(args: argparse.Namespace) -> dict:
@@ -156,7 +155,7 @@ def _dish(args: argparse.Namespace) -> dict:
     ]
     return {
         "run": _common.run_section(args, frame="camera"),
-        "telescopes": [{"id": 1, "position_m": [0.0, 0.0, 0.0], "radius_m": radius}],
+        "telescopes": _common.single_telescope(radius),
         "events": events,
     }
 
@@ -213,6 +212,6 @@ def _secondary(args: argparse.Namespace) -> dict:
             })
     return {
         "run": _common.run_section(args, frame="telescope"),
-        "telescopes": [{"id": 1, "position_m": [0.0, 0.0, 0.0], "radius_m": radius}],
+        "telescopes": _common.single_telescope(radius),
         "events": events,
     }

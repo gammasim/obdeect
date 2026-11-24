@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -41,13 +42,15 @@ def in_telescope_path_m(optical_model) -> float:
     from obdeect.ray_tracing.model import OpticalModel
 
     if isinstance(optical_model, OpticalModel):
-        model = optical_model
+        model, label = optical_model, "the OpticalModel object"
     elif isinstance(optical_model, (str, os.PathLike)):
-        model = OpticalModel.load(Path(optical_model))
+        model, label = OpticalModel.load(Path(optical_model)), os.fspath(optical_model)
     else:
         raise TypeError("optical_model must be an OpticalModel or a path to an optical model file")
 
-    optics = model.document["optics"]
+    optics = model.document.get("optics")
+    if not isinstance(optics, dict):
+        raise ValueError(f"{label} has no 'optics' section: it is not an optical model")
     primary_z = _vertex_z_m(optics["primary"], "primary")
     secondary = optics.get("secondary")
     secondary_z = None if secondary is None else _vertex_z_m(secondary, "secondary")
@@ -83,7 +86,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         path = in_telescope_path_m(args.model)
-    except (OSError, ValueError, KeyError) as error:
-        parser.exit(1, f"obdeect propagation pathlen: {error}\n")
+    except (OSError, ValueError) as error:
+        print(f"{parser.prog}: {error}", file=sys.stderr)
+        return 1
     print(f"{path:.6f}")
     return 0

@@ -4,16 +4,19 @@
 extinction tables to the format above:
 
 ```console
-$ obdeect propagation convert-table --format kascade us76.ext -o atm_trans_1800.dat --observation-level 1800
-$ obdeect propagation convert-table --format modtran5 us76.ext -o out.dat --observation-level 1800 --min-wavelength 210
+$ obdeect propagation convert-table --format kascade us76.ext -o atm_trans_1800.dat --site-altitude 1800
+$ obdeect propagation convert-table --format modtran5 us76.ext -o out.dat --site-altitude 1800 --min-wavelength 210
 ```
+
+`--site-altitude M` is the observation level (the same name as `obdeect propagation run`).
+`--observation-level` is accepted as a deprecated alias with a warning.
 
 All legacy layouts hold the cumulative vertical optical depth $c(\lambda, h)$, which rises with
 altitude. The optical depth of a vertical path between the observation level and an emission
 height is $c(\lambda, h_e) - c(\lambda, h_{\text{obs}})$, with $c$ linear in height and in
 wavelength. The converter writes $\tau(\lambda, h) = c(\lambda, h) - c(\lambda, h_{\text{obs}})$ for
 every integer wavelength from the first to the last of the source (up to 999 nm), and for heights
-above `--observation-level` (= H2): every altitude of the source, eighth steps in the lowest 6 km
+above `--site-altitude` (= H2): every altitude of the source, eighth steps in the lowest 6 km
 above the observation level, and points 10 m to 500 m above it. The absolute offset of $c$ does not
 matter. At the grid heights $\tau$ reproduces the source exactly; between them obdeect propagation
 interpolates in $\log_{10} h$ instead of $h$, which differs by less than 1 % of $\tau$. If the grid

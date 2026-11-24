@@ -54,7 +54,7 @@ event, telescope)` rounds it (see [conventions](conventions.md#rounding-to-count
 | Case | Mean candidates |
 | --- | --- |
 | Point, none or fixed-angle | `photons` |
-| Point, disc | `photons * I_max / (2 pi integral(I du)) * pi R^2 / h^2`, `h` = distance of the point to the disc plane |
+| Point, disc | `photons * F`, `F` the light fraction in the disc: `F = (1 - h / sqrt(h^2 + R^2)) / 2` for an isotropic point on the axis of the disc (the solid angle over 4 pi); the cdf of the profile at `1 - h / sqrt(h^2 + R^2)` for any profile on that axis; otherwise a 256 x 256 Gauss-Legendre quadrature of `1 / (2 pi integral(I du)) int_disc I h / d^3 dA` |
 | Point, sphere (isotropic) | `photons * (1 - cos_max) / 2`, `cos_max = sqrt(1 - (R/d)^2)` |
 | Line, none | `photons` |
 | Line, sphere (isotropic or fixed angle) | `photons * r`, `r` the line reference fraction (below) |
@@ -77,9 +77,12 @@ candidates `first .. first + candidates - 1` and returns the rows written (line 
 Point, no target: direction = profile quantile of `u[0]` about the axis; azimuth `2 pi u[1]`.
 Weight 1.
 
-Point, disc target: point `P` on the disc (target stream, `r = R sqrt(u0)`, `phi = 2 pi u1`);
-direction towards `P`; weight `I(1 - cos) / I_max * (h / |P - x|)^3`. The sum of weights
-is the expected count on the disc.
+Point, disc target: rejection sampling of the profile. Attempt `k` draws a direction from the
+profile (direction stream of photon `index`, attempt 0; attempts `k >= 1` use the stream key
+`stream | k << 4`) and keeps it when the ray from the point meets the disc in front of the point.
+Each candidate is one hit with weight 1, so no row has zero weight and the candidates are the
+expected hits (`expected_count`). The draws per hit are `1 / F` on average, so the work is that of
+the photons emitted.
 
 Point, sphere target: cone about the direction to the centre, `cos = 1 - u0 (1 - cos_max)`,
 azimuth `2 pi u1`. Weight 1.

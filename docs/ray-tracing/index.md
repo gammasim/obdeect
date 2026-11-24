@@ -95,11 +95,3 @@ optics
 VALIDATION
 api
 ```
-
-```{toctree}
-:caption: Notes
-:hidden:
-:maxdepth: 1
-
-analysis-v0.7.2
-```

@@ -4,6 +4,7 @@
 // and spherical), and independence of the output from chunking, row order and threads. See
 // docs/propagation/refraction.md ("Upward photons") and docs/propagation/extinction.md.
 #include "check.hpp"
+#include "stream_fixtures.hpp"
 
 #include "obdeect/propagation/extinction.hpp"
 #include "obdeect/propagation/ground_to_sky.hpp"
@@ -37,6 +38,8 @@
 
 namespace {
 
+using namespace obdeect_test;
+
 using obdeect::propagation::AtmosphereProfile;
 using obdeect::propagation::bend_quadrature;
 using obdeect::propagation::bend_upward;
@@ -53,19 +56,6 @@ using obdeect::stream::PhotonChunk;
 constexpr double kObs = 2000.0;                                 // observation level [m]
 constexpr double kC = obdeect::stream::speed_of_light_m_per_ns; // [m/ns]
 constexpr double kR = obdeect::stream::earth_radius_m;          // [m]
-
-bool throws_invalid(auto &&action) {
-  try {
-    action();
-  } catch (const std::invalid_argument &) {
-    return true;
-  }
-  return false;
-}
-
-std::string data_file(const std::string &name) {
-  return std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/" + name;
-}
 
 AtmosphereProfile ecmwf_profile() {
   return AtmosphereProfile::from_file(data_file("atmprof_ecmwf_north_winter_fixed.dat"));
@@ -363,7 +353,8 @@ void test_round_trip() {
   auto above = chunk;
   above[Column::zem][0] = static_cast<float>(kObs + 150.0);
   std::uint64_t none = 0;
-  CHECK(throws_invalid([&] { obdeect::propagation::ground_to_sky(above, ground, none); }));
+  CHECK(throws_with([&] { obdeect::propagation::ground_to_sky(above, ground, none); },
+                    "emitted above the telescope plane"));
 }
 
 // Chunking, row order and the per-row kernel: a mixed-direction chunk gives the same rows for one
@@ -410,7 +401,7 @@ void test_mixed_directions_independent() {
     std::vector<std::array<double, 8>> piece(rows.begin() + static_cast<std::ptrdiff_t>(first),
                                              rows.begin() + static_cast<std::ptrdiff_t>(end));
     auto chunk = sky_chunk(piece, true);
-    obdeect::propagation::sky_to_ground(chunk, plane);
+    (void)obdeect::propagation::sky_to_ground(chunk, plane);
     for (std::size_t r = 0; r < piece.size(); ++r) {
       CHECK(same_row(chunk, r, whole, first + r));
     }
@@ -418,7 +409,7 @@ void test_mixed_directions_independent() {
   // Reversed order.
   std::vector<std::array<double, 8>> reversed(rows.rbegin(), rows.rend());
   auto back = sky_chunk(reversed, true);
-  obdeect::propagation::sky_to_ground(back, plane);
+  (void)obdeect::propagation::sky_to_ground(back, plane);
   for (std::size_t r = 0; r < rows.size(); ++r) {
     CHECK(same_row(back, r, whole, rows.size() - 1 - r));
   }

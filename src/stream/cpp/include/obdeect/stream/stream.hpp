@@ -1,6 +1,6 @@
 #pragma once
 
-// Photon-stream reader and writer following docs/format.md. Header-only,
+// Photon-stream reader and writer following docs/stream/format.md. Header-only,
 // standard library only. All multi-byte fields are little-endian; hosts of
 // other byte orders convert per value.
 
@@ -26,7 +26,7 @@ namespace obdeect::stream {
 
 inline constexpr bool little_endian_host = std::endian::native == std::endian::little;
 
-// Name of a record type as used in docs/format.md and the Python API.
+// Name of a record type as used in docs/stream/format.md and the Python API.
 [[nodiscard]] constexpr const char *record_name(RecordType type) {
   switch (type) {
   case RecordType::stream:
@@ -71,6 +71,29 @@ inline constexpr bool little_endian_host = std::endian::native == std::endian::l
   }
 }
 
+// Typed errors of the reader and writer. All derive from std::runtime_error, so generic catches
+// keep working; the C API maps them by type (not by message).
+// A stream that breaks the format: malformed content, or a record out of order.
+class MalformedStreamError : public std::runtime_error {
+public:
+  using std::runtime_error::runtime_error;
+};
+// A stream that ends inside a record or a payload.
+class TruncatedStreamError : public MalformedStreamError {
+public:
+  using MalformedStreamError::MalformedStreamError;
+};
+// A stream whose format major version differs from format_major.
+class UnsupportedVersionError : public std::runtime_error {
+public:
+  using std::runtime_error::runtime_error;
+};
+// A read error of the input stream (not the end of the input).
+class StreamReadError : public std::runtime_error {
+public:
+  using std::runtime_error::runtime_error;
+};
+
 namespace stream_detail {
 
 inline constexpr std::size_t record_header_size = 16;
@@ -86,7 +109,11 @@ inline constexpr std::uint8_t value_string = 3;
 inline constexpr std::uint8_t value_array = 4;
 
 [[noreturn]] inline void malformed(const char *what) {
-  throw std::runtime_error(std::string("obdeect stream: malformed stream: ") + what);
+  throw MalformedStreamError(std::string("obdeect stream: malformed stream: ") + what);
+}
+
+[[noreturn]] inline void truncated(const char *what) {
+  throw TruncatedStreamError(std::string("obdeect stream: malformed stream: truncated ") + what);
 }
 
 inline void put_le(std::vector<std::uint8_t> &out, std::uint64_t value, std::size_t nbytes) {
@@ -112,7 +139,7 @@ public:
 
   const std::uint8_t *take(std::size_t n) {
     if (n > remaining()) {
-      malformed("truncated payload");
+      truncated("payload");
     }
     const std::uint8_t *at = next_;
     next_ += n;
@@ -235,11 +262,13 @@ inline void load_floats(const std::uint8_t *src, float *dst, std::size_t n) {
   }
 }
 
-// Validates a photons record. With load_columns false the header and payload size are
-// still checked and the fixed fields are set, but no column is allocated or copied.
-// path_allowed is false for streams of format 1.0 and 1.1, which have no path column.
+// Decodes and validates a photons record. With load_columns false the header and payload size are
+// still checked and the row count is set, but no column is allocated or copied, so the photon
+// values are not checked (keep_photons_of). path_allowed is false for streams of format 1.0 and
+// 1.1, which have no path column; upward_allowed is false for format 1.0, which has no upward
+// photons.
 inline void decode_chunk(PhotonChunk &chunk, const std::uint8_t *data, std::size_t size,
-                         bool load_columns, bool path_allowed) {
+                         bool load_columns, bool path_allowed, bool upward_allowed) {
   Cursor cursor(data, size);
   chunk.telescope_id = static_cast<std::uint32_t>(cursor.le(4));
   const std::uint64_t frame = cursor.le(4);
@@ -271,7 +300,7 @@ inline void decode_chunk(PhotonChunk &chunk, const std::uint8_t *data, std::size
     malformed("chunk payload size does not match its header");
   }
   if (!load_columns) {
-    chunk.resize(0, 0);
+    chunk.set_rows_without_columns(n);
     return;
   }
   chunk.resize(n, mask);
@@ -280,14 +309,197 @@ inline void decode_chunk(PhotonChunk &chunk, const std::uint8_t *data, std::size
       load_floats(cursor.take(n * sizeof(float)), chunk.columns[i].data(), n);
     }
   }
-  if ((mask & column_bit(Column::path)) != 0) {
-    for (const float path : chunk[Column::path]) {
-      if (!std::isfinite(path) || path < 0.0F) {
-        malformed("path column value is not finite and >= 0");
-      }
-    }
+  try {
+    validate_photon_values(chunk, upward_allowed);
+  } catch (const std::invalid_argument &error) {
+    malformed(error.what());
   }
 }
+
+// Efficiency status of one record: factor -> state (docs/stream/efficiency-status.md).
+using EfficiencyStates = std::map<std::string, std::string>;
+
+// Rank of a state in the order pending -> envelope -> applied; a factor may only advance.
+inline int efficiency_rank(const std::string &state) {
+  if (state == "pending") {
+    return 0;
+  }
+  return state == "envelope" ? 1 : 2;
+}
+
+// The factors and states of one efficiency_status record: every factor named in `factors` needs
+// `<name>.state` with one of the three states.
+inline EfficiencyStates efficiency_states(const Metadata &metadata) {
+  const auto factors = metadata.find("factors");
+  if (factors == metadata.end()) {
+    malformed("efficiency status lacks 'factors'");
+  }
+  const auto *list = std::get_if<std::string>(&factors->second);
+  if (list == nullptr) {
+    malformed("efficiency status 'factors' is not a string");
+  }
+  EfficiencyStates states;
+  std::size_t begin = 0;
+  while (begin <= list->size()) {
+    std::size_t end = list->find(',', begin);
+    if (end == std::string::npos) {
+      end = list->size();
+    }
+    std::string name = list->substr(begin, end - begin);
+    begin = end + 1;
+    const auto first = name.find_first_not_of(" \t");
+    if (first == std::string::npos) {
+      continue;
+    }
+    name = name.substr(first, name.find_last_not_of(" \t") - first + 1);
+    const auto state_it = metadata.find(name + ".state");
+    if (state_it == metadata.end()) {
+      malformed(("efficiency status lacks '" + name + ".state'").c_str());
+    }
+    const auto *state = std::get_if<std::string>(&state_it->second);
+    if (state == nullptr || (*state != "applied" && *state != "envelope" && *state != "pending")) {
+      malformed(("efficiency status factor '" + name +
+                 "' has an unknown state (applied, envelope or pending)")
+                    .c_str());
+    }
+    if (!states.emplace(name, *state).second) {
+      malformed(("efficiency status lists factor '" + name + "' twice").c_str());
+    }
+  }
+  return states;
+}
+
+// Record nesting and efficiency-status transitions (docs/stream/format.md, "Record";
+// docs/stream/efficiency-status.md). The Reader runs accept() on every record it returns, so
+// `stream cat`, the Python reader and the converters all reject the same streams.
+class Nesting {
+public:
+  // Throws std::runtime_error (malformed) if a record of this type may not follow the records
+  // seen so far. Unknown record types are not passed here.
+  void accept(RecordType type, const Metadata &metadata) {
+    switch (type) {
+    case RecordType::run:
+      if (run_open_) {
+        malformed("run inside a run (run_end missing)");
+      }
+      run_open_ = true;
+      events_ = 0;
+      run_states_.clear();
+      return;
+    case RecordType::event:
+      if (!run_open_) {
+        malformed("event outside a run");
+      }
+      if (event_open_) {
+        malformed("event inside an event (event_end missing)");
+      }
+      event_open_ = true;
+      ++events_;
+      return;
+    case RecordType::telescope:
+      if (!event_open_) {
+        malformed("telescope outside an event");
+      }
+      if (telescope_open_) {
+        malformed("telescope inside a telescope (telescope_end missing)");
+      }
+      telescope_open_ = true;
+      telescope_photons_ = false;
+      telescope_states_.clear();
+      return;
+    case RecordType::photons:
+      if (!telescope_open_) {
+        malformed("photons outside a telescope record");
+      }
+      telescope_photons_ = true;
+      return;
+    case RecordType::telescope_end:
+      if (!telescope_open_) {
+        malformed("telescope_end without telescope");
+      }
+      telescope_open_ = false;
+      return;
+    case RecordType::event_end:
+      if (!event_open_) {
+        malformed("event_end without event");
+      }
+      if (telescope_open_) {
+        malformed("event_end inside a telescope (telescope_end missing)");
+      }
+      event_open_ = false;
+      return;
+    case RecordType::run_end:
+      if (!run_open_) {
+        malformed("run_end without run");
+      }
+      if (event_open_) {
+        malformed("run_end inside an event (event_end missing)");
+      }
+      run_open_ = false;
+      return;
+    case RecordType::blob:
+      if (!run_open_) {
+        malformed("blob outside a run");
+      }
+      return;
+    case RecordType::efficiency_status:
+      efficiency_status(metadata);
+      return;
+    case RecordType::stream_end:
+      if (run_open_) {
+        malformed("stream_end inside a run (run_end missing)");
+      }
+      return;
+    default:
+      return; // the stream header
+    }
+  }
+
+private:
+  // Run status records come before the first event; a telescope status record comes after its
+  // telescope record and before its photons. The two scopes are checked separately: the telescope
+  // status overrides the run status per factor (docs/stream/efficiency-status.md).
+  void efficiency_status(const Metadata &metadata) {
+    if (!run_open_) {
+      malformed("efficiency status outside a run");
+    }
+    if (telescope_open_) {
+      if (telescope_photons_) {
+        malformed("efficiency status after the photons of its telescope");
+      }
+      advance(telescope_states_, metadata, "telescope status records");
+      return;
+    }
+    if (events_ > 0) {
+      malformed("run efficiency status after the first event");
+    }
+    advance(run_states_, metadata, "run status records");
+  }
+
+  // Checks every factor first and then updates the states, so a rejected record changes nothing.
+  static void advance(EfficiencyStates &states, const Metadata &metadata, const char *scope) {
+    const EfficiencyStates record = efficiency_states(metadata);
+    for (const auto &[name, state] : record) {
+      const auto previous = states.find(name);
+      if (previous != states.end() && efficiency_rank(state) <= efficiency_rank(previous->second)) {
+        malformed(("efficiency status factor '" + name + "' in " + scope +
+                   " has an invalid transition from " + previous->second + " to " + state)
+                      .c_str());
+      }
+    }
+    for (const auto &[name, state] : record) {
+      states[name] = state;
+    }
+  }
+
+  bool run_open_{false};
+  bool event_open_{false};
+  bool telescope_open_{false};
+  bool telescope_photons_{false};
+  std::uint64_t events_{0};
+  EfficiencyStates run_states_;
+  EfficiencyStates telescope_states_;
+};
 
 inline std::int64_t int_field(const Metadata &metadata, const char *key) {
   const auto it = metadata.find(key);
@@ -316,6 +528,9 @@ inline std::int64_t int_field(const Metadata &metadata, const char *key) {
 
 // Writes records to a stream. The constructor writes the `stream` record;
 // finish() writes `stream_end` (idempotent). Nothing is written after finish().
+// A record that breaks the nesting rules of the Reader (for example an event outside a run, or
+// a run still open at finish()) is refused with std::invalid_argument before any of its bytes
+// are written, so the Writer cannot produce a stream the Reader would reject.
 class Writer {
 public:
   explicit Writer(std::ostream &out, std::string producer) : out_(out) {
@@ -335,6 +550,7 @@ public:
     if (type == RecordType::run) {
       static_cast<void>(ground_representation(metadata));
     }
+    accept_record(type, metadata);
     begin(type);
     stream_detail::append_metadata(buf_, metadata);
     finish_record();
@@ -348,6 +564,7 @@ public:
     if (static_cast<std::uint32_t>(chunk.frame) > static_cast<std::uint32_t>(Frame::camera)) {
       throw std::invalid_argument("photon chunk has an unknown frame");
     }
+    accept_record(RecordType::photons, no_metadata);
     const std::uint32_t mask = chunk.mask();
     const auto rows = static_cast<std::uint32_t>(chunk.rows());
     const auto present = static_cast<std::uint64_t>(std::popcount(mask));
@@ -368,6 +585,7 @@ public:
 
   void write_blob(std::uint32_t eventio_type, std::uint32_t eventio_id,
                   const std::vector<std::uint8_t> &data) {
+    accept_record(RecordType::blob, no_metadata);
     begin(RecordType::blob);
     stream_detail::put_le(buf_, eventio_type, 4);
     stream_detail::put_le(buf_, eventio_id, 4);
@@ -379,6 +597,7 @@ public:
     if (finished_) {
       return;
     }
+    accept_record(RecordType::stream_end, no_metadata);
     begin(RecordType::stream_end);
     finish_record();
     out_.flush();
@@ -389,6 +608,17 @@ private:
   void check_open() const {
     if (finished_) {
       throw std::logic_error("obdeect::stream::Writer: stream already finished");
+    }
+  }
+
+  // Refuses a record that the Reader would refuse (the same Nesting rules), before any byte of
+  // it is written. Throws std::invalid_argument.
+  void accept_record(RecordType type, const Metadata &metadata) {
+    check_open();
+    try {
+      nesting_.accept(type, metadata);
+    } catch (const MalformedStreamError &error) {
+      throw std::invalid_argument(std::string("obdeect::stream::Writer: ") + error.what());
     }
   }
 
@@ -435,6 +665,8 @@ private:
   std::ostream &out_;
   std::vector<std::uint8_t> buf_;
   bool finished_{false};
+  stream_detail::Nesting nesting_;
+  inline static const Metadata no_metadata{};
 };
 
 // Reads the next complete record (header and payload) as raw bytes into
@@ -447,13 +679,13 @@ inline bool read_record_raw(std::istream &in, std::vector<std::uint8_t> &bytes) 
   const auto got = static_cast<std::size_t>(in.gcount());
   if (got == 0) {
     if (in.bad()) {
-      throw std::runtime_error("obdeect stream: read error on input stream");
+      throw StreamReadError("obdeect stream: read error on input stream");
     }
     bytes.clear();
     return false;
   }
   if (got != record_header_size) {
-    malformed("truncated record header");
+    truncated("record header");
   }
   if (load_le(bytes.data(), 4) != record_magic) {
     throw std::runtime_error("obdeect stream: bad magic, not a photon stream");
@@ -468,7 +700,7 @@ inline bool read_record_raw(std::istream &in, std::vector<std::uint8_t> &bytes) 
     bytes.resize(old_size + step);
     in.read(reinterpret_cast<char *>(bytes.data() + old_size), static_cast<std::streamsize>(step));
     if (static_cast<std::size_t>(in.gcount()) != step) {
-      malformed("truncated record payload");
+      truncated("record payload");
     }
     remaining -= step;
   }
@@ -480,9 +712,10 @@ class Reader {
 public:
   explicit Reader(std::istream &in) : in_(in) {}
 
-  // Decode photon chunk columns only for these telescope ids. Other chunks are read and
-  // validated like any other, but their columns are not decoded: they come back with
-  // telescope_id, frame and first_index set and no columns. Default: decode all.
+  // Decode photon chunk columns only for these telescope ids. Other chunks are read, and their
+  // header and payload size are checked, but their columns are not decoded and their values are not
+  // checked. They come back with telescope_id, frame, first_index and rows() (the header row count)
+  // set and no columns. Default: decode and check all.
   void keep_photons_of(std::vector<std::uint32_t> telescope_ids) {
     kept_telescopes_ = std::move(telescope_ids);
     filter_photons_ = true;
@@ -492,90 +725,19 @@ public:
   // (which is consumed, not returned) or at EOF on a record boundary. Unknown
   // record types are skipped. Throws std::runtime_error on malformed input or
   // a stream whose format_major differs from obdeect::stream::format_major.
+  // Throws std::runtime_error on malformed input, on a stream whose format_major differs from
+  // obdeect::stream::format_major, and on any record that breaks the nesting or efficiency status
+  // rules. After an exception the reader has failed: every later call throws too.
   bool next(Record &record) {
-    using namespace stream_detail;
-    while (!ended_) {
-      if (!read_record_raw(in_, raw_)) {
-        return false;
-      }
-      const auto type = static_cast<std::uint16_t>(load_le(raw_.data() + 4, 2));
-      if (static_cast<RecordType>(type) == RecordType::stream) {
-        if (header_seen_) {
-          malformed("second stream record");
-        }
-        header_seen_ = true;
-      } else if (!header_seen_) {
-        malformed("stream does not start with a stream record");
-      }
-      const std::uint8_t *payload = raw_.data() + record_header_size;
-      const std::size_t size = raw_.size() - record_header_size;
-      switch (static_cast<RecordType>(type)) {
-      case RecordType::stream: {
-        decode_metadata_into(record.metadata, payload, size);
-        const std::int64_t major = int_field(record.metadata, "format_major");
-        if (major != format_major) {
-          throw std::runtime_error("obdeect stream: unsupported format major version " +
-                                   std::to_string(major) + " (reader supports " +
-                                   std::to_string(format_major) + ")");
-        }
-        // Minor versions are compatible within a major version: a later minor is read too (its
-        // unknown columns fail the column-mask check). A missing minor is 0 (format 1.0).
-        const std::int64_t minor = record.metadata.contains("format_minor")
-                                       ? int_field(record.metadata, "format_minor")
-                                       : 0;
-        if (minor < 0) {
-          throw std::runtime_error("obdeect stream: negative format minor version " +
-                                   std::to_string(minor));
-        }
-        stream_minor_ = static_cast<int>(minor);
-        record.type = RecordType::stream;
-        return true;
-      }
-      case RecordType::run:
-        decode_metadata_into(record.metadata, payload, size);
-        // Rejects unknown representations; sphere runs need format 1.2 (path column, sphere rows).
-        if (ground_representation(record.metadata) == GroundRepresentation::sphere &&
-            stream_minor_ < 2) {
-          malformed("ground_representation sphere in a stream of format 1.0 or 1.1");
-        }
-        record.type = RecordType::run;
-        return true;
-      case RecordType::event:
-      case RecordType::telescope:
-      case RecordType::telescope_end:
-      case RecordType::event_end:
-      case RecordType::run_end:
-      case RecordType::efficiency_status:
-        decode_metadata_into(record.metadata, payload, size);
-        record.type = static_cast<RecordType>(type);
-        return true;
-      case RecordType::photons:
-        // Payloads shorter than the telescope id fail in decode_chunk.
-        decode_chunk(record.chunk, payload, size,
-                     !filter_photons_ || size < 4 || kept(chunk_telescope(payload)),
-                     stream_minor_ >= 2);
-        record.type = RecordType::photons;
-        return true;
-      case RecordType::blob:
-        if (size < blob_header_size) {
-          malformed("blob record shorter than its header");
-        }
-        record.blob_eventio_type = static_cast<std::uint32_t>(load_le(payload, 4));
-        record.blob_eventio_id = static_cast<std::uint32_t>(load_le(payload + 4, 4));
-        record.blob.assign(payload + blob_header_size, payload + size);
-        record.type = RecordType::blob;
-        return true;
-      case RecordType::stream_end:
-        if (size != 0) {
-          malformed("stream_end with payload");
-        }
-        ended_ = true;
-        return false;
-      default:
-        break; // unknown record type: skip
-      }
+    if (failed_) {
+      throw std::runtime_error("obdeect stream: reader failed earlier");
     }
-    return false;
+    try {
+      return read_next(record);
+    } catch (...) {
+      failed_ = true;
+      throw;
+    }
   }
 
   // True once stream_end has been read.
@@ -589,12 +751,99 @@ public:
     }
     const auto next = in_.peek();
     if (in_.bad()) {
-      throw std::runtime_error("obdeect stream: read error on input stream");
+      throw StreamReadError("obdeect stream: read error on input stream");
     }
     return next == std::istream::traits_type::eof();
   }
 
 private:
+  bool read_next(Record &record) {
+    using namespace stream_detail;
+    while (!ended_) {
+      if (!read_record_raw(in_, raw_)) {
+        return false;
+      }
+      const auto type = static_cast<std::uint16_t>(load_le(raw_.data() + 4, 2));
+      if (static_cast<RecordType>(type) == RecordType::stream) {
+        if (header_seen_) {
+          malformed("second stream record");
+        }
+      } else if (!header_seen_) {
+        malformed("stream does not start with a stream record");
+      }
+      const std::uint8_t *payload = raw_.data() + record_header_size;
+      const std::size_t size = raw_.size() - record_header_size;
+      const auto rtype = static_cast<RecordType>(type);
+      switch (rtype) {
+      case RecordType::stream: {
+        decode_metadata_into(record.metadata, payload, size);
+        const std::int64_t major = int_field(record.metadata, "format_major");
+        if (major != format_major) {
+          throw UnsupportedVersionError("obdeect stream: unsupported format major version " +
+                                        std::to_string(major) + " (reader supports " +
+                                        std::to_string(format_major) + ")");
+        }
+        // Minor versions are compatible within a major version: a later minor is read too (its
+        // unknown columns fail the column-mask check). A missing minor is 0 (format 1.0).
+        const std::int64_t minor = record.metadata.contains("format_minor")
+                                       ? int_field(record.metadata, "format_minor")
+                                       : 0;
+        if (minor < 0) {
+          throw std::runtime_error("obdeect stream: negative format minor version " +
+                                   std::to_string(minor));
+        }
+        stream_minor_ = static_cast<int>(minor);
+        header_seen_ = true;
+        record.type = RecordType::stream;
+        return true;
+      }
+      case RecordType::run:
+        decode_metadata_into(record.metadata, payload, size);
+        // Rejects unknown representations; sphere runs need format 1.2 (path column, sphere rows).
+        if (ground_representation(record.metadata) == GroundRepresentation::sphere &&
+            stream_minor_ < 2) {
+          malformed("ground_representation sphere in a stream of format 1.0 or 1.1");
+        }
+        break;
+      case RecordType::event:
+      case RecordType::telescope:
+      case RecordType::telescope_end:
+      case RecordType::event_end:
+      case RecordType::run_end:
+      case RecordType::efficiency_status:
+        decode_metadata_into(record.metadata, payload, size);
+        break;
+      case RecordType::photons:
+        // Payloads shorter than the telescope id fail in decode_chunk.
+        decode_chunk(record.chunk, payload, size,
+                     !filter_photons_ || size < 4 || kept(chunk_telescope(payload)),
+                     stream_minor_ >= 2, stream_minor_ >= 1);
+        break;
+      case RecordType::blob:
+        if (size < blob_header_size) {
+          malformed("blob record shorter than its header");
+        }
+        record.blob_eventio_type = static_cast<std::uint32_t>(load_le(payload, 4));
+        record.blob_eventio_id = static_cast<std::uint32_t>(load_le(payload + 4, 4));
+        record.blob.assign(payload + blob_header_size, payload + size);
+        break;
+      case RecordType::stream_end:
+        if (size != 0) {
+          malformed("stream_end with payload");
+        }
+        nesting_.accept(rtype, record.metadata);
+        ended_ = true;
+        return false;
+      default:
+        continue; // unknown record type: skipped
+      }
+      nesting_.accept(rtype, record.metadata);
+      record.type = rtype;
+      return true;
+    }
+    return false;
+  }
+
   static std::uint32_t chunk_telescope(const std::uint8_t *payload) {
     return static_cast<std::uint32_t>(stream_detail::load_le(payload, 4));
   }
@@ -610,6 +859,8 @@ private:
   int stream_minor_{0}; // format_minor of the stream record read last
   bool header_seen_{false};
   bool ended_{false};
+  bool failed_{false};
+  stream_detail::Nesting nesting_;
 };
 
 // Writes one record as returned by Reader (stream and stream_end are not written).

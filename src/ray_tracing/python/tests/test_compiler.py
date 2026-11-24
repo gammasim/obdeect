@@ -13,6 +13,7 @@ from telescopes import STRUCTURE, dual, record, segmented
 def build(records_files, **options):
     records, files = records_files
     options.setdefault("configuration_seed", 1)
+    options.setdefault("propagation_group_index", 1.0)
     return compile_model(records, files.__getitem__, **options)
 
 
@@ -60,7 +61,8 @@ def test_focus_offset_zenith_terms_need_both_components():
         ]
 
     assert plane([2.0, 20.0, 0.0, 0.0]) == pytest.approx(8.52)
-    assert plane([2.0, 20.0, 3.0, 0.0]) == pytest.approx(8.52)  # Both zenith terms are required.
+    with pytest.raises(ModelError, match="zenith"):  # Both zenith terms are required.
+        plane([2.0, 20.0, 3.0, 0.0])
     expected = 8.52 + 0.01 * (
         3.0 * (math.cos(math.radians(60)) - math.cos(math.radians(20)))
         + 4.0 * (math.sin(math.radians(60)) - math.sin(math.radians(20)))

@@ -4,7 +4,6 @@ Pixels come from a camera definition file: ``Pixel <id> <type> <x> <y>`` lines w
 cm (the file's own unit), and ``Trigger`` lines naming groups of pixels. Pixel lists look like
 ``1 +2 3 [4,5]``: ``+`` marks a required pixel, ``[..]`` lists pre-summed slave pixels, ``%``
 starts a comment. Each lit pixel is one point emission, parallel along -z, into the camera plane.
-Old program: ``led.hpp``.
 """
 
 import argparse
@@ -102,7 +101,7 @@ def build(args: argparse.Namespace) -> dict:
                 events.append(_event(args, combo, pixels, spectrum, pulse, args.events))
     return {
         "run": _common.run_section(args, frame="camera"),
-        "telescopes": [{"id": 1, "position_m": [0.0, 0.0, 0.0], "radius_m": args.camera_radius}],
+        "telescopes": _common.single_telescope(args.camera_radius),
         "events": events,
     }
 
@@ -212,18 +211,17 @@ def _event(args, items: list[_Item], pixels: dict, spectrum, pulse, repeat: int)
     for item in items:
         for pixel_id in [item.id, *(item.slaves if args.slaves else [])]:
             x, y = pixels[pixel_id]
-            emissions.append({
-                "kind": "point",
-                "photons": args.photons,
-                "bunch_size": args.bunch_size,
-                "time_offset_ns": 0.0,
-                "to_plane_z0": False,
-                "position_m": [x / 100.0, y / 100.0, 0.0],
-                "axis": [0.0, 0.0, -1.0],
-                "angular": _PARALLEL,
-                "spectrum": spectrum,
-                "pulse": pulse,
-                "target": "auto",
-            })
+            emissions.append(
+                _common.point_emission(
+                    photons=args.photons,
+                    bunch_size=args.bunch_size,
+                    position_m=[x / 100.0, y / 100.0, 0.0],
+                    axis=[0.0, 0.0, -1.0],
+                    angular=_PARALLEL,
+                    spectrum=spectrum,
+                    pulse=pulse,
+                    target="auto",
+                )
+            )
     labels = [float(item.id) for item in items]
     return {"repeat": repeat, "metadata": {"pixels": labels}, "emissions": emissions}

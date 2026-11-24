@@ -30,35 +30,24 @@ from typing import Any
 import numpy as np
 from obdeect.sources import _core, config
 
-# Copies of obdeect stream constants (no runtime dependency on obdeect stream). The tests in
-# python/tests/test_stream_contract.py compare them with the compiled obdeect stream headers.
+# The stream constants come from the compiled stream contract (never copied by hand).
+_CONTRACT = _core.stream_contract()
 
 #: Largest number of photons in one chunk (photon stream chunk limit).
-CHUNK_ROWS = 1 << 16
+CHUNK_ROWS = _CONTRACT["max_chunk_rows"]
 
 #: Frames of the photon stream. A run sets its frame; ground (G) runs write sphere rows.
-FRAMES = {"sky": 0, "ground": 1, "telescope": 2, "camera": 3}
+FRAMES = dict(_CONTRACT["frames"])
 
 #: Columns of the emitted photons, in obdeect stream column names.
-COLUMNS = ("x", "y", "z", "cx", "cy", "cz", "t", "w", "wavelength")
-
-_EVENT_PATH = "events[0].emissions[0]"
+COLUMNS = tuple(_CONTRACT["emitted_columns"])
 
 
 def normalize_emission(spec: Mapping[str, Any]) -> dict[str, Any]:
     """Normalized emission (defaults filled in); errors name the key within the emission."""
     if not isinstance(spec, Mapping):
         raise ValueError(f"emission: expected a dictionary, got {type(spec).__name__}")
-    wrapper = {
-        "run": {"observation_level_m": 0.0},
-        "telescopes": [{"id": 1, "radius_m": 1.0}],
-        "events": [{"emissions": [dict(spec)]}],
-    }
-    try:
-        return config.normalize(wrapper)["events"][0]["emissions"][0]
-    except ValueError as error:
-        message = str(error).replace(_EVENT_PATH, "emission")
-        raise ValueError(message) from None
+    return config.normalize_emission(spec)
 
 
 def _check_rows(rows: int) -> None:
@@ -93,7 +82,8 @@ def emit_chunk(
     """Candidates first_index .. first_index + rows - 1 (at most 2^16) as float32 columns.
 
     Line photons that miss their target, and photons of a ``to_plane_z0`` emission that move away
-    from the plane z = 0, are dropped, so the chunk may hold fewer rows.
+    from the plane z = 0, are dropped, so the chunk may hold fewer rows. The result also holds the
+    key ``not_on_plane`` (int): the photons of this chunk dropped for the plane.
     """
     _check_rows(rows)
     if first_index < 0:

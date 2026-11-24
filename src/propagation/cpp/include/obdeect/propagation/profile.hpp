@@ -1,6 +1,7 @@
 #pragma once
 
-// Atmospheric profile table (atmprof format) and its interpolation. See docs/refraction.md.
+// Atmospheric profile table (atmprof format) and its interpolation. See
+// docs/propagation/refraction.md.
 //
 // Columns used: altitude [km], density [g/cm^3], thickness [g/cm^2], n-1. Internally heights
 // are cm. Density and n-1 are interpolated with a natural cubic spline of their logarithm
@@ -200,9 +201,29 @@ public:
       return moment_nodes_[static_cast<std::size_t>(power)].back();
     }
     const std::size_t k = cell(h);
+    return moment_in_cell(k, h - zf_[k], power);
+  }
+
+  // All moments index_moment_cm(h, power), power = 0..max_moment, from one cell lookup. Each
+  // equals index_moment_cm(h, power) to rounding (integer powers by multiplication).
+  void index_moments_cm(double h, std::array<double, max_moment + 1> &out) const {
+    check(h);
+    if (h <= zf_.front()) {
+      out.fill(0.);
+      return;
+    }
+    if (h >= zf_.back()) {
+      for (int power = 0; power <= max_moment; ++power) {
+        out[static_cast<std::size_t>(power)] =
+            moment_nodes_[static_cast<std::size_t>(power)].back();
+      }
+      return;
+    }
+    const std::size_t k = cell(h);
     const double d = h - zf_[k];
-    return moment_nodes_[static_cast<std::size_t>(power)][k] +
-           std::pow(nuf_[k], power) * d * detail::phi(power * rate_nu_[k] * d);
+    for (int power = 0; power <= max_moment; ++power) {
+      out[static_cast<std::size_t>(power)] = moment_in_cell(k, d, power);
+    }
   }
 
   double density(double height_m) const { return density_cm(to_cm(height_m)); }
@@ -228,6 +249,21 @@ private:
     const std::size_t above =
         static_cast<std::size_t>(std::upper_bound(zf_.begin(), zf_.end(), h) - zf_.begin());
     return std::min(above == 0 ? std::size_t{0} : above - 1, zf_.size() - 2);
+  }
+
+  // x^n for integer n >= 0 by repeated multiplication (no std::pow per call).
+  static double integer_power(double x, int n) {
+    double value = 1.;
+    for (int i = 0; i < n; ++i) {
+      value *= x;
+    }
+    return value;
+  }
+
+  // Integral of (n-1)^power over the first d [cm] of fine cell k (0 <= d <= cell length).
+  double moment_in_cell(std::size_t k, double d, int power) const {
+    return moment_nodes_[static_cast<std::size_t>(power)][k] +
+           integer_power(nuf_[k], power) * d * detail::phi(power * rate_nu_[k] * d);
   }
 
   // Mass above h (g/cm^2) of the interpolated density, h inside the table.
@@ -303,7 +339,7 @@ private:
       for (std::size_t k = 0; k + 1 < m; ++k) {
         const double dz = zf_[k + 1] - zf_[k];
         nodes[k + 1] =
-            nodes[k] + std::pow(nuf_[k], power) * dz * detail::phi(power * rate_nu_[k] * dz);
+            nodes[k] + integer_power(nuf_[k], power) * dz * detail::phi(power * rate_nu_[k] * dz);
       }
     }
     // The thickness column must agree with the integrated density to 5 %.

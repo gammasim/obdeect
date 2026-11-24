@@ -9,6 +9,41 @@ The examples write to `/dev/null`; replace it with `-o out.pst` to keep the phot
 are small for a quick test. Profile options take `KIND:NAME=VALUE,...`, for example
 `--spectrum fixed:wavelength_nm=400`.
 
+Options shared by all presets (the preset builds a [run file](spec/run-file.md) from them):
+
+- `-o`, `--output`: photon-stream file (default and `-`: standard output).
+- `--observation-level` (required), `--run-number`, `--seed`, `--atmosphere-id` (-1: none),
+  `--events` (events written).
+- `--bunch-size` (photons per bunch, at least 1), `--max-rows` (refuses runs that would write more
+  rows; default 1e8), `--set KEY=VALUE` (overrides one value of the run description, for example
+  `events[0].repeat=5`; repeatable).
+- `--spectrum`, `--pulse` and, where listed, `--angular`: profile options.
+
+Options that are not in the sections below, per preset (all in `--help`): `flasher` takes
+`--flasher-offset`, `--flasher-depth`, `--flasher-inclination` (the flasher points at altitude
+-90 deg + inclination), `--mirror-camera-distance`, `--fiducial-radius`, `--delays NS NS NS NS` and
+`--fire`; `led` takes `--require N` (pixels per event of each list; 0: all), `--random` (pick them
+at random), `--slaves` (also fire the pre-summed slave pixels); `muon` takes `--primary`, `--mass`,
+`--charge`, `--momentum` or `--beta`, `--impact-x`, `--impact-y`, `--telescope-position`, and the
+core scatter `--core-scatter-radius` with `--core-scatter-count`; `night-sky` takes
+`--telescope-position`.
+
+## Directions (zenith and azimuth)
+
+One rule for every preset with a zenith and an azimuth (`--zenith`, `--azimuth`, `--beam-zenith`,
+`--beam-azimuth`, `--telescope-zenith`, `--telescope-azimuth`). Both are measured clockwise from
+north towards east (astronomical azimuth), and the zenith from up. In the sky frame (x north, y
+west, z up) the unit vector of zenith `z` and azimuth `a` is `(sin z cos a, -sin z sin a, cos z)`.
+
+- Sky sources (`muon`, `shower`, `night-sky`): the zenith and azimuth give the direction the
+  light comes FROM, as seen by the observer. The light travels along the reverse. A muon with
+  `--azimuth 90` comes from the east and runs west.
+- Beam devices (`laser-beam`, `lidar`, `beam-scan`): the zenith and azimuth give the direction the
+  beam POINTS TO. The zenith of a beam counts from up: 180 points down, 90 is horizontal.
+
+`point-source` takes a Cartesian `--direction` and `flasher` a position in the camera frame; neither
+takes a compass azimuth.
+
 ## flasher
 
 Camera flasher, with `--type`:
@@ -127,7 +162,7 @@ obdeect sources run lidar --observation-level 2000 --satellite-altitude 400000 \
     --pulse-energy 1e-3 --wavelength-nm 355 --telescope-radius 12.5 \
     --start-height 100000 --rows 128 --max-rows 10000 -o lidar-primaries.pst
 
-obdeect propagation run --site-altitude 2000 --seed 7 --mode weighted \
+obdeect propagation run --site-altitude 2000 --seed 7 --mode weighted --pathlen 0 \
     --transmission src/propagation/cpp/tests/data/atm_trans_2000_1_10_0_0_2000.dat \
     --scattering src/propagation/cpp/tests/data/scattering_exponential.dat \
     --scattering-points 64 -i lidar-primaries.pst -o lidar-scattered.pst
@@ -162,14 +197,16 @@ Model and limits, shared by both presets:
 - Only single scattering. A beam that passes a telescope sphere (closest approach within the
   sphere plus the beam radius at that point, below the start) is an error, unless
   `--allow-direct-beam` is given.
-- `--beam-azimuth` is astronomical: clockwise from north (sky frame x north, y west).
+- `--beam-azimuth` is the azimuth the beam points to, clockwise from north (see
+  [directions](#directions-zenith-and-azimuth)).
 
 ## night-sky
 
 Night-sky background: one `sky_background` emission per event on the sphere of one telescope,
 with the axis pointing down (the telescope looks up). Photons arrive from within
 `--viewcone-deg` of the axis. `--photons` is per event. Frame `sky`, target `none`.
-`--telescope-zenith` and `--telescope-azimuth` set the pointing (default: straight up).
+`--telescope-zenith` and `--telescope-azimuth` set the pointing, the sky direction the photons
+come from (default: straight up; see [directions](#directions-zenith-and-azimuth)).
 
 Required: `--spectrum`, `--photons`, `--viewcone-deg`, `--telescope-position`,
 `--telescope-radius`.
@@ -183,8 +220,9 @@ obdeect sources run night-sky --observation-level 2150 \
 ## muon
 
 Cherenkov light of a muon-like track on the telescope sphere. The track runs from
-`--start-height` down to the impact point (`--impact-x`, `--impact-y`) in the direction of
-`--zenith` and `--azimuth`. Its light is one line emission, with the cone at the Cherenkov
+`--start-height` down to the impact point (`--impact-x`, `--impact-y`). The light comes from
+`--zenith` and `--azimuth` (the track runs along the reverse; see
+[directions](#directions-zenith-and-azimuth)). Its light is one line emission, with the cone at the Cherenkov
 angle from the refractive index, and target `auto` (the telescope sphere). Frame `sky`. The
 time is zero at the impact point. Each core position of `--core-scatter-count` is one event
 entry; `--events` repeats each one.

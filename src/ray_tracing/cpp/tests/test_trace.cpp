@@ -1,20 +1,23 @@
 // End-to-end transport through analytic telescopes.
 #include "check.hpp"
 
-#include "legacy_trace.hpp"
 #include "obdeect/ray_tracing/bunches.hpp"
 #include "obdeect/ray_tracing/model_json.hpp"
 #include "obdeect/ray_tracing/source.hpp"
 #include "obdeect/ray_tracing/trace.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <map>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -109,7 +112,8 @@ OpticalModel facing_flats(double height) {
 
 TraceResult shoot(const OpticalModel &m, Vec3 origin, Vec3 direction, std::uint64_t id = 0,
                   bool responses = true) {
-  return trace_photon(m, {origin, normalized(direction)}, 400.0, 0.0, 1.0, id, 1, responses);
+  return trace_photon(m, {origin, normalized(direction)}, 400.0, 0.0, 1.0, id, 1,
+                      {.apply_responses = responses});
 }
 
 void spherical_mirror() {
@@ -209,7 +213,8 @@ void direct_photons() {
   m.telescope_transmission = TelescopeTransmission{0.5, 0.0, 1.0, 2.0, 1.0};
   m.primary.reflectivity = Response{300.0, 100.0, 3, {0.0}, {0.9, 0.8, 0.7}};
   const auto flash = [&m](double y) {
-    return trace_photon(m, {{0.0, y, 0.5}, {0.0, 0.0, 1.0}}, 400.0, 1.0, 1.0, 0, 1, true, true);
+    return trace_photon(m, {{0.0, y, 0.5}, {0.0, 0.0, 1.0}}, 400.0, 1.0, 1.0, 0, 1,
+                        {.direct = true});
   };
   auto r = flash(0.1);
   CHECK(r.status == Status::detected);
@@ -235,7 +240,7 @@ void direct_photons() {
   CHECK(flash(0.1).status == Status::detected);
   // Dual mirror: from between the mirrors down to the focal surface at z = 0.
   r = trace_photon(folded_paraboloid(), {{0.1, 0.0, 2.0}, {0.0, 0.0, -1.0}}, 400.0, 0.0, 1.0, 0, 1,
-                   true, true);
+                   {.direct = true});
   CHECK(r.status == Status::detected && r.terminal_surface == 3);
   CHECK_NEAR(r.position.z, 0.0, 1e-9);
 }
@@ -286,8 +291,9 @@ void classify_losses_option() {
   std::size_t detected = 0, differing = 0, all_differ_as_expected = 0;
   std::vector<Status> fast_status(rays.size());
   for (std::size_t i = 0; i < rays.size(); ++i) {
-    const auto full = trace_photon(m, rays[i], 400.0, 0.0, 1.0, i, 1, false, false, true, true);
-    const auto fast = trace_photon(m, rays[i], 400.0, 0.0, 1.0, i, 1, false, false, true, false);
+    const auto full = trace_photon(m, rays[i], 400.0, 0.0, 1.0, i, 1, {.apply_responses = false});
+    const auto fast = trace_photon(m, rays[i], 400.0, 0.0, 1.0, i, 1,
+                                   {.apply_responses = false, .classify_losses = false});
     fast_status[i] = fast.status;
     if (full.status == fast.status) {
       CHECK(same(full, fast));
@@ -386,6 +392,80 @@ void scatter_widths() {
   }
 }
 
+// Shape of the scatter: the angle r between the reflected and the specular ray of a flat
+// mirror is Rayleigh distributed for a Gaussian scatter (sigma per axis): P(r <= x) =
+// 1 - exp(-x^2 / (2 sigma^2)). A double Gaussian with mixture fraction f (second width s2) has
+// the CDF (1 - f) R(sigma1) + f R(s2). Kolmogorov-Smirnov test at p = 1e-4: the critical value
+// is sqrt(-ln(p / 2) / 2) / sqrt(n) = 2.2252 / sqrt(n).
+constexpr double kolmogorov_limit_1e4 = 2.2252;
+
+template <class Cdf> double ks_statistic(std::vector<double> x, Cdf cdf) {
+  std::sort(x.begin(), x.end());
+  const double n = static_cast<double>(x.size());
+  double d = 0.0;
+  for (std::size_t i = 0; i < x.size(); ++i) {
+    const double f = cdf(x[i]);
+    d = std::max({d, (static_cast<double>(i) + 1.0) / n - f, f - static_cast<double>(i) / n});
+  }
+  return d;
+}
+
+double rayleigh_cdf(double x, double sigma) {
+  return 1.0 - std::exp(-x * x / (2.0 * sigma * sigma));
+}
+
+// Angles between the reflected rays and the specular ray (up, +z) of a flat mirror.
+std::vector<double> scatter_angles(const Scatter &scatter, int n) {
+  OpticalModel m;
+  m.primary.facets.push_back({1,
+                              {0, 0, 0},
+                              {0, 0, 1},
+                              {1, 0, 0},
+                              {0, 1, 0},
+                              {1, 0, 0},
+                              {0, 1, 0},
+                              10.0,
+                              0.0,
+                              Aperture::circle});
+  m.primary.grid = FacetGrid(m.primary.facets);
+  m.primary.scatter = scatter;
+  m.focal_surface = {2, 10.0, std::nullopt};
+  std::vector<double> angles;
+  angles.reserve(static_cast<std::size_t>(n));
+  for (int i = 0; i < n; ++i) {
+    const auto r = shoot(m, {0.0, 0.0, 30.0}, {0, 0, -1}, static_cast<std::uint64_t>(i));
+    if (r.status != Status::detected)
+      return {};
+    angles.push_back(std::atan2(std::hypot(r.direction.x, r.direction.y), std::abs(r.direction.z)));
+  }
+  return angles;
+}
+
+void scatter_shape() {
+  constexpr int n = 100000;
+  constexpr double sigma = 0.002;
+  const double critical = kolmogorov_limit_1e4 / std::sqrt(static_cast<double>(n));
+  const auto single = scatter_angles(Scatter{sigma, 0.0, 0.0, false}, n);
+  CHECK(single.size() == static_cast<std::size_t>(n));
+  const auto gaussian_cdf = [&](double x) { return rayleigh_cdf(x, sigma); };
+  CHECK(ks_statistic(single, gaussian_cdf) < critical);
+
+  // Double Gaussian: a fraction 0.3 of the reflections uses the wider width.
+  constexpr double sigma1 = 0.001, fraction2 = 0.3, sigma2 = 0.004;
+  const auto mixture = scatter_angles(Scatter{sigma1, fraction2, sigma2, false}, n);
+  CHECK(mixture.size() == static_cast<std::size_t>(n));
+  const auto mixture_cdf = [&](double x) {
+    return (1.0 - fraction2) * rayleigh_cdf(x, sigma1) + fraction2 * rayleigh_cdf(x, sigma2);
+  };
+  CHECK(ks_statistic(mixture, mixture_cdf) < critical);
+  // The test has power: the narrow Gaussian alone, or another fraction, is rejected.
+  CHECK(ks_statistic(mixture, [&](double x) { return rayleigh_cdf(x, sigma1); }) > 2.0 * critical);
+  const auto wrong_fraction_cdf = [&](double x) {
+    return 0.5 * rayleigh_cdf(x, sigma1) + 0.5 * rayleigh_cdf(x, sigma2);
+  };
+  CHECK(ks_statistic(mixture, wrong_fraction_cdf) > 2.0 * critical);
+}
+
 // On a strongly curved facet the tangent at the vertex is far from perpendicular to
 // the normal at the hit point (here 24 deg); the two scatter rotations must still be
 // about orthonormal axes. The rotation about the in-plane axis moves the ray by
@@ -435,8 +515,8 @@ void sub_photon_index() {
     int differ = 0;
     for (std::uint64_t id = 0; id < 100; ++id) {
       const auto a = trace_photon(m, ray, 400.0, 0.0, 1.0, id, 7);
-      const auto b = trace_photon(m, ray, 400.0, 0.0, 1.0, id, 7, true, false, true, true, 0);
-      const auto c = trace_photon(m, ray, 400.0, 0.0, 1.0, id, 7, true, false, true, true, 1);
+      const auto b = trace_photon(m, ray, 400.0, 0.0, 1.0, id, 7);
+      const auto c = trace_photon(m, ray, 400.0, 0.0, 1.0, id, 7, {.sub_photon = 1});
       CHECK(a.status == Status::detected && c.status == Status::detected);
       CHECK(std::memcmp(&a.position, &b.position, sizeof(Vec3)) == 0);
       CHECK(std::memcmp(&a.direction, &b.direction, sizeof(Vec3)) == 0);
@@ -705,12 +785,20 @@ void bunch_survivor_allocation() {
   BunchFrame frame;
   frame.plane_z = 20.0;
   constexpr std::uint64_t seed = 42;
-  std::size_t expected = 0;
+  // Each bunch of size 2.5 has three sub-photons; the keep probability of sub-photon k is its
+  // fraction of the bunch (1, 1, 0.5) times the acceptance (0.2) times the response bound. The
+  // draws are independent, so the survivor count is binomial-like (Poisson-binomial) with mean
+  // and variance from the probabilities; the 5-sigma interval must contain it.
   const double bound = response_bound(model, 400.0);
+  const double keep_per_bunch[3] = {1.0 * 0.2 * bound, 1.0 * 0.2 * bound, 0.5 * 0.2 * bound};
+  double mean = 0.0, variance = 0.0;
   for (std::size_t i = 0; i < n; ++i)
-    for (std::uint32_t k = 0; k < 3; ++k)
-      expected +=
-          uniform4(seed, ids[i], Stream::thinning, k)[0] < (k == 2 ? 0.5 : 1.0) * 0.2 * bound;
+    for (const double p : keep_per_bunch) {
+      mean += p;
+      variance += p * (1.0 - p);
+    }
+  const std::size_t expected = static_cast<std::size_t>(std::llround(mean));
+  const double tolerance = 5.0 * std::sqrt(variance);
   for (const std::size_t threads : {1, 6}) {
     ThreadPool pool(threads);
     std::vector<double> position, direction, time, weight, lambda;
@@ -730,7 +818,7 @@ void bunch_survivor_allocation() {
                          lambda.data(),   bunch.data(),     sub.data()};
     };
     const auto written = trace_bunches(model, in, frame, options, seed, pool, allocate);
-    CHECK(allocated == expected);
+    CHECK(std::abs(static_cast<double>(allocated) - static_cast<double>(expected)) <= tolerance);
     CHECK(written <= allocated);
   }
 }
@@ -751,7 +839,8 @@ void grazing_start_invariance() {
         TraceResult reference;
         for (const double distance : {40.0, 80.0, 160.0}) {
           const Vec3 origin = impact - direction * distance;
-          const auto t = trace_photon(model, {origin, direction}, 400.0, 0.0, 1.0, 0, 1, false);
+          const auto t = trace_photon(model, {origin, direction}, 400.0, 0.0, 1.0, 0, 1,
+                                      {.apply_responses = false});
           if (distance == 40.0) {
             reference = t;
             ++total;
@@ -870,8 +959,8 @@ void from_below_single_facet() {
   for (int i = 0; i < n; ++i)
     for (int j = 0; j < n; ++j) {
       const double x = -1.0 + 2.0 * (i + 0.5) / n, y = -1.0 + 2.0 * (j + 0.5) / n;
-      const auto r = trace_photon(m, {{x, y, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, true, false,
-                                  true, true, 0, true);
+      const auto r =
+          trace_photon(m, {{x, y, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, {.from_below = true});
       if (r.status == Status::blocked) {
         ++blocked;
         CHECK(r.terminal_surface == 1 && x * x + y * y < 0.25);
@@ -911,8 +1000,8 @@ void from_below_tilted_facet() {
                               Aperture::circle});
   m.primary.grid = FacetGrid(m.primary.facets);
   m.focal_surface = {2, 10.0, std::nullopt};
-  const auto r = trace_photon(m, {{0.1, 0.0, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, true, false,
-                              true, true, 0, true);
+  const auto r =
+      trace_photon(m, {{0.1, 0.0, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, {.from_below = true});
   CHECK(r.status == Status::detected);
   CHECK(r.primary_surface == 1 && r.terminal_surface == 2);
   // The facet plane s x - c z = 0 crosses the ray at z = s x / c.
@@ -937,17 +1026,15 @@ void from_below_obscurers() {
   rod.bound_radius = rod.radius_a;
   rod.legs = Leg::after_secondary;
   m.obscurers = Obscurers({rod}, {});
-  const auto r = trace_photon(m, {{0.0, 0.2, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, true, false,
-                              true, true, 0, true);
+  const auto r =
+      trace_photon(m, {{0.0, 0.2, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, {.from_below = true});
   CHECK(r.status == Status::blocked && r.terminal_surface == 9);
   CHECK_NEAR(r.position.z, -2.05, 1e-9);
   // Off the rod: the photon reaches the focal plane from below.
-  CHECK(trace_photon(m, {{0.0, -0.8, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, true, false, true,
-                     true, 0, true)
+  CHECK(trace_photon(m, {{0.0, -0.8, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, {.from_below = true})
             .status == Status::direct_focal);
   // A ray that meets nothing at all: missed_primary.
-  CHECK(trace_photon(m, {{0.0, 0.0, -5.0}, {1, 0, 0}}, 400.0, 0.0, 1.0, 0, 1, true, false, true,
-                     true, 0, true)
+  CHECK(trace_photon(m, {{0.0, 0.0, -5.0}, {1, 0, 0}}, 400.0, 0.0, 1.0, 0, 1, {.from_below = true})
             .status == Status::missed_primary);
   CHECK(to_string(Status::non_sequential) == "non_sequential");
   CHECK(to_string(Status::direct_focal) == "direct_focal");
@@ -1149,7 +1236,7 @@ void tilted_telescope_from_behind() {
   // Nothing is detected: the photon is blocked by the back of the dish.
   CHECK(trace_bunches(model, in, frame, BunchOptions{}, 1, pool, allocate) == 0);
   const auto blocked = trace_photon(model, {{0.1, 0.0, -20.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1,
-                                    true, false, true, true, 0, true);
+                                    {.from_below = true});
   CHECK(blocked.status == Status::blocked && blocked.terminal_surface == 1);
   // The downward path (a photon moving up, not flagged from below) also meets the back of the dish.
   CHECK(trace_photon(model, {{0.1, 0.0, -20.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1).status ==
@@ -1162,8 +1249,8 @@ void tilted_telescope_from_behind() {
 // extent the reflection misses the focal surface. Through the primary's annulus: the back, blocked.
 void from_below_dual_mirror() {
   const auto m = folded_paraboloid();
-  const auto focal = trace_photon(m, {{0.2, 0.0, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, true,
-                                  false, true, true, 0, true);
+  const auto focal =
+      trace_photon(m, {{0.2, 0.0, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, {.from_below = true});
   CHECK(focal.status == Status::detected && focal.terminal_surface == 3);
   CHECK(focal.secondary_surface == 2 && focal.primary_surface == kNoSurface);
   CHECK(focal.reflections == 1);
@@ -1173,13 +1260,13 @@ void from_below_dual_mirror() {
   CHECK_NEAR(focal.direction.z, -1.0, 1e-12);
   // Through the hole, the secondary's reflecting face at r = 0.7; the reflection goes down
   // outside the focal extent and meets nothing.
-  const auto secondary = trace_photon(m, {{0.7, 0.0, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, true,
-                                      false, true, true, 0, true);
+  const auto secondary =
+      trace_photon(m, {{0.7, 0.0, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, {.from_below = true});
   CHECK(secondary.status == Status::missed_focal_surface && secondary.secondary_surface == 2);
   CHECK_NEAR(secondary.secondary_point.z, 5.0, 1e-12);
   CHECK_NEAR(secondary.direction.z, -1.0, 1e-12);
-  const auto back = trace_photon(m, {{2.0, 0.0, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, true,
-                                 false, true, true, 0, true);
+  const auto back =
+      trace_photon(m, {{2.0, 0.0, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, {.from_below = true});
   CHECK(back.status == Status::blocked && back.terminal_surface == 1);
   CHECK(back.primary_surface == 1);
 }
@@ -1193,7 +1280,7 @@ void dual_through_hole() {
   const auto m = flat_dual();
   const double k = 0.1, s = std::sqrt(1.0 + k * k);
   const auto r = trace_photon(m, {{0.3, 0.0, -5.0}, {k / s, 0.0, 1.0 / s}}, 400.0, 0.0, 1.0, 0, 1,
-                              true, false, true, true, 0, true);
+                              {.from_below = true});
   CHECK(r.status == Status::missed_secondary);
   CHECK(r.reflections == 4); // Secondary, primary, secondary, primary.
   CHECK(r.primary_surface == 1 && r.secondary_surface == 2);
@@ -1228,8 +1315,8 @@ void facing_flats_bounce_limit() {
   // Without the limit the photon would keep bouncing: the ray is vertical, so the count is exact.
   CHECK(kMaxReflections == 16);
   // Mirror back faces: a photon from below meets the primary's back and is blocked there.
-  const auto back = trace_photon(m, {{0.1, 0.0, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, true,
-                                 false, true, true, 0, true);
+  const auto back =
+      trace_photon(m, {{0.1, 0.0, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, {.from_below = true});
   CHECK(back.status == Status::blocked && back.terminal_surface == 1);
 }
 
@@ -1240,8 +1327,8 @@ void camera_extent() {
   OpticalModel m;
   m.focal_surface = {4, 10.0, prepared(Asphere{4, 10.0, 0.0, 0.5, 1.0, {0.0}})};
   const auto up = [&](double x) {
-    return trace_photon(m, {{x, 0.0, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1, true, false, true,
-                        true, 0, true);
+    return trace_photon(m, {{x, 0.0, -5.0}, {0, 0, 1}}, 400.0, 0.0, 1.0, 0, 1,
+                        {.from_below = true});
   };
   const auto inside = up(0.2);
   CHECK(inside.status == Status::detected && inside.terminal_surface == 4);
@@ -1258,29 +1345,27 @@ void camera_extent() {
   CHECK(plane.weight == 0.0);
 }
 
-// Sequential photons keep their result, bit for bit. The reference is the sequential path as it was
-// before the loop (legacy::trace_sequential): every photon of the sample, with and without
-// responses, scatter, obscurers and flasher (direct) photons. A photon blocked by the back of the
-// secondary is compared without its secondary point: the old path did not record it.
-bool same_bits(double x, double y) { return std::memcmp(&x, &y, sizeof x) == 0; }
-bool same_vec(const Vec3 &a, const Vec3 &b) {
-  return same_bits(a.x, b.x) && same_bits(a.y, b.y) && same_bits(a.z, b.z);
-}
-bool same_result(const TraceResult &a, const TraceResult &b, bool secondary_point) {
-  const bool sec =
-      !secondary_point || (a.secondary_surface == b.secondary_surface &&
-                           same_vec(a.secondary_point, b.secondary_point) &&
-                           same_bits(a.secondary_incidence_deg, b.secondary_incidence_deg));
-  return a.status == b.status && a.terminal_surface == b.terminal_surface &&
-         a.primary_surface == b.primary_surface && same_vec(a.position, b.position) &&
-         same_vec(a.direction, b.direction) && same_bits(a.path_length_m, b.path_length_m) &&
-         same_bits(a.time_ns, b.time_ns) && same_bits(a.weight, b.weight) &&
-         same_vec(a.primary_point, b.primary_point) &&
-         same_bits(a.primary_incidence_deg, b.primary_incidence_deg) &&
-         same_bits(a.focal_incidence_deg, b.focal_incidence_deg) && sec;
+// Regression of the sequential path, against data/trace_golden.inc (regression data generated by
+// this code, not an independent reference; provenance in that file). The status histogram of 40000
+// photons per model and every 200th photon in full are compared; doubles agree to 1e-9 relative.
+// A change of these results needs a reason, and the file is then regenerated.
+struct GoldenPhoton {
+  std::uint32_t model, id, status, terminal_surface, primary_surface, secondary_surface;
+  std::uint32_t reflections;
+  double weight, path_length_m, time_ns;
+  Vec3 position, direction;
+};
+struct GoldenCount {
+  std::uint32_t model, status, count;
+};
+#include "data/trace_golden.inc"
+
+bool close(double x, double y) { return std::abs(x - y) <= 1e-12 + 1e-9 * std::abs(y); }
+bool close(const Vec3 &a, const Vec3 &b) {
+  return close(a.x, b.x) && close(a.y, b.y) && close(a.z, b.z);
 }
 
-void sequential_bit_identity() {
+void sequential_regression() {
   Obscurer rod;
   rod.kind = Obscurer::Kind::cylinder;
   rod.id = 9;
@@ -1330,48 +1415,70 @@ void sequential_bit_identity() {
     CHECK(file.good());
     std::stringstream text;
     text << file.rdbuf();
+    // The stored sha256 is the canonical hash of the document; the Python fixture tests and
+    // obdeect.ray_tracing.hashing write and check the same value.
+    CHECK(model_hash(text.str()) ==
+          "ebd56b8945f4bcf5e7d2bffc8c9cbb9374d35af13455b91ec6457784853e739c");
     models.push_back(load_model(text.str()));
   }
-  for (const auto &m : models) {
-    std::size_t detected = 0, differ = 0, direct = 0;
-    constexpr std::uint64_t n = 40000;
-    const RandomKey key(7);
-    for (std::uint64_t i = 0; i < n; ++i) {
-      const auto u = uniform4(key, i, Stream::source);
-      // Sky photons from above through the aperture with small tilts; every 4th is a flasher.
-      const bool flasher = i % 4 == 3;
-      const Vec3 origin{3.0 * (u[0] - 0.5), 3.0 * (u[1] - 0.5), flasher ? 8.0 * u[2] : 30.0};
-      Vec3 dir{0.2 * (u[2] - 0.5), 0.2 * (u[3] - 0.5), -1.0};
-      if (flasher)
-        dir = Vec3{0.6 * (u[3] - 0.5), 0.6 * (u[2] - 0.5), u[1] < 0.5 ? 1.0 : -1.0};
-      const Ray ray{origin, normalized(dir)};
-      const bool responses = i % 3 != 0, incidence = i % 5 != 0, classify = i % 7 != 0;
-      const auto got = trace_photon(m, ray, 400.0, 1.0, 1.0, i, key, responses, flasher, incidence,
-                                    classify, 0, false);
-      const auto want = legacy::trace_sequential(m, ray, 400.0, 1.0, 1.0, i, key, responses,
-                                                 flasher, incidence, classify, 0);
-      detected += want.status == Status::detected;
-      // Lost after the secondary without reaching the focal surface: the old path stopped
-      // there; the loop traces these on (a reflection off the primary is possible).
-      if (want.status == Status::missed_focal_surface && want.secondary_surface != kNoSurface) {
-        continue;
+  constexpr std::uint64_t n = 40000;
+  const RandomKey key(7);
+  // Photon i: photons in the sky frame from above through the aperture with small tilts; every 4th
+  // is a flasher.
+  const auto trace = [&](const OpticalModel &m, std::uint64_t i) {
+    const auto u = uniform4(key, i, Stream::source);
+    const bool flasher = i % 4 == 3;
+    const Vec3 origin{3.0 * (u[0] - 0.5), 3.0 * (u[1] - 0.5), flasher ? 8.0 * u[2] : 30.0};
+    Vec3 dir{0.2 * (u[2] - 0.5), 0.2 * (u[3] - 0.5), -1.0};
+    if (flasher)
+      dir = Vec3{0.6 * (u[3] - 0.5), 0.6 * (u[2] - 0.5), u[1] < 0.5 ? 1.0 : -1.0};
+    const Ray ray{origin, normalized(dir)};
+    return trace_photon(m, ray, 400.0, 1.0, 1.0, i, key,
+                        {.apply_responses = i % 3 != 0,
+                         .direct = flasher,
+                         .incidence_angles = i % 5 != 0,
+                         .classify_losses = i % 7 != 0});
+  };
+  if (std::getenv("OBDEECT_GOLDEN_DUMP")) {
+    for (std::uint32_t mi = 0; mi < models.size(); ++mi) {
+      std::array<std::uint32_t, kStatusCount> count{};
+      for (std::uint64_t i = 0; i < n; ++i)
+        ++count[static_cast<std::size_t>(trace(models[mi], i).status)];
+      for (std::size_t s = 0; s < kStatusCount; ++s)
+        if (count[s])
+          std::printf("GC %u %zu %u\n", mi, s, count[s]);
+      for (std::uint64_t i = 0; i < n; i += 200) {
+        const auto r = trace(models[mi], i);
+        std::printf("GP %u %llu %u %u %u %u %u %a %a %a {%a, %a, %a} {%a, %a, %a}\n", mi,
+                    static_cast<unsigned long long>(i), static_cast<unsigned>(r.status),
+                    r.terminal_surface, r.primary_surface, r.secondary_surface, r.reflections,
+                    r.weight, r.path_length_m, r.time_ns, r.position.x, r.position.y, r.position.z,
+                    r.direction.x, r.direction.y, r.direction.z);
       }
-      // Through the hole onto the focal asphere's receiving side inside its extent: the old path
-      // never met the focal surface before the primary, the loop detects the direct hit.
-      if (want.status == Status::missed_primary && got.status == Status::detected) {
-        ++direct;
-        continue;
-      }
-      // Blocked by the back of the secondary: the old path did not record its point.
-      const bool secondary_back = want.status == Status::blocked && m.secondary &&
-                                  want.terminal_surface == m.secondary->asphere->id;
-      if (!same_result(got, want, !secondary_back))
-        ++differ;
     }
-    CHECK(differ == 0);
-    CHECK(detected > 300);
-    // Direct hits need an asphere focal surface, and sky light must reach it past the secondary.
-    CHECK((direct > 0) == (m.focal_surface.asphere.has_value() && !m.secondary_blocks_incoming));
+    return;
+  }
+  for (std::uint32_t mi = 0; mi < models.size(); ++mi) {
+    std::array<std::uint32_t, kStatusCount> count{};
+    for (std::uint64_t i = 0; i < n; ++i)
+      ++count[static_cast<std::size_t>(trace(models[mi], i).status)];
+    for (std::size_t s = 0; s < kStatusCount; ++s) {
+      std::uint32_t want = 0;
+      for (const GoldenCount &g : golden_counts)
+        if (g.model == mi && g.status == s)
+          want = g.count;
+      CHECK(count[s] == want);
+    }
+    CHECK(count[static_cast<std::size_t>(Status::detected)] > 300);
+  }
+  for (const GoldenPhoton &g : golden_photons) {
+    const TraceResult got = trace(models[g.model], g.id);
+    CHECK(static_cast<std::uint32_t>(got.status) == g.status);
+    CHECK(got.terminal_surface == g.terminal_surface && got.primary_surface == g.primary_surface &&
+          got.secondary_surface == g.secondary_surface && got.reflections == g.reflections);
+    CHECK(close(got.weight, g.weight) && close(got.path_length_m, g.path_length_m) &&
+          close(got.time_ns, g.time_ns));
+    CHECK(close(got.position, g.position) && close(got.direction, g.direction));
   }
 }
 
@@ -1539,7 +1646,8 @@ void bunch_roulette_unbiased() {
     const double z = upward ? -5.0 : 20.0;
     const Ray ray{{static_cast<double>(x[i]), static_cast<double>(y[i]), z},
                   {0.0, 0.0, upward ? 1.0 : -1.0}};
-    const auto r = trace_photon(m, ray, 400.0, 0.0, 1.0, i, 1, true, false, false, true, 0, upward);
+    const auto r = trace_photon(m, ray, 400.0, 0.0, 1.0, i, 1,
+                                {.incidence_angles = false, .from_below = upward});
     exact += r.weight;
     direct += upward && r.status == Status::detected;
     exact_ray_weight[i] = r.weight;
@@ -1596,6 +1704,7 @@ void all_tests() {
   direct_photons();
   responses_and_timing();
   scatter_widths();
+  scatter_shape();
   scatter_on_curved_facet();
   sub_photon_index();
   block_invariance();
@@ -1615,7 +1724,7 @@ void all_tests() {
   dual_through_hole();
   facing_flats_bounce_limit();
   camera_extent();
-  sequential_bit_identity();
+  sequential_regression();
   multi_bounce_invariance();
   asphere_prefilter();
   bunch_roulette_unbiased();

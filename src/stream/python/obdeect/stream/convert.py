@@ -49,10 +49,11 @@ def stream_to_simtel(
     ``(mirror_class, camera_rotation_deg)``, or the path of a text file with one line
     ``telescope_id mirror_class camera_rotation_deg`` per telescope. Telescopes not listed are
     ground-frame telescopes (Bypass_Optics=0 in sim_telarray). A class 2 entry may also carry
-    telescope-frame photons (Bypass_Optics=1, see docs/usage.md).
+    telescope-frame photons (Bypass_Optics=1, see
+    docs/stream/command-line.md, "Camera map and telescope frames").
 
     The efficiency status is checked per telescope against the frame of its photons
-    (docs/format.md): a factor is valid as ``applied`` when sim_telarray does not apply it in
+    (docs/stream/format.md): a factor is valid as ``applied`` when sim_telarray does not apply it in
     that frame (e.g. ``atmosphere`` for camera-frame photons), and as ``pending`` when
     sim_telarray applies it (e.g. ``qe``). ``envelope`` is never valid for factors sim_telarray
     applies. With camera- or telescope-frame photons ``atmosphere`` must be ``applied``: a stream

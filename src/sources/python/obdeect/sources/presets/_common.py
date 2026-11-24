@@ -13,12 +13,20 @@ and ``table:FILE`` for a two-column table file::
 from __future__ import annotations
 
 import argparse
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import numpy as np
+from obdeect.sources import _core
 
-#: Philox stage of the random choices of presets (obdeect stream ``stage_programs``).
-STAGE_PRESETS = 0x444C0002
+#: Philox stage of the random choices of presets (obdeect stream ``stage_programs``), read from
+#: the compiled stream contract (tests/test_stream_contract.py checks the header value).
+STAGE_PRESETS = _core.stream_contract()["stages"]["programs"]
+
+#: Speed of light, exact SI value [m/s and m/ns].
+SPEED_OF_LIGHT_M_S = 299792458.0
+SPEED_OF_LIGHT_M_PER_NS = SPEED_OF_LIGHT_M_S * 1e-9
 
 # Keys of the two table columns per profile.
 _TABLE_KEYS = {
@@ -79,6 +87,50 @@ def vector(text: str) -> list[float]:
         return [float(v) for v in items]
     except ValueError:
         raise argparse.ArgumentTypeError(f"'{text}' is not three numbers") from None
+
+
+def parse_telescope(text: str) -> dict:
+    """Telescope of ``X,Y,Z,R`` (sphere centre [m] and radius [m])."""
+    items = text.split(",")
+    try:
+        x, y, z, r = (float(v) for v in items)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"'{text}' needs four numbers X,Y,Z,R") from None
+    return {"position_m": [x, y, z], "radius_m": r}
+
+
+def single_telescope(radius_m: float, position_m: Sequence[float] = (0.0, 0.0, 0.0)) -> list:
+    """The telescope list of a run with one telescope (id 1)."""
+    return [{"id": 1, "position_m": [float(v) for v in position_m], "radius_m": float(radius_m)}]
+
+
+def point_emission(
+    *,
+    photons: float,
+    bunch_size: float,
+    position_m: Sequence[float],
+    axis: Sequence[float],
+    angular: dict,
+    spectrum: dict,
+    pulse: dict,
+    target: Any,
+    time_offset_ns: float = 0.0,
+    to_plane_z0: bool = False,
+) -> dict:
+    """A point emission of a run description (the keys shared by the point-like presets)."""
+    return {
+        "kind": "point",
+        "photons": photons,
+        "bunch_size": bunch_size,
+        "time_offset_ns": time_offset_ns,
+        "to_plane_z0": to_plane_z0,
+        "position_m": list(position_m),
+        "axis": list(axis),
+        "angular": angular,
+        "spectrum": spectrum,
+        "pulse": pulse,
+        "target": target,
+    }
 
 
 def add_run_arguments(parser: argparse.ArgumentParser) -> None:

@@ -1,24 +1,21 @@
 // obdeect stream cat: concatenate photon streams into one valid stream on stdout, or print
 // a summary of the streams.
 
-#include "obdeect/stream/stdin_buffer.hpp"
 #include "obdeect/stream/stream.hpp"
+#include "tool_io.hpp"
 #include "tool_version.hpp"
 
 #include <array>
 #include <cstdint>
 #include <cstdio>
-#include <fstream>
 #include <functional>
 #include <iostream>
 #include <map>
-#include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace {
-
-constexpr std::size_t buffer_size = std::size_t{1} << 20;
 
 struct Summary {
   std::array<std::uint64_t, 16> records{};
@@ -78,25 +75,6 @@ void summarize_stream(std::istream &in, const std::string &name, Summary &summar
   }
 }
 
-// Calls fn(istream&, name) for each input; "-" is stdin.
-template <class Fn>
-void for_each_input(const std::vector<std::string> &inputs, std::istream &stdin_stream, Fn &&fn) {
-  for (const auto &name : inputs) {
-    if (name == "-") {
-      fn(stdin_stream, name);
-      continue;
-    }
-    std::vector<char> buffer(buffer_size);
-    std::ifstream file;
-    file.rdbuf()->pubsetbuf(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-    file.open(name, std::ios::binary);
-    if (!file) {
-      throw std::runtime_error("cannot open " + name);
-    }
-    fn(file, name);
-  }
-}
-
 } // namespace
 
 int main(int argc, char **argv) {
@@ -122,13 +100,12 @@ int main(int argc, char **argv) {
     if (inputs.empty()) {
       inputs.emplace_back("-");
     }
-    obdeect::stream::StdinBuffer stdin_buffer;
-    std::istream stdin_stream(&stdin_buffer);
     if (summary) {
       Summary result;
-      for_each_input(inputs, stdin_stream, [&](std::istream &in, const std::string &name) {
-        summarize_stream(in, name, result);
-      });
+      for (const std::string &name : inputs) {
+        obdeect::stream::tool::Input in{name};
+        summarize_stream(in.stream(), name, result);
+      }
       std::printf("records:\n");
       for (std::size_t t = 0; t < result.records.size(); ++t) {
         if (result.records[t] > 0) {
@@ -148,21 +125,20 @@ int main(int argc, char **argv) {
       }
       std::printf("total: %llu photons, weight sum %.10g\n",
                   static_cast<unsigned long long>(total_photons), total_weight);
+      if (std::fflush(stdout) != 0 || std::ferror(stdout) != 0) {
+        throw std::runtime_error("write error on standard output");
+      }
       return 0;
     }
 
-    static std::vector<char> out_buffer(buffer_size);
-    std::cout.rdbuf()->pubsetbuf(out_buffer.data(),
-                                 static_cast<std::streamsize>(out_buffer.size()));
-    obdeect::stream::Writer writer(std::cout, "obdeect stream cat");
-    for_each_input(inputs, stdin_stream, [&](std::istream &in, const std::string &name) {
-      copy_stream(in, name, writer);
-    });
-    writer.finish();
-    std::cout.flush();
-    if (!std::cout) {
-      throw std::runtime_error("write error on stdout");
+    obdeect::stream::tool::Output out{"-"};
+    obdeect::stream::Writer writer(out.stream(), "obdeect stream cat");
+    for (const std::string &name : inputs) {
+      obdeect::stream::tool::Input in{name};
+      copy_stream(in.stream(), name, writer);
     }
+    writer.finish();
+    out.finish();
     return 0;
   });
 }

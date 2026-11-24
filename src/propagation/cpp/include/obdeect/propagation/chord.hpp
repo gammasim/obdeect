@@ -139,8 +139,14 @@ template <class Altitude, class F>
   const double cy = v[2] * d[0] - v[0] * d[2];
   const double cz = v[0] * d[1] - v[1] * d[0];
   const double b2 = cx * cx + cy * cy + cz * cz;
+  // r - R = (r^2 - R^2) / (r + R) with r^2 - R^2 = (b - R)(b + R) + u^2, u = s + c: the altitude
+  // of the lowest point is b - R without the cancellation of sqrt(b^2 + u^2) - R (as
+  // spherical_altitude_m in sky.hpp).
+  const double b = std::sqrt(b2);
   const auto altitude = [&](double s) {
-    return std::sqrt(b2 + (s + c) * (s + c)) - earth_radius_m;
+    const double u = s + c;
+    return ((b - earth_radius_m) * (b + earth_radius_m) + u * u) /
+           (std::sqrt(b2 + u * u) + earth_radius_m);
   };
   std::array<double, max_chord_breaks> breaks{};
   std::size_t count = 0;

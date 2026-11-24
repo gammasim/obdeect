@@ -2,7 +2,7 @@
 
 // Early thinning with the detector envelope. A photon survives with probability
 // p = p_atm(lambda) * E(lambda), where E is the envelope (the upper bound over the
-// later wavelength-dependent factors, e.g. QE x max_qe_rel, see docs/extinction.md).
+// later wavelength-dependent factors, e.g. QE x max_qe_rel, see docs/propagation/extinction.md).
 
 #include "obdeect/propagation/parallel.hpp"
 #include "obdeect/propagation/streams.hpp"
@@ -22,8 +22,9 @@
 
 namespace obdeect::propagation {
 
-// Largest bunch weight handled per row. Above it the sampling would reuse Philox counters
-// of the wavelength stream; split such bunches upstream.
+// Largest bunch weight handled per row. The thinning draws of a bunch cost one Philox block per
+// four photons, so a larger bunch would make one row too expensive; split such bunches upstream.
+// (The draws of different streams and rows never share a counter: DrawKey.stream separates them.)
 inline constexpr std::uint64_t max_bunch_photons = 2048;
 
 // Envelope E(lambda): a piecewise-linear factor or a product of such factors, in [0, 1].
@@ -110,12 +111,13 @@ private:
 // copied from its bunch. p (acceptance, per input row) is written as column p if write_p.
 // Output photons are numbered from out_first_index; the result is split into chunks of at
 // most 2^16 rows. The output does not depend on how the input is split into chunks, as
-// long as first_index of each input chunk is its offset in the telescope's photons. The
-// survivor counts and the copy of the output rows run on up to `threads` threads.
+// long as first_index of each input chunk is its offset in the telescope's photons (the
+// caller checks that). The survivor counts and the copy of the output rows run on the threads
+// of `pool`.
 [[nodiscard]] inline std::vector<obdeect::stream::PhotonChunk>
 thin_chunk(const obdeect::stream::PhotonChunk &in, std::span<const double> p, std::uint64_t seed,
            std::uint32_t event, std::uint32_t telescope, std::uint64_t out_first_index,
-           bool write_p, std::uint32_t stream = stream_thinning, unsigned threads = 1) {
+           bool write_p, std::uint32_t stream, RowPool &pool) {
   using obdeect::stream::Column;
   if (in.has(Column::p)) {
     throw std::invalid_argument("input already has an acceptance column p");
@@ -127,7 +129,7 @@ thin_chunk(const obdeect::stream::PhotonChunk &in, std::span<const double> p, st
   const std::size_t rows = in.rows();
   std::vector<std::uint64_t> counts(rows, 0);
   const auto &weight = in[Column::w];
-  for_row_blocks(rows, threads, [&](std::size_t begin, std::size_t end) {
+  pool.run(rows, [&](std::size_t begin, std::size_t end) {
     for (std::size_t row = begin; row < end; ++row) {
       if (!(p[row] >= 0.0 && p[row] <= 1.0)) {
         throw std::invalid_argument("acceptance must be within [0, 1]");
@@ -166,7 +168,7 @@ thin_chunk(const obdeect::stream::PhotonChunk &in, std::span<const double> p, st
     chunk.frame = in.frame;
     chunk.first_index = out_first_index + first;
     chunk.resize(rows, mask);
-    for_row_blocks(rows, threads, [&](std::size_t begin, std::size_t end) {
+    pool.run(rows, [&](std::size_t begin, std::size_t end) {
       for (std::size_t j = begin; j < end; ++j) {
         const std::size_t row = source[first + j];
         for (std::uint32_t c = 0; c < obdeect::stream::n_columns; ++c) {
@@ -185,6 +187,15 @@ thin_chunk(const obdeect::stream::PhotonChunk &in, std::span<const double> p, st
     out.push_back(std::move(chunk));
   }
   return out;
+}
+
+// thin_chunk with a pool for this call only (threads: at least 1).
+[[nodiscard]] inline std::vector<obdeect::stream::PhotonChunk>
+thin_chunk(const obdeect::stream::PhotonChunk &in, std::span<const double> p, std::uint64_t seed,
+           std::uint32_t event, std::uint32_t telescope, std::uint64_t out_first_index,
+           bool write_p, std::uint32_t stream = stream_thinning, unsigned threads = 1) {
+  RowPool pool(threads);
+  return thin_chunk(in, p, seed, event, telescope, out_first_index, write_p, stream, pool);
 }
 
 // Weighted mode. Each row is kept with w multiplied by p; p is written as column p if

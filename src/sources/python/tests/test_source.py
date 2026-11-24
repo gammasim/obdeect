@@ -77,8 +77,10 @@ def test_normalize_emission_fills_defaults():
 
 def test_columns_are_float32_and_directions_unit():
     chunk = emit_chunk(FLASHER, seed=3, rows=5000)
-    assert tuple(chunk) == COLUMNS
-    assert all(array.dtype == np.float32 for array in chunk.values())
+    assert chunk["not_on_plane"] == 0  # the one non-array key: photons dropped for the plane
+    arrays = {name: chunk[name] for name in COLUMNS}
+    assert tuple(k for k in chunk if k != "not_on_plane") == COLUMNS
+    assert all(array.dtype == np.float32 for array in arrays.values())
     length = np.sqrt(chunk["cx"] ** 2 + chunk["cy"] ** 2 + chunk["cz"] ** 2)
     assert np.allclose(length, 1.0, atol=1e-6)
     assert np.all((chunk["w"] >= 0.0) & (chunk["w"] <= 1.0))
@@ -86,13 +88,23 @@ def test_columns_are_float32_and_directions_unit():
     assert np.all(chunk["wavelength"] == np.float32(385.0))
 
 
+def weight_sigma(w):
+    """Sigma of a weight sum: the sample spread of the rows plus the rounding of the count."""
+    rows = len(w)
+    w = np.asarray(w, dtype=np.float64)
+    spread = max(0.0, float(np.sum(w * w)) - float(np.sum(w)) ** 2 / rows)
+    return math.sqrt(spread + 0.25 * float(w.mean()) ** 2)
+
+
 def test_disc_target_weights_sum_to_photons_reaching_the_disc():
-    # The 11 deg cone (pointing at the disc) lands entirely on the 1.2 m disc: the weights
-    # sum to the emitted number of photons (within the rounding of the count).
+    # The 11 deg cone (pointing at the 1.2 m disc) lands entirely on it: every candidate is a hit
+    # with weight 1, so the weight sum is the candidate count, the expected light 4e5 to rounding.
     photons = emit(FLASHER, seed=3)
-    assert photons["w"].sum() == pytest.approx(4e5, rel=1e-3)
     assert len(photons["w"]) == photon_count(FLASHER, seed=3)
-    assert expected_weight(FLASHER) == pytest.approx(4e5, rel=1e-3)
+    assert np.all(photons["w"] == 1.0)
+    expected = expected_weight(FLASHER)
+    assert expected == pytest.approx(4e5, rel=1e-12)
+    assert abs(photons["w"].sum() - expected) <= 4.0 * weight_sigma(photons["w"])
 
 
 def test_plane_wave_starts_on_the_start_plane():
@@ -285,11 +297,18 @@ def test_photon_count_is_the_expected_count_rounded():
     counts = [photon_count(spec, seed=seed) for seed in range(4000)]
     assert set(counts) <= {2, 3}
     assert np.mean(counts) == pytest.approx(2.5, abs=4.0 * 0.5 / math.sqrt(len(counts)))
-    # Candidates per photon of the 11 deg cone on the disc:
-    # I_max / (2 pi integral(I du)) * pi R^2 / h^2 with integral(I du) = 1 - cos(11 deg).
-    per_photon = 1.0 / (2.0 * math.pi * (1.0 - math.cos(math.radians(11.0))))
-    per_photon *= math.pi * 1.2**2 / 1.5**2
-    assert expected_photons(FLASHER) == pytest.approx(4e5 * per_photon, rel=1e-12)
+    # The 11 deg cone lies inside the disc's cap: all of its light reaches the disc.
+    assert expected_photons(FLASHER) == pytest.approx(4e5, rel=1e-12)
+    # An isotropic point on the axis of a disc: the solid angle of the disc over 4 pi.
+    isotropic = point_with(
+        {"kind": "isotropic"},
+        photons=1e6,
+        position_m=[0.0, 0.0, 10.0],
+        axis=[0.0, 0.0, -1.0],
+        target={"kind": "disc", "centre_m": [0, 0, 0], "normal": [0, 0, 1], "radius_m": 2.0},
+    )
+    fraction = (1.0 - 10.0 / math.sqrt(10.0**2 + 2.0**2)) / 2.0
+    assert expected_photons(isotropic) == pytest.approx(1e6 * fraction, rel=1e-12)
 
 
 def test_sphere_target_photons_all_hit_the_sphere():
@@ -374,16 +393,14 @@ def test_photon_counts_must_be_finite_and_exact():
         photon_count(dict(FLASHER, photons=1e20), seed=1)
     with pytest.raises(ValueError):
         photon_count(dict(FLASHER, photons=math.inf), seed=1)
-    # A disc target at h = 1e-170 makes the candidate count overflow.
+    # A disc target at h = 1e-170 (h^2 underflows): the disc subtends the hemisphere, fraction 1/2.
     degenerate = point_with(
         {"kind": "isotropic"},
         target={"kind": "disc", "centre_m": [0, 0, 0], "normal": [0, 0, 1], "radius_m": 2.0},
         position_m=[0.0, 0.0, 1e-170],
     )
-    with pytest.raises(ValueError, match="2\\^53"):
-        photon_count(degenerate, seed=1)
-    with pytest.raises(ValueError, match="2\\^53"):
-        next(iter_chunks(degenerate, seed=1))
+    assert expected_photons(degenerate) == pytest.approx(1e5, rel=1e-12)
+    assert len(emit(degenerate, seed=1)["w"]) == photon_count(degenerate, seed=1)
 
 
 def test_complex_pulse_widths_must_be_finite():
@@ -475,3 +492,86 @@ def test_plane_wave_without_start_keys_starts_at_start_z_zero():
 def test_plane_wave_start_rules_are_checked(spec, message):
     with pytest.raises(ValueError, match=message):
         emit(spec, seed=1)
+
+
+def ks_statistic(samples, cdf):
+    """sqrt(n) times the Kolmogorov distance of the samples from an analytic cdf."""
+    x = np.sort(np.asarray(samples, dtype=np.float64))
+    n = len(x)
+    f = cdf(x)
+    d = np.maximum((np.arange(1, n + 1) / n) - f, f - np.arange(n) / n).max()
+    return math.sqrt(n) * float(d)
+
+
+def _direction_samples(spec, n=100000, seed=7):
+    photons = emit(dict(spec, photons=float(n)), seed=seed)
+    return photons["cx"], photons["cy"], photons["cz"]
+
+
+# A point at the origin's top (z = 10 m) emitting towards -z; the profile axis is -z, so the
+# polar angle theta is measured from the axis and cos(theta) = -cz.
+_POINT = {
+    "kind": "point",
+    "position_m": [0.0, 0.0, 10.0],
+    "axis": [0.0, 0.0, -1.0],
+    "spectrum": {"kind": "fixed", "wavelength_nm": 400.0},
+}
+
+
+@pytest.mark.parametrize(
+    ("angular", "cos_cdf"),
+    [
+        # isotropic: cos(theta) uniform on [-1, 1] (u uniform on [0, 2])
+        ({"kind": "isotropic"}, lambda c: np.clip((c + 1.0) / 2.0, 0.0, 1.0)),
+        # lambertian: density of cos(theta) proportional to cos(theta) on [0, 1]: cdf c^2
+        ({"kind": "lambertian"}, lambda c: np.clip(c, 0.0, 1.0) ** 2),
+        # filled cone of 10 deg: uniform in solid angle, cos(theta) uniform on [cos 10 deg, 1]
+        (
+            {"kind": "filled_cone", "angle_deg": 10.0},
+            lambda c: np.clip(
+                (c - math.cos(math.radians(10.0))) / (1.0 - math.cos(math.radians(10.0))), 0.0, 1.0
+            ),
+        ),
+    ],
+)
+def test_emitted_directions_follow_the_profile_ks(angular, cos_cdf):
+    # End to end through the core and the Python API: the emitted cos(theta) follows the profile,
+    # and the azimuth about the axis is uniform (KS at sqrt(n) D < 2, a 7e-4 level).
+    cx, cy, cz = _direction_samples(dict(_POINT, angular=angular))
+    cos_theta = -cz.astype(np.float64)
+    assert ks_statistic(cos_theta, cos_cdf) < 2.0
+    azimuth = np.mod(np.arctan2(cy.astype(np.float64), cx.astype(np.float64)), 2.0 * math.pi)
+    assert ks_statistic(azimuth / (2.0 * math.pi), lambda a: np.clip(a, 0.0, 1.0)) < 2.0
+
+
+def test_gaussian_width_zero_is_rejected_with_the_key_path():
+    with pytest.raises(ValueError, match="sigma_deg"):
+        expected_photons(dict(_POINT, photons=1.0, angular={"kind": "gauss", "sigma_deg": 0.0}))
+
+
+def test_photons_dropped_for_the_plane_are_counted_in_emit_chunk():
+    # Isotropic photons from z = 10 m: the half that moves up is dropped for to_plane_z0.
+    spec = dict(_POINT, photons=2000.0, to_plane_z0=True)
+    chunk = emit_chunk(spec, seed=4, rows=2000)
+    kept = len(chunk["w"])
+    assert kept + chunk["not_on_plane"] == 2000
+    assert 900 < chunk["not_on_plane"] < 1100
+
+
+def test_weight_sum_is_within_four_sigma_of_the_expected_weight():
+    # Line of photons with a sphere target: weights are not all equal, so the sigma comes from
+    # their spread (not a relative tolerance).
+    spec = {
+        "kind": "line",
+        "photons": 3e4,
+        "start_m": [-30.0, 0.0, 0.0],
+        "direction": [1.0, 0.0, 0.0],
+        "length_m": 60.0,
+        "angular": {"kind": "isotropic"},
+        "spectrum": {"kind": "fixed", "wavelength_nm": 400.0},
+        "target": {"kind": "sphere", "centre_m": [0.0, 0.0, 0.0], "radius_m": 3.0},
+    }
+    photons = emit(spec, seed=11)
+    expected = expected_weight(spec)
+    assert expected > 0.0
+    assert abs(photons["w"].sum() - expected) <= 4.0 * weight_sigma(photons["w"])

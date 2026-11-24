@@ -526,7 +526,7 @@ def test_lidar_chain_to_scattered_light(obdeect_cli, tmp_path):
     _run(
         obdeect_cli, "propagation", "run",
         "--transmission", str(data / "atm_trans_2000_1_10_0_0_2000.dat"),
-        "--site-altitude", "2000", "--seed", "1", "--mode", "weighted",
+        "--site-altitude", "2000", "--pathlen", "0", "--seed", "1", "--mode", "weighted",
         "--scattering", str(data / "scattering_exponential.dat"), "--scattering-points", "64",
         "-i", str(primaries), "-o", str(scattered),
     )  # fmt: skip

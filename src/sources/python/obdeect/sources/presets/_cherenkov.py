@@ -28,13 +28,11 @@ from collections.abc import Callable
 from typing import NamedTuple
 
 import numpy as np
-from obdeect.sources.presets._common import read_table
+from obdeect.sources.presets import _common
+from obdeect.sources.presets._common import SPEED_OF_LIGHT_M_PER_NS, read_table
 
 #: Fine-structure constant.
 ALPHA = 0.0072973526
-
-#: Speed of light [m/ns].
-SPEED_OF_LIGHT_M_PER_NS = 0.299792458
 
 #: Upper limit of n - 1 accepted for any profile (air is about 3e-4).
 MAX_ETA = 0.01
@@ -235,6 +233,22 @@ def index_from_args(args: argparse.Namespace) -> IndexFunction:
         eta0, scale_height_m = args.index_exponential
         return exponential_index(eta0, scale_height_m)
     return index_from_file(args.index_profile)
+
+
+def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
+    """Options shared by the Cherenkov presets (muon, shower): run, band, index and telescope."""
+    _common.add_run_arguments(parser)
+    add_wavelength_arguments(parser)
+    add_index_arguments(parser)
+    telescope = parser.add_argument_group("telescope")
+    telescope.add_argument("--telescope-radius", type=float, required=True, metavar="M")
+    telescope.add_argument(
+        "--telescope-position",
+        type=_common.vector,
+        default="0,0,0",
+        metavar="X,Y,Z",
+        help="sphere centre [m] (default: origin)",
+    )
 
 
 def add_wavelength_arguments(parser: argparse.ArgumentParser) -> None:

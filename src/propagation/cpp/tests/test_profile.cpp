@@ -1,7 +1,9 @@
 #include "check.hpp"
+#include "stream_fixtures.hpp"
 
 #include "obdeect/propagation/profile.hpp"
 
+#include <array>
 #include <cmath>
 #include <fstream>
 #include <limits>
@@ -15,6 +17,8 @@
 #endif
 
 namespace {
+
+using namespace obdeect_test;
 
 const std::string kProfilePath =
     std::string(OBDEECT_PROPAGATION_TEST_DATA_DIR) + "/atmprof_ecmwf_north_winter_fixed.dat";
@@ -69,15 +73,9 @@ std::string parse_error(const std::string &text) {
   return "";
 }
 
-bool rejects(const std::string &text) { return !parse_error(text).empty(); }
-
-bool throws_invalid(auto &&action) {
-  try {
-    action();
-  } catch (const std::invalid_argument &) {
-    return true;
-  }
-  return false;
+// True if the profile text is rejected with a message that contains fragment.
+bool rejects_with(const std::string &text, const char *fragment) {
+  return throws_with([&] { obdeect::propagation::AtmosphereProfile profile(text); }, fragment);
 }
 
 } // namespace
@@ -107,6 +105,21 @@ int main() {
     CHECK(profile.levels() == 55);
     CHECK_NEAR(profile.bottom_m(), 0., 1e-9);
     CHECK_NEAR(profile.top_m(), 120000., 1e-6);
+
+    // index_moments_cm (one cell lookup, all powers) agrees with index_moment_cm for every power
+    // to rounding, below, inside and above the table.
+    {
+      std::array<double, obdeect::propagation::AtmosphereProfile::max_moment + 1> all{};
+      for (double km : {-1.0, 0.0, 0.0007, 2.5, 9.99, 33.3, 119.9, 120.0, 130.0}) {
+        const double h = 1e5 * km;
+        profile.index_moments_cm(h, all);
+        for (int power = 0; power <= obdeect::propagation::AtmosphereProfile::max_moment; ++power) {
+          const double single = profile.index_moment_cm(h, power);
+          const double scale = std::max(std::fabs(single), 1e-300);
+          CHECK(std::fabs(all[static_cast<std::size_t>(power)] - single) <= 4e-15 * scale);
+        }
+      }
+    }
 
     // Table nodes: lookups interpolate linearly on a 3 m grid of cubic-spline values, so
     // the nodes are reproduced to about 2e-5 relative (density), not to rounding.
@@ -149,25 +162,28 @@ int main() {
 
     // Non-finite heights are rejected by every public height lookup: NaN fails all boundary
     // comparisons and would reach an integer conversion, infinities would be clamped.
-    const double nan = std::numeric_limits<double>::quiet_NaN();
-    const double inf = std::numeric_limits<double>::infinity();
+    const double nan = obdeect_test::kNan;
+    const double inf = obdeect_test::kInf;
     for (double bad : {nan, inf, -inf}) {
-      CHECK(throws_invalid([&] { profile.density(bad); }));
-      CHECK(throws_invalid([&] { profile.thickness(bad); }));
-      CHECK(throws_invalid([&] { profile.refractive_index_minus_one(bad); }));
-      CHECK(throws_invalid([&] { profile.density_cm(bad); }));
-      CHECK(throws_invalid([&] { profile.thickness_cm(bad); }));
-      CHECK(throws_invalid([&] { profile.index_minus_one_cm(bad); }));
-      CHECK(throws_invalid([&] { profile.index_integral_cm(bad); }));
+      CHECK(throws_with([&] { profile.density(bad); }, "must be finite"));
+      CHECK(throws_with([&] { profile.thickness(bad); }, "must be finite"));
+      CHECK(throws_with([&] { profile.refractive_index_minus_one(bad); }, "must be finite"));
+      CHECK(throws_with([&] { profile.density_cm(bad); }, "must be finite"));
+      CHECK(throws_with([&] { profile.thickness_cm(bad); }, "must be finite"));
+      CHECK(throws_with([&] { profile.index_minus_one_cm(bad); }, "must be finite"));
+      CHECK(throws_with([&] { profile.index_integral_cm(bad); }, "must be finite"));
     }
     // A finite height whose conversion to cm overflows is non-finite too.
-    CHECK(throws_invalid([&] { profile.density(std::numeric_limits<double>::max()); }));
-    CHECK(throws_invalid([&] { profile.thickness(-std::numeric_limits<double>::max()); }));
+    CHECK(throws_with([&] { profile.density(std::numeric_limits<double>::max()); },
+                      "must be finite"));
+    CHECK(throws_with([&] { profile.thickness(-std::numeric_limits<double>::max()); },
+                      "must be finite"));
     // Finite heights outside the table keep their defined values (not an error).
     CHECK(profile.density(1e9) == 0.);
 
     // Input rejection.
-    CHECK(rejects("0 1e-3 100\n1 1e-3 90\n2 1e-3 80\n3 1e-3 70\n4 1e-3 60\n")); // 3 columns
+    CHECK(rejects_with("0 1e-3 100\n1 1e-3 90\n2 1e-3 80\n3 1e-3 70\n4 1e-3 60\n",
+                       "columns")); // 3 columns
     // A malformed token in any of the four parsed columns is rejected, and the error names the
     // line (row km = 5 is line 7: one comment line, then rows from km = 0).
     for (std::size_t column = 0; column < 4; ++column) {
@@ -190,16 +206,22 @@ int main() {
         CHECK(extra.refractive_index_minus_one(h) == four_columns.refractive_index_minus_one(h));
       }
     }
-    CHECK(rejects(exponential_profile().substr(0, 60))); // too few levels
-    CHECK(rejects(
-        "0 1e-3 100 2e-4\n1 1e-3 90 2e-4\n1 1e-3 80 2e-4\n3 1e-3 70 2e-4\n4 1e-3 60 2e-4\n"));
-    CHECK(rejects(
-        "0 1e-3 100 2e-4\n1 2e-3 90 2e-4\n2 1e-3 80 2e-4\n3 1e-3 70 2e-4\n4 5e-4 60 2e-4\n"));
     CHECK(
-        rejects("0 1e-3 100 2e-4\n1 0 90 2e-4\n2 1e-3 80 2e-4\n3 1e-3 70 2e-4\n4 1e-3 60 2e-4\n"));
-    CHECK(
-        rejects("0 1e-3 100 0\n1 1e-3 90 2e-4\n2 1e-3 80 2e-4\n3 1e-3 70 2e-4\n4 1e-3 60 2e-4\n"));
-    CHECK(rejects(
-        "0 1e-3 100 2e-4\n1 9e-4 90 2e-4\n2 8e-4 80 2e-4\n3 7e-4 70 2e-4\n4 6e-4 9000 2e-4\n"));
+        rejects_with("0 1e-3 100 2e-4\n1 9e-4 90 2e-4\n2 8e-4 80 2e-4\n", "needs 5 to 120 levels"));
+    CHECK(rejects_with(
+        "0 1e-3 100 2e-4\n1 1e-3 90 2e-4\n1 1e-3 80 2e-4\n3 1e-3 70 2e-4\n4 1e-3 60 2e-4\n",
+        "altitudes must ascend"));
+    CHECK(rejects_with(
+        "0 1e-3 100 2e-4\n1 2e-3 90 2e-4\n2 1e-3 80 2e-4\n3 1e-3 70 2e-4\n4 5e-4 60 2e-4\n",
+        "must decrease with height"));
+    CHECK(rejects_with(
+        "0 1e-3 100 2e-4\n1 0 90 2e-4\n2 1e-3 80 2e-4\n3 1e-3 70 2e-4\n4 1e-3 60 2e-4\n",
+        "must be positive"));
+    CHECK(rejects_with(
+        "0 1e-3 100 0\n1 1e-3 90 2e-4\n2 1e-3 80 2e-4\n3 1e-3 70 2e-4\n4 1e-3 60 2e-4\n",
+        "must be positive"));
+    CHECK(rejects_with(
+        "0 1e-3 100 2e-4\n1 9e-4 90 2e-4\n2 8e-4 80 2e-4\n3 7e-4 70 2e-4\n4 6e-4 9000 2e-4\n",
+        "must decrease with height"));
   });
 }

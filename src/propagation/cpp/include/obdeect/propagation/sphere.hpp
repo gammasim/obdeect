@@ -57,91 +57,6 @@ inline double straight_line_air_delay_sky_ns(const AtmosphereProfile &profile,
   return length_m * mean / speed_of_light_m_per_ns;
 }
 
-// Plane-mode arrival of one row (the body of sky_to_ground for one row, see sky.hpp). Inputs: the
-// sky position (x, y, z), the direction (dx, dy) with |cz| = cz_magnitude and the length factor
-// of the path, the emission altitude, the time t_in and the dispersion factors. Outputs: the bent
-// position at the telescope plane relative to the telescope (x_out, y_out), the direction there
-// and the time. Returns the drop reason (Drop::none if the plane is reached).
-inline Drop plane_arrival(const SkyPlane &plane, double x, double y, double z, double dx, double dy,
-                          double cz_magnitude, double length_factor, bool upward,
-                          double emission_altitude, double t_in, double k, double k_group,
-                          double &x_out, double &y_out, double &cx_out, double &cy_out,
-                          double &t_out) {
-  const bool curved = plane.earth_radius_m > 0.0;
-  const double plane_z = plane.telescope_z_m;
-  const double plane_altitude = plane.observation_m + plane_z;
-  const double r2 = dx * dx + dy * dy;
-  Drop reason = Drop::none;
-  if (upward) {
-    if (z < 0.0) {
-      reason = Drop::below_ground;
-    } else if (z > plane_z) {
-      reason = Drop::moving_away;
-    }
-  } else if (z < plane_z) {
-    reason = z < 0.0 ? Drop::below_ground : Drop::moving_away;
-  }
-  if (reason != Drop::none) {
-    return reason;
-  }
-  const double path = (upward ? plane_z - z : z - plane_z) / cz_magnitude;
-  x_out = x + path * dx - plane.telescope_x_m;
-  y_out = y + path * dy - plane.telescope_y_m;
-  cx_out = dx;
-  cy_out = dy;
-  const double zenith = std::atan2(std::sqrt(r2), cz_magnitude);
-  t_out = 0.0;
-  const double t_path = t_in;
-  if (curved) {
-    const double r_t = plane.earth_radius_m + plane.telescope_altitude_m;
-    const double b = impact_parameter_m(x, y, z, plane.observation_m, plane.earth_radius_m, dx, dy,
-                                        upward ? -cz_magnitude : cz_magnitude);
-    if (!(b < r_t)) {
-      return Drop::misses_level;
-    }
-    if (upward) {
-      if (emission_altitude > plane.telescope_altitude_m) {
-        return Drop::moving_away;
-      }
-      return upward_arrival(plane.profile, plane.curved_bending, emission_altitude,
-                            plane.telescope_altitude_m, dx, dy, path, zenith, t_path, k, k_group,
-                            x_out, y_out, cx_out, cy_out, t_out);
-    }
-    if (plane.curved_tables != nullptr) {
-      return curved_arrival(plane, emission_altitude, b, dx, dy, path, t_path, k, k_group, x_out,
-                            y_out, cx_out, cy_out, t_out)
-                 ? Drop::none
-                 : Drop::not_bendable;
-    }
-    t_out = t_path + path / speed_of_light_m_per_ns;
-    return Drop::none;
-  }
-  const AtmosphereProfile *flat_profile =
-      plane.profile != nullptr ? plane.profile
-                               : (plane.tables != nullptr ? &plane.tables->profile() : nullptr);
-  if (upward) {
-    return upward_arrival(flat_profile, plane.tables != nullptr, emission_altitude, plane_altitude,
-                          dx, dy, path * length_factor, zenith, t_path, k, k_group, x_out, y_out,
-                          cx_out, cy_out, t_out);
-  }
-  if (plane.tables != nullptr) {
-    double travel_ns = 0.0;
-    bool bent =
-        bend(*plane.tables, emission_altitude, cx_out, cy_out, x_out, y_out, travel_ns, k, k_group);
-    if (!bent && bend_series_limit_exceeded(*plane.tables, emission_altitude, dx, dy, k)) {
-      bent = bend_quadrature(*plane.tables, emission_altitude, cx_out, cy_out, x_out, y_out,
-                             travel_ns, k, k_group);
-    }
-    t_out = t_path + travel_ns;
-    return bent ? Drop::none : Drop::not_bendable;
-  }
-  t_out = t_path + path * length_factor / speed_of_light_m_per_ns;
-  if (plane.profile != nullptr) {
-    t_out += straight_path_air_delay_ns(*plane.profile, plane_altitude, emission_altitude, zenith);
-  }
-  return Drop::none;
-}
-
 // Whether the sphere rows of this plane use refraction (steps 3 and 4 of the header comment).
 inline bool sphere_refracts(const SkyPlane &plane) {
   if (plane.earth_radius_m > 0.0) {
@@ -231,8 +146,9 @@ inline Drop hybrid_sphere_row(const SkyPlane &plane, double radius_m, double x_o
 // photons whose stored cz is the direction used). Dropped rows stay in the chunk with w = 0, zeros
 // and cz = -1. Returns the drop reasons (DropCounts). Throws std::invalid_argument for invalid
 // input, as sky_to_ground does; sphere_radius_m must be finite and positive.
-inline DropCounts sky_to_sphere(obdeect::stream::PhotonChunk &chunk, const SkyPlane &plane,
-                                double sphere_radius_m, bool use_cz_column = false) {
+[[nodiscard]] inline DropCounts sky_to_sphere(obdeect::stream::PhotonChunk &chunk,
+                                              const SkyPlane &plane, double sphere_radius_m,
+                                              bool use_cz_column = false) {
   using obdeect::stream::Column;
   if (chunk.frame != obdeect::stream::Frame::sky) {
     throw std::invalid_argument("sky_to_sphere needs photons in frame sky");
@@ -282,6 +198,8 @@ inline DropCounts sky_to_sphere(obdeect::stream::PhotonChunk &chunk, const SkyPl
   const std::array<double, 3> centre{plane.telescope_x_m, plane.telescope_y_m, plane.telescope_z_m};
   const double radius2 = sphere_radius_m * sphere_radius_m;
   const bool refracts = sphere_refracts(plane);
+  // Refractivity of the reference wavelength: once per chunk (see dispersion_factors).
+  const double reference_e8 = dispersion ? refractivity_e8(plane.dispersion_reference_nm) : 0.0;
 
   auto &x = chunk[Column::x];
   auto &y = chunk[Column::y];
@@ -342,8 +260,7 @@ inline DropCounts sky_to_sphere(obdeect::stream::PhotonChunk &chunk, const SkyPl
       if (lambda == 0.0) {
         throw std::invalid_argument("dispersion needs assigned wavelengths (none is 0 nm)");
       }
-      k = refractivity_ratio(lambda, plane.dispersion_reference_nm);
-      k_group = group_refractivity_ratio(lambda, plane.dispersion_reference_nm);
+      dispersion_factors(lambda, reference_e8, k, k_group);
     }
     // Emission altitude a.s.l. (spherical geometry: from |r| about the Earth centre).
     const double emission_altitude =

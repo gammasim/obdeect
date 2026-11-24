@@ -13,7 +13,6 @@ from obdeect.ray_tracing import __version__
 from obdeect.ray_tracing.errors import ModelError
 from obdeect.ray_tracing.model import STATUS_NAMES, OpticalModel
 from obdeect.ray_tracing.psf import summary
-from obdeect.ray_tracing.stream import TRANSMISSION_PARTS, trace_stream
 from obdeect.stream.cli import Command, Group
 
 # Columns of `obdeect ray-tracing obscurers` (see OpticalModel.obscurer_hits).
@@ -42,6 +41,7 @@ def _compile(args: argparse.Namespace) -> None:
         args.version,
         configuration_seed=args.seed,
         zenith_deg=args.zenith_deg,
+        propagation_group_index=args.propagation_group_index,
     )
     model.save(args.output)
     print(
@@ -95,82 +95,12 @@ def _write(path: Path, photons: dict, arrivals: dict) -> None:
     )
 
 
-def _trace_stream(args: argparse.Namespace) -> None:
-    if (args.pointing_zenith_deg is None) != (args.pointing_azimuth_deg is None):
-        raise ModelError("give both --pointing-zenith-deg and --pointing-azimuth-deg, or neither")
-    pointing = None
-    if args.pointing_zenith_deg is not None:
-        pointing = (args.pointing_zenith_deg, args.pointing_azimuth_deg)
-    try:
-        counts = trace_stream(
-            _trace_stream_models(args.model),
-            args.input,
-            args.output,
-            seed=args.seed,
-            threads=args.threads,
-            telescopes=args.telescopes,
-            pointing=pointing,
-            telescope_transmission=args.telescope_transmission,
-        )
-    except (ValueError, RuntimeError) as error:
-        raise ModelError(str(error)) from error
-    # Standard output may carry the stream, so the summary goes to standard error.
-    print(
-        f"trace-stream: {counts['events']} events, {counts['photons_in']} photons in, "
-        f"{counts['photons_out']} out",
-        file=sys.stderr,
-    )
-
-
-def _model_argument(text: str) -> tuple[int | None, Path]:
-    """--model of trace-stream: PATH (every telescope) or ID=PATH (one telescope)."""
-    telescope, separator, path = text.partition("=")
-    if not separator:
-        return None, Path(text)
-    try:
-        return int(telescope), Path(path)
-    except ValueError as error:
-        raise argparse.ArgumentTypeError(
-            f"--model takes PATH or TELESCOPE_ID=PATH: {text!r}"
-        ) from error
-
-
-def _trace_stream_models(
-    items: list[tuple[int | None, Path]],
-) -> OpticalModel | dict[int, OpticalModel]:
-    """One model for every telescope, or the model of each telescope id (files loaded once)."""
-    if len(items) == 1 and items[0][0] is None:
-        return OpticalModel.load(items[0][1])
-    if any(telescope is None for telescope, _ in items):
-        raise ModelError("give one --model PATH, or --model TELESCOPE_ID=PATH for each telescope")
-    telescopes = [telescope for telescope, _ in items]
-    if len(set(telescopes)) != len(telescopes):
-        raise ModelError("a telescope id is given in more than one --model")
-    loaded: dict[Path, OpticalModel] = {}
-    models = {}
-    for telescope, path in items:
-        key = path.resolve()
-        if key not in loaded:
-            loaded[key] = OpticalModel.load(path)
-        models[telescope] = loaded[key]
-    return models
-
-
-def _telescope_ids(text: str) -> tuple[int, ...]:
-    try:
-        ids = tuple(int(item) for item in text.split(",") if item.strip())
-    except ValueError as error:
-        raise argparse.ArgumentTypeError(f"telescope ids must be integers: {text!r}") from error
-    if not ids:
-        raise argparse.ArgumentTypeError("give at least one telescope id")
-    return ids
-
-
 def _plot(args: argparse.Namespace) -> None:
     try:
+        import matplotlib  # noqa: F401  (the top-level package: its submodules may be cached)
         from obdeect.ray_tracing.plot import plot
     except ModuleNotFoundError as error:
-        if error.name != "matplotlib":
+        if (error.name or "").split(".")[0] != "matplotlib":
             raise
         raise ModelError(
             "plotting requires Matplotlib; install obdeect-ray-tracing[plot]"
@@ -213,6 +143,12 @@ def main(argv: list[str] | None = None, prog: str = "obdeect ray-tracing") -> in
     c.add_argument("--version", required=True, help="simulation-models production version")
     c.add_argument("--seed", type=int, required=True, help="seed of the random mirror errors")
     c.add_argument("--zenith-deg", type=float)
+    c.add_argument(
+        "--propagation-group-index",
+        type=float,
+        help="group index of air at the telescope (default: the site's, from its atmosphere; "
+        "required for a telescope without a site)",
+    )
     c.add_argument("--output", type=Path, required=True)
     c.set_defaults(run=_compile)
 
@@ -230,50 +166,6 @@ def main(argv: list[str] | None = None, prog: str = "obdeect ray-tracing") -> in
     _source_arguments(o)
     o.set_defaults(run=_obscurers)
 
-    s = commands.add_parser(
-        "trace-stream",
-        help="trace a photon stream (G or T photons) to camera-frame (C) photons",
-    )
-    s.add_argument(
-        "--model",
-        type=_model_argument,
-        action="append",
-        required=True,
-        metavar="[ID=]PATH",
-        help="optical model of every telescope (PATH), or of one telescope id (ID=PATH, "
-        "repeated: one process traces several telescopes; telescopes without a model are dropped)",
-    )
-    s.add_argument("--seed", type=int, required=True, help="run seed of the random draws")
-    s.add_argument("--threads", type=int, default=0, help="0 uses every core")
-    s.add_argument(
-        "--telescopes",
-        type=_telescope_ids,
-        metavar="IDS",
-        help="comma-separated telescope ids to trace; other telescopes are dropped",
-    )
-    s.add_argument(
-        "--pointing-zenith-deg",
-        type=float,
-        help="telescope zenith [deg]; default: the run keys telescope_pointing_zenith_rad "
-        "and telescope_pointing_azimuth_rad",
-    )
-    s.add_argument(
-        "--pointing-azimuth-deg",
-        type=float,
-        help="telescope azimuth [deg] in the array frame (x north, y west), as simtools' "
-        "telescope phi; not the CORSIKA shower azimuth; default: the run keys",
-    )
-    s.add_argument(
-        "--telescope-transmission",
-        choices=TRANSMISSION_PARTS,
-        default="full",
-        help="full: apply the telescope transmission, including its on-axis value; angular: "
-        "only t(theta)/t0, leaving t0 pending in the efficiency status for the camera",
-    )
-    s.add_argument("-i", "--input", default="-", help="input stream (default: standard input)")
-    s.add_argument("-o", "--output", default="-", help="output stream (default: standard output)")
-    s.set_defaults(run=_trace_stream)
-
     p = commands.add_parser("plot", help="plot the dish layout and the focal-plane image")
     p.add_argument("--model", type=Path, required=True)
     p.add_argument("--arrivals", type=Path, help="results of 'obdeect ray-tracing trace' (.npz)")
@@ -283,7 +175,8 @@ def main(argv: list[str] | None = None, prog: str = "obdeect ray-tracing") -> in
     args = parser.parse_args(argv)
     try:
         args.run(args)
-    except (ModelError, OSError) as error:
+    # ValueError: bad JSON and bad arrays in the bindings (ModelError is one); both are user errors.
+    except (ModelError, OSError, ValueError) as error:
         print(f"obdeect: error: {error}", file=sys.stderr)
         return 1
     return 0

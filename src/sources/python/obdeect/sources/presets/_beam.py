@@ -1,8 +1,13 @@
-"""Direction and value helpers of the presets (laser-beam, lidar, night-sky).
+"""Direction and value helpers of the presets (beams, sky sources, pulsed lasers).
 
 Sky frame (docs/sources/spec/conventions.md): origin at the telescope, z up, x north, y west.
 Directions are zenith and azimuth in degrees. Zenith is measured from +z. Azimuth is
 astronomical: 0 deg is +x (north) and 90 deg is -y (east), increasing clockwise seen from above.
+
+Direction rule (all presets with a zenith and an azimuth, see docs/sources/presets.md): zenith
+(from up) and astronomical azimuth (clockwise from north towards east) give, for a sky source,
+the direction the light COMES FROM as seen by the observer, and for a beam device the direction
+the beam POINTS TO. Sky frame: x north, y west, z up.
 """
 
 from __future__ import annotations
@@ -30,6 +35,12 @@ def unit_vector(zenith_deg: float, azimuth_deg: float) -> Vector:
         component(-math.sin(zenith) * math.sin(azimuth)),
         component(math.cos(zenith)),
     )
+
+
+def travel_from_source(zenith_deg: float, azimuth_deg: float) -> Vector:
+    """Direction of motion of light that comes from (zenith, azimuth): the reverse of the unit
+    vector, for the sky sources (muon, shower, night-sky)."""
+    return tuple(-component for component in unit_vector(zenith_deg, azimuth_deg))
 
 
 def positive(value: float, name: str) -> float:

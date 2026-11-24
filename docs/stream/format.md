@@ -21,7 +21,7 @@ Readers skip records of unknown type. A stream starts with one `stream` record a
 | 1 | `stream` | metadata: `format_major` (int), `format_minor` (int), `producer` (string) |
 | 2 | `run` | metadata (run keys below) |
 | 3 | `event` | metadata (event keys below) |
-| 4 | `telescope` | metadata: `telescope_id` (int), `frame` (int), optional `array_index` (int, CORSIKA array reuse), `x_m`, `y_m`, `z_m`, `r_m` |
+| 4 | `telescope` | metadata: `telescope_id` (int), `frame` (int), optional `array_index` (int, CORSIKA array reuse; missing: array 0), `x_m`, `y_m`, `z_m`, `r_m` |
 | 5 | `photons` | photon chunk (below) |
 | 6 | `telescope_end` | metadata: `telescope_id` (int), `photons` (float, sum of weights; from CORSIKA: the photon sum of its block header) |
 | 7 | `event_end` | metadata (optional keys) |
@@ -33,14 +33,21 @@ Readers skip records of unknown type. A stream starts with one `stream` record a
 Nesting: `stream` (`run` (`efficiency_status`* (`event` (`telescope` `photons`*
 `telescope_end`)* `event_end`)* `run_end`)*) `stream_end`. `blob` records may appear anywhere
 between `run` and `run_end`. An `efficiency_status` record after a `telescope` record applies to
-that telescope only.
+that telescope only, and comes before that telescope's photons. A run `efficiency_status` comes
+before the first event of its run.
+
+Readers reject a record that breaks this nesting, for example photons outside a `telescope`
+record, `telescope_end` without `telescope`, `event` inside an `event`, `run` inside a `run`, or
+`stream_end` inside a `run`. Writers do not check the nesting; a stream that breaks it is still
+written, and the readers reject it. The efficiency status transitions are checked by readers too
+([](efficiency-status.md)).
 
 Blobs keep the input order (CORSIKA: RUNH and TELPOS after `run`; EVTH and TELOFF before the
 telescopes; EVTE after them; RUNE before `run_end`). Writers of EventIO output emit them in that
 order. CORSIKA split-mode markers (1213, 1214) are blobs between the telescopes of an event;
 `obdeect stream to-simtel` does not write them.
 
-The format has a major and a minor version (`obdeect stream --version` prints them). Readers
+The format has a major and a minor version (`obdeect --version` prints them). Readers
 reject a stream whose `format_major` differs from theirs. Minor versions are compatible within a
 major version: a reader also reads a later `format_minor` (the current one is 2), and a column it
 does not know fails the column-mask check. A negative `format_minor` is rejected. A stream without
@@ -120,6 +127,13 @@ Direction `(cx, cy, cz)` is a unit vector. Without a `cz` column the photon move
 photon moving upwards or horizontally needs the `cz` column (format 1.1). Consumers that cannot
 handle upward photons must check the sign of `cz` and reject the photon rather than assume it is
 downward.
+
+Values: x, y, t and w must be finite, and so must every other column value. Readers reject a
+non-finite value, a direction that is not a unit vector (cz inconsistent with cx and cy, or without
+a `cz` column, (cx, cy) outside the unit disc), and in a format 1.0 stream an upward photon
+(cz > 0). Writers check only the column layout and the path column, not these values. A reader
+that decodes only some telescopes
+(`keep_photons_of`) checks the header and the payload size of the others, not their values.
 
 Frames:
 

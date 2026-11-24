@@ -10,13 +10,17 @@
 #include "obdeect/ray_tracing/bunches.hpp"
 #include "obdeect/ray_tracing/model_json.hpp"
 #include "obdeect/ray_tracing/source.hpp"
+#include "obdeect/ray_tracing/stream_trace.hpp"
 #include "obdeect/ray_tracing/trace.hpp"
+#include "obdeect/stream/cli.hpp"
 
 #include <algorithm>
+#include <fstream>
 #include <iterator>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -502,6 +506,11 @@ public:
 
   [[nodiscard]] double candidates_per_photon() const { return emitter_.candidates_per_photon(); }
 
+  [[nodiscard]] std::uint64_t candidate_count(double emitted, std::uint64_t first_id,
+                                              std::uint64_t seed) const {
+    return emitter_.candidate_count(emitted, first_id, seed);
+  }
+
   [[nodiscard]] nb::dict sample(std::uint64_t first_id, std::size_t count,
                                 std::uint64_t seed) const {
     return photon_arrays(count, first_id, emitter_.wavelength_nm, [&](std::uint64_t id) {
@@ -571,6 +580,98 @@ nb::list trace_many(const std::vector<ManyItem> &items, std::uint64_t seed,
   return results;
 }
 
+// Photon-stream tracing for the Python API: the code of obdeect-ray-tracing-trace-stream, on
+// files. Models are the JSON texts of the optical models: one for every telescope (no id), or one
+// for each telescope id. Streams are file paths.
+std::tuple<std::uint64_t, std::uint64_t, std::uint64_t>
+trace_stream_files(const std::string &input, const std::string &output,
+                   const std::vector<std::tuple<std::optional<std::int64_t>, std::string>> &models,
+                   std::uint64_t seed, unsigned threads,
+                   const std::optional<std::vector<std::int64_t>> &telescopes,
+                   const std::optional<std::tuple<double, double>> &pointing,
+                   const std::string &telescope_transmission) {
+  namespace rt = obdeect::ray_tracing;
+  namespace sd = obdeect::ray_tracing::stream_trace_detail;
+  if (threads > 256)
+    throw nb::value_error("threads must lie in 0..256 (0 uses every core)");
+  rt::StreamTraceSettings settings;
+  settings.seed = seed;
+  settings.threads = thread_count(threads);
+  settings.version = obdeect::stream::cli::core_version();
+  if (telescope_transmission == "full")
+    settings.part = sd::TransmissionPart::full;
+  else if (telescope_transmission == "angular")
+    settings.part = sd::TransmissionPart::angular;
+  else
+    throw nb::value_error(
+        ("telescope transmission must be full or angular: " + telescope_transmission).c_str());
+  if (pointing) {
+    const auto [zenith, azimuth] = *pointing;
+    settings.pointing = std::pair{zenith, azimuth};
+  }
+  try {
+    std::vector<rt::ModelSource> sources;
+    for (const auto &[id, text] : models) {
+      std::optional<std::uint32_t> telescope;
+      if (id)
+        telescope = rt::checked_telescope_id(*id);
+      sources.push_back({telescope, text});
+    }
+    std::optional<std::set<std::uint32_t>> selected;
+    if (telescopes) {
+      std::set<std::uint32_t> ids;
+      for (const std::int64_t id : *telescopes)
+        ids.insert(rt::checked_telescope_id(id));
+      if (ids.empty())
+        throw rt::ModelError("give at least one telescope id");
+      selected = std::move(ids);
+    }
+    auto run = rt::make_run_optics(sources, selected, settings.part, settings.version);
+    settings.telescopes = run.telescopes;
+    if (rt::same_file(input, output))
+      throw rt::ModelError("input and output are the same file: " + output);
+    std::ifstream in(input, std::ios::binary);
+    if (!in)
+      throw std::runtime_error("cannot open input stream: " + input);
+    std::ofstream out(output, std::ios::binary);
+    if (!out)
+      throw std::runtime_error("cannot open output stream: " + output);
+    rt::StreamTraceCounts counts;
+    {
+      nb::gil_scoped_release release;
+      counts =
+          rt::trace_stream(in, out, std::move(run.shared), std::move(run.per_telescope), settings);
+      out.flush();
+    }
+    if (!out)
+      throw std::runtime_error("write error on the output stream");
+    return {counts.events, counts.photons_in, counts.photons_out};
+  } catch (const rt::ModelError &error) {
+    throw nb::value_error(error.what());
+  }
+}
+
+// (upper, lower) input planes [m] of a ground-frame telescope pointing for an optical model text.
+std::tuple<double, double> input_planes(const std::string &model_text, double zenith_deg,
+                                        double azimuth_deg) {
+  namespace sd = obdeect::ray_tracing::stream_trace_detail;
+  try {
+    const auto model = sd::load_stream_model(model_text);
+    const auto planes = sd::ground_input_planes(*model, zenith_deg, azimuth_deg);
+    return {planes.upper, planes.lower};
+  } catch (const obdeect::ray_tracing::ModelError &error) {
+    throw nb::value_error(error.what());
+  }
+}
+
+nb::object ground_rotation(double zenith_deg, double azimuth_deg) {
+  const auto rotation = obdeect::ray_tracing::stream_trace_detail::ground_to_telescope_rotation(
+      zenith_deg, azimuth_deg);
+  nb::object out = owned_array<double>(3, 3);
+  std::copy(rotation.begin(), rotation.end(), data_of<double>(out));
+  return out;
+}
+
 } // namespace
 
 NB_MODULE(_core, module) {
@@ -599,12 +700,18 @@ NB_MODULE(_core, module) {
            "z"_a = nb::none(), "path"_a = nb::none(), "pool"_a)
       .def("obscurer_crossings", &Model::obscurer_crossings, "start"_a, "end"_a, "leg"_a);
   module.def("trace_many", &trace_many, "items"_a, nb::kw_only(), "seed"_a, "pool"_a);
+  module.def("trace_stream", &trace_stream_files, "input"_a, "output"_a, "models"_a, nb::kw_only(),
+             "seed"_a, "threads"_a = 0U, "telescopes"_a = nb::none(), "pointing"_a = nb::none(),
+             "telescope_transmission"_a = std::string("full"));
+  module.def("input_planes", &input_planes, "model"_a, "zenith_deg"_a, "azimuth_deg"_a);
+  module.def("ground_to_telescope_rotation", &ground_rotation, "zenith_deg"_a, "azimuth_deg"_a);
   nb::class_<Emitter>(module, "Emitter")
       .def(nb::init<In1<double>, In1<double>, In1<double>, In1<double>, In1<double>, In1<double>,
                     In1<double>, In1<double>, double, double>(),
            "position_m"_a, "axis"_a, "intensity_u"_a, "intensity"_a, "pulse_time_ns"_a, "pulse"_a,
            "disk_centre_m"_a, "disk_normal"_a, "disk_radius_m"_a, "wavelength_nm"_a)
       .def("candidates_per_photon", &Emitter::candidates_per_photon)
+      .def("candidate_count", &Emitter::candidate_count, "emitted"_a, "first_id"_a, "seed"_a)
       .def("sample", &Emitter::sample, "first_id"_a, "count"_a, "seed"_a);
   module.def("sample_source", &sample_source, "towards_source"_a, "distance_m"_a, "disk_radius_m"_a,
              "disk_z_m"_a, "start_z_m"_a, "wavelength_nm"_a, "first_id"_a, "count"_a, "seed"_a);

@@ -17,7 +17,9 @@ Which steps you need depends on the **frame** in which the source writes its pho
 | camera (C) | `obdeect sources run flasher --type dish`, `obdeect sources run led` | none |
 
 `obdeect stream to-simtel` prints the sim_telarray option (`Bypass_Optics`) that each telescope
-needs. Replace `<config>` below with your sim_telarray configuration.
+needs: for camera-frame photons 1 (single mirror) or 2 (dual mirror), for telescope-frame photons
+1. The examples below use 1 for single-mirror telescopes. Replace `<config>` below with your
+sim_telarray configuration.
 
 ## Air showers through the full chain
 
@@ -25,6 +27,7 @@ needs. Replace `<config>` below with your sim_telarray configuration.
 $ zstd -dc run.corsika.zst \
     | obdeect stream from-corsika \
     | obdeect propagation run --transmission atm.dat --site-altitude 2156 --seed 1 \
+        --pathlen "$(obdeect propagation pathlen telescope.json)" \
     | obdeect ray-tracing trace-stream --model telescope.json --seed 7 \
         --pointing-zenith-deg 20 --pointing-azimuth-deg 0 \
     | obdeect stream to-simtel --camera-map cam.txt > sim.simtel
@@ -43,7 +46,7 @@ camera plane):
 $ obdeect sources run flasher --type dish --position 0,0,1.6 --camera-radius 0.9 \
     --observation-level 2150 --spectrum fixed:wavelength_nm=400 --photons 1e6 \
     | obdeect stream to-simtel --camera-map cam.txt \
-    | sim_telarray -c <config> -C Bypass_Optics=3 -
+    | sim_telarray -c <config> -C Bypass_Optics=1 -
 ```
 
 ## Flasher at the camera corners (dual-mirror telescopes)
@@ -73,7 +76,7 @@ camera-frame photons:
 $ obdeect sources run led --camera-file cam.dat --use-trg-all --photons 500 \
     --camera-radius 0.9 --observation-level 2150 --spectrum fixed:wavelength_nm=400 \
     | obdeect stream to-simtel --camera-map cam.txt \
-    | sim_telarray -c <config> -C Bypass_Optics=3 -
+    | sim_telarray -c <config> -C Bypass_Optics=1 -
 ```
 
 ## Point source, beam, laser, lidar, night sky, muon and shower

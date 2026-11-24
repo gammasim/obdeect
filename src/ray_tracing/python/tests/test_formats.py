@@ -43,6 +43,7 @@ def test_mirror_list():
     facets = read_mirror_list(MIRROR_LIST + "10 20 30 -1500 1 -40 # trailing comment\n")
     assert len(facets) == 8
     assert facets[1] == {
+        "panel_id": None,
         "id": 1,
         "centre_m": [1.25, 0.0, 0.0],
         "shape": "circle",
@@ -53,7 +54,7 @@ def test_mirror_list():
     assert facets[-1]["centre_m"] == [0.1, 0.2, -0.4]
     assert facets[-1]["catalogue_focal_length_m"] == -15.0
     with pytest.raises(ModelError, match="invalid shape"):
-        read_mirror_list("0 0 120 0 7\n")
+        read_mirror_list("0 0 120 0 7 0\n")
 
 
 def test_segmentation():

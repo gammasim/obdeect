@@ -14,10 +14,15 @@
 
 namespace obdeect::stream::parse {
 
-// A finite real number filling the whole token.
-[[nodiscard]] inline bool finite_number(std::string_view token, double &value) {
+// Drops one leading '+' unless it is followed by a sign ("+-1" and "++1" stay invalid).
+inline void strip_plus(std::string_view &token) {
   if (token.size() > 1 && token.front() == '+' && token[1] != '-' && token[1] != '+')
     token.remove_prefix(1);
+}
+
+// A finite real number filling the whole token.
+[[nodiscard]] inline bool finite_number(std::string_view token, double &value) {
+  strip_plus(token);
   if (token.empty())
     return false;
 #if defined(__cpp_lib_to_chars) && __cpp_lib_to_chars >= 201611L
@@ -42,8 +47,7 @@ namespace obdeect::stream::parse {
 
 // A decimal integer (optional sign) filling the whole token and fitting in T.
 template <class T> [[nodiscard]] inline bool integer(std::string_view token, T &value) {
-  if (token.size() > 1 && token.front() == '+' && token[1] != '-' && token[1] != '+')
-    token.remove_prefix(1);
+  strip_plus(token);
   if (token.empty())
     return false;
   T parsed{};

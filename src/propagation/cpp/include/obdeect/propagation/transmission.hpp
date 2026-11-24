@@ -1,9 +1,11 @@
 #pragma once
 
 // Optical-depth table of the atmosphere (extinction-table format) and the transmission of a
-// photon from its emission height to the telescope. See docs/extinction.md.
+// photon from its emission height to the telescope. See docs/propagation/extinction.md.
 
+#include "obdeect/propagation/quadrature.hpp"
 #include "obdeect/stream/parse.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -112,14 +114,7 @@ namespace detail {
   return y[i - 1] + (at - x[i - 1]) / (x[i] - x[i - 1]) * (y[i] - y[i - 1]);
 }
 
-// Curved atmosphere (slant_optical_depth): 8-point Gauss-Legendre nodes and weights on [-1, 1].
-inline constexpr std::size_t gauss_points = 8;
-inline constexpr std::array<double, gauss_points> gauss_nodes{
-    -0.9602898564975363, -0.7966664774136267, -0.5255324099163290, -0.1834346424956498,
-    0.1834346424956498,  0.5255324099163290,  0.7966664774136267,  0.9602898564975363};
-inline constexpr std::array<double, gauss_points> gauss_weights{
-    0.1012285362903763, 0.2223810344533745, 0.3137066458778873, 0.3626837833783620,
-    0.3626837833783620, 0.3137066458778873, 0.2223810344533745, 0.1012285362903763};
+// Curved atmosphere (slant_optical_depth) uses the Gauss-Legendre table of quadrature.hpp.
 // Cosines below this use h = h_t + u^2 in the first segment (the integrand 1/cos has a
 // 1/sqrt singularity at h_t when cos_t -> 0).
 inline constexpr double curved_substitution_cos = 0.2;
@@ -240,7 +235,8 @@ public:
   //   integral from h_t to zem of (d tau/dh) / cos theta(h) dh,
   // with cos theta(h) = sqrt(1 - p^2 / (R + h)^2), p = (R + h_t) sin theta_t and cos theta_t =
   // cos_zenith. Zero if zem <= h_t. The plane-parallel limit R -> infinity is
-  // |tau(zem) - tau(h_t)| / cos_zenith. Computed in double precision; see docs/extinction.md.
+  // |tau(zem) - tau(h_t)| / cos_zenith. Computed in double precision; see
+  // docs/propagation/extinction.md.
   template <class T>
   [[nodiscard]] T slant_optical_depth(T wavelength_nm, T telescope_altitude_m,
                                       T emission_altitude_m, T cos_zenith,

@@ -58,10 +58,44 @@ void test_canonical_json_and_hash() {
   CHECK(rejected);
 }
 
+// True if hashing `text` throws a ModelError.
+bool rejects(const std::string &text) {
+  try {
+    (void)model_hash(text);
+  } catch (const ModelError &) {
+    return true;
+  }
+  return false;
+}
+
+// The parser and the canonical hash accept the same documents: escapes with surrogate pairs,
+// the four JSON white-space characters, and the depth limit.
+void test_same_documents_as_the_parser() {
+  // \u escapes decode to UTF-8 (U+00E9 and U+1F600), as the raw UTF-8 text does.
+  const std::string raw = "{\"a\": \"\xc3\xa9\xf0\x9f\x98\x80\"}";
+  CHECK(model_hash(R"({"a": "é😀"})") == model_hash(raw));
+  CHECK(rejects(R"({"a": "\ud800"})"));
+  CHECK(rejects(R"({"a": "\udc00"})"));
+  CHECK(rejects("{\"a\":\f1}"));
+  CHECK(rejects("{\"a\":\v1}"));
+  CHECK(model_hash("{\n\t\"a\" :\r1}") == model_hash(R"({"a": 1})"));
+  std::string deep;
+  for (int i = 0; i < json::max_depth + 1; ++i)
+    deep += "[";
+  deep += std::string(static_cast<std::size_t>(json::max_depth + 1), ']');
+  CHECK(rejects("{\"a\": " + deep + "}"));
+  std::string limit;
+  for (int i = 0; i < json::max_depth - 1; ++i)
+    limit += "[";
+  limit += std::string(static_cast<std::size_t>(json::max_depth - 1), ']');
+  CHECK(!rejects("{\"a\": " + limit + "}"));
+}
+
 void all_tests() {
   test_sha256_vectors();
   test_python_float_repr();
   test_canonical_json_and_hash();
+  test_same_documents_as_the_parser();
 }
 
 } // namespace

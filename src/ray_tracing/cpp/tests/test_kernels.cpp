@@ -1,6 +1,5 @@
 // Analytic tests of the random generator, tables, surfaces and obscurers.
 #include "check.hpp"
-#include "legacy_asphere.hpp"
 
 #include "obdeect/ray_tracing/model.hpp"
 #include "obdeect/ray_tracing/random.hpp"
@@ -8,14 +7,55 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <numeric>
 #include <optional>
 #include <stdexcept>
 #include <vector>
 
 using namespace obdeect::ray_tracing;
 
+// mpmath reference of the polynomial asphere (provenance in the file).
+#include "data/asphere_reference.inc"
+
 namespace {
+
+// Pearson chi-square of values in [0, 1) over 64 equal bins (63 degrees of freedom).
+double chi_square_64(const std::vector<double> &u) {
+  std::vector<double> bins(64, 0.0);
+  for (const double x : u)
+    bins[std::min<std::size_t>(63, static_cast<std::size_t>(x * 64.0))] += 1.0;
+  const double expected = static_cast<double>(u.size()) / 64.0;
+  double chi = 0.0;
+  for (const double b : bins)
+    chi += (b - expected) * (b - expected) / expected;
+  return chi;
+}
+
+// Pearson correlation of two equally long sequences.
+double pearson(const std::vector<double> &x, const std::vector<double> &y) {
+  const double n = static_cast<double>(x.size());
+  double mx = 0.0, my = 0.0;
+  for (std::size_t i = 0; i < x.size(); ++i) {
+    mx += x[i] / n;
+    my += y[i] / n;
+  }
+  double sxy = 0.0, sxx = 0.0, syy = 0.0;
+  for (std::size_t i = 0; i < x.size(); ++i) {
+    sxy += (x[i] - mx) * (y[i] - my);
+    sxx += (x[i] - mx) * (x[i] - mx);
+    syy += (y[i] - my) * (y[i] - my);
+  }
+  return sxy / std::sqrt(sxx * syy);
+}
+
+// Correlation of consecutive values.
+double lag1_correlation(const std::vector<double> &u) {
+  const std::vector<double> head(u.begin(), u.end() - 1), tail(u.begin() + 1, u.end());
+  return std::abs(pearson(head, tail));
+}
 
 void random_numbers() {
   // Random123 known-answer tests for Philox-4x32-10.
@@ -33,13 +73,23 @@ void random_numbers() {
   CHECK(a != uniform4(7, 11, Stream::secondary_scatter));
   CHECK(a != uniform4(7, 12, Stream::primary_scatter));
   CHECK(a != uniform4(8, 11, Stream::primary_scatter));
-  double mean = 0.0;
-  for (std::uint64_t i = 0; i < 100000; ++i)
-    for (const double u : uniform4(1, i, Stream::source)) {
-      CHECK(u > 0.0 && u < 1.0);
-      mean += u / 400000.0;
-    }
-  CHECK_NEAR(mean, 0.5, 0.002);
+  // Uniformity (mean, 64-bin chi-square) and lag-1 correlation of the source stream, over
+  // 2^20 photons of one key, and of the first draw of two streams of the same photons.
+  constexpr std::uint64_t n = std::uint64_t{1} << 20;
+  std::vector<double> source(n), scatter(n);
+  for (std::uint64_t i = 0; i < n; ++i) {
+    const auto u = uniform4(RandomKey{1, 2, 3}, i, Stream::source);
+    for (const double x : u)
+      CHECK(x > 0.0 && x < 1.0);
+    source[i] = u[0];
+    scatter[i] = uniform4(RandomKey{1, 2, 3}, i, Stream::primary_scatter)[0];
+  }
+  CHECK_NEAR(std::accumulate(source.begin(), source.end(), 0.0) / static_cast<double>(n), 0.5,
+             0.001);
+  CHECK(chi_square_64(source) < 113.5); // 1e-4 quantile of chi-square with 63 degrees of freedom
+  CHECK(lag1_correlation(source) < 5.0 / std::sqrt(static_cast<double>(n)));
+  CHECK(lag1_correlation(scatter) < 5.0 / std::sqrt(static_cast<double>(n)));
+  CHECK(std::abs(pearson(source, scatter)) < 5.0 / std::sqrt(static_cast<double>(n)));
 }
 
 void tables() {
@@ -949,6 +999,46 @@ void facet_prefilter() {
   CHECK(found > 10000);
 }
 
+// The facet grid offers every facet that a ray hits, each facet at most once per call (tilted
+// and curved facets, one tiny facet among large ones, rays from above and below).
+void facet_grid_offers_once() {
+  std::vector<Facet> facets;
+  for (int row = -5; row <= 5; ++row)
+    for (int column = -5; column <= 5; ++column) {
+      Facet f;
+      f.id = static_cast<std::uint32_t>(facets.size());
+      f.centre = {1.1 * (column + 0.5 * (row & 1)), 0.95 * row, 0.02 * column * column};
+      f.normal = normalized({0.3 * column / 5.0, 0.25 * row / 5.0, 1.0});
+      f.u = normalized(cross(f.normal, {0.0, 1.0, 0.0}));
+      f.v = cross(f.normal, f.u);
+      f.shape = (column + row) % 2 ? Aperture::hexagon_flat_x : Aperture::circle;
+      f.half_width = column == 3 && row == -2 ? 0.02 : 0.6; // One tiny facet.
+      f.radius = (column + row) % 2 ? 0.0 : 25.0;
+      f.prepare();
+      facets.push_back(f);
+    }
+  const FacetGrid grid(facets);
+  std::size_t found = 0;
+  for (std::uint64_t k = 0; k < 40000; ++k) {
+    const auto u = uniform4(71, k, Stream::source);
+    const bool from_above = k % 2 == 0;
+    const Vec3 d = normalized({0.8 * (u[2] - 0.5), 0.8 * (u[3] - 0.5), from_above ? -1.0 : 1.0});
+    const Ray ray{{12.0 * (u[0] - 0.5) - d.x * 20.0, 12.0 * (u[1] - 0.5) - d.y * 20.0,
+                   from_above ? 20.0 : -20.0},
+                  d};
+    std::vector<int> visits(facets.size(), 0);
+    grid.candidates(ray, facets.size(), [&](std::size_t i) { ++visits[i]; });
+    for (std::size_t i = 0; i < facets.size(); ++i) {
+      CHECK(visits[i] <= 1);
+      if (facets[i].intersect_any_side(ray, kMinDistanceM)) {
+        CHECK(visits[i] == 1);
+        ++found;
+      }
+    }
+  }
+  CHECK(found > 20000);
+}
+
 void sources() {
   // A plane wave fills the disk uniformly and starts on the start plane.
   PointSource star{
@@ -1036,6 +1126,47 @@ void emitters() {
   }
 }
 
+template <class F> bool throws_invalid(F &&f) {
+  try {
+    f();
+  } catch (const std::invalid_argument &) {
+    return true;
+  }
+  return false;
+}
+
+// Poisson counts of the emitters: the inversion matches the cumulative distribution, and the
+// keyed draws have the right mean and variance, for one block and for several blocks.
+void poisson() {
+  // Mean 1: P(0) = e^-1 = 0.3679, P(0..1) = 0.7358, P(0..2) = 0.9197.
+  CHECK(poisson_inversion(1.0, 0.36) == 0);
+  CHECK(poisson_inversion(1.0, 0.37) == 1);
+  CHECK(poisson_inversion(1.0, 0.73) == 1);
+  CHECK(poisson_inversion(1.0, 0.74) == 2);
+  CHECK(poisson_inversion(1.0, 0.92) == 3);
+  CHECK(poisson_inversion(0.0, 0.5) == 0);
+  CHECK(throws_invalid([] { static_cast<void>(poisson_count(-1.0, 0, 1)); }));
+  CHECK(throws_invalid([] { static_cast<void>(poisson_count(std::nan(""), 0, 1)); }));
+  CHECK(poisson_count(0.0, 7, 1) == 0);
+  // Same key, same count; the keys of other photons and seeds are independent draws.
+  CHECK(poisson_count(4.5, 11, 3) == poisson_count(4.5, 11, 3));
+
+  for (const double mean : {2.5, 1200.0}) {
+    const std::size_t n = 40000;
+    double sum = 0.0, sum2 = 0.0;
+    for (std::uint64_t i = 0; i < n; ++i) {
+      const double k = static_cast<double>(poisson_count(mean, i, 9));
+      sum += k;
+      sum2 += k * k;
+    }
+    const double average = sum / n;
+    const double variance = sum2 / n - average * average;
+    // Standard error of the mean: sqrt(mean / n); the variance is Poisson too.
+    CHECK_NEAR(average, mean, 5.0 * std::sqrt(mean / n));
+    CHECK_NEAR(variance / mean, 1.0, 0.05);
+  }
+}
+
 void transmission() {
   const TelescopeTransmission t{0.9, 0.5, 0.1, 2.0, 1.0};
   CHECK_NEAR(t.at({0, 0, -1}), 0.9, 1e-15);
@@ -1116,45 +1247,6 @@ void asphere_in_r_squared() {
   }
 }
 
-// The r^2 intersection finds the points and normals of the hypot-based one.
-void asphere_against_legacy() {
-  const auto accept = [](const Vec3 &) { return true; };
-  std::size_t both = 0, differ = 0;
-  for (const Asphere &a : polynomial_surfaces())
-    for (std::uint64_t k = 0; k < 100000; ++k) {
-      const auto u = uniform4(17 + a.id, k, Stream::source);
-      const double angle = k % 4 == 0 ? 1e-6 * u[2] : 0.05 * (u[2] - 0.5);
-      const Vec3 d = normalized({angle, 0.03 * (u[3] - 0.5) * (k % 4 != 0), -1});
-      const double reach = 1.1 * a.outer_radius;
-      const Vec3 target{2 * reach * (u[0] - 0.5), 2 * reach * (u[1] - 0.5), 0.0};
-      const double distance = k % 2 ? 1e4 : 30.0;
-      const Ray ray{target - d * distance, d};
-      bool failed_new = false, failed_old = false;
-      const auto n = a.intersect(ray, kMinDistanceM, accept, failed_new);
-      const auto o = legacy::intersect(a, ray, kMinDistanceM, accept, failed_old);
-      CHECK(failed_new == failed_old);
-      if (n && o) {
-        ++both;
-        CHECK_NEAR(n->t, o->t, 1e-9);
-        CHECK_NEAR(n->point.x, o->point.x, 1e-9);
-        CHECK_NEAR(n->point.y, o->point.y, 1e-9);
-        CHECK_NEAR(n->point.z, o->point.z, 1e-9);
-        CHECK_NEAR(n->normal.x, o->normal.x, 1e-9);
-        CHECK_NEAR(n->normal.y, o->normal.y, 1e-9);
-        CHECK_NEAR(n->normal.z, o->normal.z, 1e-9);
-      } else if (n.has_value() != o.has_value()) {
-        // Allowed only within 1e-8 m of an aperture edge.
-        ++differ;
-        const Vec3 p = n ? n->point : o->point;
-        const double r = std::hypot(p.x, p.y);
-        CHECK(std::abs(r - a.outer_radius) <= 1e-8 ||
-              (a.inner_radius > 0.0 && std::abs(r - a.inner_radius) <= 1e-8));
-      }
-    }
-  CHECK(both > 100000);
-  CHECK(differ <= 5);
-}
-
 // Convex secondary-like aspheres (rays travel upwards from below the vertex
 // plane, so the second root of the first-guess paraboloid lies beyond the start).
 std::vector<Asphere> secondary_like_surfaces() {
@@ -1170,40 +1262,84 @@ std::vector<Asphere> secondary_like_surfaces() {
   return surfaces;
 }
 
-// The hits of the current intersect equal those of the reference copy, also on
-// secondary-like surfaces where the root-ordering of the first guesses matters.
-void asphere_secondary_against_legacy() {
-  const auto accept = [](const Vec3 &) { return true; };
-  std::size_t both = 0, differ = 0;
-  for (const Asphere &a : secondary_like_surfaces())
-    for (std::uint64_t k = 0; k < 100000; ++k) {
-      const auto u = uniform4(31 + a.id, k, Stream::source);
-      const double reach = 1.3 * a.outer_radius;
-      const Vec3 origin{2 * reach * (u[0] - 0.5), 2 * reach * (u[1] - 0.5), 0.3 * u[2]};
-      const Vec3 target{0.5 * reach * (u[3] - 0.5), 0.5 * reach * (u[2] - 0.5), a.sag(0.0)};
-      const Vec3 d = normalized(target - origin + Vec3{0.6 * (u[1] - 0.5), 0.6 * (u[0] - 0.5), 0});
-      const Ray ray{origin, d};
-      bool failed_new = false, failed_old = false;
-      const auto n = a.intersect(ray, kMinDistanceM, accept, failed_new);
-      const auto o = legacy::intersect(a, ray, kMinDistanceM, accept, failed_old);
-      CHECK(failed_new == failed_old);
-      if (n && o) {
-        ++both;
-        CHECK_NEAR(n->t, o->t, 1e-9);
-        CHECK_NEAR(n->point.x, o->point.x, 1e-9);
-        CHECK_NEAR(n->point.y, o->point.y, 1e-9);
-        CHECK_NEAR(n->point.z, o->point.z, 1e-9);
-      } else if (n.has_value() != o.has_value()) {
-        ++differ;
-        const Vec3 p = n ? n->point : o->point;
-        const double r = std::hypot(p.x, p.y);
-        std::fprintf(stderr, "secondary %u ray %llu: differing hit/miss at r = %.12g\n", a.id,
-                     static_cast<unsigned long long>(k), r);
-        CHECK(std::abs(r - a.outer_radius) <= 1e-8 || std::abs(r - a.inner_radius) <= 1e-8);
-      }
+// Sag and slope / r against the 50-digit mpmath reference (data/asphere_reference.inc). The
+// double evaluation is bounded by rounding: |error| <= 1e-12 * sum_i |term_i|, where term_i is
+// the i-th term of the polynomial (or of its derivative) at that radius.
+constexpr double kAsphereReferenceTolerance = 1e-12;
+
+template <std::size_t N, std::size_t M>
+void check_against_reference(std::uint32_t id, const double (&coefficients)[N],
+                             const double (&geometry)[4], const double (&rows)[M][5]) {
+  Asphere a{id, geometry[0], geometry[1], geometry[2], geometry[3], {}};
+  a.coefficients.assign(coefficients, coefficients + N);
+  a.prepare();
+  const double inv_scale2 = 1.0 / (geometry[3] * geometry[3]);
+  for (const auto &row : rows) {
+    const double q = row[0];
+    const double sag_reference = row[1] + row[2];
+    const double slope_reference = row[3] + row[4];
+    double sag_magnitude = 0.0, slope_magnitude = 0.0, power = 1.0;
+    for (std::size_t i = 0; i < N; ++i) {
+      sag_magnitude += std::abs(coefficients[i]) * power;
+      if (i >= 1)
+        slope_magnitude += 2.0 * static_cast<double>(i) * std::abs(coefficients[i]) *
+                           std::pow(q, static_cast<double>(i) - 1.0) * inv_scale2;
+      power *= q;
     }
-  CHECK(both > 50000);
-  CHECK(differ <= 5);
+    CHECK(std::abs(a.sag_q(q) - sag_reference) <=
+          kAsphereReferenceTolerance * sag_magnitude + 1e-300);
+    CHECK(std::abs(a.slope_over_r_q(q) - slope_reference) <=
+          kAsphereReferenceTolerance * slope_magnitude + 1e-300);
+  }
+}
+
+void asphere_against_mpmath() {
+  check_against_reference(1, paraboloid_coefficients, paraboloid_geometry, paraboloid_rows);
+  check_against_reference(2, sst_like_coefficients, sst_like_geometry, sst_like_rows);
+  check_against_reference(3, sct_like_coefficients, sct_like_geometry, sct_like_rows);
+}
+
+// Ray-asphere hits lie on the surface and on the ray, and the hit normal is the surface normal
+// at the hit point. Checked on the polynomial and the secondary-like surfaces.
+void asphere_intersections_on_surface() {
+  const auto accept = [](const Vec3 &) { return true; };
+  std::vector<Asphere> surfaces = polynomial_surfaces();
+  for (const Asphere &s : secondary_like_surfaces())
+    surfaces.push_back(s);
+  std::size_t hits = 0, misses_inside = 0;
+  for (const Asphere &a : surfaces)
+    for (std::uint64_t k = 0; k < 100000; ++k) {
+      const auto u = uniform4(17 + a.id, k, Stream::source);
+      const double angle = k % 4 == 0 ? 1e-6 * u[2] : 0.05 * (u[2] - 0.5);
+      const Vec3 d = normalized({angle, 0.03 * (u[3] - 0.5) * (k % 4 != 0), -1});
+      const double reach = 1.1 * a.outer_radius;
+      const Vec3 target{2 * reach * (u[0] - 0.5), 2 * reach * (u[1] - 0.5), 0.0};
+      const double distance = k % 2 ? 1e4 : 30.0;
+      const Ray ray{target - d * distance, d};
+      bool failed = false;
+      const auto hit = a.intersect(ray, kMinDistanceM, accept, failed);
+      CHECK(!failed);
+      if (!hit) {
+        // A ray that is aimed well inside the aperture must hit it.
+        // Where the ray crosses the vertex plane (the surface lies within 0.1 m of it here).
+        const Vec3 crossing = ray.at((a.vertex_z - ray.origin.z) / ray.direction.z);
+        const double r = std::hypot(crossing.x, crossing.y);
+        if (r > a.inner_radius + 0.05 && r < 0.8 * a.outer_radius)
+          ++misses_inside;
+        continue;
+      }
+      ++hits;
+      const Vec3 &p = hit->point;
+      CHECK(std::abs(p.z - a.sag(std::hypot(p.x, p.y))) <= 1e-9);
+      CHECK(std::abs(p.x - (ray.origin.x + hit->t * ray.direction.x)) <= 1e-9);
+      CHECK(std::abs(p.y - (ray.origin.y + hit->t * ray.direction.y)) <= 1e-9);
+      CHECK(std::abs(p.z - (ray.origin.z + hit->t * ray.direction.z)) <= 1e-9);
+      const Vec3 n = a.normal_at(p);
+      CHECK(std::abs(hit->normal.x - n.x) <= 1e-9 && std::abs(hit->normal.y - n.y) <= 1e-9 &&
+            std::abs(hit->normal.z - n.z) <= 1e-9);
+    }
+  CHECK(hits > 100000);
+  CHECK(misses_inside == 0);
 }
 
 } // namespace
@@ -1214,10 +1350,11 @@ void all_tests() {
   apertures();
   facets();
   facet_prefilter();
+  facet_grid_offers_once();
   aspheres();
   asphere_in_r_squared();
-  asphere_against_legacy();
-  asphere_secondary_against_legacy();
+  asphere_against_mpmath();
+  asphere_intersections_on_surface();
   slope_bound();
   single_root_shortcut();
   segment_grid();
@@ -1230,6 +1367,7 @@ void all_tests() {
   sources();
   densities();
   emitters();
+  poisson();
   transmission();
 }
 

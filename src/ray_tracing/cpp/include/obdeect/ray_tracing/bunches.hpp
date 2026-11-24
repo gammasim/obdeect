@@ -121,7 +121,7 @@ class BunchTask {
 public:
   BunchTask(const OpticalModel &model, const BunchBlock &in, const BunchFrame &frame,
             const BunchOptions &options, const RandomKey &seed)
-      : model_(model), in_(in), frame_(frame), options_(options), seed_(seed) {
+      : model_(model), in_(in), frame_(frame), options_(options), seed_(seed), bound_(model) {
     if (in.z && !in.cz)
       throw std::invalid_argument("bunches: start heights z need the direction column cz");
     for (std::size_t k = 0; k < in.n; ++k)
@@ -208,7 +208,7 @@ public:
     const auto response = [&](double lambda, double zem_m) {
       if (lambda != cached_lambda) {
         cached_lambda = lambda;
-        cached_bound = response_bound(model_, lambda) / norm;
+        cached_bound = bound_.at(lambda) / norm;
         cached_zem = std::numeric_limits<double>::quiet_NaN();
       }
       if (zem_m != cached_zem) {
@@ -266,8 +266,11 @@ public:
         // towards +z there (also a G photon with cz < 0 at a large zenith angle, which arrives
         // from behind the dish) takes the first-hit path. The start plane follows cz.
         const bool from_below = ray.direction.z >= 0.0;
-        const auto t = trace_photon(model_, ray, lambda, time, 1.0, id, seed_, true, false, false,
-                                    options_.classify_losses, sub, from_below);
+        const auto t = trace_photon(model_, ray, lambda, time, 1.0, id, seed_,
+                                    {.incidence_angles = false,
+                                     .classify_losses = options_.classify_losses,
+                                     .sub_photon = sub,
+                                     .from_below = from_below});
         if (t.status != Status::detected)
           continue;
         // ratio = weight / bound may exceed one (see response_bound): such a photon is kept
@@ -301,6 +304,7 @@ private:
   BunchFrame frame_;
   BunchOptions options_;
   RandomKey seed_;
+  ResponseBound bound_; // Per-wavelength bound, the degradation maxima computed once.
 };
 
 } // namespace detail

@@ -22,11 +22,12 @@ enum class Stream : std::uint32_t {
   primary_scatter = 1,
   secondary_scatter = 2,
   thinning = 3,
-  wavelength = 4
+  wavelength = 4,
+  emitter_count = 5 // Poisson number of candidate photons of an emitter (poisson_count).
 };
 
 // The draws of reflection k >= 2 of a photon (its k-th reflection, on any mirror; k
-// counts from 1). Stream ids 5 to 7 are reserved; the first reflection on each mirror
+// counts from 1). Stream ids 6 and 7 are reserved; the first reflection on each mirror
 // keeps primary_scatter and secondary_scatter. Each reflection of a photon has its own
 // k, so the draws of the reflections are independent.
 [[nodiscard]] constexpr Stream reflection_stream(std::uint32_t reflection) {

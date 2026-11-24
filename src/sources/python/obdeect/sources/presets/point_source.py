@@ -2,7 +2,6 @@
 
 ``--position`` is in the sky frame with z the height above the observation level. The emitted
 direction is ``--direction`` normalised (default: downward). Each ``--photons`` value is one event.
-Old program: ``point-source.hpp``.
 """
 
 import argparse
@@ -49,20 +48,11 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     )
     where.add_argument(
         "--telescope",
-        type=_telescope,
+        type=_common.parse_telescope,
         action="append",
         metavar="X,Y,Z,R",
         help="telescope position and radius in the sky frame [m]; repeatable (ids 1, 2, ...)",
     )
-
-
-def _telescope(text: str) -> dict:
-    items = text.split(",")
-    try:
-        x, y, z, r = (float(v) for v in items)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"'{text}' needs four numbers X,Y,Z,R") from None
-    return {"position_m": [x, y, z], "radius_m": r}
 
 
 def build(args: argparse.Namespace) -> dict:
@@ -78,19 +68,16 @@ def build(args: argparse.Namespace) -> dict:
         {
             "repeat": args.events,
             "emissions": [
-                {
-                    "kind": "point",
-                    "photons": photons,
-                    "bunch_size": args.bunch_size,
-                    "time_offset_ns": 0.0,
-                    "to_plane_z0": False,
-                    "position_m": list(args.position),
-                    "axis": axis,
-                    "angular": angular,
-                    "spectrum": spectrum,
-                    "pulse": pulse,
-                    "target": "auto",
-                }
+                _common.point_emission(
+                    photons=photons,
+                    bunch_size=args.bunch_size,
+                    position_m=args.position,
+                    axis=axis,
+                    angular=angular,
+                    spectrum=spectrum,
+                    pulse=pulse,
+                    target="auto",
+                )
             ],
         }
         for photons in args.photons

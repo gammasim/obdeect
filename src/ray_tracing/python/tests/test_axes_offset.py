@@ -28,7 +28,11 @@ def compiled(axes_offsets=None, zenith_deg=THETA_DEG):
         changes["axes_offsets"] = record("axes_offsets", axes_offsets, ["cm", "cm"])
     records, files = segmented(**changes)
     return OpticalModel.from_records(
-        records, files.__getitem__, configuration_seed=1, zenith_deg=zenith_deg
+        records,
+        files.__getitem__,
+        configuration_seed=1,
+        zenith_deg=zenith_deg,
+        propagation_group_index=1.0,
     )
 
 

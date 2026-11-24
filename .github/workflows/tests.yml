@@ -30,8 +30,11 @@ jobs:
         run: >-
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           && cmake --build build --parallel 4
+      # Fast tests first; the slow label (tests above about 5 s) runs only when they pass.
       - name: Run native tests
-        run: ctest --test-dir build --output-on-failure --parallel 4
+        run: |
+          ctest --test-dir build --output-on-failure --parallel 4 -LE slow
+          ctest --test-dir build --output-on-failure --parallel 4 -L slow
 
   # Python packages, native programs and the end-to-end chain. Python 3.15 (prerelease)
   # on one platform only.
@@ -60,8 +63,11 @@ jobs:
           && python -m pip install "scikit-build-core>=0.11" "setuptools-scm>=8" "nanobind>=3.1"
           && python -m pip install --no-build-isolation ./src/stream ./src/propagation
           ./src/sources "./src/ray_tracing[plot]" pytest
-      # One run per component (test modules of different components share file names),
+      # One run per component (test modules of different components share file names).
+      # Tests that need the native tools fail instead of skipping when OBDEECT_REQUIRE_TOOLS is set.
       - name: Run Python tests
+        env:
+          OBDEECT_REQUIRE_TOOLS: "1"
         run: |
           status=0
           for component in stream propagation sources ray_tracing; do
@@ -107,7 +113,8 @@ jobs:
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
           -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined"
           && cmake --build build-sanitize --parallel
-          && ctest --test-dir build-sanitize --output-on-failure --parallel 4
+          && ctest --test-dir build-sanitize --output-on-failure --parallel 4 -LE slow
+          && ctest --test-dir build-sanitize --output-on-failure --parallel 4 -L slow
 
   # Ray tracing only: the only component with an FMA option and with threads.
   fma:
@@ -122,20 +129,27 @@ jobs:
           -DOBDEECT_RAY_TRACING_USE_FMA=ON
           && cmake --build build-fma --parallel
           && ctest --test-dir build-fma --output-on-failure
+  # The components with threads (ray tracing and propagation, which uses parallel.hpp).
   thread-sanitizer:
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [ray_tracing, propagation]
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 0  # component versions come from the repository tags
       # GCC 13 reports a false free-nonheap-object warning in std::vector under TSan.
-      - name: Configure, build, and test ray tracing with ThreadSanitizer
+      # -O1 as in the sanitizers job (Debug adds no optimisation flag of its own).
+      - name: Configure, build, and test with ThreadSanitizer
         run: >-
-          cmake -S src/ray_tracing -B build-tsan -DCMAKE_BUILD_TYPE=RelWithDebInfo
-          -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -Wno-free-nonheap-object"
+          cmake -S src/${{ matrix.component }} -B build-tsan -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_FLAGS="-O1 -fsanitize=thread -fno-omit-frame-pointer -Wno-free-nonheap-object"
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
           && cmake --build build-tsan --parallel
-          && ctest --test-dir build-tsan --output-on-failure
+          && ctest --test-dir build-tsan --output-on-failure --parallel 4 -LE slow
+          && ctest --test-dir build-tsan --output-on-failure --parallel 4 -L slow
   clang-tidy:
     runs-on: ubuntu-26.04
     steps:

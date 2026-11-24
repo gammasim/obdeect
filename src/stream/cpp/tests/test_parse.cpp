@@ -25,6 +25,8 @@ int main() {
     CHECK(!finite_number("inf", v));
     CHECK(!finite_number("1e999", v));
     CHECK(!finite_number("++1", v));
+    CHECK(!finite_number("+-1", v));
+    CHECK(!finite_number("+", v));
 
     long n = 0;
     CHECK(integer("42", n) && n == 42);

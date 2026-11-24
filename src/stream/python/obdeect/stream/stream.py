@@ -8,20 +8,28 @@ from collections.abc import Mapping
 import numpy as np
 from obdeect.stream import _core
 
-Reader = _core.Reader
+
+class Reader(_core.Reader):
+    """Iterates over the records of a photon stream: a path (or os.PathLike), or "-" for stdin.
+
+    ``photon_telescopes`` lists the telescope ids whose photons are decoded; the photons of other
+    telescopes come back with ``columns`` empty. Use as a context manager or call ``close()``.
+    """
+
+    def __init__(self, path: str | os.PathLike, photon_telescopes=None) -> None:
+        super().__init__(os.fspath(path), photon_telescopes)
+
+    def __enter__(self) -> Reader:
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.close()
+
 
 FRAMES = dict(_core.frame_ids)
 COLUMNS = tuple(_core.column_names())
 REQUIRED_COLUMNS = ("x", "y", "cx", "cy", "t", "w")
-METADATA_RECORDS = (
-    "run",
-    "event",
-    "telescope",
-    "telescope_end",
-    "event_end",
-    "run_end",
-    "efficiency_status",
-)
+METADATA_RECORDS = tuple(_core.metadata_record_names())
 
 
 def _frame(frame: int | str) -> int:
@@ -52,7 +60,7 @@ GROUND_REPRESENTATIONS = ("plane", "sphere")
 def ground_representation(run_metadata: Mapping[str, object]) -> str:
     """Ground representation of a run: "plane" (default, also when the key is absent) or "sphere".
 
-    Raises ValueError for any other value (docs/format.md, "Run metadata").
+    Raises ValueError for any other value (docs/stream/format.md, "Metadata").
     """
     value = run_metadata.get("ground_representation", "plane")
     if not isinstance(value, str) or value not in GROUND_REPRESENTATIONS:
@@ -75,6 +83,9 @@ def reject_same_file(input: object, output: object) -> None:
 
 class Writer(_core.Writer):
     """Writes a photon stream. As a context manager it writes stream_end on a normal exit."""
+
+    def __init__(self, path: str | os.PathLike, producer: str) -> None:
+        super().__init__(os.fspath(path), producer)
 
     def __enter__(self) -> Writer:
         return self

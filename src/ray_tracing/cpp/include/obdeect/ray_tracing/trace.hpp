@@ -144,7 +144,7 @@ inline Vec3 reflect_at(const Mirror &mirror, const MirrorHit &mh, const Vec3 &di
     // Graph-surface normal (-dz/dx, -dz/dy, 1): perturb each slope by half
     // the angle, so the reflected ray deviates by about the full angle where
     // the surface is flat. A slope is not an angle: on a tilted surface the
-    // effective width is smaller (docs/optics.md, mirror scatter conventions).
+    // effective width is smaller (docs/ray-tracing/optics.md, mirror scatter conventions).
     const Vec3 tilted{n.x / n.z + 0.5 * a1, n.y / n.z + 0.5 * a2, 1.0};
     return reflect(direction, normalized(tilted));
   }
@@ -187,6 +187,17 @@ inline double mirror_response(const Mirror &mirror, const MirrorHit &mh, double 
 
 } // namespace detail
 
+// Per-photon switches of trace_photon (see the comment there). `sub_photon` numbers the photons
+// that share one photon_id; `from_below` traces a photon that moves up from below the optics.
+struct TraceOptions {
+  bool apply_responses{true};  // Reflectivities, degradation and telescope transmission.
+  bool direct{false};          // Start inside the telescope on the leg to the focal surface.
+  bool incidence_angles{true}; // Compute the incidence angles (NaN otherwise).
+  bool classify_losses{true};  // Report a photon that misses the primary as missed_primary.
+  std::uint32_t sub_photon{0}; // Photon number within a bunch (its random numbers).
+  bool from_below{false};      // Traces up from below the optics.
+};
+
 // Trace one photon through the optical model: one loop for every photon.
 // Each step takes the nearest hit along the ray among the primary, the secondary
 // (both sides), the focal surface and the obscurers of the current leg. Ties go
@@ -228,12 +239,17 @@ inline double mirror_response(const Mirror &mirror, const MirrorHit &mh, double 
 //
 // `from_below` traces a photon that moves up from a start below the optics (the
 // caller decides, e.g. by the sign of cz). Its first hit decides as above.
-[[nodiscard]] inline TraceResult
-trace_photon(const OpticalModel &model, Ray ray, double wavelength_nm, double time_ns,
-             double weight, std::uint64_t photon_id, const RandomKey &seed,
-             bool apply_responses = true, bool direct = false, bool incidence_angles = true,
-             bool classify_losses = true, std::uint32_t sub_photon = 0, bool from_below = false) {
+//
+// The flags are the fields of TraceOptions (defaults: a photon from the sky, with responses).
+[[nodiscard]] inline TraceResult trace_photon(const OpticalModel &model, Ray ray,
+                                              double wavelength_nm, double time_ns, double weight,
+                                              std::uint64_t photon_id, const RandomKey &seed,
+                                              const TraceOptions &options = {}) {
   using namespace detail;
+  const bool apply_responses = options.apply_responses, direct = options.direct;
+  const bool incidence_angles = options.incidence_angles;
+  const bool classify_losses = options.classify_losses, from_below = options.from_below;
+  const std::uint32_t sub_photon = options.sub_photon;
   TraceResult out;
   out.position = ray.origin;
   out.direction = ray.direction;
@@ -458,33 +474,9 @@ struct ResultBlock {
   std::uint8_t *reflections{};
 };
 
-// Chunk size of parallel_for: photons cost very different amounts, so threads
+// Chunk size of the parallel loops: photons cost very different amounts, so threads
 // take fixed chunks from a shared counter instead of one static share each.
 inline constexpr std::size_t kChunkSize = 4096;
-
-// Run body(begin, end) over [0, n) in chunks of kChunkSize items (the last one
-// shorter) on up to `threads` threads. Each worker takes the next free chunk
-// until none is left; the body must write only the items of its range.
-template <class Body> void parallel_for(std::size_t n, unsigned threads, const Body &body) {
-  const std::size_t chunks = (n + kChunkSize - 1) / kChunkSize;
-  const std::size_t workers = std::max<std::size_t>(1, std::min<std::size_t>(threads, chunks));
-  if (workers == 1) {
-    body(std::size_t{0}, n);
-    return;
-  }
-  std::atomic<std::size_t> next{0};
-  const auto work = [&] {
-    for (std::size_t c = next.fetch_add(1, std::memory_order_relaxed); c < chunks;
-         c = next.fetch_add(1, std::memory_order_relaxed))
-      body(c * kChunkSize, std::min(n, (c + 1) * kChunkSize));
-  };
-  std::vector<std::thread> pool;
-  for (std::size_t w = 1; w < workers; ++w)
-    pool.emplace_back(work);
-  work(); // The calling thread works too.
-  for (auto &t : pool)
-    t.join();
-}
 
 // A fixed set of worker threads that runs one job at a time; the calling
 // thread works too. Owned by the caller (no global pool). A task must never
@@ -595,11 +587,23 @@ private:
   bool stop_{false};
 };
 
-// The same on a persistent pool: the chunks of kChunkSize items are the pool's
-// tasks.
+// Run body(begin, end) over [0, n) in chunks of kChunkSize items (the last one shorter) on the
+// pool: the chunks are the pool's tasks, and the body must write only the items of its range.
 template <class Body> void parallel_for(std::size_t n, ThreadPool &pool, const Body &body) {
   const std::size_t chunks = (n + kChunkSize - 1) / kChunkSize;
   pool.run(chunks, [&](std::size_t c) { body(c * kChunkSize, std::min(n, (c + 1) * kChunkSize)); });
+}
+
+// Threads of a pool for n items: at least 1, at most `threads`, and no more than there are chunks.
+inline unsigned pool_size(std::size_t n, unsigned threads) {
+  const std::size_t chunks = (n + kChunkSize - 1) / kChunkSize;
+  return static_cast<unsigned>(std::max<std::size_t>(1, std::min<std::size_t>(threads, chunks)));
+}
+
+// The same on `threads` threads: a pool for this call (see pool_size).
+template <class Body> void parallel_for(std::size_t n, unsigned threads, const Body &body) {
+  ThreadPool pool(pool_size(n, threads));
+  parallel_for(n, pool, body);
 }
 
 namespace detail {
@@ -614,24 +618,6 @@ struct Column {
 template <class T> void add_column(std::vector<Column> &columns, T *pointer, std::size_t per_row) {
   if (pointer)
     columns.push_back({pointer, per_row * sizeof(T)});
-}
-
-// Calls task(i) for every i in [0, count) on up to `threads` threads (the
-// calling thread works too); the tasks must be independent.
-template <class Task> void run_tasks(std::size_t count, unsigned threads, const Task &task) {
-  const std::size_t workers = std::max<std::size_t>(1, std::min<std::size_t>(threads, count));
-  std::atomic<std::size_t> next{0};
-  const auto work = [&] {
-    for (std::size_t i = next.fetch_add(1, std::memory_order_relaxed); i < count;
-         i = next.fetch_add(1, std::memory_order_relaxed))
-      task(i);
-  };
-  std::vector<std::thread> pool;
-  for (std::size_t w = 1; w < workers; ++w)
-    pool.emplace_back(work);
-  work();
-  for (auto &t : pool)
-    t.join();
 }
 
 // Chunk c wrote found[c] rows from row chunk_start[c] on (starts increasing);
@@ -731,8 +717,12 @@ private:
     const Ray ray{{in_.position[3 * i], in_.position[3 * i + 1], in_.position[3 * i + 2]},
                   {in_.direction[3 * i], in_.direction[3 * i + 1], in_.direction[3 * i + 2]}};
     return trace_photon(model_, ray, in_.wavelength_nm[i], in_.time_ns[i], in_.weight[i],
-                        in_.photon_id[i], seed_, apply_responses_, direct_, wants_angles_,
-                        classify_losses_, 0, ray.direction.z > 0.0);
+                        in_.photon_id[i], seed_,
+                        {.apply_responses = apply_responses_,
+                         .direct = direct_,
+                         .incidence_angles = wants_angles_,
+                         .classify_losses = classify_losses_,
+                         .from_below = ray.direction.z > 0.0});
   }
 
   void write_row(std::size_t row, std::size_t input, const TraceResult &r) const {
@@ -775,24 +765,12 @@ private:
 
 } // namespace detail
 
-// Trace a block on `threads` threads. Every photon writes only its own row,
+// Trace a block on a persistent pool. Every photon writes only its own row,
 // and its random numbers depend only on (key, photon_id), so results do not
 // depend on the thread count or the order of photons. Returns the number of
 // rows written: in.size, or with `detected_only` the number of detected
 // photons, whose rows come first, in input order (the rest of the output is
 // left unwritten).
-inline std::size_t trace_block(const OpticalModel &model, const PhotonBlock &in,
-                               const ResultBlock &out, std::uint64_t seed, bool apply_responses,
-                               unsigned threads, bool direct = false, bool detected_only = false,
-                               bool classify_losses = true) {
-  detail::BlockTask task(model, in, out, seed, apply_responses, direct, detected_only,
-                         classify_losses);
-  parallel_for(in.size, threads, [&](std::size_t begin, std::size_t end) { task.run(begin, end); });
-  return task.finish(
-      [&](std::size_t count, const auto &each) { detail::run_tasks(count, threads, each); });
-}
-
-// The same on a persistent pool; the results are equal.
 inline std::size_t trace_block(const OpticalModel &model, const PhotonBlock &in,
                                const ResultBlock &out, std::uint64_t seed, bool apply_responses,
                                ThreadPool &pool, bool direct = false, bool detected_only = false,
@@ -801,6 +779,17 @@ inline std::size_t trace_block(const OpticalModel &model, const PhotonBlock &in,
                          classify_losses);
   parallel_for(in.size, pool, [&](std::size_t begin, std::size_t end) { task.run(begin, end); });
   return task.finish([&](std::size_t count, const auto &each) { pool.run(count, each); });
+}
+
+// The same on `threads` threads: a pool for this call (see pool_size). The results are equal
+// to those of the pool version.
+inline std::size_t trace_block(const OpticalModel &model, const PhotonBlock &in,
+                               const ResultBlock &out, std::uint64_t seed, bool apply_responses,
+                               unsigned threads, bool direct = false, bool detected_only = false,
+                               bool classify_losses = true) {
+  ThreadPool pool(pool_size(in.size, threads));
+  return trace_block(model, in, out, seed, apply_responses, pool, direct, detected_only,
+                     classify_losses);
 }
 
 // One block of trace_blocks.

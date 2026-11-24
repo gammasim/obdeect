@@ -44,6 +44,14 @@ template <class T> nb::object to_numpy(const T *data, std::size_t n) {
   return nb::cast(nb::ndarray<nb::numpy, T, nb::ndim<1>>(owned, {n}, owner));
 }
 
+// Moves a column into a new numpy array (no copy): the array owns the vector.
+nb::object to_numpy(std::vector<float> &&values) {
+  auto *owned = new std::vector<float>(std::move(values));
+  nb::capsule owner(owned, [](void *p) noexcept { delete static_cast<std::vector<float> *>(p); });
+  return nb::cast(
+      nb::ndarray<nb::numpy, float, nb::ndim<1>>(owned->data(), {owned->size()}, owner));
+}
+
 struct MetadataValueToPy {
   nb::object operator()(std::int64_t v) const { return nb::int_(v); }
   nb::object operator()(double v) const { return nb::float_(v); }
@@ -102,27 +110,52 @@ obdeect::stream::RecordType metadata_type_from_name(const std::string &name) {
   throw nb::value_error(("not a metadata record type: '" + name + "'").c_str());
 }
 
+// Input path or "-" (stdin) as a stream: the file in binary mode, or the buffered stdin.
+class InputStream {
+public:
+  explicit InputStream(const std::string &path) {
+    if (path == "-") {
+      stream_ = &stdin_;
+      return;
+    }
+    file_.open(path, std::ios::binary);
+    if (!file_) {
+      throw nb::value_error(("cannot open " + path).c_str());
+    }
+    stream_ = &file_;
+  }
+  std::istream &get() { return *stream_; }
+
+private:
+  obdeect::stream::StdinBuffer stdin_buffer_;
+  std::istream stdin_{&stdin_buffer_};
+  std::ifstream file_;
+  std::istream *stream_{nullptr};
+};
+
+// Reads records of a stream file (or "-" for stdin) one call at a time.
 class PyReader {
 public:
   PyReader(const std::string &path,
-           const std::optional<std::vector<std::uint32_t>> &photon_telescopes) {
-    if (path == "-") {
-      input_ = &std::cin;
-    } else {
-      file_ = std::make_unique<std::ifstream>(path, std::ios::binary);
-      if (!*file_) {
-        throw std::runtime_error("cannot open " + path);
-      }
-      input_ = file_.get();
-    }
-    reader_ = std::make_unique<obdeect::stream::Reader>(*input_);
+           const std::optional<std::vector<std::uint32_t>> &photon_telescopes)
+      : input_(std::make_unique<InputStream>(path)) {
+    reader_ = std::make_unique<obdeect::stream::Reader>(input_->get());
     if (photon_telescopes) {
       reader_->keep_photons_of(*photon_telescopes);
     }
   }
 
   nb::dict next() {
-    if (!reader_->next(record_)) {
+    if (!reader_) {
+      throw nb::value_error("obdeect stream: reader is closed");
+    }
+    bool more = false;
+    {
+      // The native reader touches no Python object, so the GIL is not needed while it reads.
+      nb::gil_scoped_release release;
+      more = reader_->next(record_);
+    }
+    if (!more) {
       if (!reader_->ended()) {
         throw std::runtime_error("obdeect stream: truncated stream (no stream_end record)");
       }
@@ -136,16 +169,17 @@ public:
     out["type"] = nb::str(obdeect::stream::record_name(type));
     switch (type) {
     case obdeect::stream::RecordType::photons: {
-      const auto &chunk = record_.chunk;
+      auto &chunk = record_.chunk;
       out["telescope_id"] = nb::int_(chunk.telescope_id);
       out["frame"] = nb::int_(static_cast<std::uint32_t>(chunk.frame));
       out["first_index"] = nb::int_(chunk.first_index);
+      const std::uint32_t mask = chunk.mask();
       nb::dict columns;
       for (std::uint32_t i = 0; i < obdeect::stream::n_columns; ++i) {
-        if (chunk.mask() & (1U << i)) {
-          const auto &values = chunk.columns[i];
+        if (mask & (1U << i)) {
           const auto column = static_cast<obdeect::stream::Column>(i);
-          columns[obdeect::stream::column_name(column)] = to_numpy(values.data(), values.size());
+          // The record is decoded again by the next call, so its columns can be moved out.
+          columns[obdeect::stream::column_name(column)] = to_numpy(std::move(chunk.columns[i]));
         }
       }
       out["columns"] = columns;
@@ -164,9 +198,15 @@ public:
     return out;
   }
 
+  // Releases the file. Further calls to next() raise ValueError.
+  void close() {
+    reader_.reset();
+    input_.reset();
+  }
+
 private:
-  std::unique_ptr<std::ifstream> file_;
-  std::istream *input_{nullptr};
+  // The input is declared first, so the reader (which refers to it) is destroyed first.
+  std::unique_ptr<InputStream> input_;
   std::unique_ptr<obdeect::stream::Reader> reader_;
   obdeect::stream::Record record_;
 };
@@ -200,7 +240,6 @@ public:
 
     std::vector<std::pair<obdeect::stream::Column, Array>> items;
     std::size_t rows = 0;
-    std::uint32_t mask = 0;
     for (auto item : columns) {
       const auto name = nb::cast<std::string>(item.first);
       const auto column = column_from_name(name);
@@ -217,12 +256,13 @@ public:
       } else if (array.shape(0) != rows) {
         throw nb::value_error("photon columns differ in length");
       }
-      mask |= obdeect::stream::column_bit(*column);
       items.emplace_back(*column, array);
     }
-    chunk.resize(rows, mask);
+    // Sets the row count and copies each column once (no zero fill). A chunk with no rows has no
+    // columns, so the mask follows from the columns that were given.
+    chunk.resize(rows, 0);
     for (const auto &[column, array] : items) {
-      std::copy_n(array.data(), rows, chunk[column].data());
+      chunk[column].assign(array.data(), array.data() + rows);
     }
     writer_->write_chunk(chunk);
   }
@@ -275,29 +315,6 @@ private:
   std::unique_ptr<obdeect::stream::Writer> writer_;
 };
 
-// Input path or "-" (stdin) as a stream; the file is opened in binary mode.
-class InputStream {
-public:
-  explicit InputStream(const std::string &path) {
-    if (path == "-") {
-      stream_ = &stdin_;
-      return;
-    }
-    file_.open(path, std::ios::binary);
-    if (!file_) {
-      throw nb::value_error(("cannot open " + path).c_str());
-    }
-    stream_ = &file_;
-  }
-  std::istream &get() { return *stream_; }
-
-private:
-  obdeect::stream::StdinBuffer stdin_buffer_;
-  std::istream stdin_{&stdin_buffer_};
-  std::ifstream file_;
-  std::istream *stream_{nullptr};
-};
-
 std::string producer_name(const char *tool = "obdeect stream from-corsika") {
   return std::string(tool) + " " + std::to_string(obdeect::stream::version_major) + "." +
          std::to_string(obdeect::stream::version_minor) + "." +
@@ -318,6 +335,17 @@ NB_MODULE(_core, module) {
     std::vector<std::string> names;
     for (std::uint32_t i = 0; i < obdeect::stream::n_columns; ++i) {
       names.emplace_back(obdeect::stream::column_name(static_cast<obdeect::stream::Column>(i)));
+    }
+    return names;
+  });
+  module.def("metadata_record_names", [] {
+    std::vector<std::string> names;
+    for (const auto type :
+         {obdeect::stream::RecordType::run, obdeect::stream::RecordType::event,
+          obdeect::stream::RecordType::telescope, obdeect::stream::RecordType::telescope_end,
+          obdeect::stream::RecordType::event_end, obdeect::stream::RecordType::run_end,
+          obdeect::stream::RecordType::efficiency_status}) {
+      names.emplace_back(obdeect::stream::record_name(type));
     }
     return names;
   });
@@ -429,7 +457,8 @@ NB_MODULE(_core, module) {
       .def(nb::init<const std::string &, const std::optional<std::vector<std::uint32_t>> &>(),
            nb::arg("path"), nb::arg("photon_telescopes") = nb::none())
       .def("__iter__", [](nb::object self) { return self; })
-      .def("__next__", &PyReader::next);
+      .def("__next__", &PyReader::next)
+      .def("close", &PyReader::close);
 
   nb::class_<PyWriter>(module, "Writer")
       .def(nb::init<const std::string &, const std::string &>(), nb::arg("path"),

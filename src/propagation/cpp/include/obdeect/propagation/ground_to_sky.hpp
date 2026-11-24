@@ -19,6 +19,7 @@
 // back-projection along the arrival direction.
 
 #include "obdeect/propagation/profile.hpp"
+#include "obdeect/propagation/streams.hpp"
 #include "obdeect/propagation/timing.hpp"
 
 #include "obdeect/stream/format.hpp"
@@ -111,6 +112,41 @@ inline obdeect::stream::PhotonChunk ground_slice(const obdeect::stream::PhotonCh
   return piece;
 }
 
+// The converted rows of a chunk, split into one chunk per run of consecutive kept rows (keep[row]
+// != 0); each piece has the first_index of its first row. Rows that are not kept are added to
+// dropped. A chunk with every row kept is moved, not copied.
+inline std::vector<obdeect::stream::PhotonChunk>
+split_kept_rows(obdeect::stream::PhotonChunk &&converted, const std::vector<std::uint8_t> &keep,
+                std::uint64_t &dropped) {
+  const std::size_t rows = converted.rows();
+  std::vector<obdeect::stream::PhotonChunk> out;
+  std::uint64_t kept = 0;
+  for (const std::uint8_t flag : keep) {
+    kept += flag != 0 ? 1U : 0U;
+  }
+  dropped += static_cast<std::uint64_t>(rows) - kept;
+  if (kept == rows) {
+    if (rows > 0) {
+      out.push_back(std::move(converted));
+    }
+    return out;
+  }
+  std::size_t row = 0;
+  while (row < rows) {
+    if (keep[row] == 0) {
+      ++row;
+      continue;
+    }
+    std::size_t end = row;
+    while (end < rows && keep[end] != 0) {
+      ++end;
+    }
+    out.push_back(ground_slice(converted, row, end));
+    row = end;
+  }
+  return out;
+}
+
 // Converts the rows of a frame G chunk to frame sky. Rows that cannot be converted (see
 // ground_to_sky_row, horizontal photons with cz = 0, or non-finite cz) are removed and added to
 // dropped. Upward rows (cz > 0) are converted as upward photons (ground_to_sky_row). The result is
@@ -188,24 +224,7 @@ ground_to_sky(const obdeect::stream::PhotonChunk &input, const GroundPlane &plan
     }
   }
 
-  std::vector<obdeect::stream::PhotonChunk> out;
-  std::uint64_t kept = 0;
-  std::size_t row = 0;
-  while (row < rows) {
-    if (keep[row] == 0) {
-      ++row;
-      continue;
-    }
-    std::size_t end = row;
-    while (end < rows && keep[end] != 0) {
-      ++end;
-    }
-    out.push_back(ground_slice(converted, row, end));
-    kept += end - row;
-    row = end;
-  }
-  dropped += static_cast<std::uint64_t>(rows) - kept;
-  return out;
+  return split_kept_rows(std::move(converted), keep, dropped);
 }
 
 // Sphere representation (docs/propagation/ground-to-sky.md, "Sphere rows"). A row is the point
@@ -291,24 +310,7 @@ ground_to_sky_sphere(const obdeect::stream::PhotonChunk &input, const GroundPlan
       converted[Column::t][row] = static_cast<float>(t_sky);
     }
   }
-  std::vector<obdeect::stream::PhotonChunk> out;
-  std::uint64_t kept = 0;
-  std::size_t row = 0;
-  while (row < rows) {
-    if (keep[row] == 0) {
-      ++row;
-      continue;
-    }
-    std::size_t end = row;
-    while (end < rows && keep[end] != 0) {
-      ++end;
-    }
-    out.push_back(ground_slice(converted, row, end));
-    kept += end - row;
-    row = end;
-  }
-  dropped += static_cast<std::uint64_t>(rows) - kept;
-  return out;
+  return split_kept_rows(std::move(converted), keep, dropped);
 }
 
 struct ToSkySummary {
@@ -441,7 +443,7 @@ inline ToSkySummary ground_to_sky_stream(std::istream &in, std::ostream &out,
   obdeect::stream::Reader reader(in);
   ToSkySummary summary;
   std::optional<to_sky_detail::RunSite> run;
-  std::optional<std::uint32_t> open_telescope; // telescope whose photons may follow
+  std::uint32_t open_telescope = 0; // telescope whose photons may follow (ids are 1-based; 0: none)
   double telescope_weight = 0.0;
   obdeect::stream::Record record;
   while (reader.next(record)) {
@@ -477,7 +479,7 @@ inline ToSkySummary ground_to_sky_stream(std::istream &in, std::ostream &out,
                                       " differs from the run's telescope position");
         }
       }
-      if (open_telescope) {
+      if (open_telescope != 0) {
         throw std::invalid_argument("telescope record while another telescope is open");
       }
       open_telescope = static_cast<std::uint32_t>(id);
@@ -488,7 +490,7 @@ inline ToSkySummary ground_to_sky_stream(std::istream &in, std::ostream &out,
       break;
     }
     case RecordType::photons: {
-      if (!run || !open_telescope || record.chunk.telescope_id != *open_telescope) {
+      if (!run || open_telescope == 0 || record.chunk.telescope_id != open_telescope) {
         throw std::invalid_argument("photons of a telescope that is not open");
       }
       const auto &chunk = record.chunk;
@@ -496,7 +498,7 @@ inline ToSkySummary ground_to_sky_stream(std::istream &in, std::ostream &out,
       if (chunk.rows() == 0) {
         break;
       }
-      const auto index = static_cast<std::size_t>(*open_telescope - 1);
+      const auto index = static_cast<std::size_t>(open_telescope - 1);
       const GroundPlane plane{run->x_m[index], run->y_m[index], run->z_m[index], run->observation_m,
                               profile ? &*profile : nullptr};
       const auto pieces = run->sphere ? ground_to_sky_sphere(chunk, plane, summary.dropped)
@@ -512,19 +514,16 @@ inline ToSkySummary ground_to_sky_stream(std::istream &in, std::ostream &out,
     }
     case RecordType::telescope_end: {
       const auto id = integer(record.metadata, "telescope_id");
-      if (!open_telescope || id != *open_telescope) {
+      if (open_telescope == 0 || id != open_telescope) {
         throw std::invalid_argument("telescope_end does not match an open telescope");
       }
-      open_telescope.reset();
+      open_telescope = 0;
       record.metadata["photons"] = telescope_weight;
       writer.write_metadata(record.type, record.metadata);
       break;
     }
-    case RecordType::blob:
-      writer.write_blob(record.blob_eventio_type, record.blob_eventio_id, record.blob);
-      break;
     default:
-      writer.write_metadata(record.type, record.metadata);
+      obdeect::stream::write_record(writer, record); // blob and metadata records
       break;
     }
   }

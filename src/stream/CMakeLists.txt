@@ -22,6 +22,17 @@ if(NOT OBDEECT_STREAM_NUMERIC_VERSION)
 endif()
 project(obdeect_stream VERSION ${OBDEECT_STREAM_NUMERIC_VERSION} LANGUAGES CXX)
 
+# Shared CMake helpers: the repository's cmake/ directory, or the copy staged next to the
+# sdist (shared-cmake/). A parent that embeds this component has set the directory already.
+if(NOT DEFINED OBDEECT_SHARED_CMAKE_DIR)
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/ObdeectCommon.cmake)
+    set(OBDEECT_SHARED_CMAKE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../cmake)
+  else()
+    set(OBDEECT_SHARED_CMAKE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shared-cmake)
+  endif()
+endif()
+include(${OBDEECT_SHARED_CMAKE_DIR}/ObdeectCommon.cmake)
+
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
@@ -63,14 +74,7 @@ target_include_directories(obdeect_stream_core INTERFACE
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/cpp/include>
   $<BUILD_INTERFACE:${OBDEECT_STREAM_GENERATED_DIR}>
   $<INSTALL_INTERFACE:${OBDEECT_STREAM_INCLUDE_INSTALL_DIR}>)
-target_compile_features(obdeect_stream_core INTERFACE cxx_std_20)
-# Identical floating-point results for any thread count and chunk size on one
-# platform: no implicit fused multiply-add contraction.
-target_compile_options(obdeect_stream_core INTERFACE -ffp-contract=off)
-
-function(obdeect_stream_enable_warnings target)
-  target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror)
-endfunction()
+obdeect_set_core_options(obdeect_stream_core)
 
 # Headers and the package config for consumers (find_package(obdeect_stream CONFIG)).
 if(OBDEECT_STREAM_INSTALL)
@@ -97,7 +101,7 @@ if(OBDEECT_STREAM_BUILD_CAPI)
   if(NOT DEFINED SKBUILD_PLATLIB_DIR) # wheels cannot hold the symlinks
     set_target_properties(obdeect_stream_c PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION 1)
   endif()
-  obdeect_stream_enable_warnings(obdeect_stream_c)
+  obdeect_enable_warnings(obdeect_stream_c)
   install(TARGETS obdeect_stream_c EXPORT obdeect_stream-targets
           LIBRARY DESTINATION ${OBDEECT_STREAM_LIB_INSTALL_DIR}
           RUNTIME DESTINATION ${OBDEECT_STREAM_LIB_INSTALL_DIR}
@@ -116,15 +120,7 @@ if(OBDEECT_STREAM_INSTALL)
 endif()
 
 if(OBDEECT_STREAM_BUILD_PYTHON_API)
-  find_package(Python 3.14 COMPONENTS Interpreter Development.Module REQUIRED)
-  execute_process(COMMAND "${Python_EXECUTABLE}" -m nanobind --cmake_dir
-                  OUTPUT_VARIABLE nanobind_DIR OUTPUT_STRIP_TRAILING_WHITESPACE
-                  COMMAND_ERROR_IS_FATAL ANY)
-  find_package(nanobind CONFIG REQUIRED)
-  nanobind_add_module(_core NB_STATIC cpp/bindings/core.cpp)
-  target_link_libraries(_core PRIVATE obdeect_stream_core)
-  obdeect_stream_enable_warnings(_core)
-  install(TARGETS _core LIBRARY DESTINATION obdeect/stream)
+  obdeect_add_python_module(stream obdeect_stream_core)
 endif()
 
 if(OBDEECT_STREAM_BUILD_TOOLS)
@@ -139,7 +135,7 @@ if(OBDEECT_STREAM_BUILD_TOOLS)
     target_link_libraries(${tool} PRIVATE obdeect_stream_core)
     target_compile_definitions(${tool} PRIVATE
                                "OBDEECT_STREAM_PACKAGE_VERSION=\"${OBDEECT_STREAM_PACKAGE_VERSION}\"")
-    obdeect_stream_enable_warnings(${tool})
+    obdeect_enable_warnings(${tool})
   endforeach()
   # Wheels: inside the package, run through `obdeect stream <command>`.
   if(DEFINED SKBUILD_PLATLIB_DIR)
@@ -153,15 +149,15 @@ if(OBDEECT_STREAM_BUILD_BENCH)
   foreach(bench bench_stream gen_corsika)
     add_executable(${bench} cpp/bench/${bench}.cpp)
     target_link_libraries(${bench} PRIVATE obdeect_stream_core)
-    obdeect_stream_enable_warnings(${bench})
+    obdeect_enable_warnings(${bench})
   endforeach()
 endif()
 
 if(OBDEECT_STREAM_BUILD_TESTING)
   enable_testing()
   if(OBDEECT_STREAM_BUILD_BENCH)
-    add_test(NAME bench_stream_partial_chunk COMMAND bench_stream 65537
-             ${CMAKE_CURRENT_BINARY_DIR}/bench_stream_test.pst)
+    obdeect_add_test(bench_stream_partial_chunk stream COMMAND bench_stream 65537
+                     ${CMAKE_CURRENT_BINARY_DIR}/bench_stream_test.pst)
   endif()
   if(OBDEECT_STREAM_BUILD_CAPI)
     enable_language(C)
@@ -172,22 +168,24 @@ if(OBDEECT_STREAM_BUILD_TESTING)
     target_link_libraries(test_capi PRIVATE obdeect_stream_c)
     target_compile_options(test_capi PRIVATE -Wall -Wextra -Wpedantic -Werror)
     set(OBDEECT_STREAM_CONFORMANCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/cpp/tests/data/conformance)
-    add_test(NAME capi COMMAND test_capi ${CMAKE_CURRENT_BINARY_DIR}/capi_roundtrip.pst
-             ${OBDEECT_STREAM_CONFORMANCE_DIR})
+    obdeect_add_test(capi stream COMMAND test_capi ${CMAKE_CURRENT_BINARY_DIR}/capi_roundtrip.pst
+                     ${OBDEECT_STREAM_CONFORMANCE_DIR})
     set_tests_properties(capi PROPERTIES FIXTURES_SETUP capi_stream)
     add_executable(test_capi_cpp cpp/tests/test_capi_cpp.cpp)
     target_link_libraries(test_capi_cpp PRIVATE obdeect_stream_c obdeect_stream_core)
-    obdeect_stream_enable_warnings(test_capi_cpp)
-    add_test(NAME capi_cpp COMMAND test_capi_cpp ${CMAKE_CURRENT_BINARY_DIR}/capi_roundtrip.pst
-             ${OBDEECT_STREAM_CONFORMANCE_DIR})
+    obdeect_enable_warnings(test_capi_cpp)
+    obdeect_add_test(capi_cpp stream SOURCE test_capi_cpp.cpp
+                     COMMAND test_capi_cpp ${CMAKE_CURRENT_BINARY_DIR}/capi_roundtrip.pst
+                     ${OBDEECT_STREAM_CONFORMANCE_DIR})
     set_tests_properties(capi_cpp PROPERTIES FIXTURES_REQUIRED capi_stream)
   endif()
   foreach(test_name version format parse cli stream eventio corsika simtel grisu stages wavelength)
     add_executable(test_${test_name} cpp/tests/test_${test_name}.cpp)
     target_link_libraries(test_${test_name} PRIVATE obdeect_stream_core)
-    obdeect_stream_enable_warnings(test_${test_name})
-    add_test(NAME ${test_name} COMMAND test_${test_name})
+    obdeect_enable_warnings(test_${test_name})
+    obdeect_add_test(${test_name} stream SOURCE test_${test_name}.cpp COMMAND test_${test_name})
   endforeach()
+  obdeect_check_test_sources(${CMAKE_CURRENT_SOURCE_DIR}/cpp/tests)
 
   # --version of each tool: "<tool> <package version> (photon-stream format <major>.<minor>)".
   file(READ ${CMAKE_CURRENT_SOURCE_DIR}/cpp/include/obdeect/stream/format.hpp OBDEECT_STREAM_FORMAT_HPP)
@@ -197,7 +195,7 @@ if(OBDEECT_STREAM_BUILD_TESTING)
   set(OBDEECT_STREAM_FORMAT_MINOR ${CMAKE_MATCH_1})
   if(OBDEECT_STREAM_BUILD_TOOLS)
     foreach(command ${OBDEECT_STREAM_COMMANDS})
-      add_test(NAME ${command}_version COMMAND obdeect-stream-${command} --version)
+      obdeect_add_test(${command}_version stream COMMAND obdeect-stream-${command} --version)
       set_tests_properties(${command}_version PROPERTIES PASS_REGULAR_EXPRESSION
         "^obdeect stream ${command} ${OBDEECT_STREAM_PACKAGE_VERSION} \\(photon-stream format ${OBDEECT_STREAM_FORMAT_MAJOR}\\.${OBDEECT_STREAM_FORMAT_MINOR}\\)")
     endforeach()

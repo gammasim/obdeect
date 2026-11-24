@@ -61,7 +61,9 @@ def run_command(group: Group, name: str, command: Command, argv: list[str]) -> i
     prog = f"obdeect {name}"
     if command.program is not None:
         path = program_path(group.package, command.program)
-        sys.stdout.flush()
+        # With stdout closed (`>&-`) sys.stdout is None: the program reports its own write error.
+        if sys.stdout is not None:
+            sys.stdout.flush()
         os.execv(path, [prog, *argv])
     return command.function(argv)
 

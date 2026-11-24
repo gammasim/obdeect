@@ -12,16 +12,18 @@ obdeect ray-tracing trace-stream --model 1=lst.json --model 2=lst.json --model 5
 
 `--model PATH` traces every telescope with one model. `--model ID=PATH`, repeated, gives each
 telescope id its own model, so that one process traces a whole array and writes one stream in
-event order; telescopes without a model are dropped, and a model file named several times is
-loaded once. The photons of a telescope do not depend on the other telescopes traced with it.
+event order; telescopes without a model are dropped, and an optical-model file named several times
+is loaded once. The photons of a telescope do not depend on the other telescopes traced with it.
 Records pass through; telescopes not listed in `--telescopes` are dropped. A summary (events,
 photons in and out) goes to standard error. `-` (the default) is standard input or output.
 
 The command runs a native program (`obdeect-ray-tracing-trace-stream`, C++), like the other
-stream stages. It writes the same stream as the Python function
-`obdeect.ray_tracing.stream.trace_stream`, bit for bit; only the version in the producer and
-provenance strings can differ between a development build and the Python package. Like the
-Python loader, it rejects a model file whose content does not match its `sha256`.
+stream stages. The Python function `obdeect.ray_tracing.stream.trace_stream` runs the same code
+and writes the same bytes. Both reject an optical-model file whose content does not match its
+`sha256`.
+The random numbers are keyed on the run seed, the event number (below 2^32), the telescope and the
+photon index (the row of the telescope block in the event, below 2^40); the photon index continues
+across the chunks of one telescope block, so the output does not depend on chunking.
 
 ## Input frames
 
@@ -39,12 +41,11 @@ not be zero: a horizontal photon has no input plane and is rejected with an erro
 1.2) is carried through: the output `path` is the input path, moved to the start point, plus the
 traced path inside the telescope (the camera-frame output keeps the column, valid in any frame).
 
-Sphere runs (run key `ground_representation` = `sphere`, format 1.2): each G row is the point where
-the photon's path enters the telescope sphere (or its emission point, if emitted inside), with its
-direction and its time there. The row is the start point: the tracer does not move it to an input
-plane. Its radius is `telescope_r_m` of the run, indexed by telescope id (id 1 is the first entry,
-as in sim_telarray); the rows are checked with `validate_sphere_rows` (columns `x y z cx cy cz t zem w`
-required, |r| <= R). Horizontal rows (cz = 0) are allowed; each row takes the branch of its traced
+Sphere runs (run key `ground_representation` = `sphere`, format 1.2): each G row is a point of the
+telescope sphere, as defined in the [format](../stream/format.md#photon-chunk). The row is the start
+point: the tracer does not move it to an input plane. Its radius is `telescope_r_m` of the run,
+indexed by telescope id (id 1 is the first entry, as in sim_telarray); the rows are checked with
+`validate_sphere_rows` (columns `x y z cx cy cz t zem w` required, |r| <= R). Horizontal rows (cz = 0) are allowed; each row takes the branch of its traced
 direction (see [Light sources](light-sources.md#sphere-rows)). Before the first sphere row of a
 telescope, the tracer checks that the sphere encloses the optical model (see
 [Limitations](limitations.md#sphere-runs)); a sphere that is too small is an error.
@@ -91,7 +92,9 @@ run level.
 | `envelope` | The stream carries the efficiency bound f_env, so the output weight is multiplied by 1 / f_env(λ). The trace then gives f / f_env. Photons are traced with `roulette=False` (weight w / bound per survivor, unclamped, so the weights stay unbiased); the table is interpolated at each photon's wavelength. |
 | `applied` | An error: the trace would apply the factor again. |
 
-Other factors (for example `qe`) pass on unchanged. After the run record, the stage writes a
+The vocabulary and the transition rules are in [](../stream/efficiency-status.md).
+
+Other factors (for example `qe`) pass on unchanged. After the run record, the stage writes an
 efficiency-status record after the incoming run statuses, marking the factors it applies `applied`, with
 `source` set to obdeect and the model hash. With a model per telescope id, this record is written
 in each telescope block instead, with the hash of that telescope's model: the first
@@ -103,7 +106,7 @@ to 600 nm) becomes:
 ```text
 factors = mirror_reflectivity,telescope_transmission
 mirror_reflectivity.state = applied
-mirror_reflectivity.source = obdeect 0.7.2 model <sha256>
+mirror_reflectivity.source = obdeect <version> model <sha256>
 telescope_transmission.state = applied
 ...
 ```

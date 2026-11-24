@@ -8,13 +8,14 @@ import math
 import numpy as np
 import pytest
 from obdeect.ray_tracing import OpticalModel
-from obdeect.ray_tracing import stream as stream_module
-from obdeect.ray_tracing.cli import main
 from obdeect.ray_tracing.compiler import model_hash
 from obdeect.ray_tracing.formats import ModelError
+from obdeect.ray_tracing.model import _obscurer_support
+from obdeect.ray_tracing.psf import containment
 from obdeect.ray_tracing.stream import (
     CONSTANT_FACTOR,
     ground_to_telescope_rotation,
+    lower_input_plane_height_m,
     minimum_input_plane_height_m,
     trace_stream,
 )
@@ -23,17 +24,6 @@ from telescopes import dual, segmented
 FOCAL_LENGTH_M = 8.0  # focal length of segmented()
 RUN = {"run_number": 7, "wavelength_min_nm": 300.0, "wavelength_max_nm": 600.0}
 SEED = 20261107
-
-
-@pytest.fixture
-def obdeect_stream():
-    return pytest.importorskip("obdeect.stream")
-
-
-@pytest.fixture(scope="module")
-def model():
-    records, files = segmented()
-    return OpticalModel.from_records(records, files.__getitem__, configuration_seed=1)
 
 
 def beam(count, direction, *, radius_m=0.5, wavelength_nm=400.0, seed=3):
@@ -149,16 +139,6 @@ def test_rotation_maps_the_optical_axis_to_minus_z():
     assert np.allclose(rotation @ direction, [0.0, 0.0, -1.0], atol=1e-12)
 
 
-def test_cz_column_accepts_float32_near_horizontal_directions():
-    # Unit vector in float32 with |cz| ~ 6e-4: an absolute check on cz rejected it.
-    cx = np.array([0.989117742], dtype=np.float32)
-    cy = np.array([-0.147124648], dtype=np.float32)
-    assert stream_module._cz_matches(np.array([-0.000614837], dtype=np.float32), cx, cy)
-    # Upwards photons are accepted too; a cz that does not match cx, cy is rejected.
-    assert stream_module._cz_matches(np.array([0.000614837], dtype=np.float32), cx, cy)
-    assert not stream_module._cz_matches(np.array([-0.05], dtype=np.float32), cx, cy)
-
-
 def test_input_plane_is_above_the_incoming_obscurers(model):
     top = model.max_incoming_obscurer_z_m()
     assert minimum_input_plane_height_m(model, 0.0) == pytest.approx(top + 1.0)
@@ -166,7 +146,7 @@ def test_input_plane_is_above_the_incoming_obscurers(model):
     height = minimum_input_plane_height_m(model, 60.0)
     for obscurer in model.document["optics"]["obscurers"]:
         if "incoming" in obscurer.get("legs", []):
-            assert height - np.dot(normal, model.axes_offset_m) > stream_module._obscurer_support(
+            assert height - np.dot(normal, model.axes_offset_m) > _obscurer_support(
                 obscurer, normal
             )
     with pytest.raises(ModelError):
@@ -187,6 +167,10 @@ def test_on_axis_beam_focuses_at_the_centre(model, tmp_path, obdeect_stream):
     assert 0 < counts["photons_out"] < 4000
     assert abs(columns["x"].mean()) < 1e-3
     assert abs(columns["y"].mean()) < 1e-3
+    # Spot size: the radius holding 80 % of the photons is about 0.2 mm for this fixture (measured
+    # with the segmented model at 4000 photons); 1 mm bounds it with a factor-of-5 margin.
+    spot = containment(columns["x"], columns["y"], fraction=0.8)
+    assert spot["radius_m"] < 1e-3
     # Reflected photons travel from the dish up towards the camera: +z in the telescope frame.
     assert np.all(columns["cz"] > 0.0)
     assert np.allclose(columns["cx"] ** 2 + columns["cy"] ** 2 + columns["cz"] ** 2, 1.0, atol=1e-5)
@@ -315,14 +299,6 @@ def test_unsupported_frame_and_column_are_rejected(model, tmp_path, obdeect_stre
     with pytest.raises(ModelError, match="frame 0"):
         write_stream(tmp_path / "sky.pst", {1: beam(10, (0.0, 0.0))}, frame=0)
         trace_stream(model, tmp_path / "sky.pst", tmp_path / "x.pst", seed=SEED, pointing=(0, 0))
-
-
-def test_unknown_photon_column_is_rejected():
-    tracer = object.__new__(stream_module._Tracer)
-    tracer.telescope = stream_module._Telescope(1, True)
-    tracer.event = {"event_number": 1}
-    with pytest.raises(ModelError, match="unsupported photon columns: extra"):
-        tracer._photons({"telescope_id": 1, "columns": {"w": np.ones(1), "extra": np.ones(1)}})
 
 
 def test_telescope_filter_drops_other_telescopes(model, tmp_path, obdeect_stream):
@@ -543,16 +519,18 @@ def write_chunks(path, photons, chunk, obdeect_stream):
         writer.write("run_end", {})
 
 
-def test_output_chunks_are_capped_and_numbered(model, tmp_path, obdeect_stream, monkeypatch):
-    monkeypatch.setattr(stream_module, "MAX_CHUNK_ROWS", 100)
-    _, _, output = focus(
-        model, tmp_path, obdeect_stream, beam(2000, (0.0, 0.0)), pointing=(0, 0), name="cap"
-    )
+def test_output_chunks_are_capped_and_numbered(model, tmp_path, obdeect_stream):
+    # Bunches of 3 photons: more output rows than one chunk holds.
+    photons = beam(200000, (0.0, 0.0), radius_m=6.0)
+    photons["w"] = np.full(200000, 3.0, np.float32)
+    source = write_chunks_of(tmp_path / "cap.in", photons, 50000, obdeect_stream)
+    output = tmp_path / "cap.out"
+    trace_stream(model, source, output, seed=SEED, pointing=(0, 0))
     chunks = [r for r in read_records(output, obdeect_stream) if r["type"] == "photons"]
     assert len(chunks) > 1
     expected_index = 0
     for chunk in chunks:
-        assert len(chunk["columns"]["w"]) <= 100
+        assert len(chunk["columns"]["w"]) <= obdeect_stream.max_chunk_rows
         assert chunk["first_index"] == expected_index
         expected_index += len(chunk["columns"]["w"])
     telescope_end = [
@@ -614,68 +592,6 @@ def test_records_pass_through(model, tmp_path, obdeect_stream):
     assert run == RUN
     event = next(r for r in records if r["type"] == "event")["metadata"]
     assert event["energy_gev"] == 1.5
-
-
-def test_cli_trace_stream(model, tmp_path, obdeect_stream, capsys):
-    model_path = tmp_path / "model.json"
-    model.save(model_path)
-    source = write_stream(tmp_path / "cli.in.pst", {1: beam(500, (0.0, 0.0))})
-    output = tmp_path / "cli.out.pst"
-    code = main([
-        "trace-stream",
-        "--model",
-        str(model_path),
-        "--seed",
-        "3",
-        "--pointing-zenith-deg",
-        "0",
-        "--pointing-azimuth-deg",
-        "0",
-        "-i",
-        str(source),
-        "-o",
-        str(output),
-    ])
-    assert code == 0
-    assert "trace-stream:" in capsys.readouterr().err
-    assert any(r["type"] == "photons" for r in read_records(output, obdeect_stream))
-
-
-def test_cli_needs_a_pointing_for_ground_photons(model, tmp_path, capsys):
-    model_path = tmp_path / "model.json"
-    model.save(model_path)
-    source = write_stream(tmp_path / "cli.nop.pst", {1: beam(10, (0.0, 0.0))})
-    code = main([
-        "trace-stream",
-        "--model",
-        str(model_path),
-        "--seed",
-        "3",
-        "-i",
-        str(source),
-        "-o",
-        str(tmp_path / "cli.nop.out.pst"),
-    ])
-    assert code == 1
-    assert "--pointing-zenith-deg" in capsys.readouterr().err
-
-
-def test_cli_rejects_half_a_pointing(model, tmp_path, capsys):
-    model_path = tmp_path / "model.json"
-    model.save(model_path)
-    code = main([
-        "trace-stream",
-        "--model",
-        str(model_path),
-        "--seed",
-        "3",
-        "--pointing-zenith-deg",
-        "5",
-        "-i",
-        str(tmp_path / "none.pst"),
-    ])
-    assert code == 1
-    assert "pointing" in capsys.readouterr().err
 
 
 def test_angular_transmission_drops_the_on_axis_value_from_on_axis_photons(
@@ -763,7 +679,9 @@ def test_angular_efficiency_status_marks_telescope_level_transmission(
 
 def test_angular_transmission_needs_a_model_with_transmission(model, tmp_path, obdeect_stream):
     records, files = segmented(telescope_transmission=None)
-    bare = OpticalModel.from_records(records, files.__getitem__, configuration_seed=1)
+    bare = OpticalModel.from_records(
+        records, files.__getitem__, configuration_seed=1, propagation_group_index=1.0
+    )
     with pytest.raises(ModelError, match="has none"):
         focus(
             bare,
@@ -788,7 +706,7 @@ def test_angular_transmission_needs_a_model_with_transmission(model, tmp_path, o
 def test_unknown_transmission_part_and_existing_constant_are_rejected(
     model, tmp_path, obdeect_stream
 ):
-    with pytest.raises(ModelError, match="must be one of"):
+    with pytest.raises(ModelError, match="full or angular"):
         focus(
             model,
             tmp_path,
@@ -829,57 +747,12 @@ def test_unknown_transmission_part_and_existing_constant_are_rejected(
         )
 
 
-def test_cli_telescope_transmission_option(model, tmp_path, obdeect_stream, capsys):
-    model_path = tmp_path / "model.json"
-    model.save(model_path)
-    source = write_stream(tmp_path / "opt.in.pst", {1: beam(50, (0.0, 0.0))})
-    base = [
-        "trace-stream",
-        "--model",
-        str(model_path),
-        "--seed",
-        "3",
-        "--pointing-zenith-deg",
-        "0",
-        "--pointing-azimuth-deg",
-        "0",
-        "-i",
-        str(source),
-        "-o",
-    ]
-    parts = {}
-    for label, extra in (("default", []), ("angular", ["--telescope-transmission", "angular"])):
-        output = tmp_path / f"opt.{label}.pst"
-        assert main([*base, str(output), *extra]) == 0
-        parts[label] = efficiency_status_of(output, obdeect_stream)[0][
-            "telescope_transmission.part"
-        ]
-    assert parts == {"default": "full", "angular": "angular"}
-    capsys.readouterr()
-    with pytest.raises(SystemExit) as error:
-        main([*base, str(tmp_path / "bad.pst"), "--telescope-transmission", "partial"])
-    assert error.value.code == 2
-    assert "invalid choice" in capsys.readouterr().err
-
-
-def test_single_wavelength_run_keys_give_that_wavelength():
-    law = stream_module._wavelength_law({"wavelength_min_nm": 400.0, "wavelength_max_nm": 400.0})
-    assert law == (400.0, 401.0)
-    # Any draw of the 1/lambda^2 law over [400, 401) truncates to 400 nm.
-    lo, hi = law
-    for u in (1e-9, 0.5, 1 - 1e-9):
-        assert math.floor(1.0 / (1.0 / lo - u * (1.0 / lo - 1.0 / hi))) == 400
-    assert stream_module._wavelength_law({"wavelength_min_nm": 300, "wavelength_max_nm": 550}) == (
-        300.0,
-        550.0,
-    )
-    assert stream_module._wavelength_law({}) is None
-
-
 def dual_without_obscurers():
     """SST-like dual mirror with no obscurers: its dish reaches above the camera at grazing."""
     records, files = dual()
-    model = OpticalModel.from_records(records, files.__getitem__, configuration_seed=1)
+    model = OpticalModel.from_records(
+        records, files.__getitem__, configuration_seed=1, propagation_group_index=1.0
+    )
     document = model.document
     document["optics"]["obscurers"] = []
     document["sha256"] = model_hash(document)
@@ -957,7 +830,9 @@ def test_input_plane_clears_the_mirror_at_grazing_pointing():
 @pytest.fixture(scope="module")
 def dual_model():
     records, files = dual()
-    return OpticalModel.from_records(records, files.__getitem__, configuration_seed=1)
+    return OpticalModel.from_records(
+        records, files.__getitem__, configuration_seed=1, propagation_group_index=1.0
+    )
 
 
 def two_telescope_stream(path):
@@ -1067,56 +942,6 @@ def test_telescope_status_marks_own_factors_once_per_block(model, tmp_path, obde
     assert statuses[0]["qe.state"] == "pending"
 
 
-def test_cli_trace_stream_with_a_model_per_telescope(
-    model, dual_model, tmp_path, obdeect_stream, capsys
-):
-    model.save(tmp_path / "segmented.json")
-    dual_model.save(tmp_path / "dual.json")
-    source = two_telescope_stream(tmp_path / "cli.array.pst")
-    output = tmp_path / "cli.array.out.pst"
-    arguments = ["trace-stream", "--seed", "3", "--pointing-zenith-deg", "0"]
-    arguments += ["--pointing-azimuth-deg", "0", "-i", str(source), "-o", str(output)]
-
-    code = main([
-        *arguments,
-        "--model",
-        f"1={tmp_path / 'segmented.json'}",
-        "--model",
-        f"2={tmp_path / 'dual.json'}",
-    ])
-
-    assert code == 0
-    assert "1400 photons in" in capsys.readouterr().err
-    records = read_records(output, obdeect_stream)
-    assert [r["metadata"]["telescope_id"] for r in records if r["type"] == "telescope"] == [1, 2]
-
-
-@pytest.mark.parametrize(
-    ("models", "message"),
-    [
-        (["{path}", "2={path}"], "give one --model PATH"),
-        (["1={path}", "1={path}"], "more than one --model"),
-        (["0={path}"], "outside 1..65535"),
-    ],
-)
-def test_cli_rejects_inconsistent_models(model, tmp_path, capsys, models, message):
-    path = tmp_path / "model.json"
-    model.save(path)
-    source = write_stream(tmp_path / "cli.bad.pst", {1: beam(10, (0.0, 0.0))})
-    arguments = ["trace-stream", "--seed", "3", "-i", str(source), "-o", str(tmp_path / "o.pst")]
-    for item in models:
-        arguments += ["--model", item.format(path=path)]
-
-    assert main(arguments) == 1
-    assert message in capsys.readouterr().err
-
-
-def test_cli_rejects_a_non_integer_telescope_id(tmp_path, capsys):
-    with pytest.raises(SystemExit):
-        main(["trace-stream", "--model", "LST=x.json", "--seed", "3"])
-    assert "TELESCOPE_ID=PATH" in capsys.readouterr().err
-
-
 def with_direction(photons, cx, cy, cz_sign):
     """Photons with the direction (cx, cy, cz_sign sqrt(1 - cx^2 - cy^2)) and a cz column."""
     count = len(photons["w"])
@@ -1178,11 +1003,12 @@ def test_lower_input_plane_is_below_every_optic(model):
     normal = np.array([0.0, 0.0, 1.0])
     bottoms = dict(model.optics_bottoms(normal))
     assert set(bottoms) >= {"primary"}
-    plane = stream_module._Optics.of(model, "full").telescope_lower_plane_m
-    assert plane == pytest.approx(min(bottoms.values()) - 1.0)
-    # Ground frame: the same plane along the zenith of a tilted pointing, above the optics' bottoms.
+    # Pointing at the zenith: the plane lies a margin below the lowest optic (no axes offset here).
+    plane = lower_input_plane_height_m(model, 0.0)
+    assert plane == pytest.approx(min(bottoms.values()) - 1.0 + float(normal @ model.axes_offset_m))
+    # A tilted pointing: the same plane along its zenith, below the optics' bottoms.
     zenith = ground_to_telescope_rotation(60.0, 0.0)[:, 2]
-    height = stream_module.lower_input_plane_height_m(model, 60.0)
+    height = lower_input_plane_height_m(model, 60.0)
     for name, bottom in model.optics_bottoms(zenith):
         assert height + float(np.dot(zenith, model.axes_offset_m)) < bottom, name
 
@@ -1201,8 +1027,10 @@ def test_upward_bunches_need_a_lower_plane_below_the_optics(model):
         "bunch_id": np.arange(1, dtype=np.uint64),
     }
     common = {"frame_rotation": np.eye(3), "frame_offset_m": np.zeros(3), "length_unit_m": 1.0}
-    plane = stream_module._Optics.of(model, "full").telescope_plane_m
-    lower = stream_module._Optics.of(model, "full").telescope_lower_plane_m
+    tops = [z for z in (model.max_incoming_obscurer_z_m(), model.max_mirror_z_m()) if z is not None]
+    plane = max(tops, default=0.0) + 1.0
+    bottom = min((b for _, b in model.optics_bottoms(np.array([0.0, 0.0, 1.0]))), default=0.0)
+    lower = bottom - 1.0
     model.trace_bunches(bunches, seed=1, plane_z=plane, lower_plane_z=lower, **common)
     with pytest.raises(ValueError, match="from below"):
         model.trace_bunches(bunches, seed=1, plane_z=plane, lower_plane_z=plane, **common)
@@ -1218,3 +1046,103 @@ def test_sources_from_below_emit_upward_photons(model):
     assert np.allclose(photons["position_m"][:, 2], bottom - 1.0, atol=1e-6)
     with pytest.raises(ValueError):
         model.star_photons(5, seed=3, towards_source=(1.0, 0.0, 0.0))
+
+
+@pytest.mark.parametrize("event_number", [1, 255, 256, 300, 2**32 - 1])
+def test_event_numbers_trace_with_their_own_random_numbers(
+    model, tmp_path, obdeect_stream, event_number
+):
+    # Bunch ids are the photon indices: the event number is in the random key. Event numbers from
+    # 256 on once overflowed the 40-bit photon id of the key and failed.
+    photons = beam(3000, (0.0, 0.0), radius_m=6.0)
+    source = write_stream(
+        tmp_path / f"event{event_number}.in", {1: photons}, event={"event_number": event_number}
+    )
+    output = tmp_path / f"event{event_number}.out"
+    counts = trace_stream(model, source, output, seed=SEED, pointing=(0.0, 0.0))
+    assert counts["photons_out"] > 0
+    assert camera_photons(output, obdeect_stream)["x"].size == counts["photons_out"]
+
+
+def test_events_draw_different_random_numbers(model, tmp_path, obdeect_stream):
+    photons = beam(3000, (0.0, 0.0), radius_m=6.0)
+    x = {}
+    for event_number in (255, 256, 300, 2**32 - 1):
+        source = write_stream(
+            tmp_path / f"e{event_number}.in", {1: photons}, event={"event_number": event_number}
+        )
+        output = tmp_path / f"e{event_number}.out"
+        trace_stream(model, source, output, seed=SEED, pointing=(0.0, 0.0))
+        x[event_number] = camera_photons(output, obdeect_stream)["x"]
+    assert not np.array_equal(x[255], x[256])
+    assert not np.array_equal(x[300], x[2**32 - 1])
+
+
+def write_chunks_of(path, photons, chunk, obdeect_stream):
+    """A stream of one telescope whose photon records hold `chunk` rows each."""
+    rows = len(photons["w"])
+    with obdeect_stream.Writer(str(path), "pytest") as writer:
+        writer.write("run", RUN)
+        writer.write("event", {"event_number": 1})
+        writer.write("telescope", {"telescope_id": 1, "frame": 1})
+        for start in range(0, rows, chunk):
+            part = {k: v[start : start + chunk] for k, v in photons.items()}
+            writer.write_photons(1, 1, start, part)
+        writer.write("telescope_end", {"telescope_id": 1, "photons": float(rows)})
+        writer.write("event_end", {})
+        writer.write("run_end", {})
+    return path
+
+
+def test_photon_sum_in_telescope_end_does_not_depend_on_chunking(model, tmp_path, obdeect_stream):
+    # The photons metadata is the sum of the output weights, in output order.
+    photons = beam(20000, (0.0, 0.0), radius_m=6.0)
+    photons["w"] = np.linspace(0.5, 1.5, 20000, dtype=np.float32)
+    totals = []
+    for chunk in (1000, 7777, 20000):
+        source = write_chunks_of(tmp_path / f"sum{chunk}.in", photons, chunk, obdeect_stream)
+        output = tmp_path / f"sum{chunk}.out"
+        trace_stream(model, source, output, seed=SEED, pointing=(0.0, 0.0))
+        (end,) = [r for r in read_records(output, obdeect_stream) if r["type"] == "telescope_end"]
+        totals.append(end["metadata"]["photons"])
+    assert totals[0] > 0.0
+    assert totals[0] == totals[1] == totals[2]
+
+
+def test_cz_column_accepts_float32_near_horizontal_directions(model, tmp_path, obdeect_stream):
+    # A unit vector in float32 with |cz| ~ 6e-4: an absolute check on cz rejected it. Upwards
+    # photons are accepted too; a cz that does not match cx and cy is rejected.
+    for cz, accepted in ((-0.000614837, True), (0.000614837, True), (-0.05, False)):
+        photons = beam(1, (0.989117742, -0.147124648))
+        photons["cz"] = np.array([cz], dtype=np.float32)
+        source = write_stream(tmp_path / "cz.in", {1: photons})
+        output = tmp_path / "cz.out"
+        if not accepted:
+            with pytest.raises(ModelError, match="cz"):
+                trace_stream(model, source, output, seed=SEED, pointing=(0.0, 0.0))
+            continue
+        counts = trace_stream(model, source, output, seed=SEED, pointing=(0.0, 0.0))
+        assert counts["photons_in"] == 1
+
+
+def test_acceptance_column_is_rejected(model, tmp_path):
+    photons = beam(10, (0.0, 0.0))
+    photons["p"] = np.ones(10, np.float32)
+    source = write_stream(tmp_path / "p.in", {1: photons})
+    with pytest.raises(ModelError, match="photon column p"):
+        trace_stream(model, source, tmp_path / "p.out", seed=SEED, pointing=(0.0, 0.0))
+
+
+def test_single_wavelength_run_draws_from_one_nanometre_above_that_wavelength(
+    model, tmp_path, obdeect_stream
+):
+    # One wavelength: the 1/lambda^2 law over [lo, lo + 1) nm (a wavelength-0 photon is drawn).
+    photons = beam(300, (0.0, 0.0), radius_m=6.0)
+    photons["wavelength"] = np.zeros(300, np.float32)
+    run = dict(RUN, wavelength_min_nm=400.0, wavelength_max_nm=400.0)
+    source = write_stream(tmp_path / "single.in", {1: photons}, run=run)
+    output = tmp_path / "single.out"
+    trace_stream(model, source, output, seed=SEED, pointing=(0.0, 0.0))
+    wavelength = camera_photons(output, obdeect_stream)["wavelength"]
+    assert wavelength.size > 0
+    assert np.all((wavelength >= 400.0) & (wavelength < 401.0))
