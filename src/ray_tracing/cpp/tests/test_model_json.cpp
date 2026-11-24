@@ -69,7 +69,7 @@ std::string signed_text(std::string text) {
     const std::string hash = model_hash(text);
     text.replace(start, end - start, hash);
   } catch (const ModelError &) {
-    // Reported by load_model.
+    return text; // Not hashable: returned unchanged, load_model reports the error.
   }
   return text;
 }
